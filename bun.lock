@@ -18,6 +18,7 @@
       },
       "dependencies": {
         "@flow/core": "workspace:*",
+        "@flow/hub": "workspace:*",
         "@flow/mcp": "workspace:*",
         "zod": "^4.6.7",
       },
