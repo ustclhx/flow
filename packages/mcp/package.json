@@ -7,6 +7,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@flow/core": "workspace:*"
+    "@flow/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "yaml": "^2.9.1"
   }
 }

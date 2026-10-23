@@ -33,7 +33,7 @@
 
 ## 5. 知识访问：MCP 与 harness 接入
 
-- [ ] 5.1 实现 `flow mcp --actor <name>`（stdio 传输），把第 4 组的每个操作暴露为 MCP 工具，参数描述由 schema 生成；验证对每个工具做一次 CLI 与 MCP 结果一致的对比测试
+- [x] 5.1 实现 `flow mcp --actor <name>`（stdio 传输），把第 4 组的每个操作暴露为 MCP 工具，参数描述由 schema 生成；验证对每个工具做一次 CLI 与 MCP 结果一致的对比测试
 - [ ] 5.2 在 Claude Code、Codex、oh-my-pi 中注册 `flow` MCP，各自使用对应的 actor；验证在每个 harness 中都能调用 `kb_search` 并得到结果，实际使用的注册命令记录到 `docs/harness-setup.md`
 - [ ] 5.3 为 pi 编写一个 skill 文件，说明 `flow kb` CLI 的用法和写入规则；验证在 pi 会话里能按 skill 的说明完成一次检索和一次 journal 追加
 

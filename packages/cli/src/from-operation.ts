@@ -1,4 +1,4 @@
-import { fail, type Operation, resolveFlowHome } from '@flow/core'
+import { fail, invokeOperation, type Operation, resolveFlowHome } from '@flow/core'
 import type { z } from 'zod'
 import { type Command, defineCommand, type OptionSpec } from './command.ts'
 
@@ -67,14 +67,7 @@ export function commandFromOperation(op: Operation<never, unknown>): Command<unk
         const key = optionKeys[name] as string
         raw[key] = fieldKind(shape[key] as z.ZodType) === 'number' ? Number(value) : value
       }
-      const parsed = op.input.safeParse(raw)
-      if (!parsed.success) {
-        const detail = parsed.error.issues
-          .map((i) => `${i.path.join('.') || '(input)'}: ${i.message}`)
-          .join('；')
-        return fail('usage', 'invalid_arguments', `参数不合法：${detail}`, parsed.error.issues)
-      }
-      return op.run(parsed.data as never, {
+      return invokeOperation(op, raw, {
         home: resolveFlowHome(process.env),
         actor,
         via: 'cli',
