@@ -44,8 +44,8 @@
 
 ## 7. 首批录入与端到端验收
 
-- [ ] 7.1 在真实的 `~/flow-home` 上运行 `flow init`，编写 `config/workspaces/product-res.yaml` 和 `xuanxue-saas.yaml`；验证 `flow doctor` 通过，`flow ws list` 列出 3 个 workspace
-- [ ] 7.2 让 Claude 读取两个产品仓库（README、`template.config.ts`、`wrangler.jsonc`、`docs/`），以提案形式提交以下条目：项目卡片、product、domain（arcanumber.com、ganjiday.com、product.ezarouter.cc；后者的出处写"用户确认 2026-10-24"，并注明 wrangler 中的生产路由是占位值）、service（各自的 web 和 jobs Worker）、repo、data-source（Sentry、Stripe、Cloudflare Web Analytics、`/api/health`），以及指向 `docs/runbooks/` 的条目；查不到依据的字段一律留空；验证每个提案都带出处
+- [x] 7.1 在真实的 `~/flow-home` 上运行 `flow init`，编写 `config/workspaces/product-res.yaml` 和 `xuanxue-saas.yaml`；验证 `flow doctor` 通过，`flow ws list` 列出 3 个 workspace
+- [x] 7.2 让 Claude 读取两个产品仓库（README、`template.config.ts`、`wrangler.jsonc`、`docs/`），以提案形式提交以下条目：项目卡片、product、domain（arcanumber.com、ganjiday.com、product.ezarouter.cc；后者的出处写"用户确认 2026-10-24"，并注明 wrangler 中的生产路由是占位值）、service（各自的 web 和 jobs Worker）、repo、data-source（Sentry、Stripe、Cloudflare Web Analytics、`/api/health`），以及指向 `docs/runbooks/` 的条目；查不到依据的字段一律留空；验证每个提案都带出处
 - [ ] 7.3 用户审阅后批量接受提案；验证 `flow kb validate` 没有错误，只列出"从未核实"的条目，`flow ws resources xuanxue-saas --type domain` 返回两个域名
 - [ ] 7.4 对两个产品运行 `flow agents sync`，用户审阅差异后在产品仓库中提交；验证 `flow agents sync --check` 以零状态退出，turborepo 区块没有变化
 - [ ] 7.5 端到端检验：在 product-res 中新开一个 Claude Code 会话，只问"这个项目的生产域名和监控数据源是什么"，验证它通过受管区块和 `flow` MCP 答对了（product.ezarouter.cc，以及 Sentry 和 `/api/health`）
