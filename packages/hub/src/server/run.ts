@@ -27,6 +27,12 @@ export async function runHub(options: RunHubOptions): Promise<Result<RunningHub>
       if (!loaded.ok) throw new Error(loaded.error.message)
       config = loaded.data
       ledger = await openLedger(flowPaths(options.home).ledgerDb, { now: () => clock.now() })
+      // 中枢停机期间节点无法续约：重启后给每个活动租约至少一个 TTL 的宽限，
+      // 让仍在运行的节点有机会续上，而不是在第一次扫描时被误判为 node_lost（hub-daemon "崩溃后自动恢复"）。
+      const graceUntil = new Date(clock.now() + config.lease_ttl_s * 1000).toISOString()
+      for (const lease of ledger.activeLeases()) {
+        if (lease.expires_at < graceUntil) ledger.renewLease(lease.lease_id, graceUntil)
+      }
       return ledger
     },
     routes: () => {

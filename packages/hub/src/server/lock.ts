@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { readFileSync, unlinkSync } from 'node:fs'
-import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { link, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { fail, flowPaths, ok, type Result } from '@flow/core'
 import { z } from 'zod'
 
@@ -53,24 +53,51 @@ async function atomicCreate(path: string, info: LockInfo): Promise<boolean> {
   }
 }
 
+const ignoreMissing = (err: unknown) => {
+  if (!isErrno(err, 'ENOENT')) throw err
+}
+
+/**
+ * 只在文件内容仍等于 expected 时删除它。先原子 rename 到唯一的临时名，只有一个竞争者能拿到这个文件；
+ * 拿到的若不是预期的记录（期间已被换成新的），就 link 回原处，不破坏别人的锁或守护。
+ * 直接"读一遍再 unlink"不是原子的：读和删之间文件可能已被替换。
+ */
+async function removeIfUnchanged(path: string, expected: string): Promise<boolean> {
+  // 先读：内容已经变了就绝不碰它。否则 rename 会把别人刚建好的锁短暂移走，
+  // 在它被 link 回来之前，第三个竞争者可能趁空位拿到锁，造成两个持有者。
+  if ((await readOptional(path)) !== expected) return false
+  const moved = `${path}.${process.pid}.${randomBytes(8).toString('hex')}.removing`
+  try {
+    await rename(path, moved)
+  } catch (err) {
+    ignoreMissing(err)
+    return false
+  }
+  try {
+    if ((await readOptional(moved)) === expected) return true
+    await link(moved, path).catch((err) => {
+      // 原处已有新记录：说明有人在此期间写入了更新的状态，保留它即可。
+      if (!isErrno(err, 'EEXIST')) throw err
+    })
+    return false
+  } finally {
+    await unlink(moved).catch(ignoreMissing)
+  }
+}
+
 /** 接管守护也记录 pid；守护内重新比较原锁，避免并发接管误删新持有者。 */
 async function breakStale(path: string, staleText: string, info: LockInfo): Promise<void> {
   const guard = `${path}.steal`
   if (!(await atomicCreate(guard, info))) {
     const text = await readOptional(guard)
-    if (text && !pidAlive(parseLock(text).pid)) {
-      // 重新确认崩溃遗留的守护身份，避免删除已经更换的记录。
-      if ((await readOptional(guard)) === text)
-        await unlink(guard).catch((err) => {
-          if (!isErrno(err, 'ENOENT')) throw err
-        })
-    }
+    // 崩溃遗留的守护：只有内容未变时才移除，避免删掉别人刚建立的守护。
+    if (text && !pidAlive(parseLock(text).pid)) await removeIfUnchanged(guard, text)
     return
   }
   try {
-    if ((await readOptional(path)) === staleText) await unlink(path)
+    await removeIfUnchanged(path, staleText)
   } finally {
-    await unlink(guard)
+    await unlink(guard).catch(ignoreMissing)
   }
 }
 
