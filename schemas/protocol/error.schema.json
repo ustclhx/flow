@@ -1,0 +1,50 @@
+{
+  "$id": "https://flow.local/schemas/protocol/error.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "failure",
+            "usage",
+            "retryable"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "稳定的机器可读错误码"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {},
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "code",
+        "message",
+        "retryable"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "ok",
+    "error"
+  ],
+  "additionalProperties": false,
+  "title": "Flow API error",
+  "description": "失败响应，与 CLI --json 的失败形态一致"
+}

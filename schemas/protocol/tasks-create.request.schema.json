@@ -1,0 +1,179 @@
+{
+  "$id": "https://flow.local/schemas/protocol/tasks-create.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "任务目标"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "role": {
+      "type": "string",
+      "minLength": 1,
+      "description": "角色，例如 developer、reviewer、triage"
+    },
+    "executor": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "description": "执行器类型，例如 fake、codex-orca、claude-sdk、codex-exec"
+    },
+    "requires": {
+      "default": [],
+      "description": "所需节点能力；匹配时 executor:<executor> 视为隐含必需，不必重复写出",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 512,
+        "pattern": "^[a-z][a-z0-9_-]*(:.+)?$",
+        "description": "节点能力，例如 browser、executor:fake、repo:/path/to/repo"
+      }
+    },
+    "cwd": {
+      "description": "工作目录（节点上的绝对路径）",
+      "type": "string",
+      "minLength": 1
+    },
+    "context": {
+      "description": "上下文引用：brain 条目 id 或文件路径",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "verify": {
+      "description": "验收命令，按顺序执行",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "cmd": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "命令 argv 数组（不经 shell），例如 [\"bun\", \"test\"]"
+          },
+          "cwd": {
+            "description": "工作目录；缺省为任务的 cwd",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "additionalProperties": false,
+        "title": "Verify step",
+        "description": "一条验收命令"
+      }
+    },
+    "timeout_s": {
+      "default": 3600,
+      "description": "单次尝试的超时秒数，默认 3600",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "retry": {
+      "description": "重试策略；缺省为不重试（执行器可能已有副作用）",
+      "type": "object",
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "最多尝试次数（含第一次）；1 等同于不重试"
+        }
+      },
+      "required": [
+        "max_attempts"
+      ],
+      "additionalProperties": false
+    },
+    "parent": {
+      "description": "父任务 id",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "idempotency_key": {
+      "description": "幂等键：同一个键再次提交时返回已有任务",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "inputs": {
+      "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用",
+      "type": "object",
+      "properties": {
+        "fake": {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "default": "done",
+              "description": "模拟的结束方式",
+              "type": "string",
+              "enum": [
+                "done",
+                "failed",
+                "blocked"
+              ]
+            },
+            "delay_ms": {
+              "default": 0,
+              "description": "结束前等待的毫秒数，用于模拟长时间运行",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400000
+            },
+            "blocked_reason": {
+              "description": "outcome=blocked 时必填的卡住原因",
+              "type": "string",
+              "enum": [
+                "awaiting_approval",
+                "question",
+                "no_progress",
+                "crashed",
+                "node_lost",
+                "other"
+              ]
+            },
+            "message": {
+              "description": "卡住或失败时的说明；done 时作为结果摘要",
+              "type": "string",
+              "minLength": 1
+            },
+            "activity": {
+              "default": [],
+              "description": "执行期间依次上报的输出片段（kind=output）",
+              "maxItems": 1000,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "Fake executor inputs"
+        }
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "goal",
+    "workspace",
+    "role",
+    "executor"
+  ],
+  "additionalProperties": false,
+  "title": "Flow task contract",
+  "description": "创建任务时提交的合同"
+}

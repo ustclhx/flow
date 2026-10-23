@@ -38,6 +38,7 @@
 - `verifying → done | failed | blocked`
 - `blocked → queued | running | cancelled | failed`
 - 任何非终态 → `cancelled`
+- `running | verifying → queued`：仅当允许重试的任务租约过期、且未超过最大尝试次数时（见 node-protocol "租约过期处理"）
 
 其中 `done`、`failed`、`cancelled` 是终态。不合法的转换 MUST 被拒绝，并且不写入事件。
 

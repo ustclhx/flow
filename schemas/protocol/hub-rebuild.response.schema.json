@@ -1,0 +1,43 @@
+{
+  "$id": "https://flow.local/schemas/protocol/hub-rebuild.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "events_replayed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ledger_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "events_replayed",
+        "duration_ms",
+        "ledger_seq"
+      ],
+      "additionalProperties": false,
+      "title": "POST /v1/hub/rebuild"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}

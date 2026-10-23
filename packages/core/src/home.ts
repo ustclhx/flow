@@ -33,6 +33,21 @@ export interface FlowPaths {
   journal: string
   /** `raw/inbox/`：随手记。 */
   inbox: string
+  /** M1 中枢与节点的配置：`config/hub.yaml`、`config/node.yaml`、`config/schedules.yaml`。 */
+  hubConfig: string
+  nodeConfig: string
+  schedulesConfig: string
+  /** 任务账本 `state/flow.db`，只由中枢打开（design D1）。 */
+  ledgerDb: string
+  /** 中枢 token（0600）与单实例锁。 */
+  hubToken: string
+  hubPid: string
+  /** 本机节点 id。 */
+  nodeId: string
+  /** `state/backups/`：账本每日备份。 */
+  backups: string
+  /** `state/logs/`：中枢与节点日志。 */
+  logs: string
 }
 
 /** 需要初始化为独立 git 仓库的子目录；`state/` 不进 git。 */
@@ -43,18 +58,28 @@ export function flowPaths(home: string): FlowPaths {
   const config = join(home, 'config')
   const brain = join(home, 'brain')
   const raw = join(home, 'raw')
+  const state = join(home, 'state')
   return {
     home,
     config,
     brain,
     raw,
-    state: join(home, 'state'),
+    state,
     workspaces: join(config, 'workspaces'),
     brainAgents: join(brain, 'AGENTS.md'),
     brainIndex: join(brain, 'index.md'),
     brainLog: join(brain, 'log.md'),
     journal: join(brain, 'journal'),
     inbox: join(raw, 'inbox'),
+    hubConfig: join(config, 'hub.yaml'),
+    nodeConfig: join(config, 'node.yaml'),
+    schedulesConfig: join(config, 'schedules.yaml'),
+    ledgerDb: join(state, 'flow.db'),
+    hubToken: join(state, 'hub.token'),
+    hubPid: join(state, 'hub.pid'),
+    nodeId: join(state, 'node-id'),
+    backups: join(state, 'backups'),
+    logs: join(state, 'logs'),
   }
 }
 

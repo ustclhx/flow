@@ -4,8 +4,8 @@
 
 ## 1. 契约与骨架
 
-- [ ] 1.1 在 `packages/core/src/ledger/` 中用 zod 定义任务合同、任务结果、全部事件类型（task.*、lease.*、node.*、schedule.fired、hub.*）及其载荷，以及 HTTP 协议的请求和响应体；接入 `jsonSchemas()`，导出到 `schemas/{tasks,events,protocol}/`；验证 `bun run schemas:check` 通过，每种类型都有合法和非法的样例测试
-- [ ] 1.2 新建 `packages/hub` 与 `packages/node` 包，加入依赖 `hono`、`@hono/node-server`、`croner`；建立 `serve.ts` 运行时隔离层，以及 `config/hub.yaml`、`config/node.yaml` 的 zod 配置加载（全部字段可选，有默认值）；验证空中枢能在 Bun 下启动，`GET /v1/health` 返回 200
+- [x] 1.1 在 `packages/core/src/ledger/` 中用 zod 定义任务合同、任务结果、全部事件类型（task.*、lease.*、node.*、schedule.fired、hub.*）及其载荷，以及 HTTP 协议的请求和响应体；接入 `jsonSchemas()`，导出到 `schemas/{tasks,events,protocol}/`；验证 `bun run schemas:check` 通过，每种类型都有合法和非法的样例测试
+- [x] 1.2 新建 `packages/hub` 与 `packages/node` 包，加入依赖 `hono`、`@hono/node-server`、`croner`；建立 `serve.ts` 运行时隔离层，以及 `config/hub.yaml`、`config/node.yaml` 的 zod 配置加载（全部字段可选，有默认值）；验证空中枢能在 Bun 下启动，`GET /v1/health` 返回 200
 
 ## 2. 账本核心（packages/hub）
 

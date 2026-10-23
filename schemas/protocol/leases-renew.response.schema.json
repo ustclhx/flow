@@ -1,0 +1,43 @@
+{
+  "$id": "https://flow.local/schemas/protocol/leases-renew.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "租约 id，由中枢在分配任务时生成"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "cancel_requested": {
+          "type": "boolean",
+          "description": "为 true 时节点应停止执行器并提交 cancelled"
+        }
+      },
+      "required": [
+        "lease_id",
+        "expires_at",
+        "cancel_requested"
+      ],
+      "additionalProperties": false,
+      "title": "POST /v1/leases/:id/renew 响应"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}

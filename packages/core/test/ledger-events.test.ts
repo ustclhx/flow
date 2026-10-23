@@ -1,0 +1,272 @@
+import { describe, expect, test } from 'bun:test'
+import {
+  canTransition,
+  checkTaskEvent,
+  EVENT_TYPES,
+  type EventType,
+  isTaskEventType,
+  ledgerEvent,
+  ledgerEventDraft,
+  parseLedgerEvent,
+  parseLedgerEventDraft,
+  TASK_EVENT_RULES,
+  TASK_STATUSES,
+  type TaskStatus,
+} from '../src/index.ts'
+
+const ts = '2026-10-24T08:00:00.000Z'
+const contract = { goal: 'g', workspace: 'ws/product-res', role: 'developer', executor: 'fake' }
+const result = { summary: 's', executor: 'fake', node_id: 'n1' }
+const task = { workspace: 'ws/product-res', task_id: 't_1' }
+const sha = 'a'.repeat(64)
+
+/** 每种事件一个合法样例（只写 type 之外的信封字段与载荷）与一个非法样例。 */
+const samples: Record<
+  EventType,
+  { valid: Record<string, unknown>; invalid: Record<string, unknown> }
+> = {
+  'task.created': {
+    valid: { ...task, payload: { contract } },
+    invalid: { ...task, payload: { contract: { ...contract, workspace: undefined } } },
+  },
+  'task.started': {
+    valid: { ...task, payload: { node_id: 'n1', lease_id: 'l1', attempt: 1 } },
+    invalid: { ...task, payload: { node_id: 'n1', lease_id: 'l1', attempt: 0 } },
+  },
+  'task.verifying': {
+    valid: { ...task, payload: { node_id: 'n1' } },
+    invalid: { workspace: 'ws/product-res', payload: { node_id: 'n1' } },
+  },
+  'task.done': {
+    valid: { ...task, payload: { result } },
+    invalid: { ...task, payload: {} },
+  },
+  'task.failed': {
+    valid: { ...task, payload: { message: '用户放弃' } },
+    invalid: { ...task, payload: {} },
+  },
+  'task.blocked': {
+    valid: { ...task, payload: { reason: 'question', message: '哪个分支？', tail: ['> ?'] } },
+    invalid: { ...task, payload: { reason: 'tired', message: 'x' } },
+  },
+  'task.unblocked': {
+    valid: { ...task, payload: { note: '用 main' } },
+    invalid: { ...task, payload: { note: 1 } },
+  },
+  'task.requeued': {
+    valid: { ...task, payload: { reason: 'lease_expired' } },
+    invalid: { ...task, payload: { reason: 'because' } },
+  },
+  'task.cancel_requested': {
+    valid: { ...task, payload: { reason: '不需要了' } },
+    invalid: { task_id: 't_1', payload: {} },
+  },
+  'task.cancelled': {
+    valid: { ...task, payload: { node_id: 'n1' } },
+    invalid: { ...task, payload: { node_id: 'bad id' } },
+  },
+  'task.lease_expired': {
+    valid: { ...task, payload: { lease_id: 'l1', node_id: 'n1', expired_at: ts, attempt: 1 } },
+    invalid: { ...task, payload: { lease_id: 'l1', node_id: 'n1', attempt: 1 } },
+  },
+  'lease.granted': {
+    valid: {
+      ...task,
+      payload: { lease_id: 'l1', node_id: 'n1', token_sha256: sha, ttl_s: 60, expires_at: ts },
+    },
+    invalid: {
+      ...task,
+      payload: {
+        lease_id: 'l1',
+        node_id: 'n1',
+        token_sha256: 'plain-token',
+        ttl_s: 60,
+        expires_at: ts,
+      },
+    },
+  },
+  'node.registered': {
+    valid: {
+      payload: {
+        node_id: 'n1',
+        hostname: 'mac',
+        version: '0.0.0',
+        capabilities: ['executor:fake'],
+        executors: [{ type: 'fake', mode: 'headless' }],
+        concurrency: 1,
+      },
+    },
+    invalid: {
+      payload: {
+        node_id: 'n1',
+        hostname: 'mac',
+        version: '0',
+        capabilities: ['X'],
+        concurrency: 1,
+      },
+    },
+  },
+  'schedule.fired': {
+    valid: {
+      workspace: 'ws/global',
+      payload: { rule_id: 'daily', planned_at: ts, missed: true, payload: { kind: 'patrol' } },
+    },
+    invalid: { payload: { rule_id: 'daily', planned_at: ts } },
+  },
+  'hub.started': {
+    valid: { payload: { version: '0.0.0', pid: 123, runtime: 'bun', port: 7477 } },
+    invalid: { payload: { version: '0.0.0', pid: 123, runtime: 'deno', port: 7477 } },
+  },
+  'hub.resumed': {
+    valid: { payload: { slept_ms: 3_600_000, extended_leases: 2 } },
+    invalid: { payload: { slept_ms: -1, extended_leases: 0 } },
+  },
+  'hub.backup_done': {
+    valid: { payload: { path: 'state/backups/flow-x.db', size_bytes: 10, duration_ms: 3 } },
+    invalid: { payload: { size_bytes: 10, duration_ms: 3 } },
+  },
+  'hub.rebuilt': {
+    valid: { payload: { events_replayed: 10, duration_ms: 3 } },
+    invalid: { payload: { events_replayed: 10, duration_ms: 3, extra: true } },
+  },
+}
+
+const envelope = (type: EventType, body: Record<string, unknown>) => ({
+  seq: 1,
+  ts,
+  type,
+  actor: 'hub',
+  ...body,
+})
+
+describe('事件 schema', () => {
+  test('事件类型清单', () => {
+    expect(EVENT_TYPES).toEqual(Object.keys(samples) as EventType[])
+  })
+
+  test.each(EVENT_TYPES)('%s：合法样例通过，非法样例被拒', (type) => {
+    const { valid, invalid } = samples[type]
+    const ok = ledgerEvent.safeParse(envelope(type, valid))
+    if (!ok.success) throw new Error(ok.error.message)
+    expect(ledgerEvent.safeParse(envelope(type, invalid)).success).toBe(false)
+    // 草稿没有 seq/ts
+    const { seq: _s, ts: _t, ...draft } = envelope(type, valid)
+    expect(ledgerEventDraft.safeParse(draft).success).toBe(true)
+  })
+
+  test('信封：seq、ts、actor 与未知 type', () => {
+    const good = envelope('hub.rebuilt', samples['hub.rebuilt'].valid)
+    expect(ledgerEvent.safeParse({ ...good, seq: 0 }).success).toBe(false)
+    expect(ledgerEvent.safeParse({ ...good, ts: '昨天' }).success).toBe(false)
+    expect(ledgerEvent.safeParse({ ...good, actor: '' }).success).toBe(false)
+    expect(ledgerEvent.safeParse({ ...good, type: 'lease.renewed' }).success).toBe(false)
+    expect(ledgerEvent.safeParse({ ...good, extra: 1 }).success).toBe(false)
+  })
+
+  test('task.created 的合同补齐默认值', () => {
+    const r = parseLedgerEvent(envelope('task.created', samples['task.created'].valid))
+    expect(r.ok).toBe(true)
+    if (r.ok && r.data.type === 'task.created') expect(r.data.payload.contract.timeout_s).toBe(3600)
+  })
+
+  test('parse 辅助函数返回 invalid_event', () => {
+    const r = parseLedgerEventDraft({ type: 'task.done', actor: 'hub', payload: {} })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.code).toBe('invalid_event')
+  })
+})
+
+describe('事件触发的状态转换', () => {
+  /** 期望表：事件 → 允许的当前状态（null=任务不存在）→ 之后的状态。独立于实现手写。 */
+  const expected: Record<string, [TaskStatus | null, TaskStatus][]> = {
+    'task.created': [[null, 'queued']],
+    'task.started': [['queued', 'running']],
+    'lease.granted': [['running', 'running']],
+    'task.verifying': [['running', 'verifying']],
+    'task.done': [
+      ['running', 'done'],
+      ['verifying', 'done'],
+    ],
+    'task.failed': [
+      ['running', 'failed'],
+      ['verifying', 'failed'],
+      ['blocked', 'failed'],
+    ],
+    'task.blocked': [
+      ['running', 'blocked'],
+      ['verifying', 'blocked'],
+    ],
+    'task.unblocked': [['blocked', 'running']],
+    'task.requeued': [
+      ['blocked', 'queued'],
+      ['running', 'queued'],
+      ['verifying', 'queued'],
+    ],
+    'task.cancel_requested': [
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+    ],
+    'task.cancelled': [
+      ['queued', 'cancelled'],
+      ['running', 'cancelled'],
+      ['verifying', 'cancelled'],
+      ['blocked', 'cancelled'],
+    ],
+    'task.lease_expired': [
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+    ],
+  }
+
+  test('规则覆盖全部任务事件', () => {
+    expect(Object.keys(TASK_EVENT_RULES).sort()).toEqual(Object.keys(expected).sort())
+    expect(EVENT_TYPES.filter(isTaskEventType).sort() as string[]).toEqual(
+      Object.keys(expected).sort(),
+    )
+  })
+
+  const states: (TaskStatus | null)[] = [null, ...TASK_STATUSES]
+  const cases = Object.keys(expected).flatMap((type) =>
+    states.map((from) => [type as EventType, from] as const),
+  )
+
+  const payloadFor = (type: EventType, from: TaskStatus | null) => {
+    if (type === 'task.requeued') return { reason: from === 'blocked' ? 'manual' : 'lease_expired' }
+    return samples[type].valid.payload
+  }
+
+  test.each(cases)('%s 作用于 %s', (type, from) => {
+    const hit = expected[type]?.find(([f]) => f === from)
+    const r = checkTaskEvent(from, { type, payload: payloadFor(type, from) } as never)
+    if (hit) {
+      expect(r).toEqual({ ok: true, data: hit[1] })
+      if (from !== null && hit[1] !== from) expect(canTransition(from, hit[1])).toBe(true)
+    } else {
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error.code).toBe('invalid_transition')
+    }
+  })
+
+  test('已完成的任务不能再运行（task-ledger 场景）', () => {
+    const r = checkTaskEvent('done', {
+      type: 'task.started',
+      payload: samples['task.started'].valid.payload,
+    } as never)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.code).toBe('invalid_transition')
+  })
+
+  test('task.requeued 的 reason 必须与来源状态匹配', () => {
+    const manual = { type: 'task.requeued', payload: { reason: 'manual' } } as never
+    const expired = { type: 'task.requeued', payload: { reason: 'lease_expired' } } as never
+    expect(checkTaskEvent('running', manual).ok).toBe(false)
+    expect(checkTaskEvent('blocked', expired).ok).toBe(false)
+  })
+
+  test('非任务事件不涉及状态', () => {
+    expect(checkTaskEvent(null, { type: 'hub.rebuilt', payload: {} } as never)).toEqual({
+      ok: true,
+      data: null,
+    })
+  })
+})

@@ -1,0 +1,12 @@
+{
+  "$id": "https://flow.local/schemas/protocol/tasks-cancel.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "title": "POST /v1/tasks/:id/cancel"
+}

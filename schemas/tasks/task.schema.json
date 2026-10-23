@@ -1,0 +1,508 @@
+{
+  "$id": "https://flow.local/schemas/tasks/task.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "任务 id，由中枢在创建时分配"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "verifying",
+        "done",
+        "failed",
+        "blocked",
+        "cancelled"
+      ],
+      "description": "任务状态"
+    },
+    "contract": {
+      "type": "object",
+      "properties": {
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "任务目标"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "description": "角色，例如 developer、reviewer、triage"
+        },
+        "executor": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "description": "执行器类型，例如 fake、codex-orca、claude-sdk、codex-exec"
+        },
+        "requires": {
+          "default": [],
+          "description": "所需节点能力；匹配时 executor:<executor> 视为隐含必需，不必重复写出",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^[a-z][a-z0-9_-]*(:.+)?$",
+            "description": "节点能力，例如 browser、executor:fake、repo:/path/to/repo"
+          }
+        },
+        "cwd": {
+          "description": "工作目录（节点上的绝对路径）",
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "description": "上下文引用：brain 条目 id 或文件路径",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "verify": {
+          "description": "验收命令，按顺序执行",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "命令 argv 数组（不经 shell），例如 [\"bun\", \"test\"]"
+              },
+              "cwd": {
+                "description": "工作目录；缺省为任务的 cwd",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "cmd"
+            ],
+            "additionalProperties": false,
+            "title": "Verify step",
+            "description": "一条验收命令"
+          }
+        },
+        "timeout_s": {
+          "default": 3600,
+          "description": "单次尝试的超时秒数，默认 3600",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retry": {
+          "description": "重试策略；缺省为不重试（执行器可能已有副作用）",
+          "type": "object",
+          "properties": {
+            "max_attempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "最多尝试次数（含第一次）；1 等同于不重试"
+            }
+          },
+          "required": [
+            "max_attempts"
+          ],
+          "additionalProperties": false
+        },
+        "parent": {
+          "description": "父任务 id",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "idempotency_key": {
+          "description": "幂等键：同一个键再次提交时返回已有任务",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "inputs": {
+          "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用",
+          "type": "object",
+          "properties": {
+            "fake": {
+              "type": "object",
+              "properties": {
+                "outcome": {
+                  "default": "done",
+                  "description": "模拟的结束方式",
+                  "type": "string",
+                  "enum": [
+                    "done",
+                    "failed",
+                    "blocked"
+                  ]
+                },
+                "delay_ms": {
+                  "default": 0,
+                  "description": "结束前等待的毫秒数，用于模拟长时间运行",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400000
+                },
+                "blocked_reason": {
+                  "description": "outcome=blocked 时必填的卡住原因",
+                  "type": "string",
+                  "enum": [
+                    "awaiting_approval",
+                    "question",
+                    "no_progress",
+                    "crashed",
+                    "node_lost",
+                    "other"
+                  ]
+                },
+                "message": {
+                  "description": "卡住或失败时的说明；done 时作为结果摘要",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "activity": {
+                  "default": [],
+                  "description": "执行期间依次上报的输出片段（kind=output）",
+                  "maxItems": 1000,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "outcome",
+                "delay_ms",
+                "activity"
+              ],
+              "additionalProperties": false,
+              "title": "Fake executor inputs"
+            }
+          },
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "goal",
+        "workspace",
+        "role",
+        "executor",
+        "requires",
+        "timeout_s"
+      ],
+      "additionalProperties": false,
+      "title": "Flow task contract",
+      "description": "创建任务时提交的合同"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "已开始的尝试次数（task.started 次数）"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "最近一次开始执行的时间"
+    },
+    "finished_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "进入终态的时间"
+    },
+    "cancel_requested": {
+      "type": "boolean"
+    },
+    "blocked": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "enum": [
+                "awaiting_approval",
+                "question",
+                "no_progress",
+                "crashed",
+                "node_lost",
+                "other"
+              ],
+              "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、node_lost 节点掉线（租约过期）、other 其他"
+            },
+            "message": {
+              "type": "string"
+            },
+            "tail": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "reason",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "当前处于 blocked 时的原因与说明"
+    },
+    "lease": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "lease_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "租约 id，由中枢在分配任务时生成"
+            },
+            "node_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+            },
+            "expires_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+            }
+          },
+          "required": [
+            "lease_id",
+            "node_id",
+            "expires_at"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "当前有效的租约"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "description": "结果摘要"
+            },
+            "artifacts": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "file",
+                      "pr",
+                      "commit",
+                      "url",
+                      "other"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "文件路径、PR 链接、提交 sha 或 URL"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ref"
+                ],
+                "additionalProperties": false,
+                "title": "Task artifact"
+              }
+            },
+            "verify": {
+              "default": [],
+              "description": "每条验收命令的结果",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "cmd": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "执行的 argv"
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "exit_code": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "退出码；被信号终止或超时时为 null"
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "timed_out": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "output_tail": {
+                    "default": [],
+                    "description": "合并 stdout/stderr 后的末尾若干行",
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "cmd",
+                  "exit_code",
+                  "duration_ms",
+                  "timed_out",
+                  "output_tail"
+                ],
+                "additionalProperties": false,
+                "title": "Verify outcome",
+                "description": "一条验收命令的执行结果"
+              }
+            },
+            "executor": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$",
+              "description": "执行器类型，例如 fake、codex-orca、claude-sdk、codex-exec"
+            },
+            "node_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+            }
+          },
+          "required": [
+            "summary",
+            "artifacts",
+            "verify",
+            "executor",
+            "node_id"
+          ],
+          "additionalProperties": false,
+          "title": "Flow task result",
+          "description": "任务结束（done / failed）时的结果"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_by": {
+      "type": "string",
+      "description": "创建者（task.created 的 actor）"
+    },
+    "last_activity_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "最近一次活动（续约上报）时间；非事件派生，重建后为 null"
+    }
+  },
+  "required": [
+    "id",
+    "workspace",
+    "status",
+    "contract",
+    "attempt",
+    "created_at",
+    "updated_at",
+    "started_at",
+    "finished_at",
+    "cancel_requested",
+    "blocked",
+    "lease",
+    "result",
+    "created_by",
+    "last_activity_at"
+  ],
+  "additionalProperties": false,
+  "title": "Flow task",
+  "description": "任务的当前状态（由事件投影得到）"
+}

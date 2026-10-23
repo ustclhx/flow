@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ledgerSchemaEntries } from '../ledger/index.ts'
 import { proposalSchema } from '../proposals/schema.ts'
 import { baseShape, ENTRY_TYPES, entrySchema, entrySchemas } from './entries.ts'
 import { searchSchemas } from './search.ts'
@@ -36,6 +37,10 @@ export function jsonSchemas(): Record<string, JsonSchema> {
   for (const [name, schema] of Object.entries(searchSchemas)) {
     const file = `operations/${name}.schema.json`
     out[file] = toJson(schema, file, name.endsWith('.input') ? 'input' : 'output')
+  }
+  // M1：tasks/、events/、protocol/、config/（add-m1-ledger-daemon 1.1、1.2）
+  for (const [file, { schema, io }] of Object.entries(ledgerSchemaEntries())) {
+    out[file] = toJson(schema, file, io)
   }
   return out
 }
