@@ -37,5 +37,5 @@
 
 ## 7. 端到端与上线
 
-- [ ] 7.1 CI 中的端到端测试：在临时 FLOW_HOME 中启动真实中枢和节点进程，经 CLI 创建 fake 任务，覆盖完成、卡住、取消、节点被杀后的 `node_lost`，以及中枢被杀后重启时账本完整；验证在 GitHub Actions 上通过
+- [x] 7.1 CI 中的端到端测试：在临时 FLOW_HOME 中启动真实中枢和节点进程，经 CLI 创建 fake 任务，覆盖完成、卡住、取消、节点被杀后的 `node_lost`，以及中枢被杀后重启时账本完整；验证在 GitHub Actions 上通过
 - [ ] 7.2 在用户的 Mac 上运行 `flow daemon install`，用 `kill -9` 验证中枢会被 launchd 自动拉起、`flow daemon status` 状态正常；把实际步骤和结果记录到 `docs/daemon.md`
