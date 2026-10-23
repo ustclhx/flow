@@ -1,4 +1,4 @@
-import { mkdir, readdir, unlink } from 'node:fs/promises'
+import { mkdir, readdir, stat, unlink } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { flowPaths, type HubConfig } from '@flow/core'
 import type { LedgerMaintenance } from '../ledger/port.ts'
@@ -9,6 +9,10 @@ export interface BackupInfo {
   path: string
   at: string
   kept: number
+  size_bytes: number
+  duration_ms: number
+  /** 本次按保留份数删除的旧备份文件名。 */
+  removed: string[]
 }
 
 export interface HubLogger {
@@ -104,6 +108,7 @@ export function startMaintenance(options: MaintenanceOptions): { stop(): Promise
     // 当天已有任意一份完整备份，就不再重复补做。
     const alreadyBackedUp = names.some((name) => name.startsWith(`flow-${dateStamp(now)}-`))
     const path = join(backups, backupName(now))
+    const startedAt = clock.now()
     if (!alreadyBackedUp) {
       ledger.backupTo(path)
       names.push(backupName(now))
@@ -116,6 +121,9 @@ export function startMaintenance(options: MaintenanceOptions): { stop(): Promise
       path: relative(options.home, path),
       at: now.toISOString(),
       kept: names.length,
+      size_bytes: (await stat(path)).size,
+      duration_ms: Math.max(0, Math.round(clock.now() - startedAt)),
+      removed,
     }
     logger.info('账本备份完成', info)
     options.onBackupDone?.(info)

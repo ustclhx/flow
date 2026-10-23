@@ -202,6 +202,9 @@ describe('每日备份', () => {
         path: 'state/backups/flow-20261024-033000.db',
         at: new Date(clock.now()).toISOString(),
         kept: 2,
+        size_bytes: 2,
+        duration_ms: 0,
+        removed: expect.any(Array),
       })
       expect((await readdir(backups)).sort()).toEqual([
         'flow-20261023-033000.db',

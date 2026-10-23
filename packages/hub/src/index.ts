@@ -18,5 +18,6 @@ export {
   type MaintenanceOptions,
   startMaintenance,
 } from './server/maintenance.ts'
+export { type RunHubOptions, runHub } from './server/run.ts'
 export { type RunningHub, type StartHubOptions, startHub } from './server/start.ts'
 export { ensureHubToken } from './server/token.ts'

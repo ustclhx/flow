@@ -16,6 +16,8 @@ export interface StartHubOptions
   /** 已打开的账本由调用者确保单实例；优先使用 openLedger，在取得锁后才打开数据库。 */
   ledger?: HubLedger
   openLedger?: () => HubLedger | Promise<HubLedger>
+  /** 账本打开后再构造的子应用（例如任务路由），与 mount 一起挂载在认证之后。 */
+  routes?: (ledger: HubLedger) => NonNullable<HubDeps['mount']>
   /** 测试可用 0 申请随机端口；默认读取 hub.yaml。 */
   port?: number
   runtime?: Runtime
@@ -83,7 +85,10 @@ export async function startHub(options: StartHubOptions): Promise<Result<Running
       signal: shutdown.signal,
       ...(ledger ? { ledger } : {}),
       ...(options.version ? { version: options.version } : {}),
-      ...(options.mount ? { mount: options.mount } : {}),
+      mount: [
+        ...(options.mount ?? []),
+        ...(ledger && options.routes ? options.routes(ledger) : []),
+      ],
     })
     server = await serve(app.fetch, {
       port: options.port ?? config.data.port,
