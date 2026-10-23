@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { scheduleErrorSchema } from '../daemon/schedules.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import { executorInfo, ledgerEvent } from './events.ts'
@@ -83,14 +84,9 @@ export const hubStatusData = healthData
     runtime: z.enum(['bun', 'node']),
     schedules: z.object({
       loaded: z.number().int().min(0),
-      errors: z.array(
-        z.object({
-          rule_id: z.string().optional(),
-          field: z.string().optional(),
-          message: z.string(),
-        }),
-      ),
+      errors: z.array(scheduleErrorSchema),
     }),
+    schedule_errors: z.array(scheduleErrorSchema).default([]),
     last_backup: z.object({ path: z.string(), at: timestamp }).nullable(),
   })
   .meta({ title: 'GET /v1/hub/status' })

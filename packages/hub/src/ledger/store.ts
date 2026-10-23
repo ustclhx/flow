@@ -92,6 +92,10 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   /** 清空投影并按 seq 重放全部事件，软状态按 D2 重置，最后写入 `hub.rebuilt`。 */
   rebuild(opts?: RebuildOptions): Result<RebuildData>
 
+  /** 最近一条事件；beforeSeq 用于取得本次 hub.started 之前的恢复边界。 */
+  latestEvent(beforeSeq?: number, type?: EventType): LedgerEvent | null
+  hasScheduleFire(ruleId: string, plannedAt: string): boolean
+
   getTask(id: string): TaskView | null
   listTasks(filter?: Partial<ListTasksQuery>): TaskView[]
   /** 全部 queued 任务，按创建先后（created_seq 升序），供租约分配使用。 */
@@ -466,6 +470,22 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
   return {
     seq: () => get<{ s: number }>('SELECT COALESCE(MAX(seq), 0) AS s FROM events')?.s ?? 0,
     eventsAfter,
+    latestEvent(beforeSeq, type) {
+      const row = get<EventRow>(
+        'SELECT * FROM events WHERE seq < ? AND (? IS NULL OR type = ?) ORDER BY seq DESC LIMIT 1',
+        beforeSeq ?? Number.MAX_SAFE_INTEGER,
+        type ?? null,
+        type ?? null,
+      )
+      return row ? rowToEvent(row) : null
+    },
+    hasScheduleFire(ruleId, plannedAt) {
+      return !!get(
+        'SELECT 1 FROM schedule_fires WHERE rule_id = ? AND planned_at = ?',
+        ruleId,
+        plannedAt,
+      )
+    },
     subscribe(listener) {
       listeners.add(listener)
       return () => {

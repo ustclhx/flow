@@ -1,5 +1,6 @@
 import type { z } from 'zod'
 import { hubConfigSchema, nodeConfigSchema } from '../daemon/config.ts'
+import { schedulesConfigSchema } from '../daemon/schedules.ts'
 import { EVENT_TYPES, eventSchemas, ledgerEvent } from './events.ts'
 import { ENDPOINTS, errorBody, okBody } from './protocol.ts'
 import { activity, taskContract, taskResult, taskStatus, taskView } from './task.ts'
@@ -26,6 +27,7 @@ export function ledgerSchemaEntries(): Record<string, SchemaEntry> {
     'events/event.schema.json': { schema: ledgerEvent, io: 'output' },
     'protocol/error.schema.json': { schema: errorBody, io: 'output' },
     'config/hub.schema.json': { schema: hubConfigSchema, io: 'input' },
+    'config/schedules.schema.json': { schema: schedulesConfigSchema, io: 'input' },
     'config/node.schema.json': { schema: nodeConfigSchema, io: 'input' },
   }
   for (const type of EVENT_TYPES) {

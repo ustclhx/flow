@@ -1,0 +1,44 @@
+{
+  "$id": "https://flow.local/schemas/config/schedules.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "cron": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timezone": {
+        "description": "缺省使用本机时区",
+        "type": "string",
+        "minLength": 1
+      },
+      "workspace": {
+        "type": "string",
+        "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+        "description": "workspace 标识，形如 ws/<id>"
+      },
+      "payload": {
+        "default": {},
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {}
+      }
+    },
+    "required": [
+      "id",
+      "cron",
+      "workspace"
+    ],
+    "additionalProperties": false
+  },
+  "title": "Flow schedules config",
+  "description": "config/schedules.yaml：定时规则数组"
+}

@@ -32,7 +32,7 @@
 
 ## 6. 定时触发与托管
 
-- [ ] 6.1 实现 `config/schedules.yaml` 的加载（单条规则出错不影响其他规则）、到点写入 `schedule.fired`（用唯一约束去重）、重启或唤醒后只补发最近一次并标记 `missed`；验证 scheduler spec 的全部场景（注入时钟）
+- [x] 6.1 实现 `config/schedules.yaml` 的加载（单条规则出错不影响其他规则）、到点写入 `schedule.fired`（用唯一约束去重）、重启或唤醒后只补发最近一次并标记 `missed`；验证 scheduler spec 的全部场景（注入时钟）
 - [ ] 6.2 实现 `flow daemon install|uninstall|status`：生成两个 plist（bun 绝对路径、FLOW_HOME、KeepAlive、日志路径），通过 `launchctl bootstrap/bootout` 加载和卸载，日志按大小轮转，`flow doctor` 增加对 plist 中路径有效性的检查；验证 plist 快照测试和注入后的 launchctl 命令序列测试
 
 ## 7. 端到端与上线
