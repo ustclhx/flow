@@ -11,17 +11,17 @@ const GLOBAL_OPTIONS: Record<string, OptionSpec> = {
 }
 
 /** 解析 argv 并执行匹配的命令。纯函数式入口，便于测试；进程副作用只在 main.ts。 */
-export async function runCli(argv: string[], commands: Command<never>[]): Promise<Rendered> {
+export async function runCli(argv: string[], commands: Command<unknown>[]): Promise<Rendered> {
   const json = argv.includes('--json')
   const positionals = argv.filter((a) => !a.startsWith('-'))
-  const command = matchCommand(positionals, commands as Command<unknown>[])
+  const command = matchCommand(positionals, commands)
 
   if (!command) {
     if (argv.includes('--version') || argv.includes('-V')) {
       return render(ok({ version: VERSION }), { json, human: (d) => d.version })
     }
     if (positionals.length === 0 || argv.includes('--help') || argv.includes('-h')) {
-      return render(ok(helpText(commands as Command<unknown>[])), { json, human: (d) => d })
+      return render(ok(helpText(commands)), { json, human: (d) => d })
     }
     return render(fail('usage', 'unknown_command', `未知命令：${positionals.join(' ')}`), {
       json,
@@ -55,7 +55,11 @@ export async function runCli(argv: string[], commands: Command<never>[]): Promis
   } catch (err) {
     result = fail('failure', 'internal_error', (err as Error).message)
   }
-  return render(result, command.human ? { json, human: command.human } : { json })
+  return render(result, {
+    json,
+    ...(command.human ? { human: command.human } : {}),
+    ...(command.humanError ? { humanError: command.humanError } : {}),
+  })
 }
 
 /** 取能匹配的最长命令路径，例如 `kb proposals accept` 优先于 `kb proposals`。 */
