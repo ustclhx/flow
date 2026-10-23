@@ -1,4 +1,5 @@
-import { HubClient, ok, renderTable, resolveFlowHome } from '@flow/core'
+import { join } from 'node:path'
+import { fail, flowPaths, HubClient, ok, renderTable, resolveFlowHome, rotateLog } from '@flow/core'
 import { runHub } from '@flow/hub'
 import { defineCommand } from '../command.ts'
 
@@ -6,8 +7,15 @@ export const hubStartCommand = defineCommand({
   name: 'hub start',
   summary: '在前台运行中枢，收到 SIGINT 或 SIGTERM 后退出',
   run: async () => {
+    const home = resolveFlowHome(process.env)
+    const rotated = await rotateLog(join(flowPaths(home).logs, 'hub.log'))
+    if (!rotated.ok) return rotated
+    // launchd 已在启动前打开标准流；轮转后退出一次，让 KeepAlive 重新打开新的日志。
+    if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.flow.hub') {
+      return fail('retryable', 'log_rotated', '日志已轮转，等待 launchd 重新启动中枢')
+    }
     const started = await runHub({
-      home: resolveFlowHome(process.env),
+      home,
       logger: { info: console.error, warn: console.error },
     })
     if (!started.ok) return started

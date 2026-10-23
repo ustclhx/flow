@@ -239,6 +239,18 @@ describe('任务操作与真实中枢', () => {
 })
 
 describe('HubClient 协议边界', () => {
+  test('health 无需本地 token，保持启动就绪探测与服务端免认证契约一致', async () => {
+    const probe = new HubClient({
+      ...ctx(),
+      fetch: async (request) => {
+        expect(request.headers.has(HEADERS.authorization)).toBe(false)
+        expect(new URL(request.url).pathname).toBe('/v1/health')
+        return Response.json({ ok: true, data: { version: VERSION, uptime: 0, ledger_seq: 0 } })
+      },
+    })
+    expect(data(await probe.health())).toEqual({ version: VERSION, uptime: 0, ledger_seq: 0 })
+  })
+
   test('认证失败保留中枢错误类别和错误码', async () => {
     await start()
     await writeFile(flowPaths(home).hubToken, randomUUID())

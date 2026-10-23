@@ -50,15 +50,17 @@ export class HubClient {
   ): Promise<Result<ResponseData<N>>> {
     const config = await loadHubConfig(this.options.home)
     if (!config.ok) return config
-    let token: string
-    try {
-      token = (await readFile(flowPaths(this.options.home).hubToken, 'utf8')).trim()
-    } catch (err) {
-      if (isMissing(err)) return unavailable()
-      return fail('failure', 'read_failed', '无法读取中枢 token 文件')
-    }
-    if (!token) return unavailable()
     const endpoint = ENDPOINTS[name]
+    let token: string | undefined
+    if (endpoint.auth) {
+      try {
+        token = (await readFile(flowPaths(this.options.home).hubToken, 'utf8')).trim()
+      } catch (err) {
+        if (isMissing(err)) return unavailable()
+        return fail('failure', 'read_failed', '无法读取中枢 token 文件')
+      }
+      if (!token) return unavailable()
+    }
     const url = new URL(
       endpoint.path.replace(':id', encodeURIComponent(id ?? '')),
       resolveHubUrl(config.data),
@@ -75,7 +77,7 @@ export class HubClient {
       const request = new Request(url.toString(), {
         method: endpoint.method,
         headers: {
-          [HEADERS.authorization]: `Bearer ${token}`,
+          ...(token ? { [HEADERS.authorization]: `Bearer ${token}` } : {}),
           [HEADERS.actor]: this.options.actor,
           'Content-Type': 'application/json',
         },
