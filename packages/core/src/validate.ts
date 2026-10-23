@@ -50,6 +50,50 @@ const daysBetween = (from: string, to: string): number =>
 const WORKSPACE_FIELDS = ['workspace'] as const
 
 /**
+ * 单个条目 frontmatter 的错误级检查：type、schema 必填字段、owner 与 workspace 引用。
+ * `flow kb validate` 与统一写入路径共用这一套规则，保证两边判断一致。
+ */
+export function checkEntryFrontmatter(
+  fm: Record<string, unknown>,
+  ctx: { file: string; id: string; workspaces: ReadonlyMap<string, Workspace> },
+): ValidationIssue[] {
+  const { file, id, workspaces } = ctx
+  const errors: ValidationIssue[] = []
+  const at = (field: string, code: string, message: string): ValidationIssue => ({
+    file,
+    id,
+    field,
+    code,
+    message,
+  })
+  const type = fm.type
+  if (type === undefined || type === null) return [at('type', 'missing_field', '缺少必填字段 type')]
+  if (!isEntryType(type)) return [at('type', 'unknown_type', `未知条目类型：${String(type)}`)]
+
+  const parsed = entrySchemas[type].safeParse(fm)
+  if (!parsed.success) errors.push(...formatZodIssues(parsed.error.issues, fm, { file, id }))
+
+  // 资源单一归属：owner 必须是已定义的非职能 workspace（ws/global 合法）。
+  if (isResourceType(type) && typeof fm.owner === 'string' && WS_REF_RE.test(fm.owner)) {
+    const ws = workspaces.get(fm.owner)
+    if (!ws) {
+      errors.push(at('owner', 'unknown_owner', `owner 指向未定义的 workspace：${fm.owner}`))
+    } else if (ws.kind === 'function') {
+      errors.push(
+        at('owner', 'function_owner', `职能 workspace 不能拥有资源：${fm.owner} 是 function 类型`),
+      )
+    }
+  }
+  for (const field of WORKSPACE_FIELDS) {
+    const v = fm[field]
+    if (typeof v === 'string' && WS_REF_RE.test(v) && !workspaces.has(v)) {
+      errors.push(at(field, 'unknown_workspace', `${field} 指向未定义的 workspace：${v}`))
+    }
+  }
+  return errors
+}
+
+/**
  * 校验 brain 下的全部条目与 workspace 定义（knowledge-base、resource-registry）。
  * 只有 brain 不存在时返回失败；条目问题都记入报告，由调用方根据 errors 决定退出码。
  */
@@ -83,40 +127,10 @@ export async function validateBrain(
       code,
       message,
     })
+    const entryErrors = checkEntryFrontmatter(fm, { file, id, workspaces })
+    errors.push(...entryErrors)
     const type = fm.type
-    if (type === undefined || type === null) {
-      errors.push(at('type', 'missing_field', '缺少必填字段 type'))
-      continue
-    }
-    if (!isEntryType(type)) {
-      errors.push(at('type', 'unknown_type', `未知条目类型：${String(type)}`))
-      continue
-    }
-
-    const parsed = entrySchemas[type].safeParse(fm)
-    if (!parsed.success) errors.push(...formatZodIssues(parsed.error.issues, fm, { file, id }))
-
-    // 资源单一归属：owner 必须是已定义的非职能 workspace（ws/global 合法）。
-    if (isResourceType(type) && typeof fm.owner === 'string' && WS_REF_RE.test(fm.owner)) {
-      const ws = workspaces.get(fm.owner)
-      if (!ws) {
-        errors.push(at('owner', 'unknown_owner', `owner 指向未定义的 workspace：${fm.owner}`))
-      } else if (ws.kind === 'function') {
-        errors.push(
-          at(
-            'owner',
-            'function_owner',
-            `职能 workspace 不能拥有资源：${fm.owner} 是 function 类型`,
-          ),
-        )
-      }
-    }
-    for (const field of WORKSPACE_FIELDS) {
-      const v = fm[field]
-      if (typeof v === 'string' && WS_REF_RE.test(v) && !workspaces.has(v)) {
-        errors.push(at(field, 'unknown_workspace', `${field} 指向未定义的 workspace：${v}`))
-      }
-    }
+    if (!isEntryType(type)) continue
     if (Array.isArray(fm.applies_to)) {
       for (const ref of fm.applies_to) {
         if (typeof ref === 'string' && !knownIds.has(ref)) {
