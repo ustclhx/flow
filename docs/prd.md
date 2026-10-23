@@ -1,4 +1,4 @@
-# Flow 产品定义（PRD）v0.5
+# Flow 产品定义（PRD）v0.6
 
 > 状态：讨论定稿草案 · 2026-10-24
 > 项目名 `flow` 为临时名。
@@ -223,7 +223,7 @@ last_verified: 2026-10-20
 ## 9. 数据层（"中"档）
 
 - 平台只保存用户关心的关键指标的时间序列，存储用 SQLite 或 DuckDB，支持阈值、趋势和对比。
-- 数据通过能力插件接入。MVP 首批来源是各产品的 `/api/health`、Cloudflare（含 Web Analytics）、Sentry、Stripe（只读），以后再接 Grafana/Prometheus、Plausible 和社媒平台的统计数据。
+- 数据通过能力插件接入。MVP 首批来源是各产品的 `/api/health` 和 Cloudflare（含 Web Analytics）；Sentry、Stripe 等到产品实际启用后再接，以后再接 Grafana/Prometheus、Plausible 和社媒平台的统计数据。
 - 明细数据仍然在原系统的面板里看。
 
 ---
@@ -382,8 +382,8 @@ policy:
 
 | Workspace | 资源 | 阶段 |
 |---|---|---|
-| `product-res` | product.ezarouter.cc；Workers（web、jobs）、Neon、KV、Queues、R2；Sentry | 内测 |
-| `xuanxue-saas` | arcanumber.com（西方站）、ganjiday.com（东方站），同一个 Worker 按 Host 区分；另有 Stripe、Turnstile、Google OAuth、Cloudflare Web Analytics、Sentry | 已上线收费 |
+| `product-res` | 选品工作台。product.ezarouter.cc；自托管 Docker Compose（web、jobs，镜像来自 GHCR），不走 Workers；数据源目前只有 `/api/health` | 内测 |
+| `xuanxue-saas` | arcanumber.com（西方站）、ganjiday.com（东方站），同一个 Worker 按 Host 区分；Neon、Turnstile、Google OAuth、Cloudflare Web Analytics。**暂未开启支付，不使用 Sentry** | 已上线 v0.1.1，未收费 |
 
 **里程碑**：
 
@@ -391,7 +391,7 @@ policy:
 |---|---|---|
 | **M0 地基** | monorepo 脚手架；`~/flow-home` 布局；brain 和 raw 仓库及 schema；资源注册表（录入两个产品）；知识库 MCP server；AGENTS.md 受管区块；密钥扫描 | 所有 harness 共享同一份背景 |
 | **M1 内核 v0** | 账本、事件、调度；执行器插件：Claude Code、Codex（经 Orca）；卡住检测；supervisor 和 workspace 简报；最小策略引擎；sops + age 密钥提供器；收件箱（ntfy，加 Web 版"需要我的"） | 不用再盯 Codex 终端 |
-| **M2 运维闭环** | 能力插件：Gatus、Cloudflare、Sentry、Stripe（只读）、域名到期；Metric；运维分诊工作流；runbook 回写；Decision 和回看；Web 版"全局健康" | 不用再手动查看网站状态 |
+| **M2 运维闭环** | 能力插件：Gatus、Cloudflare、域名到期（Sentry、Stripe 待产品启用后再接）；Metric；运维分诊工作流；runbook 回写；Decision 和回看；Web 版"全局健康" | 不用再手动查看网站状态 |
 | M3 | 知识 ingest 和 lint；随手记；热点雷达 | |
 | M4 | 社媒（X） | |
 | M5 | 完整迭代工作流、桌面端、插件视图、职能 workspace、参谋长、更多平台 | |
