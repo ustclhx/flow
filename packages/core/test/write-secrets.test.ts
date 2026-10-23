@@ -136,7 +136,7 @@ describe('Flow 写入前扫描', () => {
     const r = await writeEntry(
       home,
       { id: 'resources/data-sources/stripe', frontmatter: dataSource },
-      { actor: 'claude' },
+      { actor: 'user' },
     )
     if (!r.ok) throw new Error(r.error.message)
     const text = readFileSync(join(home, 'brain', 'resources/data-sources/stripe.md'), 'utf8')

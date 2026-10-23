@@ -1,7 +1,7 @@
 import { BRAIN_JOURNAL_DIR } from '../entries.ts'
 import { parseFrontmatter } from '../frontmatter.ts'
 import { fail, type Result } from '../result.ts'
-import { isFactType } from '../schema/entries.ts'
+import { isFactType, isResourceType } from '../schema/entries.ts'
 
 /**
  * AI 写入边界（design D8、knowledge-access "AI 写入边界"）。`actor !== 'user'` 即视为 AI。
@@ -88,6 +88,22 @@ const userOnly = (fm: Record<string, unknown> | null, path: string): Result<neve
 }
 
 /**
+ * 资源、product、project-card 是共享事实：AI 只能通过修改提案提交，由用户确认后合入
+ * （knowledge-access "修改提案"）。合入时以用户身份写入，因此不受此限制。runbook 允许 AI 直写。
+ */
+export const isProposalOnlyType = (type: unknown): boolean =>
+  isResourceType(type) || type === 'product' || type === 'project-card'
+
+const proposalOnly = (fm: Record<string, unknown> | null, path: string): Result<never> | null =>
+  fm && isProposalOnlyType(fm.type)
+    ? fail(
+        'failure',
+        'proposal_required',
+        `AI 不能直接写入 ${String(fm.type)} 条目，请提交修改提案：${path}`,
+      )
+    : null
+
+/**
  * 对单个文件操作做策略检查。`existing` 是文件当前内容（不存在为 null）。
  * 返回 null 表示允许。
  */
@@ -139,6 +155,8 @@ export function checkPolicy(
   const after = change.op === 'delete' ? null : frontmatterOf(change.content)
   const denied = userOnly(before, change.path) ?? userOnly(after, change.path)
   if (denied) return denied
+  const proposal = proposalOnly(before, change.path) ?? proposalOnly(after, change.path)
+  if (proposal) return proposal
   if (after && isFactType(after.type)) {
     const sources = after.sources
     const has =

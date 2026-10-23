@@ -186,28 +186,45 @@ describe('AI 写入边界', () => {
     }
   })
 
-  test('AI 写其他事实类条目（domain）同样必须有出处', async () => {
+  test('AI 不能直接写资源、product、project-card：必须走提案', async () => {
     const home = await initTempHome()
-    await expectRejected(
-      home,
-      () =>
-        writeEntry(
-          home,
-          { id: 'resources/domains/ganjiday.com', frontmatter: domain() },
-          { actor: 'claude' },
-        ),
-      'sources_required',
-      '事实类条目需要出处',
-    )
-    const ok = await writeEntry(
+    for (const actor of ['claude', 'codex']) {
+      await expectRejected(
+        home,
+        () =>
+          writeEntry(
+            home,
+            {
+              id: 'resources/domains/ganjiday.com',
+              frontmatter: domain({ sources: ['apps/web/wrangler.jsonc'] }),
+            },
+            { actor },
+          ),
+        'proposal_required',
+        '请提交修改提案',
+      )
+    }
+    const byUser = await writeEntry(
       home,
       {
         id: 'resources/domains/ganjiday.com',
         frontmatter: domain({ sources: ['apps/web/wrangler.jsonc'] }),
       },
-      { actor: 'claude' },
+      { actor: 'user' },
     )
-    expect(ok.ok).toBe(true)
+    expect(byUser.ok).toBe(true)
+    // 已存在的资源条目同样不能被 AI 改写成别的类型或删除。
+    await expectRejected(
+      home,
+      () =>
+        writeEntry(
+          home,
+          { id: 'resources/domains/ganjiday.com', frontmatter: note() },
+          { actor: 'claude' },
+        ),
+      'proposal_required',
+      '请提交修改提案',
+    )
   })
 
   test('用户手写事实条目不附出处可以写入（只在 kb validate 中警告）', async () => {
