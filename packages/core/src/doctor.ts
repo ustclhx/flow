@@ -1,5 +1,6 @@
 import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
+import { checkDaemonPlists, launchAgentsDirectory } from './daemon/plist.ts'
 import { execCommand, git, hasCommits, hookPath, isRepoRoot } from './git.ts'
 import { type Env, flowPaths, GIT_REPOS } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
@@ -33,6 +34,8 @@ export interface DoctorReport {
 }
 
 export interface DoctorOptions {
+  /** 测试必须注入临时目录，避免读取真实的 LaunchAgents。 */
+  launchAgentsDir?: string
   /** 用于查找外部工具的环境（主要是 PATH）；测试中注入以模拟缺少工具。 */
   env?: Env
 }
@@ -187,6 +190,18 @@ export async function runDoctor(
         ? { id: `brain.${name}`, ok: true, message: `brain/${name} 存在` }
         : { id: `brain.${name}`, ok: false, message: `缺少 brain/${name}`, hint: INIT_HINT },
     )
+  }
+
+  for (const plist of checkDaemonPlists(opts.launchAgentsDir ?? launchAgentsDirectory())) {
+    if (!plist.installed) continue
+    checks.push({
+      id: `daemon.${plist.label}`,
+      ok: !plist.error && plist.bunExists && plist.cliExists,
+      message:
+        plist.error ??
+        `${plist.label}：bun ${plist.bunExists ? '有效' : '失效'}（${plist.bunPath}），入口 ${plist.cliExists ? '有效' : '失效'}（${plist.cliPath}）`,
+      hint: '重新运行 flow daemon install 更新 plist 中的路径',
+    })
   }
 
   const report: DoctorReport = { home, homeSource, ok: checks.every((c) => c.ok), checks }

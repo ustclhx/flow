@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import { chmodSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { compareVersions, type DoctorReport, findExecutable, runDoctor } from '../src/doctor.ts'
+import { generatePlist } from '../src/daemon/plist.ts'
+import {
+  runDoctor as actualDoctor,
+  compareVersions,
+  type DoctorOptions,
+  type DoctorReport,
+  findExecutable,
+} from '../src/doctor.ts'
 import { initFlowHome } from '../src/init.ts'
 import { tempHome } from './helpers.ts'
 
@@ -19,8 +26,52 @@ const reportOf = (r: Awaited<ReturnType<typeof runDoctor>>): DoctorReport =>
   r.ok ? r.data : (r.error.details as DoctorReport)
 
 const failed = (r: DoctorReport) => r.checks.filter((c) => !c.ok).map((c) => c.id)
+const runDoctor = (home: string, source: DoctorReport['homeSource'], options: DoctorOptions = {}) =>
+  actualDoctor(home, source, { launchAgentsDir: join(home, 'LaunchAgents'), ...options })
 
 describe('flow doctor', () => {
+  test('已安装 plist 的 bun 或入口失效时报错并提示重新安装；有效路径通过', async () => {
+    const home = tempHome('flow-doctor-')
+    await initFlowHome(home)
+    const directory = join(home, 'LaunchAgents')
+    mkdirSync(directory)
+    const bunPath = join(home, 'bun & <test>')
+    const cliPath = join(home, 'main.ts')
+    const plist = generatePlist({
+      label: 'dev.flow.hub',
+      bunPath,
+      cliPath,
+      command: ['hub', 'start'],
+      home,
+      logPath: join(home, 'hub.log'),
+      path: '/usr/bin',
+    })
+    writeFileSync(join(directory, 'dev.flow.hub.plist'), plist)
+    const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    const check = report.checks.find((c) => c.id === 'daemon.dev.flow.hub')
+    expect(check?.ok).toBe(false)
+    expect(check?.message).toContain('bun 失效')
+    expect(check?.message).toContain('入口 失效')
+    expect(check?.hint).toContain('flow daemon install')
+    writeFileSync(bunPath, '')
+    writeFileSync(cliPath, '')
+    expect(
+      reportOf(await runDoctor(home, 'FLOW_HOME')).checks.find((c) => c.id === check?.id)?.ok,
+    ).toBe(true)
+  })
+
+  test('损坏的 plist 不会静默跳过，未安装的服务不要求安装', async () => {
+    const home = tempHome('flow-doctor-')
+    mkdirSync(join(home, 'LaunchAgents'), { recursive: true })
+    writeFileSync(join(home, 'LaunchAgents', 'dev.flow.node.plist'), 'broken plist')
+    const checks = reportOf(await runDoctor(home, 'FLOW_HOME')).checks.filter((c) =>
+      c.id.startsWith('daemon.'),
+    )
+    expect(checks).toHaveLength(1)
+    expect(checks[0]).toMatchObject({ id: 'daemon.dev.flow.node', ok: false })
+    expect(checks[0]?.hint).toContain('flow daemon install')
+  })
+
   test('缺少密钥扫描工具：指出缺失的工具与安装方式，非零退出', async () => {
     const home = tempHome('flow-doctor-')
     expect((await initFlowHome(home)).ok).toBe(true)
