@@ -27,7 +27,7 @@
 
 ## 5. CLI 与操作
 
-- [ ] 5.1 在 core 中实现 `HubClient`；新增操作 `task_create`、`task_list`、`task_show`、`task_cancel` 并加入操作注册表；中枢不可用时返回 `hub_unavailable`（可重试）；验证 knowledge-access delta 的两个场景，且 M0 的 CLI 与 MCP 一致性测试自动覆盖这四个新操作
+- [x] 5.1 在 core 中实现 `HubClient`；新增操作 `task_create`、`task_list`、`task_show`、`task_cancel` 并加入操作注册表；中枢不可用时返回 `hub_unavailable`（可重试）；验证 knowledge-access delta 的两个场景，且 M0 的 CLI 与 MCP 一致性测试自动覆盖这四个新操作
 - [ ] 5.2 新增 `flow hub start|status|rebuild` 与 `flow node start|list` 命令，表格化的人类可读输出复用 `renderTable`；验证 `flow hub status` 显示版本、运行时长、账本序号、定时规则的加载错误和最近一次备份
 
 ## 6. 定时触发与托管

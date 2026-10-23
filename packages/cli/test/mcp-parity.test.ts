@@ -9,6 +9,7 @@ import { runCli } from '../src/run.ts'
  * CLI ≡ MCP 一致性（knowledge-access "两种接口等价"、tasks 5.1）：对 `operations` 中的**每一个**操作，
  * 用同一份最小合法输入分别经 CLI `--json` 与 MCP 工具调用，比较返回的 JSON 文档。
  * 新增操作会被自动覆盖；输入无法由 schema 自动构造时，在 SAMPLE_INPUTS 中补一份样例。
+ * 任务操作测试不启动中枢；两端同为 hub_unavailable 也符合一致性要求。
  * 写操作在两个独立的临时 home 中各执行一次，比较前把 sha、时间戳、随机后缀等易变部分归一化。
  */
 
@@ -19,6 +20,12 @@ type Json = Record<string, unknown>
  * kb_journal 给出样例是为了同时覆盖可选的 workspace 选项；capture 走自动构造。
  */
 const SAMPLE_INPUTS: Record<string, Json> = {
+  task_create: {
+    goal: '一致性任务',
+    workspace: 'ws/product-res',
+    role: 'developer',
+    executor: 'fake',
+  },
   kb_journal: { text: '一致性测试日志', workspace: 'ws/product-res' },
   // content 与 file 二选一，schema 采样器无法推断。
   kb_propose: {
