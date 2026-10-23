@@ -1,0 +1,17 @@
+{
+  "name": "@flow/hub",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@flow/core": "workspace:*",
+    "@hono/node-server": "^2.1.5",
+    "croner": "^10.0.1",
+    "hono": "^4.13.13",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  }
+}
