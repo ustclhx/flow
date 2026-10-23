@@ -14,7 +14,9 @@ describe('GET /v1/health', () => {
   })
 
   test('未知路径返回 404 与协议错误体', async () => {
-    const res = await createHubApp().request('/v1/nope')
+    const res = await createHubApp({ token: 'x'.repeat(43) }).request('/v1/nope', {
+      headers: { Authorization: `Bearer ${'x'.repeat(43)}` },
+    })
     expect(res.status).toBe(404)
     const body = errorBody.parse(await res.json())
     expect(body.error).toMatchObject({ code: 'not_found', retryable: false })
