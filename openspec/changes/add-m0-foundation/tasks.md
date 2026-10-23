@@ -28,8 +28,8 @@
 - [x] 4.1 实现 FTS5 trigram 索引（`state/index.db`），支持增量重建，并为少于 3 个字符的查询提供 `LIKE` 兜底；`flow kb search`；验证中文查询"干支日"（3 字）和"域名"（2 字）都能命中测试条目
 - [x] 4.2 实现 `flow kb get <id>` 和 `flow kb query key=value...`；验证 `type=data-source owner=ws/xxx` 的过滤测试
 - [x] 4.3 实现 `flow kb journal`、`flow capture`；验证 journal 写入当天文件，capture 只写 `raw/inbox/` 且 brain 没有变化
-- [ ] 4.4 实现提案功能：`flow kb propose`（提交时做校验和出处检查），`flow kb proposals list|diff|accept|reject [--all] [--reason]`，接受时用 base_hash 检测冲突，被拒绝的提案连同理由一起归档；验证测试覆盖批量接受和冲突两个场景
-- [ ] 4.5 实现 `flow ws list`、`flow ws resources <ws> [--type]`、`flow resource transfer`，以及 workspace 简报 `flow ws brief <ws> [--budget]`；验证 transfer 产生 owner-change 日志，简报超出预算时截断并注明省略了什么
+- [x] 4.4 实现提案功能：`flow kb propose`（提交时做校验和出处检查），`flow kb proposals list|diff|accept|reject [--all] [--reason]`，接受时用 base_hash 检测冲突，被拒绝的提案连同理由一起归档；验证测试覆盖批量接受和冲突两个场景
+- [x] 4.5 实现 `flow ws list`、`flow ws resources <ws> [--type]`、`flow resource transfer`，以及 workspace 简报 `flow ws brief <ws> [--budget]`；验证 transfer 产生 owner-change 日志，简报超出预算时截断并注明省略了什么
 
 ## 5. 知识访问：MCP 与 harness 接入
 

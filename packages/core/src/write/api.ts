@@ -15,7 +15,7 @@ import {
   type WriteContext,
   type WriteReceipt,
 } from './commit.ts'
-import { withWriteLock } from './lock.ts'
+import { type WriteLock, withWriteLock } from './lock.ts'
 import { checkRepoPath, classifyBrainPath } from './policy.ts'
 import type { LogOp } from './render.ts'
 
@@ -97,45 +97,47 @@ export async function writeEntry(
   const { expectedBaseHash, op, summary, ...ctx } = opts
 
   // 在锁内判断条目是否存在，避免判断与写入之间被别的进程插入。
+  const writeLocked = async (lock: WriteLock): Promise<Result<WriteEntryReceipt>> => {
+    const exists = existsSync(join(flowPaths(home).brain, path.data))
+    if (expectedBaseHash === null && exists) {
+      return fail('failure', 'base_conflict', `条目已存在，不能新建：${input.id}`, {
+        path: path.data,
+        expected: null,
+      })
+    }
+    if (typeof expectedBaseHash === 'string' && !exists) {
+      return fail('failure', 'base_conflict', `条目已不存在，不予写入：${input.id}`, {
+        path: path.data,
+        expected: expectedBaseHash,
+        actual: null,
+      })
+    }
+    const r = await commitWrite(
+      home,
+      {
+        repo: 'brain',
+        op: op ?? 'apply',
+        summary: summary ?? `${exists ? '更新' : '新增'} ${input.id}`,
+        files: [
+          exists
+            ? {
+                op: 'replace',
+                path: path.data,
+                content,
+                ...(typeof expectedBaseHash === 'string' ? { baseHash: expectedBaseHash } : {}),
+              }
+            : { op: 'create', path: path.data, content },
+        ],
+      },
+      { ...ctx, lock },
+    )
+    if (!r.ok) return r
+    return ok({ ...r.data, id: input.id, hash: hashContent(content), created: !exists })
+  }
+  if (ctx.lock) return writeLocked(ctx.lock)
   return withWriteLock(
     home,
-    async (lock) => {
-      const exists = existsSync(join(flowPaths(home).brain, path.data))
-      if (expectedBaseHash === null && exists) {
-        return fail('failure', 'base_conflict', `条目已存在，不能新建：${input.id}`, {
-          path: path.data,
-          expected: null,
-        })
-      }
-      if (typeof expectedBaseHash === 'string' && !exists) {
-        return fail('failure', 'base_conflict', `条目已不存在，不予写入：${input.id}`, {
-          path: path.data,
-          expected: expectedBaseHash,
-          actual: null,
-        })
-      }
-      const r = await commitWrite(
-        home,
-        {
-          repo: 'brain',
-          op: op ?? 'apply',
-          summary: summary ?? `${exists ? '更新' : '新增'} ${input.id}`,
-          files: [
-            exists
-              ? {
-                  op: 'replace',
-                  path: path.data,
-                  content,
-                  ...(typeof expectedBaseHash === 'string' ? { baseHash: expectedBaseHash } : {}),
-                }
-              : { op: 'create', path: path.data, content },
-          ],
-        },
-        { ...ctx, lock },
-      )
-      if (!r.ok) return r
-      return ok({ ...r.data, id: input.id, hash: hashContent(content), created: !exists })
-    },
+    writeLocked,
     ctx.lockTimeoutMs === undefined ? {} : { timeoutMs: ctx.lockTimeoutMs },
   )
 }

@@ -1,8 +1,10 @@
 import { z } from 'zod'
+import { proposalSchema } from '../proposals/schema.ts'
 import { baseShape, ENTRY_TYPES, entrySchema, entrySchemas } from './entries.ts'
 import { searchSchemas } from './search.ts'
 import { workspaceSchema } from './workspace.ts'
 
+export * from '../proposals/schema.ts'
 export * from './common.ts'
 export * from './entries.ts'
 export * from './search.ts'
@@ -25,6 +27,7 @@ export function jsonSchemas(): Record<string, JsonSchema> {
   const out: Record<string, JsonSchema> = {
     'entry.schema.json': toJson(entrySchema, 'entry.schema.json'),
     'workspace.schema.json': toJson(workspaceSchema, 'workspace.schema.json'),
+    'proposal.schema.json': toJson(proposalSchema, 'proposal.schema.json'),
   }
   for (const type of ENTRY_TYPES) {
     const file = `entries/${type}.schema.json`
