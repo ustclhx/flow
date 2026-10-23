@@ -1,3 +1,7 @@
+export * from './agents-sync/render.ts'
+export * from './agents-sync/splice.ts'
+export * from './agents-sync/sync.ts'
+export * from './agents-sync/types.ts'
 export * from './result.ts'
 export * from './sqlite.ts'
 export { VERSION } from './version.ts'

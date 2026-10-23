@@ -1,4 +1,4 @@
-import { exitCodeOf, type Result } from '@flow/core'
+import { exitCodeOf, type FlowError, type Result } from '@flow/core'
 
 export interface Rendered {
   stdout: string
@@ -12,7 +12,7 @@ export interface Rendered {
  */
 export function render<T>(
   result: Result<T>,
-  opts: { json: boolean; human?: (data: T) => string },
+  opts: { json: boolean; human?: (data: T) => string; humanError?: (error: FlowError) => string },
 ): Rendered {
   const exitCode = exitCodeOf(result)
   if (opts.json) {
@@ -26,8 +26,9 @@ export function render<T>(
     return { stdout: text.endsWith('\n') || text === '' ? text : `${text}\n`, stderr: '', exitCode }
   }
   const hint = result.error.kind === 'retryable' ? '（可重试）' : ''
+  const text = opts.humanError?.(result.error) ?? ''
   return {
-    stdout: '',
+    stdout: text.endsWith('\n') || text === '' ? text : `${text}\n`,
     stderr: `error[${result.error.code}]${hint}: ${result.error.message}\n`,
     exitCode,
   }

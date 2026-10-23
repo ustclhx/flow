@@ -1,4 +1,4 @@
-import type { Result } from '@flow/core'
+import type { FlowError, Result } from '@flow/core'
 
 export interface OptionSpec {
   type: 'string' | 'boolean'
@@ -25,6 +25,8 @@ export interface Command<T = unknown> {
   run(ctx: CommandContext): Promise<Result<T>>
   /** 人类可读输出；省略时以缩进 JSON 输出 data。 */
   human?(data: T): string
+  /** 失败时的补充输出，例如批量操作已经完成的仓库报告。 */
+  humanError?(error: FlowError): string
 }
 
 export const defineCommand = <T>(command: Command<T>): Command<T> => command
