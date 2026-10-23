@@ -1,0 +1,15 @@
+{
+  "$id": "https://flow.local/schemas/tasks/status.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "string",
+  "enum": [
+    "queued",
+    "running",
+    "verifying",
+    "done",
+    "failed",
+    "blocked",
+    "cancelled"
+  ],
+  "description": "任务状态"
+}

@@ -1,0 +1,39 @@
+{
+  "$id": "https://flow.local/schemas/protocol/tasks-list.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "verifying",
+        "done",
+        "failed",
+        "blocked",
+        "cancelled"
+      ],
+      "description": "任务状态"
+    },
+    "parent": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "任务 id，由中枢在创建时分配"
+    },
+    "limit": {
+      "default": 50,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    }
+  },
+  "additionalProperties": false,
+  "title": "GET /v1/tasks 查询参数",
+  "description": "按创建时间倒序"
+}

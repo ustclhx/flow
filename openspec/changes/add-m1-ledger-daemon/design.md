@@ -40,7 +40,11 @@
 - **写入流程**：校验事件 → 检查状态机 → 在同一个事务里插入事件并更新投影。事务失败就两者都不写。
 - **事件类型**集中在 `packages/core/src/ledger/events.ts`，每种类型都用 zod 定义载荷，并导出到 `schemas/events/`。
 - **重建**：清空投影表，按 seq 重放全部事件，用同一个 `apply(event)` 函数，保证重建与增量维护一致。测试中用随机生成的事件序列做"增量结果等于重建结果"的性质测试。
-- 租约令牌、long-poll 等待者这类纯内存状态不进投影。中枢重启后，租约按 `leases` 表中的到期时间恢复。
+- long-poll 等待者这类纯内存状态不进投影。租约令牌明文不落盘，`lease.granted` 只记录令牌的 SHA-256，中枢重启后据此继续校验原节点的续约与提交；租约按 `leases` 表中的到期时间恢复。
+- **高频信号不入账本**（契约见 `packages/core/src/ledger/events.ts`）：续约（`lease.renewed`）、活动（`task.activity`）、节点心跳（`node.seen`）都不是事件类型，只更新投影中的"软状态"列：`leases.expires_at`、任务最近 N 条活动与 `last_activity_at`、`nodes.last_seen_at`。
+  - 需要持久化的末尾输出随 `task.blocked` 的 `tail` 写入账本。
+  - 重建时软状态清空；活动租约的到期时间重置为"重建时刻 + lease_ttl_s"，与 D5 一样宁可多等一个 TTL。
+  - 租约过期写 `task.lease_expired`（不改状态），同一事务内再写 `task.blocked`（`node_lost`）或 `task.requeued`（`lease_expired`），一个事件只对应一个目标状态。
 
 ### D3 HTTP 层用 Hono，并隔离运行时
 - 选择 Hono 是因为它在 Bun 和 Node 上都能运行，并原生支持 SSE。

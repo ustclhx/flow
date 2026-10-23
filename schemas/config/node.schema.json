@@ -1,0 +1,33 @@
+{
+  "$id": "https://flow.local/schemas/config/node.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "capabilities": {
+      "default": [],
+      "description": "节点声明的能力；执行器插件自动贡献 executor:<type>，不必写出",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 512,
+        "pattern": "^[a-z][a-z0-9_-]*(:.+)?$",
+        "description": "节点能力，例如 browser、executor:fake、repo:/path/to/repo"
+      }
+    },
+    "concurrency": {
+      "default": 1,
+      "description": "同时执行的任务数，默认 1",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "hub_url": {
+      "description": "中枢地址；缺省为 http://127.0.0.1:<hub.yaml 的 port>",
+      "type": "string",
+      "format": "uri"
+    }
+  },
+  "additionalProperties": false,
+  "title": "Flow node config",
+  "description": "config/node.yaml"
+}

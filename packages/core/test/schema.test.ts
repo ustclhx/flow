@@ -178,7 +178,9 @@ describe('workspace 定义', () => {
 describe('JSON Schema 导出', () => {
   test('包含总 schema、workspace 与每种类型', () => {
     const files = Object.keys(jsonSchemas()).sort()
-    expect(files).toHaveLength(20)
+    // M1 的 tasks/、events/、protocol/、config/ 由 ledger-protocol.test.ts 覆盖
+    const m0 = files.filter((f) => !/^(tasks|events|protocol|config)\//.test(f))
+    expect(m0).toHaveLength(20)
     expect(files).toContain('entry.schema.json')
     expect(files).toContain('workspace.schema.json')
     expect(files).toContain('proposal.schema.json')

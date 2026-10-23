@@ -1,0 +1,123 @@
+{
+  "$id": "https://flow.local/schemas/protocol/nodes-list.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "node_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+              },
+              "hostname": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "pattern": "^[a-z][a-z0-9_-]*(:.+)?$",
+                  "description": "节点能力，例如 browser、executor:fake、repo:/path/to/repo"
+                }
+              },
+              "executors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                      "description": "执行器类型，例如 fake、codex-orca、claude-sdk、codex-exec"
+                    },
+                    "mode": {
+                      "description": "交互式（如 codex-orca）或无头（如 claude-sdk）；由变更 ② 使用",
+                      "type": "string",
+                      "enum": [
+                        "interactive",
+                        "headless"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false,
+                  "title": "Executor info"
+                }
+              },
+              "concurrency": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "registered_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+              },
+              "last_seen_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "最近一次活动；非事件派生，重建后为 null"
+              },
+              "active_leases": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "node_id",
+              "hostname",
+              "version",
+              "capabilities",
+              "executors",
+              "concurrency",
+              "registered_at",
+              "last_seen_at",
+              "active_leases"
+            ],
+            "additionalProperties": false,
+            "title": "Flow node"
+          }
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "additionalProperties": false,
+      "title": "GET /v1/nodes"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}

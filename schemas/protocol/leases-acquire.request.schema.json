@@ -1,0 +1,34 @@
+{
+  "$id": "https://flow.local/schemas/protocol/leases-acquire.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "node_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 512,
+        "pattern": "^[a-z][a-z0-9_-]*(:.+)?$",
+        "description": "节点能力，例如 browser、executor:fake、repo:/path/to/repo"
+      }
+    },
+    "wait_s": {
+      "default": 30,
+      "description": "long-poll 最长等待秒数；中枢按 lease_wait_max_s 截断",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 300
+    }
+  },
+  "required": [
+    "node_id",
+    "capabilities"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/leases"
+}

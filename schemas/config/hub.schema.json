@@ -1,0 +1,56 @@
+{
+  "$id": "https://flow.local/schemas/config/hub.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "port": {
+      "default": 7477,
+      "description": "中枢监听端口（只监听 127.0.0.1），默认 7477",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "heartbeat_url": {
+      "description": "外部心跳地址（例如 healthchecks.io）；不配置则不发心跳",
+      "type": "string",
+      "format": "uri"
+    },
+    "heartbeat_interval_s": {
+      "default": 300,
+      "description": "外部心跳间隔秒数，默认 300",
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 9007199254740991
+    },
+    "lease_ttl_s": {
+      "default": 60,
+      "description": "租约有效期秒数，默认 60",
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 3600
+    },
+    "lease_wait_max_s": {
+      "default": 30,
+      "description": "领取租约 long-poll 的最长等待秒数，默认 30",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 300
+    },
+    "backup_keep": {
+      "default": 14,
+      "description": "保留的账本备份份数，默认 14",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "backup_at": {
+      "default": "03:30",
+      "description": "每日备份的本地时间 HH:MM，默认 03:30",
+      "type": "string",
+      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+    }
+  },
+  "additionalProperties": false,
+  "title": "Flow hub config",
+  "description": "config/hub.yaml"
+}

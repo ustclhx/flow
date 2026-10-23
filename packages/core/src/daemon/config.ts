@@ -1,0 +1,134 @@
+import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { relative } from 'node:path'
+import { parse } from 'yaml'
+import { z } from 'zod'
+import { flowPaths } from '../home.ts'
+import { capability } from '../ledger/common.ts'
+import { DEFAULT_HUB_PORT, HUB_HOSTNAME } from '../ledger/protocol.ts'
+import { fail, ok, type Result } from '../result.ts'
+import { formatZodIssues } from '../validation-issue.ts'
+
+/**
+ * `config/hub.yaml` 与 `config/node.yaml`（design D6、D10）。
+ *
+ * 放在 core 而不是 hub / node 各自的包里：中枢、节点、CLI（`flow daemon status`、
+ * `HubClient` 解析中枢地址）都要读 `hub.yaml`，节点还要同时读两份；放在 core 只有一份定义，
+ * 也能和其他契约一起导出到 `schemas/config/`。
+ *
+ * 所有字段可选、有默认值；未知字段视为错误（拼错的键不会被静默忽略）。
+ */
+
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+
+export const hubConfigSchema = z
+  .strictObject({
+    port: z
+      .number()
+      .int()
+      .min(1)
+      .max(65535)
+      .default(DEFAULT_HUB_PORT)
+      .meta({ description: `中枢监听端口（只监听 ${HUB_HOSTNAME}），默认 ${DEFAULT_HUB_PORT}` }),
+    heartbeat_url: z
+      .url({ protocol: /^https?$/ })
+      .optional()
+      .meta({ description: '外部心跳地址（例如 healthchecks.io）；不配置则不发心跳' }),
+    heartbeat_interval_s: z
+      .number()
+      .int()
+      .min(10)
+      .default(300)
+      .meta({ description: '外部心跳间隔秒数，默认 300' }),
+    lease_ttl_s: z
+      .number()
+      .int()
+      .min(5)
+      .max(3600)
+      .default(60)
+      .meta({ description: '租约有效期秒数，默认 60' }),
+    lease_wait_max_s: z
+      .number()
+      .int()
+      .min(0)
+      .max(300)
+      .default(30)
+      .meta({ description: '领取租约 long-poll 的最长等待秒数，默认 30' }),
+    backup_keep: z
+      .number()
+      .int()
+      .min(1)
+      .default(14)
+      .meta({ description: '保留的账本备份份数，默认 14' }),
+    backup_at: z
+      .string()
+      .regex(HHMM_RE, '应为 24 小时制 HH:MM')
+      .default('03:30')
+      .meta({ description: '每日备份的本地时间 HH:MM，默认 03:30' }),
+  })
+  .meta({ title: 'Flow hub config', description: 'config/hub.yaml' })
+export type HubConfig = z.infer<typeof hubConfigSchema>
+
+export const nodeConfigSchema = z
+  .strictObject({
+    capabilities: z
+      .array(capability)
+      .default([])
+      .meta({ description: '节点声明的能力；执行器插件自动贡献 executor:<type>，不必写出' }),
+    concurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(64)
+      .default(1)
+      .meta({ description: '同时执行的任务数，默认 1' }),
+    hub_url: z
+      .url({ protocol: /^https?$/ })
+      .optional()
+      .meta({ description: '中枢地址；缺省为 http://127.0.0.1:<hub.yaml 的 port>' }),
+  })
+  .meta({ title: 'Flow node config', description: 'config/node.yaml' })
+export type NodeConfig = z.infer<typeof nodeConfigSchema>
+
+/** 读取并校验一份可选的 YAML 配置：文件不存在或为空时取全部默认值。 */
+async function loadYamlConfig<S extends z.ZodType>(
+  home: string,
+  path: string,
+  schema: S,
+): Promise<Result<z.infer<S>>> {
+  const file = relative(home, path)
+  let data: unknown = {}
+  if (existsSync(path)) {
+    let text: string
+    try {
+      text = await readFile(path, 'utf8')
+    } catch (err) {
+      return fail('failure', 'read_failed', `无法读取 ${file}：${(err as Error).message}`)
+    }
+    try {
+      data = parse(text) ?? {}
+    } catch (err) {
+      return fail(
+        'failure',
+        'invalid_config',
+        `${file} 不是合法的 YAML：${(err as Error).message}`,
+        [{ file, code: 'invalid_yaml', message: (err as Error).message }],
+      )
+    }
+  }
+  const parsed = schema.safeParse(data)
+  if (parsed.success) return ok(parsed.data as z.infer<S>)
+  const issues = formatZodIssues(parsed.error.issues, data, { file })
+  const detail = issues.map((i) => (i.field ? `${i.field}: ${i.message}` : i.message)).join('；')
+  return fail('failure', 'invalid_config', `${file} 配置不合法：${detail}`, issues)
+}
+
+export const loadHubConfig = (home: string): Promise<Result<HubConfig>> =>
+  loadYamlConfig(home, flowPaths(home).hubConfig, hubConfigSchema)
+
+export const loadNodeConfig = (home: string): Promise<Result<NodeConfig>> =>
+  loadYamlConfig(home, flowPaths(home).nodeConfig, nodeConfigSchema)
+
+/** 节点应连接的中枢地址：node.yaml 的 hub_url 优先，否则用回环地址加 hub.yaml 的端口。 */
+export const resolveHubUrl = (hub: Pick<HubConfig, 'port'>, node?: Pick<NodeConfig, 'hub_url'>) =>
+  (node?.hub_url ?? `http://${HUB_HOSTNAME}:${hub.port}`).replace(/\/+$/, '')

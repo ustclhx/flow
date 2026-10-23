@@ -1,0 +1,41 @@
+{
+  "$id": "https://flow.local/schemas/tasks/activity.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "output",
+        "status",
+        "heartbeat"
+      ],
+      "description": "output 输出片段、status 状态提示、heartbeat 执行器心跳（无内容）"
+    },
+    "text": {
+      "description": "输出片段或状态说明",
+      "type": "string",
+      "maxLength": 16384
+    },
+    "data": {
+      "description": "执行器专用的结构化信息",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "ts",
+    "kind"
+  ],
+  "title": "Task activity",
+  "description": "执行器上报的一条活动"
+}
