@@ -20,6 +20,7 @@
         "@flow/core": "workspace:*",
         "@flow/hub": "workspace:*",
         "@flow/mcp": "workspace:*",
+        "@flow/node": "workspace:*",
         "zod": "^4.6.7",
       },
       "devDependencies": {
@@ -64,6 +65,9 @@
       "dependencies": {
         "@flow/core": "workspace:*",
         "zod": "^4.6.7",
+      },
+      "devDependencies": {
+        "@flow/hub": "workspace:*",
       },
     },
   },

@@ -36,7 +36,7 @@ function statusOf(code: string, kind: string): number {
   return kind === 'usage' ? 400 : kind === 'retryable' ? 503 : 500
 }
 
-function respond<T>(
+export function respond<T>(
   c: Context,
   result: Result<T>,
   schema: z.ZodType,
@@ -67,7 +67,7 @@ function actorOf(c: Context): Result<string> {
 }
 
 /** 读取 JSON 请求体；空请求体视为 `{}`（仅当 allowEmpty）。 */
-async function jsonBody(c: Context, allowEmpty: boolean): Promise<Result<unknown>> {
+export async function jsonBody(c: Context, allowEmpty: boolean): Promise<Result<unknown>> {
   const text = await c.req.text()
   if (text.trim() === '') {
     return allowEmpty ? { ok: true, data: {} } : usage('请求体不能为空，应为 JSON 对象')

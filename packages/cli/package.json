@@ -12,8 +12,9 @@
   "dependencies": {
     "@flow/core": "workspace:*",
     "@flow/mcp": "workspace:*",
-    "zod": "^4.6.7",
-    "@flow/hub": "workspace:*"
+    "@flow/hub": "workspace:*",
+    "@flow/node": "workspace:*",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2"
