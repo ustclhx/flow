@@ -18,10 +18,10 @@
 
 ## 3. 写入路径（核心）
 
-- [ ] 3.1 实现跨进程写锁（`state/write.lock`，带超时）；验证测试中两个进程并发写 journal，最终两条记录都完整写入
-- [ ] 3.2 实现写入前的密钥扫描（通过 stdin 调用 gitleaks，脱敏输出），并允许 `secret://` 引用通过；验证测试中含假 Stripe key 的写入被拒绝且错误里不含原文，含 `secret://` 引用的写入正常通过
-- [ ] 3.3 实现统一的写入模块，流程为：校验 → 扫描 → 写文件 → 重新生成 index → 追加 log → git 提交（作者为 `Flow (<actor>)`）；验证一次写入恰好产生一次提交，index 和 log 也都更新
-- [ ] 3.4 在写入模块中加入 AI 写入边界：拒绝 AI 直接写入 decision 和 personal 条目，禁止修改 log 的已有行和 raw 的已有文件，runbook 必须附出处；验证测试覆盖 knowledge-access spec 中"AI 写入边界"的全部场景
+- [x] 3.1 实现跨进程写锁（`state/write.lock`，带超时）；验证测试中两个进程并发写 journal，最终两条记录都完整写入
+- [x] 3.2 实现写入前的密钥扫描（通过 stdin 调用 gitleaks，脱敏输出），并允许 `secret://` 引用通过；验证测试中含假 Stripe key 的写入被拒绝且错误里不含原文，含 `secret://` 引用的写入正常通过
+- [x] 3.3 实现统一的写入模块，流程为：校验 → 扫描 → 写文件 → 重新生成 index → 追加 log → git 提交（作者为 `Flow (<actor>)`）；验证一次写入恰好产生一次提交，index 和 log 也都更新
+- [x] 3.4 在写入模块中加入 AI 写入边界：拒绝 AI 直接写入 decision 和 personal 条目，禁止修改 log 的已有行和 raw 的已有文件，runbook 必须附出处；验证测试覆盖 knowledge-access spec 中"AI 写入边界"的全部场景
 
 ## 4. 知识访问：CLI
 

@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileS
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { stringify } from 'yaml'
+import { git } from '../src/git.ts'
+import { initFlowHome } from '../src/init.ts'
 
 /** 新建一个临时 flow-home 路径（目录本身尚不存在），绝不触碰真实的 ~/flow-home。 */
 export function tempHome(prefix = 'flow-test-'): string {
@@ -49,3 +51,41 @@ export function snapshot(dir: string): Map<string, { content: string; mtimeMs: n
 /** 由片段拼出一个假 Stripe 密钥，避免源码本身被扫描器当作泄漏。 */
 export const fakeStripeKey = (): string =>
   ['sk', 'live', '51Hq8ZtLm3Xr7VbN2cKd9WfPy4Gs6Ja'].join('_')
+
+/** 新建并初始化一个临时 flow-home，并定义 `ws/product-res` 与 `ws/xuanxue-saas` 两个产品 workspace。 */
+export async function initTempHome(prefix = 'flow-write-'): Promise<string> {
+  const home = tempHome(prefix)
+  const r = await initFlowHome(home)
+  if (!r.ok) throw new Error(r.error.message)
+  for (const id of ['product-res', 'xuanxue-saas']) {
+    writeWorkspace(home, id, {
+      id,
+      kind: 'product',
+      name: id,
+      description: `${id} workspace`,
+      repos: [`~/workspace/${id}`],
+    })
+  }
+  return home
+}
+
+/** 仓库的提交数。 */
+export async function commitCount(dir: string): Promise<number> {
+  const r = await git(dir, ['rev-list', '--count', 'HEAD'])
+  return Number(r.stdout.trim())
+}
+
+/** `git status --porcelain` 的输出；空串表示工作区与暂存区都干净。 */
+export async function gitStatus(dir: string): Promise<string> {
+  return (await git(dir, ['status', '--porcelain'])).stdout
+}
+
+/** 工作区文件内容（排除 `.git`、忽略 mtime），用于比较"写入前后内容完全一致"。 */
+export function treeContents(dir: string): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const [path, v] of snapshot(dir)) {
+    if (path === '.git' || path.startsWith(`.git/`)) continue
+    out.set(path, v.content)
+  }
+  return out
+}
