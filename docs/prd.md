@@ -1,4 +1,4 @@
-# Flow 产品定义（PRD）v0.6
+# Flow 产品定义（PRD）v0.7
 
 > 状态：讨论定稿草案 · 2026-10-24
 > 项目名 `flow` 为临时名。
@@ -367,7 +367,7 @@ policy:
 | 知识库 | Obsidian、qmd、gitleaks；社区的 LLM Wiki 实现（如 Astro-Han/karpathy-llm-wiki）可作为提示词参考 |
 | 监控 | Gatus、Uptime Kuma、Beszel、healthchecks.io |
 | 信息源 | RSSHub、Miniflux、changedetection.io、Firecrawl |
-| 通知 | ntfy、Apprise |
+| 通知 | Telegram Bot（首选）、ntfy、Apprise |
 | 网关与观测 | LiteLLM、Langfuse |
 | 社媒发布 | Postiz（可作为发布层的参考） |
 | Agent 任务板参考 | beads、Backlog.md、Vibe Kanban |
@@ -390,7 +390,7 @@ policy:
 | 阶段 | 内容 | 体感目标 |
 |---|---|---|
 | **M0 地基** | monorepo 脚手架；`~/flow-home` 布局；brain 和 raw 仓库及 schema；资源注册表（录入两个产品）；知识库 MCP server；AGENTS.md 受管区块；密钥扫描 | 所有 harness 共享同一份背景 |
-| **M1 内核 v0** | 账本、事件、调度；执行器插件：Claude Code、Codex（经 Orca）；卡住检测；supervisor 和 workspace 简报；最小策略引擎；sops + age 密钥提供器；收件箱（ntfy，加 Web 版"需要我的"） | 不用再盯 Codex 终端 |
+| **M1 内核 v0** | 账本、事件、调度；执行器插件：Claude Code、Codex（经 Orca）；卡住检测；supervisor 和 workspace 简报；最小策略引擎；sops + age 密钥提供器；收件箱（Telegram Bot，加 Web 版"需要我的"） | 不用再盯 Codex 终端 |
 | **M2 运维闭环** | 能力插件：Gatus、Cloudflare、域名到期（Sentry、Stripe 待产品启用后再接）；Metric；运维分诊工作流；runbook 回写；Decision 和回看；Web 版"全局健康" | 不用再手动查看网站状态 |
 | M3 | 知识 ingest 和 lint；随手记；热点雷达 | |
 | M4 | 社媒（X） | |
@@ -400,10 +400,10 @@ policy:
 
 **部署**：
 - MVP 在 Mac 上单机运行，但中枢和节点从一开始就分成两个进程；服务器到位后再迁移中枢。
-- Gatus 部署在常驻环境（小服务器或免费托管），即使 Mac 离线，也直接通过 ntfy 兜底告警。
+- Gatus 部署在常驻环境（小服务器或免费托管），即使 Mac 离线，也直接通过 Telegram 兜底告警（Gatus 自带 Telegram 告警）。
 
 **MVP 不做**：
-- 桌面端：用 Web 的 PWA 加 ntfy 代替；
+- 桌面端：用 Web 的 PWA 加 Telegram 代替；
 - 职能 workspace 和参谋长；
 - 插件视图、Notion 镜像、ACP；
 - 多节点部署。
@@ -426,7 +426,7 @@ policy:
 | Flow MCP server | 向所有 harness 暴露知识库检索、提交任务、写 journal、提问用户等能力 |
 | 直接调用模型 | Vercel AI SDK，费用记进账本 |
 | 知识库 | Markdown + frontmatter（zod 校验）；qmd 检索；frontmatter 索引进 SQLite |
-| 通知 | ntfy，加 Web 收件箱 |
+| 通知 | Telegram Bot，加 Web 收件箱 |
 | 平台自身监控 | healthchecks.io 外部心跳；日志用 pino |
 
 **语言演进**：
@@ -461,3 +461,31 @@ policy:
 5. **两类密钥分开管理**。Flow 自己的凭据由 Flow 管理；产品部署用的密钥（wrangler secrets、`.env.production-*`）仍由各产品自己的流程管理。Flow 的 agent 执行任务时不得读取这些文件：worktree 不复制它们，harness 也禁止读取这类路径。
 
 **age 私钥必须离线备份。** 私钥丢失意味着所有密钥都丢失。
+
+---
+
+## 19. M1 内核设计（2026-10-24 确认）
+
+1. **进程形态**：中枢 `flowd` 是 launchd 托管的守护进程，带外部心跳。节点是独立进程，用"租约 + long-poll"**主动向中枢拉取任务**。中枢和节点之间用 HTTP + JSON 通信，带 token 认证，协议用 JSON Schema 定义。
+2. **账本**：只追加事件，任务、收件箱等由事件投影得到。任务状态为 `queued → running → verifying → done / failed / blocked / cancelled`。任务是一份合同（目标、上下文引用、workspace、角色、工作目录、验收命令、策略），结束时产出 `result.json`。
+3. **执行器**：
+   - **交互模式**：Codex 经由 Orca 运行，把现有的 dispatch 和 watch 脚本插件化，用于长时间的开发任务；
+   - **无头模式**：Claude 用 Agent SDK，`canUseTool` 接入策略引擎；Codex 用 `codex exec --json`；用于分诊、审查这类短任务。
+4. **卡住检测**：执行器持续上报活动信号，内核据此区分卡住的原因：等审批、提问、无输出、崩溃。卡住后任务转为 `blocked`，收件箱生成一条附带终端末尾输出的消息；用户的回复会被送回 worker。
+5. **Supervisor**：每个 workspace 一个，被事件、任务结束或卡住、定时巡检唤醒。每次唤醒都是新会话，靠 workspace 简报恢复记忆。它只能通过 MCP 工具行动：建任务、提提案、问用户、写 journal。M1 的巡检是每天一次，输出报告。
+6. **收件箱**：分 Interrupt、Decide、Digest 三级，推送渠道做成插件。
+   - **首个渠道是 Telegram Bot**：Flow 主动向 Telegram 拉取消息（long polling），中枢不需要被公网访问；
+   - 通知里用内联按钮完成审批，回复消息就是给 worker 的答复；
+   - 只接受用户本人的 chat id。
+
+   ntfy 暂不采用。Web 端只做"需要我的"一页。
+7. **开发任务的验收**：每个任务一个 worktree，走 PR 流程。验收顺序是 CI 通过 → Claude 审查 → 合并 → 确认 main 上的发布流水线成功。
+8. **拆成 4 个变更**：
+   - ① 账本、守护进程、节点协议；
+   - ② 执行器和卡住检测；
+   - ③ 收件箱、Telegram、Web 页和策略；
+   - ④ supervisor 和 sops 密钥。
+
+   ② 和 ③ 依赖 ①，④ 依赖 ② 和 ③。
+
+   **M1 验收场景**：用户在 Telegram 给 product-res 下一条指令 → supervisor 拆成任务 → Codex 在 worktree 中执行 → 卡住时用户收到推送并回复，worker 继续 → 提 PR → Claude 审查 → 合并 → 验证 main 的发布流水线 → 写 journal。整个过程中用户只操作两次手机。
