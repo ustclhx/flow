@@ -19,7 +19,15 @@ import {
   toJsonDocument,
   VERSION,
 } from '@flow/core'
-import { type RunningHub, runHub } from '@flow/hub'
+import {
+  createTaskRoutes,
+  createTaskService,
+  openLedger,
+  type RunningHub,
+  runHub,
+  startHub,
+  workspaceCheckFromHome,
+} from '@flow/hub'
 import { callJson, connect, initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
@@ -347,8 +355,25 @@ describe('HubClient 协议边界', () => {
     expect(command?.human?.(status)).toContain('bad-rule cron 不合法')
   })
 
-  test('真实中枢 status 回退显示 health、pid、最新备份，rebuild 显示事件数和耗时', async () => {
-    await start()
+  test('旧中枢缺少 status 路由时回退显示 health、pid、最新备份，rebuild 显示事件数和耗时', async () => {
+    // 显式构造没有 status 路由的旧服务，保留客户端回退与 CLI 渲染的回归覆盖。
+    let routes: ReturnType<typeof createTaskRoutes>
+    hub = data(
+      await startHub({
+        home,
+        port: 0,
+        openLedger: async () => {
+          const ledger = await openLedger(flowPaths(home).ledgerDb)
+          routes = createTaskRoutes({
+            ledger,
+            tasks: createTaskService({ ledger, workspaceExists: workspaceCheckFromHome(home) }),
+          })
+          return ledger
+        },
+        routes: () => [{ path: '/', app: routes }],
+      }),
+    )
+    await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
     await client().createTask(contract)
     const backups = flowPaths(home).backups
     await mkdir(backups, { recursive: true })

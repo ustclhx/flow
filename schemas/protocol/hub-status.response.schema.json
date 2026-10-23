@@ -58,7 +58,15 @@
                   "rule_id": {
                     "type": "string"
                   },
+                  "rule_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
                   "field": {
+                    "type": "string"
+                  },
+                  "code": {
                     "type": "string"
                   },
                   "message": {
@@ -77,6 +85,36 @@
             "errors"
           ],
           "additionalProperties": false
+        },
+        "schedule_errors": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule_id": {
+                "type": "string"
+              },
+              "rule_index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "field": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "additionalProperties": false
+          }
         },
         "last_backup": {
           "anyOf": [
@@ -113,6 +151,7 @@
         "started_at",
         "runtime",
         "schedules",
+        "schedule_errors",
         "last_backup"
       ],
       "additionalProperties": false,

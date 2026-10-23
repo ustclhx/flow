@@ -19,6 +19,8 @@ export interface SleepDetectorOptions {
   ttlMs: number
   /** 判定为睡眠的阈值，默认 30 秒。 */
   thresholdMs?: number
+  /** 记录恢复事件后通知其他中枢服务。 */
+  onResume?: () => void
 }
 
 export interface SleepDetector {
@@ -45,6 +47,7 @@ export function createSleepDetector(o: SleepDetectorOptions): SleepDetector {
         { type: 'hub.resumed', payload: { slept_ms: slept, extended_leases: extended } },
         { actor: 'hub' },
       )
+      o.onResume?.()
       return slept
     },
   }
