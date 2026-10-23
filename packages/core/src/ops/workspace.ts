@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { type BrainEntry, readBrainEntries } from '../entries.ts'
+import { renderTable } from '../format/table.ts'
 import { parseFrontmatter } from '../frontmatter.ts'
 import { flowPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
@@ -46,6 +47,12 @@ export const wsListOp = defineOperation({
       workspaces: loaded.data.workspaces.map(({ ref, kind, name }) => ({ ref, kind, name })),
     })
   },
+  human: (o) =>
+    renderTable(o.workspaces, [
+      { header: 'WORKSPACE', value: (w) => w.ref },
+      { header: 'KIND', value: (w) => w.kind },
+      { header: 'NAME', value: (w) => w.name },
+    ]),
 })
 
 export const wsResourcesOp = defineOperation({
@@ -64,6 +71,16 @@ export const wsResourcesOp = defineOperation({
     )
     return ok({ workspace: ws.data.ref, resources })
   },
+  human: (o) =>
+    renderTable(
+      o.resources,
+      [
+        { header: 'TYPE', value: (r) => r.type },
+        { header: 'ID', value: (r) => r.id },
+        { header: 'SUMMARY', value: (r) => r.summary, max: 50 },
+      ],
+      `${o.workspace} 没有资源`,
+    ),
 })
 
 export const resourceTransferOp = defineOperation({

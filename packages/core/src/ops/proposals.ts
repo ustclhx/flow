@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { renderTable } from '../format/table.ts'
 import {
   acceptProposals,
   createProposal,
@@ -30,12 +31,33 @@ export const kbProposeOp = defineOperation({
   human: (o) => `已提交提案 ${o.id}：${o.target}`,
 })
 
+/** ISO 时间转为本地时区的 `YYYY-MM-DD HH:MM`，便于人读。 */
+const localMinute = (iso: string): string => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 export const kbProposalsListOp = defineOperation({
   name: 'kb_proposals_list',
   cli: 'kb proposals list',
   summary: '列出待确认提案',
   input: z.object({}),
   run: (_input: Record<string, never>, ctx) => listProposals(ctx.home),
+  human: (o) =>
+    renderTable(
+      o.proposals,
+      [
+        { header: 'ID', value: (p) => p.id },
+        { header: 'TARGET', value: (p) => p.target },
+        { header: 'NEW', value: (p) => (p.is_new ? '新建' : '修改') },
+        { header: 'ACTOR', value: (p) => p.actor },
+        { header: 'CREATED', value: (p) => localMinute(p.created_at) },
+        { header: 'REASON', value: (p) => p.reason, max: 40 },
+      ],
+      '没有待确认的提案',
+    ),
 })
 
 export const kbProposalsDiffOp = defineOperation({
