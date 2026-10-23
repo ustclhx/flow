@@ -1,0 +1,38 @@
+{
+  "$id": "https://flow.local/schemas/operations/kb-query.output.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "title",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "results"
+  ],
+  "additionalProperties": false
+}

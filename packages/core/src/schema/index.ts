@@ -1,17 +1,19 @@
 import { z } from 'zod'
 import { baseShape, ENTRY_TYPES, entrySchema, entrySchemas } from './entries.ts'
+import { searchSchemas } from './search.ts'
 import { workspaceSchema } from './workspace.ts'
 
 export * from './common.ts'
 export * from './entries.ts'
+export * from './search.ts'
 export * from './workspace.ts'
 
 type JsonSchema = Record<string, unknown>
 
 const SCHEMA_BASE = 'https://flow.local/schemas/'
 
-function toJson(schema: z.ZodType, file: string): JsonSchema {
-  const json = z.toJSONSchema(schema) as JsonSchema
+function toJson(schema: z.ZodType, file: string, io: 'input' | 'output' = 'output'): JsonSchema {
+  const json = z.toJSONSchema(schema, { io }) as JsonSchema
   return { $id: `${SCHEMA_BASE}${file}`, ...json }
 }
 
@@ -27,6 +29,10 @@ export function jsonSchemas(): Record<string, JsonSchema> {
   for (const type of ENTRY_TYPES) {
     const file = `entries/${type}.schema.json`
     out[file] = toJson(entrySchemas[type], file)
+  }
+  for (const [name, schema] of Object.entries(searchSchemas)) {
+    const file = `operations/${name}.schema.json`
+    out[file] = toJson(schema, file, name.endsWith('.input') ? 'input' : 'output')
   }
   return out
 }
