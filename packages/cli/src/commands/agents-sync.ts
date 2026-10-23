@@ -1,4 +1,12 @@
-import { fail, type Result, type SyncReport, type SyncTarget, syncAgentsFiles } from '@flow/core'
+import {
+  fail,
+  loadSyncTargets,
+  type Result,
+  resolveFlowHome,
+  type SyncReport,
+  type SyncTarget,
+  syncAgentsFiles,
+} from '@flow/core'
 import { defineCommand } from '../command.ts'
 
 function humanReport(report: SyncReport): string {
@@ -29,6 +37,4 @@ export function createAgentsSyncCommand(loadTargets: () => Promise<Result<SyncTa
   })
 }
 
-export default createAgentsSyncCommand(async () =>
-  fail('failure', 'not_implemented', 'workspace 加载将在第 2 组合并后接入'),
-)
+export default createAgentsSyncCommand(() => loadSyncTargets(resolveFlowHome(process.env)))

@@ -2,7 +2,17 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["**", "!openspec", "!.claude", "!.agents", "!.omp", "!.pi", "!docs", "!**/*.md"]
+    "includes": [
+      "**",
+      "!openspec",
+      "!.claude",
+      "!.agents",
+      "!.omp",
+      "!.pi",
+      "!docs",
+      "!schemas",
+      "!**/*.md"
+    ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "asNeeded" } },

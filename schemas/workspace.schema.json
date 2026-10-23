@@ -1,0 +1,91 @@
+{
+  "$id": "https://flow.local/schemas/workspace.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "workspace id，与文件名一致；标识写作 ws/<id>"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "显示名称"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话说明"
+        },
+        "kind": {
+          "type": "string",
+          "const": "product",
+          "description": "产品 workspace，可以拥有资源"
+        },
+        "repos": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "关联项目仓库的本地路径"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "kind",
+        "repos"
+      ],
+      "additionalProperties": {},
+      "title": "product workspace"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "workspace id，与文件名一致；标识写作 ws/<id>"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "显示名称"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话说明"
+        },
+        "kind": {
+          "type": "string",
+          "const": "function",
+          "description": "职能 workspace，不能拥有资源"
+        },
+        "repos": {
+          "description": "关联仓库的本地路径",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "kind"
+      ],
+      "additionalProperties": {},
+      "title": "function workspace"
+    }
+  ],
+  "title": "Flow workspace",
+  "description": "config/workspaces/<id>.yaml 的内容"
+}

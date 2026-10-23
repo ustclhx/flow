@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -126,18 +127,17 @@ describe('agents sync CLI', () => {
     expect(output.exitCode).toBe(1)
   })
 
-  test('默认占位命令已注册，loader 错误以标准 JSON 返回', async () => {
-    const output = await runCli(['agents', 'sync', '--json'], commands)
-    expect(output.exitCode).toBe(1)
-    expect(JSON.parse(output.stdout)).toEqual({
-      ok: false,
-      error: {
-        kind: 'failure',
-        code: 'not_implemented',
-        message: 'workspace 加载将在第 2 组合并后接入',
-        retryable: false,
-      },
-    })
+  test('默认命令已注册并读取 FLOW_HOME：未初始化时返回 not_initialized', async () => {
+    const prev = process.env.FLOW_HOME
+    process.env.FLOW_HOME = join(mkdtempSync(join(tmpdir(), 'flow-cli-sync-')), 'home')
+    try {
+      const output = await runCli(['agents', 'sync', '--json'], commands)
+      expect(output.exitCode).toBe(1)
+      expect(JSON.parse(output.stdout).error.code).toBe('not_initialized')
+    } finally {
+      if (prev === undefined) delete process.env.FLOW_HOME
+      else process.env.FLOW_HOME = prev
+    }
   })
 
   test('多余位置参数返回用法错误且不调用 loader', async () => {

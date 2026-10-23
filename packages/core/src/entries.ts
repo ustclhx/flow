@@ -1,0 +1,79 @@
+import { existsSync } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
+import { join, relative, sep } from 'node:path'
+import { parseFrontmatter } from './frontmatter.ts'
+import { flowPaths } from './home.ts'
+import { fail, ok, type Result } from './result.ts'
+import type { ValidationIssue } from './validation-issue.ts'
+
+/**
+ * brain 条目的发现与读取。条目 = `brain/` 下的 `.md` 文件；标识 = 相对 brain 的路径去掉 `.md`。
+ * 排除：顶层的 `AGENTS.md`、`index.md`、`log.md`，`journal/` 整个目录（按天的日志，不是条目），
+ * 以及所有隐藏文件和目录。
+ */
+
+export const BRAIN_RESERVED_FILES = ['AGENTS.md', 'index.md', 'log.md'] as const
+export const BRAIN_JOURNAL_DIR = 'journal'
+
+export interface BrainEntry {
+  /** 条目标识，例如 `resources/domains/arcanumber.com`。 */
+  id: string
+  /** 相对 flow-home 的路径，例如 `brain/resources/domains/arcanumber.com.md`。 */
+  file: string
+  absPath: string
+  /** 未经 schema 校验的 frontmatter。 */
+  frontmatter: Record<string, unknown>
+  body: string
+}
+
+const toPosix = (p: string) => p.split(sep).join('/')
+
+/** 列出 brain 下所有条目文件的绝对路径（按标识排序）。 */
+export async function listEntryFiles(brainDir: string): Promise<string[]> {
+  const out: string[] = []
+  async function walk(dir: string, relDir: string) {
+    const items = await readdir(dir, { withFileTypes: true })
+    for (const item of items) {
+      if (item.name.startsWith('.')) continue
+      const rel = relDir === '' ? item.name : `${relDir}/${item.name}`
+      if (item.isDirectory()) {
+        if (relDir === '' && item.name === BRAIN_JOURNAL_DIR) continue
+        await walk(join(dir, item.name), rel)
+      } else if (item.isFile() && item.name.endsWith('.md')) {
+        if (relDir === '' && (BRAIN_RESERVED_FILES as readonly string[]).includes(item.name))
+          continue
+        out.push(join(dir, item.name))
+      }
+    }
+  }
+  await walk(brainDir, '')
+  return out.sort()
+}
+
+export const entryIdOf = (brainDir: string, absPath: string): string =>
+  toPosix(relative(brainDir, absPath)).replace(/\.md$/, '')
+
+/**
+ * 读取全部条目。无法解析 frontmatter 的文件记入 issues（作为错误），不会出现在 entries 中。
+ */
+export async function readBrainEntries(
+  home: string,
+): Promise<Result<{ entries: BrainEntry[]; issues: ValidationIssue[] }>> {
+  const { brain } = flowPaths(home)
+  if (!existsSync(brain)) {
+    return fail('failure', 'not_initialized', `未找到 ${brain}，请先运行 flow init`)
+  }
+  const entries: BrainEntry[] = []
+  const issues: ValidationIssue[] = []
+  for (const absPath of await listEntryFiles(brain)) {
+    const id = entryIdOf(brain, absPath)
+    const file = toPosix(relative(home, absPath))
+    const parsed = parseFrontmatter(await readFile(absPath, 'utf8'))
+    if (!parsed.ok) {
+      issues.push({ file, id, code: parsed.error.code, message: parsed.error.message })
+      continue
+    }
+    entries.push({ id, file, absPath, frontmatter: parsed.data.data, body: parsed.data.body })
+  }
+  return ok({ entries, issues })
+}

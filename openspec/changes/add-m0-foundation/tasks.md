@@ -10,11 +10,11 @@
 
 ## 2. flow-home 与条目格式
 
-- [ ] 2.1 实现数据目录的解析逻辑（`FLOW_HOME` 优先，默认 `~/flow-home`）；验证单元测试覆盖默认和覆盖两种情况
-- [ ] 2.2 实现 `flow init`：创建四个子目录、初始化三个 git 仓库、写入 `brain/AGENTS.md`、`index.md`、`log.md`，以及各仓库的 `.gitleaks.toml` 和提交前钩子；行为必须幂等；验证集成测试在临时 `FLOW_HOME` 下初始化两次，第二次不改动任何已有文件
-- [ ] 2.3 用 zod 定义 11 种条目类型及各自的必填字段，包括 decision 的字段、事实条目的 `sources` 与 `last_verified`；由同一份定义生成 `brain/AGENTS.md` 中的字段说明，并导出 JSON Schema 到 `schemas/`（纳入版本管理，CI 检查是否与定义一致）；验证每种类型都有合法和非法的样例测试，且运行 `bun run schemas:check` 时没有差异
-- [ ] 2.4 实现 `flow kb validate`：报告必填字段缺失、未知类型、owner 无效、出处缺失（用户手写时只警告）、可能过时和从未核实的条目；验证测试覆盖 knowledge-base 与 resource-registry 两份 spec 中的全部校验场景
-- [ ] 2.5 实现 `flow doctor`；验证缺少 gitleaks 或钩子时以非零状态退出，并给出修复提示
+- [x] 2.1 实现数据目录的解析逻辑（`FLOW_HOME` 优先，默认 `~/flow-home`）；验证单元测试覆盖默认和覆盖两种情况
+- [x] 2.2 实现 `flow init`：创建四个子目录、初始化三个 git 仓库、写入 `brain/AGENTS.md`、`index.md`、`log.md`，以及各仓库的 `.gitleaks.toml` 和提交前钩子；行为必须幂等；验证集成测试在临时 `FLOW_HOME` 下初始化两次，第二次不改动任何已有文件
+- [x] 2.3 用 zod 定义 11 种条目类型及各自的必填字段，包括 decision 的字段、事实条目的 `sources` 与 `last_verified`；由同一份定义生成 `brain/AGENTS.md` 中的字段说明，并导出 JSON Schema 到 `schemas/`（纳入版本管理，CI 检查是否与定义一致）；验证每种类型都有合法和非法的样例测试，且运行 `bun run schemas:check` 时没有差异
+- [x] 2.4 实现 `flow kb validate`：报告必填字段缺失、未知类型、owner 无效、出处缺失（用户手写时只警告）、可能过时和从未核实的条目；验证测试覆盖 knowledge-base 与 resource-registry 两份 spec 中的全部校验场景
+- [x] 2.5 实现 `flow doctor`；验证缺少 gitleaks 或钩子时以非零状态退出，并给出修复提示
 
 ## 3. 写入路径（核心）
 
