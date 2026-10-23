@@ -1,4 +1,5 @@
 export { createHubApp, errorResponse, type HubDeps } from './app.ts'
+export * from './ledger/index.ts'
 export {
   currentRuntime,
   type FetchHandler,
