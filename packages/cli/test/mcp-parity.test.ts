@@ -20,6 +20,12 @@ type Json = Record<string, unknown>
  */
 const SAMPLE_INPUTS: Record<string, Json> = {
   kb_journal: { text: '一致性测试日志', workspace: 'ws/product-res' },
+  // content 与 file 二选一，schema 采样器无法推断。
+  kb_propose: {
+    target: 'notes/parity',
+    content: '---\ntype: note\ntitle: 一致性\nsummary: 一致性测试\nscope: work\n---\n正文\n',
+    reason: '一致性测试',
+  },
 }
 
 const ACTOR = 'parity-agent'
@@ -76,9 +82,10 @@ function toArgv(op: Operation<never, unknown>, input: Json): string[] {
     if (typeof v === 'boolean') {
       if (v) opts.push(`--${kebab(key)}`)
     } else if (Array.isArray(v)) {
-      for (const item of v) opts.push(`--${kebab(key)}`, String(item))
+      for (const item of v) opts.push(`--${kebab(key)}=${String(item)}`)
     } else {
-      opts.push(`--${kebab(key)}`, String(v))
+      // 用 --key=value 形式：值以 - 开头（例如 frontmatter 的 ---）时 parseArgs 才不会误判。
+      opts.push(`--${kebab(key)}=${String(v)}`)
     }
   }
   return [...op.cli.split(' '), ...args, ...opts, '--json', '--actor', ACTOR]

@@ -77,6 +77,8 @@ flow kb query type=data-source owner=ws/xuanxue-saas --json --actor pi
 flow ws brief ws/xuanxue-saas --budget 4000 --json --actor pi
 flow kb journal "东方站日语版部署完成，CDN 缓存已刷新" --workspace ws/product-res --json --actor pi
 flow capture "用户提到想给东方站加日语" --json --actor pi
+# 提案：先把完整的新条目（含 frontmatter 与 sources）写到临时文件，再提交
+flow kb propose resources/domains/ganjiday.com --file /tmp/ganjiday.md --reason "补充注册商" --json --actor pi
 ```
 
 写锁超时时的输出（退出码 3，可重试）：
