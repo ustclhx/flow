@@ -1,0 +1,5 @@
+# Orca 项目配置：每个任务组一个 worktree / 分支，完成后由协调者审查并合并回 main。
+scripts:
+  setup: |
+    bun install
+setupAgentStartupPolicy: wait-for-setup

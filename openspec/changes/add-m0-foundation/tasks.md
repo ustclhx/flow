@@ -4,9 +4,9 @@
 
 ## 1. 脚手架
 
-- [ ] 1.1 建立 Bun workspaces monorepo：`packages/core`、`packages/cli`、`packages/mcp`，配置 TS strict 和 Biome；验证 `bun install`、`bun test`、`bunx biome check .` 在空项目上都能通过
-- [ ] 1.2 用 `bun link` 暴露 `flow` 命令，先只有 `flow --version`；建立 CLI 公共层，统一处理 `--json` 输出和退出码约定（0/1/2/3），并为 `bun:sqlite` 加一层薄封装；验证在任意目录下运行 `flow --version` 和 `flow --version --json` 都输出正确，CLI 公共层有单元测试
-- [ ] 1.3 安装 gitleaks，确定最低版本并写入 README 的依赖说明；验证 `gitleaks version` 满足这个最低版本
+- [x] 1.1 建立 Bun workspaces monorepo：`packages/core`、`packages/cli`、`packages/mcp`，配置 TS strict 和 Biome；验证 `bun install`、`bun test`、`bunx biome check .` 在空项目上都能通过
+- [x] 1.2 用 `bun link` 暴露 `flow` 命令，先只有 `flow --version`；建立 CLI 公共层，统一处理 `--json` 输出和退出码约定（0/1/2/3），并为 `bun:sqlite` 加一层薄封装；验证在任意目录下运行 `flow --version` 和 `flow --version --json` 都输出正确，CLI 公共层有单元测试
+- [x] 1.3 安装 gitleaks，确定最低版本并写入 README 的依赖说明；验证 `gitleaks version` 满足这个最低版本
 
 ## 2. flow-home 与条目格式
 
