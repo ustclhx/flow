@@ -1,0 +1,960 @@
+{
+  "$id": "https://flow.local/schemas/entry.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "product",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "产品所属的 workspace（ws/<id>）"
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "description": "产品状态，例如 beta、live"
+        },
+        "url": {
+          "description": "产品主页 URL",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope",
+        "workspace",
+        "status"
+      ],
+      "additionalProperties": {},
+      "title": "product",
+      "description": "一个对外产品"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "domain",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "唯一归属的 workspace（ws/<id>），不能是职能 workspace"
+        },
+        "registrar": {
+          "description": "注册商；未知时为空",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "注册到期日（YYYY-MM-DD）；未知时为空"
+        },
+        "dns_provider": {
+          "description": "DNS 服务商",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "monitors": {
+          "description": "监控该域名的数据源条目标识",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope",
+        "owner",
+        "registrar",
+        "expires"
+      ],
+      "additionalProperties": {},
+      "title": "domain",
+      "description": "一个域名（资源）"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "service",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "唯一归属的 workspace（ws/<id>），不能是职能 workspace"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "运行平台，例如 cloudflare-workers"
+        },
+        "environment": {
+          "description": "环境，例如 production",
+          "type": "string"
+        },
+        "url": {
+          "description": "服务地址",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope",
+        "owner",
+        "provider"
+      ],
+      "additionalProperties": {},
+      "title": "service",
+      "description": "一个部署的服务（资源）"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "repo",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "唯一归属的 workspace（ws/<id>），不能是职能 workspace"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "本地路径"
+        },
+        "remote": {
+          "description": "远端地址",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope",
+        "owner",
+        "path"
+      ],
+      "additionalProperties": {},
+      "title": "repo",
+      "description": "一个代码仓库（资源）"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "data-source",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "唯一归属的 workspace（ws/<id>），不能是职能 workspace"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "数据源提供方，例如 sentry、stripe、cloudflare-web-analytics、http-health"
+        },
+        "endpoint": {
+          "description": "访问地址",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credential": {
+          "description": "访问凭据的 secret:// 引用；不得写明文",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^secret:\\/\\/[A-Za-z0-9._-]+(\\/[A-Za-z0-9._-]+)*$",
+              "description": "密钥引用，形如 secret://<路径>；不得写明文"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope",
+        "owner",
+        "provider"
+      ],
+      "additionalProperties": {},
+      "title": "data-source",
+      "description": "一个可读取的数据源（资源）"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "account",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "唯一归属的 workspace（ws/<id>），不能是职能 workspace"
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1,
+          "description": "平台名称"
+        },
+        "handle": {
+          "type": "string",
+          "minLength": 1,
+          "description": "账号名"
+        },
+        "goal": {
+          "description": "运营目标",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credential": {
+          "description": "访问凭据的 secret:// 引用；不得写明文",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^secret:\\/\\/[A-Za-z0-9._-]+(\\/[A-Za-z0-9._-]+)*$",
+              "description": "密钥引用，形如 secret://<路径>；不得写明文"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope",
+        "owner",
+        "platform",
+        "handle"
+      ],
+      "additionalProperties": {},
+      "title": "account",
+      "description": "一个平台账号（资源）"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "runbook",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "description": "适用的 workspace（ws/<id>）",
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$"
+        },
+        "applies_to": {
+          "description": "适用的条目标识列表",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[^/.]",
+            "description": "条目标识：相对 brain/ 的路径，不含 .md"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope"
+      ],
+      "additionalProperties": {},
+      "title": "runbook",
+      "description": "一份操作手册"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "decision",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "approved",
+            "rejected",
+            "reviewed"
+          ],
+          "description": "决策状态：proposed、approved、rejected、reviewed"
+        },
+        "expected_outcome": {
+          "type": "string",
+          "minLength": 1,
+          "description": "预期结果"
+        },
+        "metric": {
+          "type": "string",
+          "minLength": 1,
+          "description": "衡量指标"
+        },
+        "review_date": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "回看日期（YYYY-MM-DD）"
+        },
+        "workspace": {
+          "description": "相关的 workspace（ws/<id>）",
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope",
+        "status",
+        "expected_outcome",
+        "metric",
+        "review_date"
+      ],
+      "additionalProperties": {},
+      "title": "decision",
+      "description": "一项决策，需要定期回看"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "concept",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope"
+      ],
+      "additionalProperties": {},
+      "title": "concept",
+      "description": "一个概念或术语"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "note",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope"
+      ],
+      "additionalProperties": {},
+      "title": "note",
+      "description": "一条笔记，不要求出处"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "project-card",
+          "description": "条目类型"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "标题"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "一句话摘要，会出现在 index.md 中"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "work",
+            "personal"
+          ],
+          "description": "范围：work 或 personal"
+        },
+        "tags": {
+          "description": "标签",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "description": "出处：raw 中的路径、项目仓库内的路径或 URL；事实类条目需要至少一个",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "last_verified": {
+          "description": "最近一次核实日期（YYYY-MM-DD），未核实时为空",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "项目所属的 workspace（ws/<id>）"
+        },
+        "repo_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "项目仓库的本地路径"
+        },
+        "docs": {
+          "description": "重要文档的路径",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "scope",
+        "workspace",
+        "repo_paths"
+      ],
+      "additionalProperties": {},
+      "title": "project-card",
+      "description": "项目卡片：一个产品 workspace 的入口说明"
+    }
+  ],
+  "title": "Flow brain entry",
+  "description": "brain/ 下知识条目的 YAML frontmatter"
+}

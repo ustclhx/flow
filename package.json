@@ -9,7 +9,9 @@
     "test": "bun test",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "schemas:gen": "bun scripts/gen-schemas.ts",
+    "schemas:check": "bun scripts/gen-schemas.ts --check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",
