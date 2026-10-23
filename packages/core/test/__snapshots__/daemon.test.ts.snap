@@ -1,0 +1,108 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`plist 两个服务的 plist 快照包含启动、重启、环境和日志设置: hub 1`] = `
+"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.flow.hub</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/bun</string>
+    <string>/src/main.ts</string>
+    <string>hub</string>
+    <string>start</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FLOW_HOME</key>
+    <string>/flow</string>
+    <key>PATH</key>
+    <string>/opt:/usr/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/flow/state/logs/hub.log</string>
+  <key>StandardErrorPath</key>
+  <string>/flow/state/logs/hub.log</string>
+</dict>
+</plist>
+"
+`;
+
+exports[`plist 两个服务的 plist 快照包含启动、重启、环境和日志设置: node 1`] = `
+"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.flow.node</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/bun</string>
+    <string>/src/main.ts</string>
+    <string>node</string>
+    <string>start</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FLOW_HOME</key>
+    <string>/flow</string>
+    <key>PATH</key>
+    <string>/opt:/usr/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/flow/state/logs/node.log</string>
+  <key>StandardErrorPath</key>
+  <string>/flow/state/logs/node.log</string>
+</dict>
+</plist>
+"
+`;
+
+exports[`plist XML 特殊字符在所有字符串中转义，路径解析仅解码一次: xml-escaping 1`] = `
+"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
+    <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
+    <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FLOW_HOME</key>
+    <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
+    <key>PATH</key>
+    <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
+  <key>StandardErrorPath</key>
+  <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
+</dict>
+</plist>
+"
+`;

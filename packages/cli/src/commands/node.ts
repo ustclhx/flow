@@ -1,4 +1,13 @@
-import { type NodeView, ok, renderTable, resolveFlowHome } from '@flow/core'
+import { join } from 'node:path'
+import {
+  fail,
+  flowPaths,
+  type NodeView,
+  ok,
+  renderTable,
+  resolveFlowHome,
+  rotateLog,
+} from '@flow/core'
 import { nodeHubClientFromHome, startNode } from '@flow/node'
 import { defineCommand } from '../command.ts'
 
@@ -10,7 +19,14 @@ export const nodeStartCommand = defineCommand({
   name: 'node start',
   summary: '在前台运行执行节点：注册到中枢，领取并执行任务（Ctrl-C 退出）',
   run: async () => {
-    const started = await startNode({ home: resolveFlowHome(process.env) })
+    const home = resolveFlowHome(process.env)
+    const rotated = await rotateLog(join(flowPaths(home).logs, 'node.log'))
+    if (!rotated.ok) return rotated
+    // launchd 的标准流仍指向归档文件，退出后由 KeepAlive 重新打开当前日志。
+    if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.flow.node') {
+      return fail('retryable', 'log_rotated', '日志已轮转，等待 launchd 重新启动节点')
+    }
+    const started = await startNode({ home })
     if (!started.ok) return started
     const node = started.data
     console.error(
