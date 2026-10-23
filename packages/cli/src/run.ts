@@ -52,6 +52,7 @@ export async function runCli(argv: string[], commands: Command<unknown>[]): Prom
       args,
       options: options as Record<string, string | boolean | string[] | undefined>,
       actor: typeof actor === 'string' && actor !== '' ? actor : 'user',
+      actorGiven: typeof actor === 'string' && actor !== '',
     })
   } catch (err) {
     result = fail('failure', 'internal_error', (err as Error).message)

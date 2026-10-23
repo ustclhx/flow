@@ -14,6 +14,8 @@ export interface CommandContext {
   options: Record<string, string | boolean | string[] | undefined>
   /** 操作者标识；CLI 默认是 `user`（design D8）。 */
   actor: string
+  /** 是否显式给出了 `--actor`（`flow mcp` 要求必须显式指定）。 */
+  actorGiven?: boolean
 }
 
 export interface Command<T = unknown> {
