@@ -3,6 +3,7 @@ import type { Command } from '../command.ts'
 import { commandFromOperation } from '../from-operation.ts'
 import agentsSync from './agents-sync.ts'
 import { doctorCommand } from './doctor.ts'
+import { hubRebuildCommand, hubStartCommand, hubStatusCommand } from './hub.ts'
 import { initCommand } from './init.ts'
 import { kbValidateCommand } from './kb-validate.ts'
 import { mcpCommand } from './mcp.ts'
@@ -13,6 +14,9 @@ import { mcpCommand } from './mcp.ts'
  */
 export const commands = [
   initCommand,
+  hubStartCommand,
+  hubStatusCommand,
+  hubRebuildCommand,
   kbValidateCommand,
   doctorCommand,
   agentsSync,

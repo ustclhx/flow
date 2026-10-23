@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { fail, invokeOperation, type Operation, resolveFlowHome } from '@flow/core'
 import type { z } from 'zod'
 import { type Command, defineCommand, type OptionSpec } from './command.ts'
@@ -36,6 +37,8 @@ export function commandFromOperation(op: Operation<never, unknown>): Command<unk
       ...(description ? { description } : {}),
     }
   }
+  if (op.fileInput)
+    options.file = { type: 'string', description: '完整输入的 JSON 文件（与字段选项互斥）' }
   const usage = [
     op.cli,
     ...positional.map((p, i) =>
@@ -51,7 +54,23 @@ export function commandFromOperation(op: Operation<never, unknown>): Command<unk
     usage,
     options,
     run: async ({ args, options: values, actor }) => {
-      const raw: Record<string, unknown> = {}
+      let raw: Record<string, unknown> = {}
+      if (op.fileInput && typeof values.file === 'string') {
+        if (args.length || Object.keys(values).some((key) => key !== 'file')) {
+          return fail('usage', 'invalid_arguments', '--file 不能与字段选项或位置参数同时使用')
+        }
+        let text: string
+        try {
+          text = await readFile(values.file, 'utf8')
+        } catch {
+          return fail('failure', 'read_failed', '无法读取输入文件')
+        }
+        try {
+          raw = JSON.parse(text)
+        } catch {
+          return fail('usage', 'invalid_arguments', '输入文件不是合法的 JSON')
+        }
+      }
       positional.forEach((key, i) => {
         const last = i === positional.length - 1
         const kind = fieldKind(shape[key] as z.ZodType)
@@ -63,7 +82,7 @@ export function commandFromOperation(op: Operation<never, unknown>): Command<unk
         return fail('usage', 'invalid_arguments', `${op.cli} 不接受位置参数`)
       }
       for (const [name, value] of Object.entries(values)) {
-        if (value === undefined) continue
+        if (value === undefined || (op.fileInput && name === 'file')) continue
         const key = optionKeys[name] as string
         raw[key] = fieldKind(shape[key] as z.ZodType) === 'number' ? Number(value) : value
       }

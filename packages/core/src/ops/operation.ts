@@ -27,6 +27,8 @@ export interface Operation<I = Record<string, unknown>, O = unknown> {
    * 若为字符串则把剩余参数以空格连接（便于 `flow capture 一句话不用加引号`）。
    */
   positional?: readonly string[]
+  /** CLI 可从 --file 读取完整 JSON 输入；不改变 MCP 输入合同。 */
+  fileInput?: boolean
   run(input: I, ctx: OpContext): Promise<Result<O>>
   /** CLI 人类可读输出；省略时输出缩进 JSON。 */
   human?(output: O): string

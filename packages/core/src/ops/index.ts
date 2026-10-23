@@ -8,12 +8,14 @@ import {
   kbProposeOp,
 } from './proposals.ts'
 import { kbGetOp, kbQueryOp, kbSearchOp } from './search.ts'
+import { taskCancelOp, taskCreateOp, taskListOp, taskShowOp } from './tasks.ts'
 import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './workspace.ts'
 
 export * from './journal.ts'
 export * from './operation.ts'
 export * from './proposals.ts'
 export * from './search.ts'
+export * from './tasks.ts'
 export * from './workspace.ts'
 
 /**
@@ -21,6 +23,10 @@ export * from './workspace.ts'
  * 新增操作时在 `ops/` 下新建文件并在此追加。
  */
 export const operations = [
+  taskCreateOp,
+  taskListOp,
+  taskShowOp,
+  taskCancelOp,
   kbJournalOp,
   captureOp,
   kbSearchOp,
