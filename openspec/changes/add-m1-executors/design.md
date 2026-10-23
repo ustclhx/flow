@@ -76,6 +76,13 @@
 - 续约响应返回最早一条未送达的回复。节点调用执行器的 `deliver()` 后，通过 `POST /v1/leases/:id/ack-reply` 确认，中枢在同一个事务中写入 `task.unblocked` 并标记已送达，保证只送达一次。
 - 任务没有租约时（无头执行器的 `blocked` 已经结束了这一轮），回复会把任务转为 `queued`，并把 `{ reply, session }` 并入下一次执行的上下文。这个动作通过一个新事件 `task.requeued_with_reply` 完成。
 
+### D7a 交互式执行器在 blocked 期间继续持有租约（合并 ① 第 2 组时补充）
+- ① 的账本在 `task.blocked` 时释放租约。这对无头执行器是对的：一轮执行到此结束。但交互式执行器（codex-orca、claude-sdk）在等待回复期间，worker 还活着，节点必须继续持有并续约这个任务。
+- 因此 1.3 需要做两件事：
+  - 给 `task.blocked` 载荷加 `lease_held: boolean`。交互式执行器上报为 true，此时租约不释放、续约照常进行，回复通过续约送达后写入 `task.unblocked`；无头执行器上报为 false，行为不变。
+  - `task.unblocked` 时，如果任务没有活动租约（例如节点已经掉线），改为重新排队，以免出现"running 但无人持有"的任务。
+- 这一条要和 ① 的 store 一起修改，对应的性质测试也要覆盖 `lease_held` 的两种取值。
+
 ### D8 验收运行器
 - 用 `node:child_process` 的 `spawn(argv[0], argv.slice(1), { cwd, shell: false })` 执行，输出只保留末尾 200 行，经过 M0 的密钥扫描与脱敏后写入结果。
 - 验收在节点上完成，所以节点必须具备合同所需的仓库能力。

@@ -15,9 +15,9 @@
 
 ## 3. 中枢进程与 API（packages/hub）
 
-- [ ] 3.1 实现 `state/hub.pid` 单实例锁、token 的生成与 0600 权限，以及 Bearer 认证中间件（health 接口免认证）；验证重复启动以非零状态退出并给出已有 pid，缺少 token 时返回 401
-- [ ] 3.2 实现 SSE 事件流 `GET /v1/events?after=`，支持断线续传；验证断开后补发的事件不丢失、不重复
-- [ ] 3.3 实现外部心跳（可选的 `heartbeat_url`）与每日 `VACUUM INTO` 备份，按保留份数轮换，错过时补做；验证注入时钟的测试覆盖"心跳失败不影响 API"和"备份可恢复"
+- [x] 3.1 实现 `state/hub.pid` 单实例锁、token 的生成与 0600 权限，以及 Bearer 认证中间件（health 接口免认证）；验证重复启动以非零状态退出并给出已有 pid，缺少 token 时返回 401
+- [x] 3.2 实现 SSE 事件流 `GET /v1/events?after=`，支持断线续传；验证断开后补发的事件不丢失、不重复
+- [x] 3.3 实现外部心跳（可选的 `heartbeat_url`）与每日 `VACUUM INTO` 备份，按保留份数轮换，错过时补做；验证注入时钟的测试覆盖"心跳失败不影响 API"和"备份可恢复"
 
 ## 4. 节点协议（packages/hub + packages/node）
 

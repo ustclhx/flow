@@ -73,8 +73,10 @@ async function serveNode(fetch: FetchHandler, port: number): Promise<RunningServ
     server: ReturnType<typeof nodeServe>
     info: AddressInfo
   }>((resolve, reject) => {
-    const s = nodeServe({ fetch, port, hostname: HUB_HOSTNAME }, (info) =>
-      resolve({ server: s, info }),
+    // 不替换全局 Request / Response，保持 Bun 和其他嵌入宿主的运行时隔离。
+    const s = nodeServe(
+      { fetch, port, hostname: HUB_HOSTNAME, overrideGlobalObjects: false },
+      (info) => resolve({ server: s, info }),
     )
     s.once('error', reject)
   })
