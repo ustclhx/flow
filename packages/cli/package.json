@@ -10,6 +10,7 @@
     "flow": "./src/main.ts"
   },
   "dependencies": {
-    "@flow/core": "workspace:*"
+    "@flow/core": "workspace:*",
+    "zod": "^4.6.7"
   }
 }

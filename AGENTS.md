@@ -8,8 +8,10 @@
 ## 结构
 
 - `packages/core`：全部业务逻辑。返回 `Result<T>`（`ok` / `fail`），不直接打印、不调用 `process.exit`。
-- `packages/cli`：命令适配层。每个命令一个文件放在 `src/commands/`，用 `defineCommand` 定义，并在 `src/commands/index.ts` 注册。
-- `packages/mcp`：MCP 适配层，与 CLI 调用同一批 core 函数。
+- **知识访问操作**（kb_search、kb_journal、capture…）只在 `packages/core/src/ops/` 中用 `defineOperation` 定义一次（输入 zod schema + run），并加入 `ops/index.ts` 的 `operations`。CLI 命令与 MCP 工具都由它自动生成，不要再为这类操作手写 CLI 命令或 MCP 工具。
+- `packages/cli`：命令适配层。`src/from-operation.ts` 把操作转成命令；只有不属于知识访问的命令（init、doctor、agents sync）才在 `src/commands/` 下用 `defineCommand` 单独写，并在 `src/commands/index.ts` 注册。
+- `packages/mcp`：MCP 适配层，遍历同一个 `operations` 生成工具。
+- 写入一律经过 `packages/core/src/write/`（`commitWrite`、`writeEntry`、`appendJournal`、`appendCapture`、`withWriteLock`），不要绕开它直接写 brain 或 raw。
 
 ## 约定
 
