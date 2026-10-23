@@ -29,7 +29,7 @@ import {
 import { tempHome } from './helpers.ts'
 
 const ts = '2026-10-24T08:00:00.000Z'
-const token = 'tok_0123456789abcdef'
+const token = 'x'.repeat(24)
 const result = { summary: 's', executor: 'fake', node_id: 'n1' }
 const contract = taskContract.parse({
   goal: 'g',
