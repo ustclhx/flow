@@ -21,6 +21,8 @@ export interface StartHubOptions
   /** 测试可用 0 申请随机端口；默认读取 hub.yaml。 */
   port?: number
   runtime?: Runtime
+  /** 停止时最先调用（关闭 HTTP 与账本之前），用于停止调用方自己的定时器。 */
+  onStop?: () => void | Promise<void>
 }
 
 export interface RunningHub {
@@ -48,6 +50,11 @@ export async function startHub(options: StartHubOptions): Promise<Result<Running
       process.off('SIGINT', onSignal)
       process.off('SIGTERM', onSignal)
       shutdown.abort()
+      try {
+        await options.onStop?.()
+      } catch (err) {
+        ;(options.logger ?? console).warn('停止回调失败', String(err))
+      }
       // 即使服务关闭失败，也必须尝试关闭账本并释放锁。
       try {
         await maintenance?.stop()

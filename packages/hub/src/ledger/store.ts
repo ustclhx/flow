@@ -94,6 +94,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
 
   getTask(id: string): TaskView | null
   listTasks(filter?: Partial<ListTasksQuery>): TaskView[]
+  /** 全部 queued 任务，按创建先后（created_seq 升序），供租约分配使用。 */
+  queuedTasks(): TaskView[]
   findTaskByIdempotencyKey(key: string): TaskView | null
   /** 某任务的全部事件（按 seq）。 */
   taskEvents(taskId: string): LedgerEvent[]
@@ -496,6 +498,11 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return all<TaskRow>(
         `${TASK_SELECT} ${clause} ORDER BY t.created_seq DESC LIMIT ?`,
         ...params,
+      ).map(rowToTask)
+    },
+    queuedTasks() {
+      return all<TaskRow>(
+        `${TASK_SELECT} WHERE t.status = 'queued' ORDER BY t.created_seq ASC`,
       ).map(rowToTask)
     },
     findTaskByIdempotencyKey(key) {
