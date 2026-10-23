@@ -1,0 +1,34 @@
+{
+  "$id": "https://flow.local/schemas/operations/kb-get.output.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    },
+    "frontmatter": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "body": {
+      "type": "string"
+    },
+    "file": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "type",
+    "frontmatter",
+    "body",
+    "file"
+  ],
+  "additionalProperties": false
+}

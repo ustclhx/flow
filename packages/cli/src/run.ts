@@ -34,6 +34,7 @@ export async function runCli(argv: string[], commands: Command<unknown>[]): Prom
       args: argv,
       options: { ...GLOBAL_OPTIONS, ...(command.options ?? {}) } as never,
       allowPositionals: true,
+      allowNegative: true,
       strict: true,
     })
   } catch (err) {

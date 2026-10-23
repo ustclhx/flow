@@ -1,0 +1,15 @@
+{
+  "$id": "https://flow.local/schemas/operations/kb-get.input.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "条目标识"
+    }
+  },
+  "required": [
+    "id"
+  ]
+}

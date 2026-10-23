@@ -1,0 +1,17 @@
+{
+  "$id": "https://flow.local/schemas/operations/kb-query.input.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "filters": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "AND 条件，例如 type=data-source owner=ws/xuanxue-saas"
+    }
+  },
+  "required": [
+    "filters"
+  ]
+}
