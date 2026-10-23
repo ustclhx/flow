@@ -78,6 +78,44 @@ describe('log 行', () => {
 })
 
 describe('统一写入', () => {
+  test('brain 允许只追加日志的提交，raw 的空操作仍被拒绝', async () => {
+    const home = await initTempHome()
+    const brain = join(home, 'brain')
+    const before = await commitCount(brain)
+    const log = readFileSync(join(brain, 'log.md'), 'utf8')
+    const index = readFileSync(join(brain, 'index.md'), 'utf8')
+    const r = await commitWrite(
+      home,
+      {
+        repo: 'brain',
+        op: 'reject',
+        summary: '拒绝提案 p',
+        files: [],
+      },
+      { actor: 'user', now: NOW },
+    )
+    if (!r.ok) throw new Error(r.error.message)
+    expect(r.data.files).toEqual(['brain/log.md'])
+    expect(r.data.indexChanged).toBe(false)
+    expect(readFileSync(join(brain, 'log.md'), 'utf8')).toBe(
+      `${log}2026-10-24 reject user 拒绝提案 p\n`,
+    )
+    expect(readFileSync(join(brain, 'index.md'), 'utf8')).toBe(index)
+    expect(await commitCount(brain)).toBe(before + 1)
+    expect(await gitStatus(brain)).toBe('')
+    const raw = await commitWrite(
+      home,
+      {
+        repo: 'raw',
+        op: 'reject',
+        summary: '空操作',
+        files: [],
+      },
+      { actor: 'user' },
+    )
+    expect(!raw.ok && raw.error.code).toBe('invalid_change')
+  })
+
   test('新条目进入索引：一次写入恰好一次提交，index 与 log 同时更新', async () => {
     const home = await initTempHome()
     const brain = join(home, 'brain')
@@ -402,7 +440,7 @@ describe('统一写入', () => {
       { actor: 'bad actor' },
     )
     expect(!badActor.ok && badActor.error.code).toBe('invalid_actor')
-    const empty = await commitWrite(home, { ...base, files: [] }, { actor: 'user' })
+    const empty = await commitWrite(home, { ...base, repo: 'raw', files: [] }, { actor: 'user' })
     expect(!empty.ok && empty.error.code).toBe('invalid_change')
     const dup = await commitWrite(
       home,

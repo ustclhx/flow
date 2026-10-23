@@ -178,9 +178,10 @@ describe('workspace 定义', () => {
 describe('JSON Schema 导出', () => {
   test('包含总 schema、workspace 与每种类型', () => {
     const files = Object.keys(jsonSchemas()).sort()
-    expect(files).toHaveLength(13)
+    expect(files).toHaveLength(14)
     expect(files).toContain('entry.schema.json')
     expect(files).toContain('workspace.schema.json')
+    expect(files).toContain('proposal.schema.json')
     for (const t of ENTRY_TYPES) expect(files).toContain(`entries/${t}.schema.json`)
     const decision = jsonSchemas()['entries/decision.schema.json'] as { required: string[] }
     expect(decision.required).toEqual(

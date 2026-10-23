@@ -288,7 +288,10 @@ export async function commitWrite(
   if (!isLogOp(change.op)) {
     return fail('usage', 'invalid_change', `未知操作类型：${String(change.op)}`)
   }
-  if (change.files.length === 0) return fail('usage', 'invalid_change', '没有任何文件操作')
+  // brain 允许只追加审计日志（例如拒绝提案），raw 仍必须包含文件操作。
+  if (change.files.length === 0 && change.repo !== 'brain') {
+    return fail('usage', 'invalid_change', '没有任何文件操作')
+  }
   const seen = new Set<string>()
   for (const f of change.files) {
     if (seen.has(f.path)) return fail('usage', 'invalid_change', `同一文件出现多次：${f.path}`)
