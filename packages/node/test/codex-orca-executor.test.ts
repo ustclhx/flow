@@ -19,6 +19,7 @@ import {
   tuiFixture,
 } from './codex-orca-helpers.ts'
 import { bench, ManualClock } from './harness.ts'
+import { waitFor as until } from './wait.ts'
 
 /**
  * codex-orca 执行器的监控循环、deliver 与 cancel（add-m1-executors 2.3；executor-codex-orca spec）。
@@ -33,13 +34,6 @@ afterEach(() => {
 })
 
 const realWait = (ms: number) => new Promise((r) => setTimeout(r, ms))
-async function until(pred: () => boolean, what: string) {
-  for (let i = 0; i < 400; i++) {
-    if (pred()) return
-    await realWait(5)
-  }
-  throw new Error(`等待超时：${what}`)
-}
 
 interface Started {
   run: ExecutorRun
@@ -107,14 +101,16 @@ async function start(
     outcome: () => outcome,
     async poll(n = 1) {
       for (let i = 0; i < n; i++) {
+        // 创建终端、接管 handle 都可能还在异步落盘；等监控真正开始等待后再拨钟。
+        await until(() => clock.pendingTimers() > 0 || outcome !== undefined, '轮询定时器')
         const before = orca.ops('terminalRead').length
         await clock.advance(POLL)
         await until(
           () => orca.ops('terminalRead').length > before || outcome !== undefined,
           '终端读取',
         )
-        await realWait(5)
-        await clock.advance(0)
+        // terminalRead 只表示本轮开始；下一次 sleep 或结束才表示本轮处理完毕。
+        await until(() => clock.pendingTimers() > 0 || outcome !== undefined, '本轮监控结束')
       }
     },
   }
@@ -122,7 +118,7 @@ async function start(
 }
 
 const ready = (s: Started) =>
-  until(() => s.orca.ops('terminalCreate').length > 0 || s.outcome() !== undefined, '启动 Codex')
+  until(() => s.clock.pendingTimers() > 0 || s.outcome() !== undefined, '启动 Codex 并落盘')
 const idles = (s: Started) => s.activity.filter((a) => a.data?.idle === true)
 const sends = (s: Started) => s.orca.ops('terminalSend').map((c) => c.input)
 
@@ -538,8 +534,10 @@ describe('deliver 与 cancel', () => {
     const s = await start({}, (o) => o.show('approval'))
     await ready(s)
     await s.poll(2)
+    const timers = s.clock.pendingTimers()
     const p = s.run.deliver?.({ reply_id: 'r-1', kind: 'deny', text: '不要写 /tmp', by: 'user' })
-    await until(() => sends(s).length > 0, 'Esc')
+    // Esc 发出后还要持久化送达状态，之后才会挂上 1 秒延时。
+    await until(() => s.clock.pendingTimers() > timers, 'Esc 后的延时定时器')
     await s.clock.advance(1_000)
     expect(await p).toBe('delivered')
     expect(sends(s)).toEqual([

@@ -18,6 +18,8 @@ import {
   type ExecutorRun,
 } from '../src/index.ts'
 import { bench } from './harness.ts'
+import { processStopped } from './process.ts'
+import { waitFor } from './wait.ts'
 
 /** 所有执行测试只启动 process.execPath + 临时脚本，CI 无需安装 Codex。 */
 const fixture = (name: string) =>
@@ -323,18 +325,24 @@ describe('codex-exec 无头执行器', () => {
 
   test('取消杀掉整个进程组，结束活动流；运行中 deliver 幂等且留给下一轮', async () => {
     const s = setup(
-      `spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); setTimeout(()=>require('node:fs').writeFileSync('orphan','alive'),300); setInterval(()=>{},1000)"], {stdio:'ignore'}); send(question); setInterval(()=>{},1000)`,
+      `const child = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); process.send('ready'); setInterval(()=>{},1000)"], {stdio:['ignore','ignore','ignore','ipc']});
+       child.on('message', () => {
+         fs.writeFileSync('ready.tmp', JSON.stringify([process.pid,child.pid]));
+         fs.renameSync('ready.tmp', 'ready.json');
+         send(question);
+       });
+       setInterval(()=>{},1000)`,
     )
     const run = s.run()
     await run.activity[Symbol.asyncIterator]().next()
+    const pids = JSON.parse(readFileSync(join(s.dir, 'ready.json'), 'utf8')) as number[]
     const reply = { reply_id: 'r-running', kind: 'text' as const, text: '3', by: 'user' }
     expect(await run.deliver?.(reply)).toBe('not_running')
     expect(await run.deliver?.(reply)).toBe('not_running')
     s.abort.abort()
     await run.cancel()
     expect(await run.done).toEqual(ok({ outcome: 'cancelled' }))
-    await new Promise((r) => setTimeout(r, 400))
-    expect(existsSync(join(s.dir, 'orphan'))).toBe(false)
+    await waitFor(() => pids.every(processStopped), '取消后整个进程组退出')
   })
 
   test('启动前已经取消时不启动进程', async () => {

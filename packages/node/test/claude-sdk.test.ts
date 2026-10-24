@@ -31,6 +31,7 @@ import {
   systemClock,
 } from '../src/index.ts'
 import { type Bench, bench, ManualClock } from './harness.ts'
+import { waitFor } from './wait.ts'
 
 /**
  * claude-sdk 执行器（add-m1-executors 3.1 / 3.2；executor-claude-sdk spec 全部场景）。
@@ -692,16 +693,17 @@ describe('运行中的回复与会话恢复', () => {
     })
     const run = ex.run(contract(), ctx())
     const outcomes: ExecutorOutcome[] = []
+    let awaitingApproval = false
     const pumped = (async () => {
-      for await (const _ of run.activity) {
+      for await (const a of run.activity) {
+        if (a.data?.idle) awaitingApproval = true
       }
     })()
-    // 等 canUseTool 挂起。
-    for (let i = 0; i < 50 && state.calls.length === 0; i++) await Bun.sleep(1)
-    await Bun.sleep(5)
+    await waitFor(() => awaitingApproval, 'canUseTool 挂起审批')
     const approve: DeliveredReply = { reply_id: 'r-a', kind: 'approve', by: 'user' }
     expect(await run.deliver?.(approve)).toBe('delivered')
     expect(await run.deliver?.(approve)).toBe('delivered')
+    await waitFor(() => state.permissions.length === 1, 'SDK 收到审批结果')
     expect(state.permissions).toHaveLength(1)
     release()
     const r = await run.done
@@ -797,7 +799,7 @@ describe('健壮性', () => {
     const gate = new Promise<void>((r) => {
       release = r
     })
-    const { query, state } = mockSdk(async function* (io) {
+    const { query } = mockSdk(async function* (io) {
       await io.nextUser()
       yield say('第一轮')
       await gate
@@ -813,11 +815,13 @@ describe('健壮性', () => {
       resolveRole: roleResolver(reviewer()),
     })
     const run = ex.run(contract(), ctx())
+    let firstTurn = false
     const pumped = (async () => {
-      for await (const _ of run.activity) {
+      for await (const a of run.activity) {
+        if (a.text === '第一轮') firstTurn = true
       }
     })()
-    for (let i = 0; i < 100 && state.calls.length === 0; i++) await Bun.sleep(1)
+    await waitFor(() => firstTurn, 'SDK 读完首条输入并开始第一轮')
     expect(
       await run.deliver?.({ reply_id: 'r-q', kind: 'text', text: '再看 CI', by: 'user' }),
     ).toBe('delivered')

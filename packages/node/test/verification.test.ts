@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join } from 'node:path'
 import { TAIL_LINE_MAX, TAIL_TOTAL_MAX_BYTES, taskContract } from '@flow/core'
 import { type Bench, bench, fake } from './harness.ts'
+import { processStopped } from './process.ts'
+import { waitFor as waitForCondition } from './wait.ts'
 
 let current: Bench | undefined
 afterEach(async () => {
@@ -38,21 +40,8 @@ async function waitFor(b: Bench, pred: () => boolean) {
 const finished = (b: Bench, id: string) =>
   waitFor(b, () => ['done', 'failed', 'blocked', 'cancelled'].includes(b.task(id).status))
 
-function assertDead(pid: number) {
-  // Linux 的孤儿进程可能短暂成为 zombie；它已经终止，不再占有管道或执行脚本。
-  if (process.platform === 'linux' && existsSync(`/proc/${pid}/stat`)) {
-    let stat: string
-    try {
-      stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
-      throw err
-    }
-    expect(stat.split(') ')[1]?.startsWith('Z')).toBe(true)
-  } else {
-    expect(() => process.kill(pid, 0)).toThrow()
-  }
-}
+const waitForExit = (pids: number[]) =>
+  waitForCondition(() => pids.every(processStopped), '父子进程退出')
 
 /** 父子进程都忽略 SIGTERM，子进程继承管道；只杀父进程时 close 不会触发。 */
 function hangingGroup(b: Bench) {
@@ -61,12 +50,15 @@ function hangingGroup(b: Bench) {
     b,
     'hanging',
     `const {spawn} = require('node:child_process');
-     const {writeFileSync} = require('node:fs');
+     const {writeFileSync, renameSync} = require('node:fs');
      process.on('SIGTERM', () => {});
      const child = spawn(process.execPath, ['-e',
        "process.on('SIGTERM',()=>{}); process.send('ready'); setInterval(()=>{},1000)"],
        {stdio:['ignore','inherit','inherit','ipc']});
-     child.on('message', () => writeFileSync(${JSON.stringify(ready)}, JSON.stringify([process.pid,child.pid])));
+     child.on('message', () => {
+       writeFileSync(${JSON.stringify(`${ready}.tmp`)}, JSON.stringify([process.pid,child.pid]));
+       renameSync(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)});
+     });
      setInterval(()=>{},1000);`,
   )
   return { ready, cmd }
@@ -192,7 +184,7 @@ test('命令超时：合同覆盖超时，杀掉整个进程组，后续命令�
     duration_ms: 2000,
   })
   expect(existsSync(marker)).toBe(false)
-  pids.forEach(assertDead)
+  await waitForExit(pids)
 })
 
 test('默认每条命令 10 分钟，verifying 期间持续续约，不受执行器超时或无进展计时影响', async () => {
@@ -239,7 +231,7 @@ test('验收中取消：杀掉命令及子进程，保存已执行命令，任�
   expect(b.task(id).result?.verify[0]).toMatchObject({ cmd, exit_code: null, timed_out: false })
   expect(b.task(id).result?.reason).toBeUndefined()
   expect(existsSync(marker)).toBe(false)
-  pids.forEach(assertDead)
+  await waitForExit(pids)
   expect(b.types(id).slice(-2)).toEqual(['task.cancel_requested', 'task.cancelled'])
   const result = b.task(id).result
   expect(b.ledger.rebuild().ok).toBe(true)

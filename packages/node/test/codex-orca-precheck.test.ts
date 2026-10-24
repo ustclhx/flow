@@ -14,6 +14,7 @@ import {
 } from '../src/index.ts'
 import { FakeGh, FakeOrca, type OrcaHome, orcaHome, tuiFixture } from './codex-orca-helpers.ts'
 import { type Bench, bench, ManualClock } from './harness.ts'
+import { waitFor as until } from './wait.ts'
 
 /**
  * codex-orca 的策略预检（add-m1-inbox 2.3）：识别到授权弹窗时先预检，放行则发回车；
@@ -29,15 +30,6 @@ afterEach(async () => {
   await b?.close()
   b = undefined
 })
-
-const realWait = (ms: number) => new Promise((r) => setTimeout(r, ms))
-async function until(pred: () => boolean, what: string) {
-  for (let i = 0; i < 400; i++) {
-    if (pred()) return
-    await realWait(5)
-  }
-  throw new Error(`等待超时：${what}`)
-}
 
 const APPROVAL = tuiFixture('approval')
 const COMMAND = 'mkdir -p /tmp/flow-tui-probe-dir2'
@@ -87,7 +79,7 @@ async function start(reads: OrcaTerminalRead[], precheck?: Precheck) {
   void run.done.then((o) => {
     outcome = o
   })
-  await until(() => orca.ops('terminalCreate').length > 0, '启动 Codex')
+  await until(() => clock.pendingTimers() > 0 || outcome !== undefined, '启动 Codex 并落盘')
   const poll = async (n = 1) => {
     for (let i = 0; i < n; i++) {
       const before = orca.ops('terminalRead').length
@@ -95,9 +87,7 @@ async function start(reads: OrcaTerminalRead[], precheck?: Precheck) {
       await until(() => clock.pendingTimers() > 0 || outcome !== undefined, '轮询定时器')
       await clock.advance(POLL)
       await until(() => orca.ops('terminalRead').length > before || outcome !== undefined, '读取')
-      await realWait(10)
-      await clock.advance(0)
-      await realWait(5)
+      await until(() => clock.pendingTimers() > 0 || outcome !== undefined, '本轮预检结束')
     }
   }
   return {
