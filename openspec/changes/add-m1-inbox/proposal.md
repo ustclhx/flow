@@ -37,6 +37,10 @@ Telegram bot token 是 Flow 需要保管的第一个密钥，所以 sops + age �
   - `flow secrets set` / `flow secrets get`；
   - 配置中用 `secret://<路径>` 引用密钥，由中枢在运行时解析；
   - 已知的密钥值会加入脱敏名单。
+- **按 token 绑定操作者身份**：现在中枢只有一个 token，操作者由请求头 `X-Flow-Actor` 自报，拿到 token 的调用方可以自称 `user`。改为每个 token 绑定一个操作者：
+  - `state/hub.token` 仍是 `user` 的 token，它可以在请求头中声明一个非 `user` 的 AI 身份（只能降级，供本机 MCP 进程使用）；
+  - `flow hub token issue|list|revoke` 为节点和远程 AI（变更 ⑤ 接入 Grok Bot）签发绑定身份的 token，中枢只保存摘要；这类 token 的身份由中枢强制，忽略请求头；
+  - 回复任务、处理收件箱条目、读取密钥等只有用户能做的操作，由中枢按 token 的身份校验，不再只靠 MCP 层的限制。
 - **不在本次范围**：
   - supervisor 消费 `/ask` 指令、提问和定时巡检（变更 ④）；
   - 其他推送渠道（ntfy、Grok Bot 等）；

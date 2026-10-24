@@ -82,6 +82,17 @@
 - **每日摘要**：昨天完成和失败的任务、`auto-report` 记录、待处理的 Decide 条目数量、可能过时的知识条目数量。
 - **静默时段**：Interrupt 条目在静默时段生成时，写入 `deferred_until`，到时间后推送。
 
+### D9 按 token 绑定操作者身份
+- **背景**：变更 ① 的中枢只有一个 token，操作者取自请求头 `X-Flow-Actor`。本机进程彼此信任时这样可以接受；但收件箱让"谁批准的"变得重要，变更 ⑤ 还会让远程 AI 经 tailnet 访问中枢，所以身份必须由凭证决定，不能由调用方自报。
+- **token 种类**：
+  - `user` token：即 `state/hub.token`（0600），沿用现有文件，CLI 读取它。持有者可以在 `X-Flow-Actor` 中声明一个非 `user` 的身份（只能降级），供本机 `flow mcp --actor <name>` 进程使用；不声明时身份为 `user`。
+  - 绑定 token：`flow hub token issue <actor> [--note ...]` 生成，只在签发时输出一次。中枢在 `state/hub-tokens.json`（0600）中只保存 sha256 摘要、actor、签发时间和备注。用这类 token 的请求，身份固定为绑定的 actor，请求头中的 `X-Flow-Actor` 与之不一致时返回 403 `actor_mismatch`。actor 不允许是 `user`。
+  - `flow hub token list` 显示 id、actor、签发时间、最近使用时间；`flow hub token revoke <id>` 立即生效。三个命令都只能由 `user` 执行。
+- **只有用户能做的操作**（由中枢按身份校验，MCP 层的限制保留作为第一道防线）：`task_reply`、`inbox_act` 中除"忽略自己发起的条目"以外的操作、`flow secrets get`、token 管理。违反时返回 403 `user_only`。supervisor 能否回复，在变更 ④ 中再定。
+- **节点**：本机节点继续使用 `user` token 并声明 `node:<id>`；变更 ⑤ 起，远程节点使用绑定 token。
+- **中枢内部渠道**：Telegram 和 Web 运行在中枢进程内，不经过 HTTP 鉴权，直接以 `user` 身份写事件，并附 `via`。
+- **信任边界**：本机上以同一系统用户运行、能读 `state/hub.token` 的进程，都可以获得 `user` 身份；这一点不变，在 `docs/` 中写明。本设计防的是远程调用方和凭证泄露后的冒充，不防本机同用户进程。
+
 ## Risks / Trade-offs
 
 - **[风险] Telegram 在用户的网络中不稳定，推送延迟。**
