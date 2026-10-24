@@ -54,8 +54,22 @@
 - **THEN** 该请求被立即批准，任务不进入 `blocked`，当天的每日摘要中出现这次操作
 
 ### Requirement: 不可自动放行的动作
-`pr.merge`、`deploy` 以及策略文件本身的修改，在用户没有显式配置时 SHALL 一律交给用户；即使命中了 `scope: *` 的 `auto` 规则，也 MUST 只有 scope 为具体 workspace 或角色的规则才能自动放行它们。
+`pr.merge`、`deploy`、`secrets`、`shell.opaque`、策略文件的修改（`policy.edit`）、flow-home `config/` 下任何文件的修改（`config.edit`），以及 flow MCP 中会扩大权限的操作（`task.create`、`task.cancel`、`task.reply`、`proposal.decide`、`resource.transfer`），在用户没有显式配置时 SHALL 一律交给用户；即使命中了 `scope: *` 或通配 action 的 `auto` 规则，也 MUST 只有 scope 为具体 workspace 或角色、且 action 不含通配符的规则才能自动放行它们。
+
+请求涉及受保护的工具时——Codex 越出沙箱的命令（`tool:CodexCommand`）、所有 MCP 工具（`tool:mcp__*`）、外发工具（`tool:WebFetch`、`tool:WebSearch`）、派生子 agent（`tool:Task`）——参与判定的每个动作 MUST 只由 action 不含通配符的规则自动放行；`*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为 `draft-approve`。
+
+经 Bash 调用 flow CLI 完成同样的操作时 MUST 识别为同样的动作，flow 的管理命令（hub、policy、daemon 等）识别为受保护的 `flow.admin`；命令直接访问中枢端口时 MUST 按无法确定处理。
+
+识别策略或配置文件时 MUST 不区分大小写；命令中出现 glob、变量展开或命令替换且涉及 `config` 或 `polic` 时，MUST 按无法确定处理（视为可能修改策略与配置）；节点 MUST 把路径解析符号链接后的真实位置与原路径一并送去判定。
 
 #### Scenario: 通配规则不能放行合并
 - **WHEN** 只有一条 `scope: * action: * level: auto` 规则，此时某任务请求 `gh pr merge`
 - **THEN** 请求交给用户，收件箱生成条目
+
+#### Scenario: 通配规则不能放行受保护的工具
+- **WHEN** 只有一条 `scope: dev action: tool:* level: auto` 规则，此时 dev 角色的 Claude 调用 `mcp__flow__task_create`，或 Codex 请求越出沙箱执行 `rm -rf ~`
+- **THEN** 两个请求都交给用户；改为显式规则 `scope: dev action: task.create level: auto` 或 `scope: ws/a action: tool:CodexCommand level: auto` 后，对应请求才可自动放行
+
+#### Scenario: 策略文件的变体写法
+- **WHEN** 只有 `scope: * action: tool:* level: auto` 规则，请求的命令为 `sed -i … ~/flow-home/config/polic*.yaml`，或写入 `~/flow-home/CONFIG/Policies.yaml`，或编辑一个指向策略文件的符号链接
+- **THEN** 请求被识别为 `policy.edit`，交给用户

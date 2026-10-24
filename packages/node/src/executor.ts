@@ -8,6 +8,7 @@ import type {
   TaskResume,
 } from '@flow/core'
 import { executorCapability } from '@flow/core'
+import type { Precheck } from './precheck.ts'
 
 /**
  * 执行器插件接口（add-m1-ledger-daemon D6；add-m1-executors D1）与注册表。
@@ -37,6 +38,11 @@ export interface ExecutorContext {
   signal: AbortSignal
   /** 任务带着回复重新排队后的这一次执行：上一轮的会话 id 与回复（D6、D7）。 */
   resume?: TaskResume
+  /**
+   * 策略预检（add-m1-inbox 2.3）：执行器把审批请求交给用户之前先调用，`allow` 时在本地放行。
+   * 节点为每个租约绑定任务 id；缺省（例如单元测试直接运行执行器）时执行器一律交给用户。
+   */
+  precheck?: Precheck
 }
 
 /** 节点交给 `classify` 的快照。 */

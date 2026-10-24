@@ -15,6 +15,7 @@ import type {
 import {
   BLOCKED_REASONS,
   type BlockedReason,
+  FLOW_MCP_TOOL_PREFIX as CORE_FLOW_MCP_TOOL_PREFIX,
   clipText,
   type DeliveredReply,
   fail,
@@ -43,6 +44,7 @@ import {
   type StuckSnapshot,
   type StuckVerdict,
 } from './executor.ts'
+import { autoApprovedText, needsUserText, type PrecheckRequest } from './precheck.ts'
 
 /**
  * claude-sdk 执行器（add-m1-executors 3.1 / 3.2；design D5；executor-claude-sdk spec）。
@@ -52,7 +54,8 @@ import {
  * - 角色提示词追加在 `claude_code` 预设之后；设置来源由角色的 `setting_sources` 决定（默认 `['project']`，
  *   为 `[]` 时改为追加 cwd 下 CLAUDE.md / AGENTS.md 的纯文本）；权限模式默认 `default`；
  * - 注入 `flow mcp --actor <角色名>`（stdio），只放行 FLOW_MCP_AUTO_ALLOWED 中的 flow 工具，其余走审批；
- * - 工具审批：`canUseTool` 被调用时挂起，经 idle 信号上报 `blocked(awaiting_approval)`，
+ * - 工具审批：`canUseTool` 先做策略预检（add-m1-inbox 2.3，`claudePrecheckRequest`），中枢判定 auto /
+ *   auto-report 时直接放行；否则挂起，经 idle 信号上报 `blocked(awaiting_approval)`，
  *   approve / deny 经 `deliver` 送达后 resolve 对应的 Promise；超过角色设定的时限则任务失败；
  * - 结果：摘要取最后一条助手文本，记录会话 id 与费用；SDK 报错或轮次耗尽时以 failed 结束；
  * - 取消：`abortController.abort()` 加 `close()`。
@@ -87,8 +90,8 @@ export const FLOW_MCP_AUTO_ALLOWED = [
   'task_list',
   'task_show',
 ] as const
-/** SDK 中 flow MCP 工具的全名前缀（服务名 flow）。 */
-export const FLOW_MCP_TOOL_PREFIX = 'mcp__flow__'
+/** SDK 中 flow MCP 工具的全名前缀（服务名 flow），与 core 的动作识别共用。 */
+export const FLOW_MCP_TOOL_PREFIX = CORE_FLOW_MCP_TOOL_PREFIX
 /** 项目约定文件（setting_sources 为 [] 时作为纯文本追加到系统提示词）。 */
 export const PROJECT_INSTRUCTION_FILES = ['CLAUDE.md', 'AGENTS.md'] as const
 const PROJECT_INSTRUCTION_MAX = 16_000
@@ -147,21 +150,35 @@ export type ClaudeQueryFn = (params: {
   options: Options
 }) => ClaudeQueryHandle
 
-/** 一次待决的工具审批（交给策略预检钩子的信息）。 */
-export interface ApprovalRequest {
-  taskId: string
-  role: string
-  toolName: string
-  input: Record<string, unknown>
-  /** 已脱敏、限长的输入摘要。 */
-  summary: string
-}
+/** 会写文件的工具：缺少路径时不做预检，直接交给用户。 */
+const PATH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const
 
 /**
- * 策略预检钩子（变更 ③ 2.3 将在这里接入策略引擎）：返回 PermissionResult 即直接作答，
- * 返回 null 表示交给用户审批。本变更不实现，缺省一律交给用户。
+ * 把 SDK 的一次工具调用转成策略预检请求（add-m1-inbox 2.3）：
+ * - Bash：`command` 作为命令文本（必须是字符串，否则不预检）；
+ * - 其他工具：`file_path` / `notebook_path` / `path` 中的字符串作为 paths，原样传给中枢
+ *   （不改写成相对路径：规则的路径模式匹配不上时只会更保守）；
+ * - Edit / Write / MultiEdit / NotebookEdit 缺少路径时不预检；
+ * - 其余工具只有工具名。
+ *
+ * 返回 undefined 表示无法可靠地构造请求，调用方交给用户审批。
  */
-export type ApprovalPrecheck = (req: ApprovalRequest) => Promise<PermissionResult | null>
+export function claudePrecheckRequest(
+  toolName: string,
+  input: Record<string, unknown>,
+): PrecheckRequest | undefined {
+  if (toolName === 'Bash') {
+    const command = input.command
+    if (typeof command !== 'string' || command.trim() === '') return undefined
+    return { tool: toolName, command }
+  }
+  const paths = PATH_FIELDS.map((k) => input[k]).filter(
+    (v): v is string => typeof v === 'string' && v !== '',
+  )
+  if (PATH_TOOLS.has(toolName) && paths.length === 0) return undefined
+  return { tool: toolName, ...(paths.length > 0 ? { paths } : {}) }
+}
 
 export interface ClaudeSdkExecutorOptions {
   /** flow-home：读取角色，并作为 flow MCP 的 FLOW_HOME。 */
@@ -173,8 +190,6 @@ export interface ClaudeSdkExecutorOptions {
   resolveRole?: (name: string) => Promise<Result<Role>>
   /** 启动 flow 的命令（argv 前缀），缺省 `['flow']`。 */
   flowCommand?: readonly string[]
-  /** 审批策略预检（变更 ③），缺省不预检。 */
-  precheck?: ApprovalPrecheck
   /** 待审批请求重新上报的初始间隔（之后指数退避到 10 分钟），缺省 1 秒。 */
   reannounceMs?: number
   /** 两条 SDK 消息间隔超过这么久时附带 resumed 信号（让 no_progress 之后恢复），缺省 60 秒。 */
@@ -509,20 +524,23 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
       }
 
       const makeCanUseTool =
-        (role: Role, perms: ClaudeSdkPermissions): CanUseTool =>
+        (perms: ClaudeSdkPermissions): CanUseTool =>
         async (toolName, toolInput, opts) => {
           if (finished) return { behavior: 'deny', message: '任务已结束', interrupt: true }
           const summary = summarizeToolInput(toolName, toolInput)
-          // ---- 策略预检钩子（变更 ③ 2.3）：在交给用户之前先问策略引擎。当前未接入。 ----
-          if (options.precheck) {
-            const decided = await options.precheck({
-              taskId: ctx.taskId,
-              role: role.name,
-              toolName,
-              input: toolInput,
-              summary,
-            })
-            if (decided) return decided
+          // ---- 策略预检（add-m1-inbox 2.3）：交给用户之前先问策略引擎。 ----
+          // 只有中枢明确判定 auto / auto-report 才放行；其余结果与调用失败一律交给用户。
+          const pre = ctx.precheck ? claudePrecheckRequest(toolName, toolInput) : undefined
+          if (ctx.precheck && pre) {
+            const verdict = await ctx.precheck(pre)
+            if (finished) return { behavior: 'deny', message: '任务已结束', interrupt: true }
+            if (verdict.allow && !opts.signal.aborted) {
+              status(autoApprovedText(`${toolName}：${summary}`, verdict), {
+                policy: { level: verdict.level, actions: verdict.actions, tool: toolName },
+              })
+              return { behavior: 'allow', updatedInput: toolInput }
+            }
+            if (!verdict.allow) status(safe(needsUserText(verdict), 1000))
           }
           // ---- 交给用户审批：挂起直到 deliver 送达 approve / deny，或超时。 ----
           const title = opts.title ? safe(opts.title, 300) : toolName
@@ -712,7 +730,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           ctx,
           home: options.home,
           flowCommand,
-          canUseTool: makeCanUseTool(role.data, perms.data),
+          canUseTool: makeCanUseTool(perms.data),
           abortController,
           stderr: (data) => {
             for (const line of data.split('\n')) if (line.trim()) stderrTail.push(line)

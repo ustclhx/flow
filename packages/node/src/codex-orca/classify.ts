@@ -222,6 +222,81 @@ export function analyzeTail(tail: readonly string[]): TailAnalysis {
   }
 }
 
+/** 策略预检时 Codex 授权请求使用的工具名（与 Claude 的 Bash 区分：这是请求越出沙箱执行）。 */
+export const CODEX_ORCA_PRECHECK_TOOL = 'CodexCommand'
+
+/** 可交给策略预检的授权弹窗：原始命令（未脱敏，只发给中枢判定）与弹窗全文（用于前后比对）。 */
+export interface ApprovalPrompt {
+  command: string
+  /** 从 `Would you like to run the following command?` 到页脚的各行。 */
+  prompt: string[]
+}
+
+const RUN_COMMAND_RE = /^\s*Would you like to run the following command\?\s*$/
+const COMMAND_LINE_RE = /^\s*\$ (.+)$/
+/** 光标停在第一个选项"Yes, proceed"上：回车只批准这一次。 */
+const FIRST_OPTION_SELECTED_RE = /^›\s*1\. Yes, proceed\b/
+const FIRST_OPTION_RE = /^\s*(?:›\s*)?1\. Yes\b/
+const SECOND_OPTION_RE = /^\s*2\. Yes, and don't ask again\b/
+const NO_OPTION_RE = /^\s*3\. No\b/
+const ANY_OPTION_RE = /^\s*(?:›\s*)?\d+\./
+const FOOTER_ONLY_RE = /^\s*Press enter to confirm or esc to cancel\s*$/
+/** 控制字符、格式字符（零宽、双向覆盖等）与非常规空白：显示的命令可能与实际执行的不一致。 */
+const UNPRINTABLE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/u
+
+/**
+ * 为策略预检严格解析授权弹窗（add-m1-inbox 2.3）。只认下面这一种完整布局，任何偏差都返回
+ * undefined（调用方按需要用户处理）：
+ *
+ * ```
+ *   Would you like to run the following command?
+ *   …（Environment / Reason 等）
+ *   $ <命令>                     ← 恰好一行 `$ `，且紧接着就是选项 1（命令没有折行或多行）
+ * › 1. Yes, proceed (y)          ← 光标在选项 1：回车只批准这一次，不会选中"不再询问"
+ *   2. Yes, and don't ask again …（可折行）
+ *   3. No, and tell Codex what to do differently (esc)
+ *   Press enter to confirm or esc to cancel   ← 最后一行
+ * ```
+ *
+ * 另外：弹窗中只能有一个问句、一个 `›` 行、一个"1. Yes"、一个 `$ ` 行；命令中出现 `…`
+ * 视为被截断；出现控制字符或非打印字符时拒绝提取。编辑请求（`make the following edits`）等其他弹窗没有命令，同样返回 undefined。
+ */
+export function approvalForPrecheck(tail: readonly string[]): ApprovalPrompt | undefined {
+  if (analyzeTail(tail).kind !== 'awaiting_approval') return undefined
+  const body = nonEmpty(clean(tail))
+  if (!FOOTER_ONLY_RE.test(body.at(-1) ?? '')) return undefined
+  const bottom = body.slice(-(APPROVAL_WINDOW + 8))
+  let header = -1
+  for (let i = bottom.length - 1; i >= 0; i--) {
+    if (RUN_COMMAND_RE.test(bottom[i] ?? '')) {
+      header = i
+      break
+    }
+  }
+  if (header < 0) return undefined
+  const block = bottom.slice(header)
+  const count = (re: RegExp) => block.filter((l) => re.test(l)).length
+  if (
+    count(RUN_COMMAND_RE) !== 1 ||
+    count(COMMAND_LINE_RE) !== 1 ||
+    count(/^›/) !== 1 ||
+    count(FIRST_OPTION_RE) !== 1
+  ) {
+    return undefined
+  }
+  const at = block.findIndex((l) => COMMAND_LINE_RE.test(l))
+  const rest = block.slice(at + 1)
+  // $ 行之后：选项 1（被选中）、选项 2（可折行）、选项 3、页脚，别无他物。
+  if (!FIRST_OPTION_SELECTED_RE.test(rest[0] ?? '')) return undefined
+  if (!SECOND_OPTION_RE.test(rest[1] ?? '')) return undefined
+  const noAt = rest.findIndex((l) => NO_OPTION_RE.test(l))
+  if (noAt < 2 || noAt !== rest.length - 2) return undefined
+  if (rest.slice(2, noAt).some((l) => ANY_OPTION_RE.test(l))) return undefined
+  const command = COMMAND_LINE_RE.exec(block[at] ?? '')?.[1]?.trim()
+  if (!command || command.includes('…') || UNPRINTABLE_RE.test(command)) return undefined
+  return { command, prompt: block }
+}
+
 /** 从 idle 信号的 hint 中取终端末尾；没有时用节点累积的末尾输出。 */
 function snapshotTail(snapshot: StuckSnapshot): readonly string[] {
   const t = snapshot.hint?.tail

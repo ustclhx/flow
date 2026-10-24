@@ -22,6 +22,9 @@ import {
   loadNodeConfig,
   type NodeView,
   ok,
+  type PolicyCheckData,
+  type PolicyCheckRequest,
+  policyCheckData,
   type RegisterNodeRequest,
   type RenewLeaseData,
   type RenewLeaseRequest,
@@ -33,7 +36,8 @@ import {
 import type { z } from 'zod'
 
 /**
- * 节点访问中枢的最小 HTTP 客户端：只覆盖 nodes / leases（含 ack-reply）端点（node-protocol spec）。
+ * 节点访问中枢的最小 HTTP 客户端：只覆盖 nodes / leases（含 ack-reply）端点（node-protocol spec），
+ * 以及执行器审批前的策略预检（policy/check，add-m1-inbox 2.3）。
  * 与 core 的 HubClient（tasks.md 5.1）职责不重叠，之后可以合并。
  *
  * - 成功响应按协议 schema 校验 `data`；
@@ -70,6 +74,11 @@ export interface NodeHubClient {
     leaseId: string,
     req: Partial<AckReplyRequest> & Pick<AckReplyRequest, 'lease_token' | 'reply_id'>,
   ): Promise<Result<AckReplyData>>
+  /** 策略预检；节点不得传 dry_run（中枢会拒绝），因此这里不提供该字段。 */
+  policyCheck(
+    req: Omit<PolicyCheckRequest, 'dry_run'>,
+    opts?: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<Result<PolicyCheckData>>
 }
 
 /** 注册请求（调用方形态：带默认值的字段可省略）。 */
@@ -165,5 +174,7 @@ export function createNodeHubClient(o: NodeHubClientOptions): NodeHubClient {
       call('POST', leasePath(ENDPOINTS['leases-complete'].path, id), completeLeaseData, req),
     ackReply: (id, req) =>
       call('POST', leasePath(ENDPOINTS['leases-ack-reply'].path, id), ackReplyData, req),
+    policyCheck: (req, opts = {}) =>
+      call('POST', ENDPOINTS['policy-check'].path, policyCheckData, req, opts),
   }
 }

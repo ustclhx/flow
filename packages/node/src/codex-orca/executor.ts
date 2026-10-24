@@ -28,7 +28,14 @@ import {
   idleSignal,
   resumedSignal,
 } from '../executor.ts'
-import { analyzeTail, classifyCodexOrca, type TailAnalysis } from './classify.ts'
+import { autoApprovedText, needsUserText } from '../precheck.ts'
+import {
+  analyzeTail,
+  approvalForPrecheck,
+  CODEX_ORCA_PRECHECK_TOOL,
+  classifyCodexOrca,
+  type TailAnalysis,
+} from './classify.ts'
 import {
   type CommandRunner,
   createGhCli,
@@ -64,6 +71,12 @@ import { renderTaskSpec, resolveContext, taskStateDir, writeTaskSpec } from './s
  *   这个 handle 在当前 runtime 中失效（例如 Orca 重启），终端和 Codex 可能还活着、换了新 handle。
  * 因此 stale 按临时错误处理：用 `terminal list --worktree` 在本 worktree 中找唯一的 Codex 终端接上；
  * 找不到时继续重试，不返回 not_running，也不判为退出（持续找不到由节点的无进展计时兜底）。
+ *
+ * 策略预检（add-m1-inbox 2.3；design D2）：轮询发现一个新的授权弹窗、且尚未上报停下时，先用
+ * `approvalForPrecheck` 严格提取命令（提取不到按需要用户处理），以工具 `CodexCommand` 加命令调用
+ * `ctx.precheck`。只有判定 auto / auto-report 时才放行：发回车之前**再读一次实时终端**，弹窗仍在底部、
+ * 命令与弹窗全文都和预检时一致才发，否则不发、下一轮重新判定。其余结果与调用失败照常走 idle → blocked。
+ * 同一个弹窗只预检一次（每次预检都会在中枢入账 `policy.decided`）。
  *
  * `deliver` 先读一次终端，按实时的末尾内容决定按键：授权弹窗在屏幕底部时，批准只发回车，
  * 拒绝或文字回复先发 Esc；否则把文字作为新一轮发出。按 reply_id 幂等，送达状态与 Orca 的 request id
@@ -264,6 +277,8 @@ function replyText(reply: DeliveredReply): string {
 }
 
 const STUCK_TAIL = 40
+/** 预检期间界面连续变化这么多次后不再重新预检，交给用户。 */
+const PRECHECK_CHANGE_MAX = 3
 
 /** 临时错误：节点会在下一次续约时重送（不确认、不取消 worker）。 */
 class TransientDeliverError extends Error {}
@@ -307,6 +322,10 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       /** 送达回复后补发一次 idle：防止 idle 信号早于节点确认送达而被忽略。 */
       let reemit = false
       let prevTail: string[] = []
+      /** 已预检过的授权弹窗（弹窗全文）；界面离开该弹窗后清空。 */
+      let prechecked: string | undefined
+      /** 连续"预检期间界面变化"的次数；达到上限后不再重试，交给用户（避免一直不上报）。 */
+      let precheckChanges = 0
       const inflight = new Map<string, Promise<DeliverResult>>()
 
       const iso = () => new Date(clock.now()).toISOString()
@@ -552,6 +571,57 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         ...extra,
       })
 
+      /**
+       * 对屏幕底部的授权弹窗做策略预检：approved 表示已发回车放行；changed 表示预检期间界面变了，
+       * 没有发送任何按键，下一轮重新判定；user 表示交给用户（照常 idle → blocked）。
+       */
+      const precheckApproval = async (
+        tail: readonly string[],
+      ): Promise<'approved' | 'changed' | 'user'> => {
+        const precheck = ctx.precheck
+        if (!precheck) return 'user'
+        const p = approvalForPrecheck(tail)
+        if (!p) {
+          status('授权请求中提取不到可核对的命令，交给用户审批')
+          return 'user'
+        }
+        const verdict = await precheck({ tool: CODEX_ORCA_PRECHECK_TOOL, command: p.command })
+        if (finished || stopping || !handle) return 'user'
+        if (!verdict.allow) {
+          status(needsUserText(verdict))
+          return 'user'
+        }
+        // 预检期间界面可能已经变了：按实时终端再核对一次，弹窗与命令都一致才发回车。
+        const h = handle
+        const live = await orca.terminalRead({ handle: h, limit: 200 })
+        if (finished || stopping) return 'user'
+        const again =
+          live.ok && live.data.status === 'running'
+            ? approvalForPrecheck(live.data.tail)
+            : undefined
+        if (
+          !again ||
+          again.command !== p.command ||
+          again.prompt.join('\n') !== p.prompt.join('\n')
+        ) {
+          status('策略预检期间终端界面已变化，没有发送回车，下一轮重新判定')
+          return 'changed'
+        }
+        const sent = await send({ handle: h, enter: true })
+        if (!sent.ok) {
+          status(redactSecrets(`策略已放行，但发送回车失败，交给用户审批：${sent.error.message}`))
+          return 'user'
+        }
+        status(autoApprovedText(redactSecrets(`执行命令 ${p.command}`), verdict), {
+          policy: {
+            level: verdict.level,
+            actions: verdict.actions,
+            tool: CODEX_ORCA_PRECHECK_TOOL,
+          },
+        })
+        return 'approved'
+      }
+
       const monitor = async () => {
         let trustSent = 0
         let readFailures = 0
@@ -571,6 +641,10 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           const term = r.data
           const fresh = emitOutput(term.tail)
           const a = analyzeTail(term.tail)
+          if (a.kind !== 'awaiting_approval') {
+            prechecked = undefined
+            precheckChanges = 0
+          }
           if (term.status !== 'running') {
             const pr = await checkPr()
             if ('pr' in pr) return finishWithPr(pr.pr)
@@ -607,6 +681,24 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             )
             idlePolls = 0
             continue
+          }
+          if (
+            a.kind === 'awaiting_approval' &&
+            ctx.precheck &&
+            !reported &&
+            inflight.size === 0 &&
+            prechecked !== a.last_message.join('\n')
+          ) {
+            // 新的授权弹窗：交给用户之前先问策略引擎（同一个弹窗只问一次）。
+            prechecked = a.last_message.join('\n')
+            const r = await precheckApproval(term.tail)
+            if (finished || stopping) return
+            if (r === 'approved') precheckChanges = 0
+            if (r === 'approved' || (r === 'changed' && ++precheckChanges < PRECHECK_CHANGE_MAX)) {
+              if (r === 'changed') prechecked = undefined
+              idlePolls = 0
+              continue
+            }
           }
           idlePolls++
           if (idlePolls >= 2 && !reported) {

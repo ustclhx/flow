@@ -1,9 +1,12 @@
+import { realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import {
   classifyAction,
   decide,
   ENDPOINTS,
   fail,
   isNodeActor,
+  loadHubConfig,
   loadPoliciesConfig,
   policyCheckData,
   policyCheckRequest,
@@ -24,6 +27,14 @@ export function createPolicyRoutes(deps: {
   leaseHolders: HubAuthOptions['leaseHolders']
 }): Hono {
   const app = new Hono()
+  // flow-home 的原路径与 realpath：其下 config/ 中的路径识别为 config.edit。
+  const flowHomes = (() => {
+    try {
+      return [...new Set([deps.home, realpathSync(deps.home)])]
+    } catch {
+      return [deps.home]
+    }
+  })()
   app.post(ENDPOINTS['policy-check'].path, async (c) => {
     const body = await jsonBody(c, false)
     if (!body.ok) return respond(c, body, policyCheckData)
@@ -57,13 +68,20 @@ export function createPolicyRoutes(deps: {
     if (!task) return errorResponse(c, 'not_found', `任务 ${task_id} 不存在`)
     const denied = checkTaskScope(c, task_id, deps.leaseHolders)
     if (denied) return denied
+    // 中枢端口用于识别直接访问中枢的命令；读取失败时只用默认端口（7477、7478）。
+    const hubConfig = await loadHubConfig(deps.home)
+    const hubPorts = hubConfig.ok ? [hubConfig.data.port] : []
     const loaded = await loadPoliciesConfig(deps.home)
     // 文件级错误沿用加载器的失败语义；节点按 D2 将调用失败视为需要用户。
     if (!loaded.ok) return errorResponse(c, 'internal_error', redactSecrets(loaded.error.message))
     // 异步读取配置期间租约可能结束或过期；入账前重新校验，此后到 append 之间没有 await。
     const expired = checkTaskScope(c, task_id, deps.leaseHolders)
     if (expired) return expired
-    const actions = classifyAction(request)
+    const actions = classifyAction(request, undefined, {
+      flowHomes,
+      userHome: homedir(),
+      hubPorts,
+    })
     const decision = decide(loaded.data.rules, {
       scope: { workspace: task.contract.workspace, role: task.contract.role },
       actions,

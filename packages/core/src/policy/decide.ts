@@ -1,9 +1,10 @@
 import { z } from 'zod'
 import {
   commandWords,
+  GUARDED_ACTIONS as GUARDED_ACTION_LIST,
   hasCommandPrefix,
+  isGuardedTool,
   normalizePolicyPath,
-  SENSITIVE_ACTIONS,
 } from './actions.ts'
 import {
   type IndexedPolicyRule,
@@ -59,7 +60,7 @@ const CONSERVATISM: Record<PolicyDecisionLevel, number> = {
   user: 3,
   notify: 4,
 }
-const GUARDED_ACTIONS: ReadonlySet<string> = new Set(SENSITIVE_ACTIONS)
+const GUARDED_ACTIONS: ReadonlySet<string> = new Set(GUARDED_ACTION_LIST)
 
 /** 动作仅支持 *；路径还支持 **（跨目录）与 ?（单字符），其余字符按字面匹配。 */
 function globMatch(pattern: string, value: string, path = false): boolean {
@@ -115,6 +116,8 @@ export function decide(
 ): PolicyDecision {
   const uniqueActions = [...new Set(request.actions)]
   const hasSpecificAction = uniqueActions.some((action) => !action.startsWith('tool:'))
+  // 请求涉及受保护的工具时，每个参与判定的动作都必须由精确 action 的规则放行。
+  const viaGuardedTool = uniqueActions.some(isGuardedTool)
   const actions = uniqueActions.map((action): ActionDecision => {
     if (hasSpecificAction && action.startsWith('tool:')) {
       return { action, level: 'skipped', matched_rules: [], guarded: false }
@@ -134,10 +137,12 @@ export function decide(
     )
     const winner = matched_rules[0]
     if (!winner) return { action, level: 'user', matched_rules, guarded: false }
+    const autoLevel = winner.rule.level === 'auto' || winner.rule.level === 'auto-report'
+    const wildcardAction = winner.rule.action.includes('*')
     const guarded =
-      GUARDED_ACTIONS.has(action) &&
-      (winner.rule.scope === '*' || winner.rule.action.includes('*')) &&
-      (winner.rule.level === 'auto' || winner.rule.level === 'auto-report')
+      autoLevel &&
+      ((GUARDED_ACTIONS.has(action) && (winner.rule.scope === '*' || wildcardAction)) ||
+        (viaGuardedTool && wildcardAction))
     return { action, level: guarded ? 'draft-approve' : winner.rule.level, matched_rules, guarded }
   })
   const level = actions.reduce<PolicyDecisionLevel>(

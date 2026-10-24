@@ -5,8 +5,6 @@
  */
 export { loadNodeConfig, type NodeConfig, nodeConfigSchema, resolveHubUrl } from '@flow/core'
 export {
-  type ApprovalPrecheck,
-  type ApprovalRequest,
   buildOptions as buildClaudeSdkOptions,
   CANCEL_GRACE_MS,
   CLAUDE_SDK_EXECUTOR,
@@ -15,6 +13,7 @@ export {
   type ClaudeSdkExecutorOptions,
   type ClaudeSdkPermissions,
   classifyClaudeSdk,
+  claudePrecheckRequest,
   claudeSdkPermissions,
   costOf,
   createClaudeSdkExecutor,
@@ -119,3 +118,16 @@ export {
   startNode,
   TIMEOUT_GRACE_MS,
 } from './node.ts'
+export {
+  autoApprovedText,
+  createPolicyPrecheck,
+  expandPolicyPaths,
+  isAutoDecision,
+  needsUserText,
+  type PolicyPrecheckOptions,
+  PRECHECK_TIMEOUT_MS,
+  type Precheck,
+  type PrecheckRequest,
+  type PrecheckVerdict,
+  realPolicyPath,
+} from './precheck.ts'
