@@ -18,6 +18,7 @@ import { mcpCommand } from './mcp.ts'
 import { nodeListCommand, nodeStartCommand } from './node.ts'
 import { policyCheckCommand } from './policy.ts'
 import { secretsCommands } from './secrets.ts'
+import { uiCommand } from './ui.ts'
 
 /**
  * 所有 CLI 命令的注册表。知识访问操作定义在 `@flow/core` 的 `ops/` 中并自动生成命令；
@@ -40,6 +41,7 @@ export const commands = [
   nodeStartCommand,
   nodeListCommand,
   policyCheckCommand,
+  uiCommand,
   ...operations.flatMap((op) =>
     [op.cli, ...(op.cliAliases ?? [])].map((cli) => commandFromOperation({ ...op, cli })),
   ),

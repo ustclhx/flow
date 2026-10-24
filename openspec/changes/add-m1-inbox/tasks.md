@@ -33,7 +33,7 @@
 
 ## 6. Web 页面
 
-- [ ] 6.1 `/ui` 页面（服务端渲染、按级别分组、操作按钮、局部刷新）、`flow ui` 一次性登录与会话 cookie、Origin 校验；验证 inbox-web spec 的全部场景（用 `app.request` 加上 cookie 流程的测试）
+- [x] 6.1 `/ui` 页面（服务端渲染、按级别分组、操作按钮、局部刷新）、`flow ui` 一次性登录与会话 cookie、Origin 校验；验证 inbox-web spec 的全部场景（用 `app.request` 加上 cookie 流程的测试）
 
 ## 7. 真实环境上线
 

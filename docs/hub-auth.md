@@ -70,6 +70,7 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | `POST /v1/tasks/:id/reply` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/hub/rebuild` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `/v1/hub/tokens`（签发、列出、撤销） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
+| `POST /v1/ui/login-code`（`flow ui` 申请 Web 登录码） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 
 remote token 一列的 403 都是 `remote_not_allowed`。`inbox_act` 先校验 action，再检查身份与条目的
 `created_by`；拒绝时不调用底层操作、不产生事件。via 只接受 cli、web、telegram，省略时为 cli；
@@ -79,6 +80,40 @@ CLI 固定传 cli。读取密钥等只有用户能做的接口使用 `userOnly`�
 传 true 返回 400 `invalid_arguments`，不产生事件。CLI 默认 dry run，只有 `--record` 才入账。
 所有权限拒绝均不产生事件。任务不存在时，策略检查返回 404 `not_found`。
 MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有读取密钥的工具）保留，作为第一道防线。
+
+## Web 页面（`/ui`）
+
+（add-m1-inbox 6.1，design D5；inbox-web spec）`/ui` 是与 `/v1` 完全分开的一条鉴权路径：页面用会话 cookie，
+`/v1` 只认 `Authorization: Bearer`，**不读 cookie**，所以会话 cookie 拿不到任何 `/v1` 接口。
+
+登录流程：
+
+1. `flow ui` 用 user token 调用 `POST /v1/ui/login-code`，拿到一次性登录码（32 字节随机数），
+   中枢只在内存中保存它的 sha256 摘要，60 秒内有效、只能使用一次（无论成功与否，提交即作废）。
+2. `flow ui` 打开 `http://127.0.0.1:<端口>/ui/login?code=...`（macOS 用 `open`；`--print` 只输出链接）。
+3. `/ui/login` 校验登录码，写入会话 cookie `flow_ui_session`（HttpOnly、SameSite=Strict、Path=/ui、
+   Max-Age 7 天），303 跳转到 `/ui`，登录码不留在地址栏与历史记录中。会话同样只在内存中保存摘要；
+   **中枢重启后会话全部失效，需要重新运行 `flow ui`**。
+
+| 接口 | 无会话 | 有效会话 | 额外校验 |
+|---|---|---|---|
+| `GET /ui` | 401，只提示"请运行 flow ui 登录"，不含条目 | 页面 | Host |
+| `GET /ui/login?code=` | 登录码无效或过期：401 | — | Host |
+| `GET /ui/items`（局部刷新片段） | 401 | 片段 | Host |
+| `POST /ui/items/:id/act` | 401 | 以 `user`、`via: web` 调用收件箱操作 | Host、Origin |
+| `POST /ui/logout` | 303 | 撤销会话并清除 cookie | Host、Origin |
+| `GET /ui/static/*`（脚本、样式、图标） | ✓ | ✓ | Host |
+
+- **Host**：必须是 `127.0.0.1:<端口>` 或 `localhost:<端口>`，否则 421（防 DNS rebinding）；中枢本身只监听 127.0.0.1。
+- **Origin**：写操作必须带 `Origin`，且为 `http://127.0.0.1:<端口>` 或 `http://localhost:<端口>`；缺少或不符时
+  403 `origin_denied`，不产生事件。`Sec-Fetch-Site` 存在时必须为 `same-origin`。与 SameSite=Strict 一起防 CSRF。
+- 页面的请求体只接受 `action` 与 `text`，不能声明身份或渠道。
+- **安全头**（`/ui` 下所有响应）：`Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self';
+  img-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`、
+  `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`X-Frame-Options: DENY`、
+  `Cross-Origin-Opener-Policy: same-origin`、`Cross-Origin-Resource-Policy: same-origin`、`Permissions-Policy`，
+  以及 `Cache-Control: no-store`（静态资源为 `no-cache`）。页面没有内联脚本和内联样式；动态文本全部由 Hono JSX 转义，
+  标题、正文和输出片段渲染前再做一次密钥脱敏。
 
 ## 命令
 
@@ -103,7 +138,8 @@ flow hub token revoke tok_0123456789ab                        # 立即生效
 - **执行器与 worker 子进程**：节点 spawn 执行器、worker 与验收命令时，环境变量一律经
   `executorEnv()`（`packages/node/src/env.ts`，执行器从 `ExecutorContext.env` 拿到同一份），
   其中去掉了 `FLOW_HUB_TOKEN`，任务里运行的代码拿不到节点的凭证。
-- **中枢内部渠道**（Telegram、Web，后续任务）：运行在中枢进程内，不经过 HTTP 鉴权，直接以 user 写事件并附 `via`。
+- **中枢内部渠道**（Telegram、Web）：运行在中枢进程内，不经过 `/v1` 的 HTTP 鉴权，直接以 user 写事件并附 `via`。
+  Web 页面先经过自己的会话与 Origin 校验（见上文"Web 页面"）。
 
 ## 信任边界
 
