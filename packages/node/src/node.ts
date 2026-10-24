@@ -21,6 +21,7 @@ import {
   ok,
   PROTOCOL_MESSAGE_MAX,
   type Result,
+  redactLines,
   resolveHubUrl,
   type TaskContract,
   VERSION,
@@ -94,8 +95,10 @@ export interface StartNodeOptions {
   noProgressMinutes?: NoProgressResolver
   /** 超时后等待执行器响应取消的毫秒数，默认 10 秒。 */
   timeoutGraceMs?: number
-  /** 单次 deliver 的超时毫秒数，默认 60 秒。 */
+  /** deliver 超过多少毫秒记警告（不重送），默认 60 秒。 */
   deliverTimeoutMs?: number
+  /** deliver 超过多少毫秒仍无结果就按 not_running 处理，默认 10 分钟。 */
+  deliverGiveUpMs?: number
   logger?: NodeLogger
 }
 
@@ -154,6 +157,7 @@ interface Env {
   roleNoProgressMinutes: NoProgressResolver | undefined
   timeoutGraceMs: number
   deliverTimeoutMs: number
+  deliverGiveUpMs: number
 }
 
 /** 按合同（通常按角色）给出无进展阈值分钟数；返回 undefined 表示没有设定。 */
@@ -178,8 +182,10 @@ export const STUCK_TAIL_LINES = 40
 const TAIL_KEEP = 200
 /** 超时后等待执行器响应取消的宽限时间；过后不再等待，直接提交 failed(timeout)。 */
 export const TIMEOUT_GRACE_MS = 10_000
-/** 单次 deliver 的超时：超时按临时错误处理，下一次续约重送（PR #16 复核第 4 条）。 */
+/** deliver 超过这个时长只记警告：不重送，继续等待结果（避免重复送达）。 */
 export const DELIVER_TIMEOUT_MS = 60_000
+/** deliver 超过这个时长仍无结果：按 not_running 处理，带着回复重新排队并取消当前 worker。 */
+export const DELIVER_GIVE_UP_MS = 10 * 60_000
 
 /** 上报前按协议上限截断说明与末尾输出（超长的请求会被中枢拒绝）。 */
 function clipBlocked<T extends { message: string; tail?: string[] | undefined }>(b: T): T {
@@ -351,32 +357,64 @@ class LeaseRunner {
    * - deliver 抛出异常：视为临时错误，不确认、不取消执行器，下一次续约再送（第 6 条）。
    */
   private deliver(reply: DeliveredReply) {
-    if (this.delivered.has(reply.reply_id) || this.released) return
+    // 执行器已结束就不再送达：交给提交结束的流程，回复随重新排队带到下一次执行。
+    if (this.delivered.has(reply.reply_id) || this.released || this.runEnded) return
     this.delivered.add(reply.reply_id)
     const run = this.run
-    this.delivering = (async () => {
-      let outcome: DeliverResult
-      let cancelTimer = () => {}
-      try {
-        const timeout = new Promise<never>((_, reject) => {
-          cancelTimer = this.env.clock.setTimeout(
-            () => reject(new Error(`deliver 超过 ${this.env.deliverTimeoutMs}ms 未返回`)),
-            this.env.deliverTimeoutMs,
-          )
-        })
-        outcome = run?.deliver ? await Promise.race([run.deliver(reply), timeout]) : 'not_running'
-      } catch (err) {
-        // 抛异常或超时都是临时错误：不确认、不取消执行器，下一次续约重送。
-        this.env.logger.warn(`回复 ${reply.reply_id} 送达失败，下一次续约重试`, String(err))
-        this.delivered.delete(reply.reply_id)
-        return
-      } finally {
-        cancelTimer()
-      }
+    const { clock, logger, deliverTimeoutMs, deliverGiveUpMs } = this.env
+    let settled = false
+    let cancelSoft = () => {}
+    let cancelHard = () => {}
+    const settle = () => {
+      settled = true
+      cancelSoft()
+      cancelHard()
+    }
+    const record = (outcome: DeliverResult) => {
+      if (settled) return
+      settle()
       if (this.released) return
       this.unacked = { reply_id: reply.reply_id, outcome }
       void this.renewNow()
-    })().finally(() => {
+    }
+    this.delivering = new Promise<void>((resolve) => {
+      if (!run?.deliver) {
+        record('not_running')
+        return resolve()
+      }
+      // 超时只是不再阻塞：底层 deliver 可能仍在执行，重送会让 worker 收到两次（PR #16 第三轮复核第 2 条）。
+      // 所以超时后不重送，回复保持在途，等迟到的结果。
+      cancelSoft = clock.setTimeout(() => {
+        logger.warn(
+          `回复 ${reply.reply_id} 的送达超过 ${deliverTimeoutMs}ms 未返回，继续等待，不重送`,
+        )
+      }, deliverTimeoutMs)
+      // 迟迟没有结果：按 not_running 处理——中枢带着回复重新排队，由下一次执行接收；
+      // 确认后本节点取消当前 worker（见 ack），避免两边都收到同一条回复。迟到的结果随后被忽略。
+      cancelHard = clock.setTimeout(() => {
+        logger.warn(
+          `回复 ${reply.reply_id} 的送达超过 ${deliverGiveUpMs}ms 仍无结果，按 not_running 处理`,
+        )
+        record('not_running')
+        resolve()
+      }, deliverGiveUpMs)
+      run.deliver(reply).then(
+        (outcome) => {
+          record(outcome)
+          resolve()
+        },
+        (err) => {
+          // deliver 明确失败（抛异常）时它已经结束，重送是安全的：视为临时错误，
+          // 不确认、不取消执行器，下一次续约重送。
+          if (!settled) {
+            settle()
+            logger.warn(`回复 ${reply.reply_id} 送达失败，下一次续约重试`, String(err))
+            this.delivered.delete(reply.reply_id)
+          }
+          resolve()
+        },
+      )
+    }).finally(() => {
       this.delivering = undefined
     })
   }
@@ -416,8 +454,12 @@ class LeaseRunner {
     if (this.tail.length > TAIL_KEEP) this.tail.splice(0, this.tail.length - TAIL_KEEP)
   }
 
+  /**
+   * 最近的输出：先对完整的缓冲（最多 200 行）脱敏，再取末尾 40 行。
+   * 否则截取窗口切掉 `-----BEGIN … PRIVATE KEY-----` 那一行后，私钥正文就认不出来了（第三轮复核第 1 条）。
+   */
   private recentTail() {
-    return this.tail.slice(-STUCK_TAIL_LINES)
+    return redactLines(this.tail).slice(-STUCK_TAIL_LINES)
   }
 
   private onActivity(a: Activity) {
@@ -732,6 +774,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     roleNoProgressMinutes: options.noProgressMinutes,
     timeoutGraceMs: options.timeoutGraceMs ?? TIMEOUT_GRACE_MS,
     deliverTimeoutMs: options.deliverTimeoutMs ?? DELIVER_TIMEOUT_MS,
+    deliverGiveUpMs: options.deliverGiveUpMs ?? DELIVER_GIVE_UP_MS,
   }
 
   const runners = new Set<LeaseRunner>()

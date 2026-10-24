@@ -81,7 +81,12 @@ export interface ExecutorRun {
   done: Promise<Result<ExecutorOutcome>>
   /** 请求停止；之后 done 应尽快以 cancelled 结束。 */
   cancel(): Promise<void>
-  /** 把回复送给正在运行的 worker；没有实现时视为 not_running。 */
+  /**
+   * 把回复送给正在运行的 worker；没有实现时视为 not_running。
+   * 应当按 `reply_id` 幂等：同一个 reply_id 再次送达时不得让 worker 收到第二次
+   * （节点在 deliver 抛异常后会重送，网络重试也可能导致重复调用）。
+   * 返回 not_running 只用于确认 worker 已不在；临时失败请抛出异常。
+   */
   deliver?(reply: DeliveredReply): Promise<DeliverResult>
 }
 

@@ -26,7 +26,7 @@ const KEY_WORDS = 'api[_-]?key|secret|token|passw(?:or)?d|pwd|access[_-]?key|pri
 const RULES: readonly Rule[] = [
   {
     id: 'private-key',
-    re: /-----BEGIN[A-Z ]{0,40}PRIVATE KEY-----[\s\S]{0,8192}?(?:-----END[A-Z ]{0,40}PRIVATE KEY-----|$)/g,
+    re: /-----BEGIN[A-Z ]{0,40}PRIVATE KEY-----[\s\S]{0,8192}?(?:-----END[A-Z ]{0,40}PRIVATE KEY-----|\[REDACTED:private-key\]|$)/g,
   },
   { id: 'aws-access-key', re: /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA)[0-9A-Z]{16}\b/g },
   {
@@ -72,9 +72,40 @@ const RULES: readonly Rule[] = [
   },
 ]
 
+const KEY_END_RE = /-----END[A-Z ]{0,40}PRIVATE KEY-----/
+const BASE64_LINE_RE = /^[A-Za-z0-9+/=]{16,128}\r?$/
+/** 私钥正文最多回溯的行数（8192 位 RSA 的 PEM 约 100 行）。 */
+const KEY_BODY_MAX_LINES = 200
+
+/**
+ * `-----END … PRIVATE KEY-----` 之前连续的 base64 行一并脱敏（第三轮复核第 1 条）：
+ * 截取窗口切掉了 BEGIN 那一行时，私钥正文仍然认得出来。逐行线性扫描，不用跨行正则，
+ * 每行最多被看一次，回溯行数有上限。
+ */
+function redactKeyBodies(text: string): string {
+  if (!text.includes('PRIVATE KEY-----')) return text
+  const lines = text.split('\n')
+  const out: string[] = []
+  for (const line of lines) {
+    if (KEY_END_RE.test(line)) {
+      let n = 0
+      while (
+        n < KEY_BODY_MAX_LINES &&
+        out.length > 0 &&
+        BASE64_LINE_RE.test(out[out.length - 1] ?? '')
+      ) {
+        out.pop()
+        n++
+      }
+      out.push(line.replace(KEY_END_RE, '[REDACTED:private-key]'))
+    } else out.push(line)
+  }
+  return out.join('\n')
+}
+
 /** 把文本中疑似密钥的部分替换为 `[REDACTED:<规则>]`。调用方应先截断输入。 */
 export function redactSecrets(text: string): string {
-  let out = text
+  let out = redactKeyBodies(text)
   for (const rule of RULES) {
     out = out.replace(rule.re, (match: string, ...rest: unknown[]) => {
       if (rule.group === undefined) return `[REDACTED:${rule.id}]`
@@ -127,6 +158,15 @@ export function sanitizeTail(lines: readonly string[]): string[] {
   return redactSecrets(kept.join('\n'))
     .split('\n')
     .map((l) => clipText(l, TAIL_LINE_MAX))
+}
+
+/**
+ * 逐行截断（每行 2000 字符）后整体脱敏，返回脱敏后的行。节点先对完整的输出缓冲调用它，
+ * 再截取末尾若干行，避免截取窗口切断私钥块（第三轮复核第 1 条）。
+ */
+export function redactLines(lines: readonly string[]): string[] {
+  if (lines.length === 0) return []
+  return redactSecrets(lines.map((l) => clipText(l, TAIL_LINE_MAX)).join('\n')).split('\n')
 }
 
 /** 卡住说明入账前的处理：先截断，再脱敏。 */

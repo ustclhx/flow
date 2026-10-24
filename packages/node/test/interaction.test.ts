@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { randomBytes } from 'node:crypto'
 import { type Bench, bench, fake, type Intercept } from './harness.ts'
 
 /**
@@ -25,6 +26,19 @@ interface ReplyResponse {
 }
 const reply = (b: Bench, id: string, body: unknown, actor = 'user') =>
   b.api<ReplyResponse>('POST', `/v1/tasks/${id}/reply`, body, actor)
+
+/** 运行时拼出的 PEM 形状文本（随机 base64 正文，每行 64 字符），不是真的私钥。 */
+function fakePem(bodyLines: number): string[] {
+  const body =
+    randomBytes(bodyLines * 48)
+      .toString('base64')
+      .match(/.{1,64}/g) ?? []
+  const label = ['PRIVATE', 'KEY'].join(' ')
+  return [`-----BEGIN ${label}-----`, ...body, `-----END ${label}-----`]
+}
+
+const deliverCalls = (b: Bench, id: string) =>
+  b.ledger.taskActivity(id).filter((a) => a.text?.startsWith('fake：deliver 调用')).length
 
 const interactive = (extra: Record<string, unknown>[] = []) =>
   fake({
@@ -263,12 +277,15 @@ describe('送达与恢复', () => {
       return undefined
     }
     const b = await open({}, 60, intercept)
-    const id = await b.create(interactive([{ do: 'await_reply' }]))
+    const id = await b.create(interactive())
     await b.until(id, (t) => t.status === 'blocked')
     await reply(b, id, { kind: 'text', text: '用 main' })
     const t = await b.until(id, (t) => t.status === 'done', 5 * 60_000)
     expect(rejected).toBe(1)
     expect(t.status).toBe('done')
+    // 节点重新送达了一次，执行器按 reply_id 幂等，worker 只收到一次。
+    expect(deliverCalls(b, id)).toBe(2)
+    expect(b.ledger.taskActivity(id).filter((a) => a.text?.startsWith('收到回复'))).toHaveLength(1)
     expect(b.ledger.taskReplies(id)).toMatchObject([{ state: 'delivered' }])
   })
 
@@ -291,18 +308,62 @@ describe('送达与恢复', () => {
     })
   })
 
-  test('deliver 永不返回：超时后按临时错误重送，任务不会永久卡住（复核第 4 条）', async () => {
+  test('deliver 比超时慢（70 秒 / 60 秒）：不重送，worker 只收到 1 次回复（第三轮复核第 2 条）', async () => {
     const b = await open({ deliverTimeoutMs: 60_000 })
+    const id = await b.create({
+      ...interactive(),
+      inputs: { fake: { ...interactive().inputs.fake, deliver_delay_ms: 70_000 } },
+    })
+    await b.until(id, (t) => t.status === 'blocked')
+    await reply(b, id, { kind: 'text', text: '用 main' })
+    const t = await b.until(id, (t) => t.status === 'done', 5 * 60_000)
+    expect(t.attempt).toBe(1)
+    expect(deliverCalls(b, id)).toBe(1)
+    const got = b.ledger.taskActivity(id).filter((a) => a.text?.startsWith('收到回复'))
+    expect(got).toHaveLength(1)
+    expect(b.ledger.taskReplies(id)).toMatchObject([{ state: 'delivered' }])
+  })
+
+  test('deliver 迟迟没有结果：按 not_running 处理，带着回复重新排队并取消当前 worker（第三轮复核第 2 条）', async () => {
+    const b = await open({ deliverTimeoutMs: 60_000, deliverGiveUpMs: 5 * 60_000 })
     const id = await b.create({
       ...interactive(),
       inputs: { fake: { ...interactive().inputs.fake, deliver_hangs: 1 } },
     })
     await b.until(id, (t) => t.status === 'blocked')
     await reply(b, id, { kind: 'text', text: '用 main' })
-    await b.clock.advance(50_000)
+    await b.clock.advance(4 * 60_000)
+    // 放弃之前不重送。
     expect(b.task(id).status).toBe('blocked')
-    const t = await b.until(id, (t) => t.status === 'done', 5 * 60_000)
-    expect(t.attempt).toBe(1)
-    expect(b.ledger.taskReplies(id)).toMatchObject([{ state: 'delivered' }])
+    expect(deliverCalls(b, id)).toBe(1)
+    const t = await b.until(id, (t) => t.status === 'done', 10 * 60_000)
+    expect(t.attempt).toBe(2)
+    expect(t.result?.summary).toBe('已恢复（会话 无）：text 用 main')
+    expect(b.types(id)).toContain('task.requeued_with_reply')
+    expect(b.ledger.taskReplies(id)).toMatchObject([{ state: 'requeued' }])
+  })
+
+  test('卡住时末尾 40 行切掉了私钥的 BEGIN 行：私钥正文也不入账（第三轮复核第 1 条）', async () => {
+    for (const bodyLines of [50, 98]) {
+      const b = await open()
+      const pem = fakePem(bodyLines)
+      const id = await b.create(
+        fake({
+          script: [
+            ...pem.map((text) => ({ do: 'output', text })),
+            { do: 'output', text: '要继续吗？' },
+            { do: 'idle' },
+            { do: 'hang' },
+          ],
+        }),
+      )
+      const t = await b.until(id, (t) => t.status === 'blocked')
+      // 合同（task.created）里本来就有这些脚本行，只检查卡住上报入账的部分。
+      const stored = JSON.stringify(b.events(id).filter((e) => e.type === 'task.blocked'))
+      expect(pem.slice(1, -1).filter((line) => stored.includes(line))).toEqual([])
+      expect(t.blocked?.tail?.some((l) => l.includes('[REDACTED:private-key]'))).toBe(true)
+      await b.close()
+      current = undefined
+    }
   })
 })

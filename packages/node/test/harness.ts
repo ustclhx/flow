@@ -81,10 +81,11 @@ export interface Bench {
 export type Intercept = (url: string, init?: RequestInit) => Response | undefined
 
 export async function bench(
-  nodeOptions: Partial<StartNodeOptions> = {},
+  nodeOptions: Partial<StartNodeOptions> & { readRoles?: boolean } = {},
   leaseTtlS = 60,
   intercept?: Intercept,
 ): Promise<Bench> {
+  const { readRoles, ...startOptions } = nodeOptions
   const clock = new ManualClock()
   const home = join(mkdtempSync(join(tmpdir(), 'flow-node-bench-')), 'home')
   const ledger = await openLedger(':memory:', { now: clock.now })
@@ -112,7 +113,10 @@ export async function bench(
     hostname: 'bench',
     logger: quiet,
     waitS: 30,
-    ...nodeOptions,
+    // 默认不读 config/roles/（真实文件 I/O 与虚拟时钟交错会让时间点不确定）；
+    // 需要测角色文件时传 readRoles: true。
+    ...(readRoles ? {} : { noProgressMinutes: () => undefined }),
+    ...startOptions,
   })
   if (!started.ok) throw new Error(started.error.message)
   const node = started.data

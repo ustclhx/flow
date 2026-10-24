@@ -148,7 +148,7 @@ describe('无进展超时', () => {
 
 describe('角色设定的无进展阈值', () => {
   test('按合同的角色读取 config/roles/<role>.yaml 的 no_progress_minutes', async () => {
-    const b = await open()
+    const b = await open({ readRoles: true })
     const dir = join(b.home, 'config', 'roles')
     mkdirSync(dir, { recursive: true })
     writeFileSync(
@@ -156,6 +156,11 @@ describe('角色设定的无进展阈值', () => {
       'name: dev\nexecutor: fake\nprompt: 测试角色\nno_progress_minutes: 3\n',
     )
     const id = await b.create(fake({ script: [{ do: 'hang' }] }))
+    // 领到租约后节点要先读角色文件（真实 I/O），等执行器真正启动后再拨动虚拟时钟。
+    for (let i = 0; i < 400 && b.node.active() === 0; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(b.node.active()).toBe(1)
     await b.clock.advance(2 * MIN + 30_000)
     expect(b.task(id).status).toBe('running')
     const t = await b.until(id, (t) => t.status === 'blocked', 2 * MIN)

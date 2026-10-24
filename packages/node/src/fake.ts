@@ -125,6 +125,7 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
       const spec: FakeResumeInputs = resume
         ? (parsed.data.resume ?? fakeResumeInputs.parse({}))
         : parsed.data
+      const seenReplies = new Set<string>()
       let deliverFailures = spec.deliver_failures ?? 0
       let deliverHangs = spec.deliver_hangs ?? 0
       const resumedSummary = resume
@@ -236,6 +237,10 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
         },
         deliver: async (reply): Promise<DeliverResult> => {
           if (finished) return 'not_running'
+          // 每次调用都留痕，测试据此确认节点没有重复送达。
+          queue.push({ ts: iso(), kind: 'status', text: `fake：deliver 调用 ${reply.reply_id}` })
+          // 按 reply_id 幂等：同一条回复只交给 worker 一次。
+          if (seenReplies.has(reply.reply_id)) return 'delivered'
           if (deliverHangs > 0) {
             deliverHangs--
             return new Promise<DeliverResult>(() => {})
@@ -244,6 +249,7 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
             deliverFailures--
             throw new Error('fake：模拟送达失败')
           }
+          seenReplies.add(reply.reply_id)
           if (spec.deliver_delay_ms) {
             await new Promise<void>((resolve) => {
               cancels.push(clock.setTimeout(resolve, spec.deliver_delay_ms ?? 0))

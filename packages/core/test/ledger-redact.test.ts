@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { randomBytes } from 'node:crypto'
 import {
+  redactLines,
   redactSecrets,
   sanitizeMessage,
   sanitizeTail,
@@ -76,6 +78,45 @@ describe('redactSecrets', () => {
   test('普通输出保持不变', () => {
     const text = 'Allow command `rm -rf build`? [y/n] token 数 1234，secret 管理见文档'
     expect(redactSecrets(text)).toBe(text)
+  })
+})
+
+/** 运行时拼出的 PEM 形状文本（随机 base64 正文），不是真的私钥。4096 位约 50 行正文，8192 位约 98 行。 */
+function fakePem(bodyLines: number): string[] {
+  const body =
+    randomBytes(bodyLines * 48)
+      .toString('base64')
+      .match(/.{1,64}/g) ?? []
+  const label = j('PRIVATE', ' KEY')
+  return [`-----BEGIN ${label}-----`, ...body, `-----END ${label}-----`]
+}
+
+describe('私钥块被截取窗口切断（第三轮复核第 1 条）', () => {
+  test.each([
+    ['4096 位', 50],
+    ['8192 位', 98],
+  ])('%s：末尾 40 行里没有 BEGIN 行也能脱敏', (_name, n) => {
+    const pem = fakePem(n)
+    const lines = ['$ cat key.pem', ...pem, '要继续吗？']
+    const body = pem.slice(1, -1)
+    const leaked = (out: string[]) => body.filter((l) => out.join('\n').includes(l))
+    // 只看末尾 40 行（BEGIN 行已被切掉）：END 之前的连续 base64 行一并脱敏。
+    const window = lines.slice(-40)
+    expect(window.some((l) => l.includes('BEGIN'))).toBe(false)
+    expect(leaked(redactSecrets(window.join('\n')).split('\n'))).toEqual([])
+    expect(leaked(sanitizeTail(window))).toEqual([])
+    // 节点的做法：先对完整缓冲脱敏，再取末尾 40 行。
+    const redacted = redactLines(lines).slice(-40)
+    expect(leaked(redacted)).toEqual([])
+    expect(redacted).toContain('要继续吗？')
+  })
+
+  test('END 之前的普通文字不被吞掉；回溯行数有上限', () => {
+    const label = j('PRIVATE', ' KEY')
+    const out = redactSecrets(['普通输出', 'A'.repeat(64), `-----END ${label}-----`].join('\n'))
+    expect(out).toBe('普通输出\n[REDACTED:private-key]')
+    const many = [...Array.from({ length: 300 }, () => 'B'.repeat(64)), `-----END ${label}-----`]
+    expect(redactSecrets(many.join('\n')).split('\n')).toHaveLength(101)
   })
 })
 
