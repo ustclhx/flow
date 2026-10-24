@@ -15,6 +15,9 @@ jobs:
     timeout-minutes: 15
     env:
       GITLEAKS_VERSION: 8.30.1
+      SOPS_VERSION: 3.13.3
+      AGE_VERSION: 1.3.2
+      FLOW_REQUIRE_SOPS_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +31,20 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | tar -xz -C /usr/local/bin gitleaks
           gitleaks version
+
+      # 官方 Linux x64 release；固定 SHA-256 来自对应官方 release 资产。
+      - name: Install sops and age (verified)
+        run: |
+          curl -sSfL "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" -o sops
+          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum --check
+          curl -sSfL "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-linux-amd64.tar.gz" -o age.tar.gz
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum --check
+          tar -xzf age.tar.gz
+          sudo install -m 0755 sops age/age age/age-keygen /usr/local/bin/
+          rm -rf sops age age.tar.gz
+          sops --version
+          age --version
+          age-keygen --version
 
       - run: bun install --frozen-lockfile
       - run: bun run lint

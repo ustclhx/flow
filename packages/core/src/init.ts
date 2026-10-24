@@ -17,6 +17,7 @@ import {
   BRAIN_INDEX_MD,
   BRAIN_LOG_MD,
   brainAgentsMd,
+  CONFIG_GITLEAKS_TOML,
   GITLEAKS_TOML,
   PRE_COMMIT_HOOK,
 } from './templates.ts'
@@ -39,7 +40,7 @@ interface RepoFile {
 
 const REPO_FILES: Record<RepoName, RepoFile[]> = {
   config: [
-    { path: '.gitleaks.toml', content: () => GITLEAKS_TOML },
+    { path: '.gitleaks.toml', content: () => CONFIG_GITLEAKS_TOML },
     ...Object.entries(DEFAULT_ROLE_FILES).map(([name, content]) => ({
       path: `roles/${name}`,
       content: () => content,
