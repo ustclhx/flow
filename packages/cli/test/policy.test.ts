@@ -80,8 +80,10 @@ test('policy check 默认只判定 auto-report，--record 才入账；支持重�
   expect(JSON.parse(recorded.stdout)).toEqual(JSON.parse(checked.stdout))
   const shown = await client.showTask(taskId)
   if (!shown.ok) throw new Error(shown.error.message)
-  expect(shown.data.events).toHaveLength(before.data.events.length + 1)
-  expect(shown.data.events.at(-1)).toMatchObject({
+  // auto-report 随后由收件箱反应器在任务上开一个 Digest 条目（inbox.*），这里只看策略审计事件。
+  const audited = shown.data.events.filter((e) => !e.type.startsWith('inbox.'))
+  expect(audited).toHaveLength(before.data.events.length + 1)
+  expect(audited.at(-1)).toMatchObject({
     type: 'policy.decided',
     payload: { request: { paths: ['src/a', 'src/b'] } },
   })

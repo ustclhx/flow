@@ -147,8 +147,10 @@ test('user dry_run：auto-report 只返回脱敏明细、不入账；false 入�
   const recorded = must(await user.checkPolicy({ ...input, dry_run: false }))
   expect(recorded).toEqual(dry)
   const after = must(await user.showTask(task.id))
-  expect(after.events).toHaveLength(before.events.length + 1)
-  expect(after.events.at(-1)).toMatchObject({
+  // auto-report 随后由收件箱反应器在任务上开一个 Digest 条目（inbox.*），这里只看策略审计事件。
+  const audited = after.events.filter((e) => !e.type.startsWith('inbox.'))
+  expect(audited).toHaveLength(before.events.length + 1)
+  expect(audited.at(-1)).toMatchObject({
     type: 'policy.decided',
     payload: { level: 'auto-report' },
   })

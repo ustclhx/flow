@@ -99,11 +99,9 @@ describe('task_reply', () => {
     await until(id, (t) => t.status === 'done', 'done')
     const shown = data(await client().showTask(id))
     expect(shown.replies).toMatchObject([{ state: 'delivered', by: 'user' }])
-    expect(shown.events.map((e) => e.type).slice(-3)).toEqual([
-      'task.replied',
-      'task.unblocked',
-      'task.done',
-    ])
+    // 收件箱条目的开关事件也在任务时间线上，这里只看任务自身的事件。
+    const lifecycle = shown.events.map((e) => e.type).filter((t) => !t.startsWith('inbox.'))
+    expect(lifecycle.slice(-3)).toEqual(['task.replied', 'task.unblocked', 'task.done'])
     expect(taskReplyOp.human?.(r.doc.data)).toContain('下一次续约')
   })
 

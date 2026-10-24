@@ -150,6 +150,32 @@ const samples: Record<
     valid: { payload: { events_replayed: 10, duration_ms: 3 } },
     invalid: { payload: { events_replayed: 10, duration_ms: 3, extra: true } },
   },
+  'inbox.item_created': {
+    valid: {
+      ...task,
+      payload: {
+        item_id: 'blk.12',
+        level: 'interrupt',
+        source: 'task',
+        source_ref: 't_1',
+        reason: 'question',
+        title: '需要确认',
+        actions: ['reply'],
+        source_seq: 12,
+      },
+    },
+    invalid: {
+      payload: { item_id: 'blk.12', level: 'urgent', source: 'task', source_ref: 't', title: 'x' },
+    },
+  },
+  'inbox.item_updated': {
+    valid: { payload: { item_id: 'blk.12', level: 'digest' } },
+    invalid: { payload: { item_id: 'blk.12' } },
+  },
+  'inbox.item_closed': {
+    valid: { ...task, payload: { item_id: 'blk.12', reason: 'task_running', cause_seq: 13 } },
+    invalid: { payload: { item_id: 'blk.12', reason: 'whatever' } },
+  },
 }
 
 const envelope = (type: EventType, body: Record<string, unknown>) => ({

@@ -41,6 +41,8 @@ export interface FlowPaths {
   schedulesConfig: string
   /** `config/policies.yaml`：策略规则。 */
   policiesConfig: string
+  /** `config/inbox.yaml`：收件箱分级覆盖与推送节奏。 */
+  inboxConfig: string
   /** 任务账本 `state/flow.db`，只由中枢打开（design D1）。 */
   ledgerDb: string
   /** 中枢 token（0600）。 */
@@ -83,6 +85,7 @@ export function flowPaths(home: string): FlowPaths {
     nodeConfig: join(config, 'node.yaml'),
     schedulesConfig: join(config, 'schedules.yaml'),
     policiesConfig: join(config, 'policies.yaml'),
+    inboxConfig: join(config, 'inbox.yaml'),
     ledgerDb: join(state, 'flow.db'),
     hubToken: join(state, 'hub.token'),
     hubLock: join(state, 'hub.lock'),

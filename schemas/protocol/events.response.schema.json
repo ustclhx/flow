@@ -2880,6 +2880,348 @@
       ],
       "additionalProperties": false,
       "title": "hub.rebuilt"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "inbox.item_created"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "pattern": "^[a-z]{2,12}\\.[A-Za-z0-9_.-]{1,120}$",
+              "description": "条目 id，例如 blk.42、prop.<提案 id>"
+            },
+            "level": {
+              "type": "string",
+              "enum": [
+                "interrupt",
+                "decide",
+                "digest"
+              ],
+              "description": "条目级别：interrupt 立即推送，decide 成批推送，digest 写进每日摘要"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "task",
+                "proposal",
+                "policy",
+                "supervisor",
+                "digest"
+              ],
+              "description": "条目来源"
+            },
+            "source_ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "description": "关联对象：任务 id、提案 id 或源事件 seq"
+            },
+            "reason": {
+              "description": "来源内的原因，例如卡住原因 question",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "body": {
+              "default": "",
+              "type": "string",
+              "maxLength": 4000
+            },
+            "actions": {
+              "default": [],
+              "description": "可用的操作；忽略（dismiss）总是可用，不写在这里",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "approve",
+                  "deny",
+                  "reply",
+                  "accept",
+                  "reject"
+                ],
+                "description": "条目上可用的操作"
+              }
+            },
+            "source_seq": {
+              "description": "触发该条目的账本事件 seq（反应器的幂等键）；提案等账本外的来源没有",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "deferred_until": {
+              "description": "静默时段内生成时，顺延推送到此时（3.3）",
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          "required": [
+            "item_id",
+            "level",
+            "source",
+            "source_ref",
+            "title",
+            "body",
+            "actions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "inbox.item_created"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "inbox.item_updated"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "pattern": "^[a-z]{2,12}\\.[A-Za-z0-9_.-]{1,120}$",
+              "description": "条目 id，例如 blk.42、prop.<提案 id>"
+            },
+            "level": {
+              "type": "string",
+              "enum": [
+                "interrupt",
+                "decide",
+                "digest"
+              ],
+              "description": "条目级别：interrupt 立即推送，decide 成批推送，digest 写进每日摘要"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "body": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "approve",
+                  "deny",
+                  "reply",
+                  "accept",
+                  "reject"
+                ],
+                "description": "条目上可用的操作"
+              }
+            },
+            "deferred_until": {
+              "description": "null 表示取消顺延",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "item_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "inbox.item_updated"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "inbox.item_closed"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "pattern": "^[a-z]{2,12}\\.[A-Za-z0-9_.-]{1,120}$",
+              "description": "条目 id，例如 blk.42、prop.<提案 id>"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "task_running",
+                "task_queued",
+                "task_done",
+                "task_failed",
+                "task_cancelled",
+                "superseded",
+                "proposal_accepted",
+                "proposal_rejected",
+                "proposal_removed",
+                "answered",
+                "dismissed",
+                "acted"
+              ],
+              "description": "条目关闭原因"
+            },
+            "note": {
+              "type": "string",
+              "maxLength": 1000
+            },
+            "cause_seq": {
+              "description": "导致关闭的账本事件 seq（例如 task.unblocked），反应器据此续跑",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "cause_actor": {
+              "description": "导致关闭的操作者，例如答复任务的 user（渠道据此显示\"已处理（来自 CLI）\"）",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$"
+            },
+            "via": {
+              "description": "操作发起的渠道；缺省表示命令行或自动关闭",
+              "type": "string",
+              "enum": [
+                "telegram",
+                "web",
+                "cli"
+              ]
+            }
+          },
+          "required": [
+            "item_id",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "inbox.item_closed"
     }
   ],
   "title": "Flow ledger event",

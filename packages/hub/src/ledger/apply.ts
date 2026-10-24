@@ -263,6 +263,77 @@ export function createApplier(db: Database): Applier {
           e.seq,
         )
         return
+      case 'inbox.item_created': {
+        const p = e.payload
+        stmt(
+          `INSERT INTO inbox_items (id, level, source, source_ref, source_seq, reason, workspace,
+             task_id, title, body, actions_json, state, created_seq, created_at, created_by,
+             updated_at, last_seq, deferred_until)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          p.item_id,
+          p.level,
+          p.source,
+          p.source_ref,
+          p.source_seq ?? null,
+          p.reason ?? null,
+          e.workspace ?? null,
+          e.task_id ?? null,
+          p.title,
+          p.body,
+          JSON.stringify(p.actions),
+          e.seq,
+          e.ts,
+          e.actor,
+          e.ts,
+          e.seq,
+          p.deferred_until ?? null,
+        )
+        return
+      }
+      case 'inbox.item_updated': {
+        const p = e.payload
+        const sets: string[] = []
+        const params: (string | number | null)[] = []
+        const set = (col: string, v: string | number | null) => {
+          sets.push(`${col} = ?`)
+          params.push(v)
+        }
+        if (p.level !== undefined) set('level', p.level)
+        if (p.title !== undefined) set('title', p.title)
+        if (p.body !== undefined) set('body', p.body)
+        if (p.actions !== undefined) set('actions_json', JSON.stringify(p.actions))
+        if (p.deferred_until !== undefined) set('deferred_until', p.deferred_until)
+        set('updated_at', e.ts)
+        set('last_seq', e.seq)
+        db.prepare(`UPDATE inbox_items SET ${sets.join(', ')} WHERE id = ?`).run(
+          ...params,
+          p.item_id,
+        )
+        return
+      }
+      case 'inbox.item_closed': {
+        const p = e.payload
+        stmt(
+          `UPDATE inbox_items SET state = 'closed', close_reason = ?, close_note = ?, closed_at = ?,
+             closed_by = ?, closed_seq = ?, cause_seq = ?, cause_actor = ?, closed_via = ?,
+             updated_at = ?, last_seq = ?
+           WHERE id = ?`,
+        ).run(
+          p.reason,
+          p.note ?? null,
+          e.ts,
+          e.actor,
+          e.seq,
+          p.cause_seq ?? null,
+          p.cause_actor ?? null,
+          p.via ?? null,
+          e.ts,
+          e.seq,
+          p.item_id,
+        )
+        return
+      }
       case 'hub.started':
       case 'hub.resumed':
       case 'hub.backup_done':

@@ -2,13 +2,20 @@
  * 账本表结构（design D2）。
  *
  * - `events`：只追加。用触发器禁止 UPDATE / DELETE，保证已写入的事件不可修改。
- * - 投影表：`tasks`、`nodes`、`leases`、`schedule_fires`、`replies`，全部由 `apply(event)` 维护，
+ * - 投影表：`tasks`、`nodes`、`leases`、`schedule_fires`、`replies`、`inbox_items`，全部由 `apply(event)` 维护，
  *   可随时清空后按 seq 重放得到（`rebuild()`）。
  * - 软状态列（不由事件派生，重建时按 D2 重置，见 `SOFT_COLUMNS`）：
  *   `tasks.last_activity_at`、`tasks.activity_json`、`nodes.last_seen_at`、`leases.expires_at`。
  */
 
-export const PROJECTION_TABLES = ['tasks', 'nodes', 'leases', 'schedule_fires', 'replies'] as const
+export const PROJECTION_TABLES = [
+  'tasks',
+  'nodes',
+  'leases',
+  'schedule_fires',
+  'replies',
+  'inbox_items',
+] as const
 export type ProjectionTable = (typeof PROJECTION_TABLES)[number]
 
 /** 每张投影表的软状态列；比较"增量投影 == 重建投影"时排除。 */
@@ -18,6 +25,7 @@ export const SOFT_COLUMNS: Readonly<Record<ProjectionTable, readonly string[]>> 
   leases: ['expires_at'],
   schedule_fires: [],
   replies: [],
+  inbox_items: [],
 }
 
 /** 每张投影表的主键（快照排序用）。 */
@@ -27,6 +35,7 @@ export const PROJECTION_KEYS: Readonly<Record<ProjectionTable, string>> = {
   leases: 'lease_id',
   schedule_fires: 'rule_id, planned_at',
   replies: 'id',
+  inbox_items: 'id',
 }
 
 export const LEDGER_DDL = `
@@ -120,6 +129,44 @@ CREATE TABLE IF NOT EXISTS replies (
   delivered_at TEXT
 );
 CREATE INDEX IF NOT EXISTS replies_task ON replies (task_id, state, created_seq);
+
+-- 收件箱条目（add-m1-inbox D1）。id 由来源确定性生成（blk.<seq>、prop.<id>、pol.<seq>），
+-- 同一来源只有一个条目；short_id 来源于 created_seq（base36），不单独存储。
+-- deferred_until（3.3 静默顺延）、pushed_at 与 channel_refs_json（4.1 渠道消息引用）先预留，
+-- 由后续的 inbox.item_updated / inbox.pushed 维护，同样只由事件派生。
+CREATE TABLE IF NOT EXISTS inbox_items (
+  id                TEXT PRIMARY KEY,
+  level             TEXT NOT NULL CHECK (level IN ('interrupt', 'decide', 'digest')),
+  source            TEXT NOT NULL,
+  source_ref        TEXT NOT NULL,
+  source_seq        INTEGER,
+  reason            TEXT,
+  workspace         TEXT,
+  task_id           TEXT,
+  title             TEXT NOT NULL,
+  body              TEXT NOT NULL,
+  actions_json      TEXT NOT NULL,
+  state             TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+  created_seq       INTEGER NOT NULL UNIQUE,
+  created_at        TEXT NOT NULL,
+  created_by        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  last_seq          INTEGER NOT NULL,
+  deferred_until    TEXT,
+  pushed_at         TEXT,
+  channel_refs_json TEXT NOT NULL DEFAULT '[]',
+  close_reason      TEXT,
+  close_note        TEXT,
+  closed_at         TEXT,
+  closed_by         TEXT,
+  closed_seq        INTEGER,
+  cause_seq         INTEGER,
+  cause_actor       TEXT,
+  closed_via        TEXT
+);
+CREATE INDEX IF NOT EXISTS inbox_open ON inbox_items (state, level, created_seq);
+CREATE INDEX IF NOT EXISTS inbox_task ON inbox_items (task_id, state);
+CREATE INDEX IF NOT EXISTS inbox_source ON inbox_items (source, state);
 `
 
 /**
