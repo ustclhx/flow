@@ -5,7 +5,7 @@
 
 ## 1. 密钥提供器
 
-- [ ] 1.1 `flow secrets init|set|list|get`：生成 age 密钥（0600）、写入 `.sops.yaml` 与加密文件并提交；`set` 从标准输入读取值，不经过 argv；`get` 只允许 user 调用；显式设置 `SOPS_AGE_KEY_FILE`；验证 secret-provider spec 的前两个场景（测试中使用临时生成的 age 密钥和临时 config 仓库）
+- [x] 1.1 `flow secrets init|set|list|get`：生成 age 密钥（0600）、写入 `.sops.yaml` 与加密文件并提交；`set` 从标准输入读取值，不经过 argv；`get` 只允许 user 调用；显式设置 `SOPS_AGE_KEY_FILE`；验证 secret-provider spec 的前两个场景（测试中使用临时生成的 age 密钥和临时 config 仓库）
 - [ ] 1.2 中枢运行时解析 `secret://`，加上内存中的脱敏名单（账本写入前、日志、外发内容；长度小于 8 的值不入名单）；缺少密钥时只停用依赖它的功能；验证 secret-provider 的"token 未配置"和 secret-hygiene 增量的场景
 
 - [ ] 1.3 按 token 绑定操作者身份（design D9）：`state/hub-tokens.json`（摘要存储、0600）、`flow hub token issue|list|revoke`、鉴权中间件按 token 决定身份（user token 只能降级声明，绑定 token 不一致时 `actor_mismatch`）、中枢对 `task_reply` 等只有用户能做的接口返回 `user_only`；节点与 MCP 进程适配；验证 hub-daemon 增量的全部场景

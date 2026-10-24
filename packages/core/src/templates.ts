@@ -17,6 +17,17 @@ regexTarget = "match"
 regexes = ['''secret://[A-Za-z0-9._/-]+''']
 `
 
+/** 仅放行 sops 元数据中的加密 MAC，不放行整个文件或任何明文业务字段。 */
+export const SOPS_ALLOWLIST = `
+[[allowlists]]
+description = "flow: sops 加密 MAC 元数据"
+regexTarget = "line"
+regexes = ['''^\\s*mac: ENC\\[AES256_GCM,.*\\]$''']
+`
+
+export const CONFIG_GITLEAKS_TOML =
+  GITLEAKS_TOML.replace('[allowlist]', '[[allowlists]]') + SOPS_ALLOWLIST
+
 /** 钩子中用于识别 Flow 管理的标记，`flow doctor` 据此检查钩子是否就位。 */
 export const HOOK_MARKER = 'flow-managed: gitleaks pre-commit'
 
