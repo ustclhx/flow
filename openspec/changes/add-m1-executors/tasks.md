@@ -17,8 +17,8 @@
 
 ## 3. claude-sdk 执行器
 
-- [ ] 3.1 接入 `@anthropic-ai/claude-agent-sdk`：流式输入、角色提示词追加到预设、`settingSources: ['project']`、注入 flow MCP、活动上报、结果（会话 id 与费用，字段以 SDK 类型为准）、`abortController` 加 `close()` 用于取消；验证用模拟的 SDK 迭代器做单元测试
-- [ ] 3.2 `canUseTool` 挂起审批：上报 `blocked(awaiting_approval)`（输入经脱敏）、approve 和 deny 的送达、审批超时导致失败；运行中的文字回复以用户消息推入；验证 executor-claude-sdk spec 的全部场景（模拟 SDK）
+- [x] 3.1 接入 `@anthropic-ai/claude-agent-sdk`：流式输入、角色提示词追加到预设、`settingSources: ['project']`、注入 flow MCP、活动上报、结果（会话 id 与费用，字段以 SDK 类型为准）、`abortController` 加 `close()` 用于取消；验证用模拟的 SDK 迭代器做单元测试
+- [x] 3.2 `canUseTool` 挂起审批：上报 `blocked(awaiting_approval)`（输入经脱敏）、approve 和 deny 的送达、审批超时导致失败；运行中的文字回复以用户消息推入；验证 executor-claude-sdk spec 的全部场景（模拟 SDK）
 
 ## 4. codex-exec 执行器
 

@@ -8,7 +8,12 @@ import {
   resolveFlowHome,
   rotateLog,
 } from '@flow/core'
-import { nodeHubClientFromHome, startNode } from '@flow/node'
+import {
+  createClaudeSdkExecutor,
+  createFakeExecutor,
+  nodeHubClientFromHome,
+  startNode,
+} from '@flow/node'
 import { defineCommand } from '../command.ts'
 
 /**
@@ -26,7 +31,10 @@ export const nodeStartCommand = defineCommand({
     if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.flow.node') {
       return fail('retryable', 'log_rotated', '日志已轮转，等待 launchd 重新启动节点')
     }
-    const started = await startNode({ home })
+    const started = await startNode({
+      home,
+      executors: [createFakeExecutor(), createClaudeSdkExecutor({ home })],
+    })
     if (!started.ok) return started
     const node = started.data
     console.error(

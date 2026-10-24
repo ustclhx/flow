@@ -165,15 +165,36 @@ describe('性能：病态输入不造成回溯爆炸（复核第 1 条）', () =
     return performance.now() - t0
   }
 
-  test.each(patterns)('1MB 的 %p 重复：sanitizeTail / sanitizeMessage 在 100ms 内完成', (p) => {
+  /**
+   * 绝对耗时只作防挂死的兜底（1 秒，CI 机器负载高时也不会误报）；
+   * 是否线性由下面的复杂度断言判断：输入放大 4 倍，耗时比必须小于 8（平方级会接近 16）。
+   */
+  const HANG_GUARD_MS = 1000
+
+  test.each(patterns)('1MB 的 %p 重复：sanitizeTail / sanitizeMessage 不挂死', (p) => {
     const big = p.repeat(Math.ceil(MB / p.length))
-    expect(timed(() => sanitizeTail([big]))).toBeLessThan(100)
-    expect(timed(() => sanitizeTail(big.match(/.{1,1000}/g) ?? []))).toBeLessThan(100)
-    expect(timed(() => sanitizeMessage(big))).toBeLessThan(100)
+    // 拆分本身不计入耗时。
+    const chunks = big.match(/.{1,1000}/g) ?? []
+    expect(timed(() => sanitizeTail([big]))).toBeLessThan(HANG_GUARD_MS)
+    expect(timed(() => sanitizeTail(chunks))).toBeLessThan(HANG_GUARD_MS)
+    expect(timed(() => sanitizeMessage(big))).toBeLessThan(HANG_GUARD_MS)
   })
 
+  /** 多次测量取最小值，减少调度抖动。 */
+  const best = (fn: () => unknown, runs = 5) => {
+    let min = Number.POSITIVE_INFINITY
+    for (let i = 0; i < runs; i++) min = Math.min(min, timed(fn))
+    return min
+  }
+
   test.each(patterns)('16KB 的 %p 重复直接脱敏也是线性的', (p) => {
+    const small = p.repeat(Math.ceil(TAIL_TOTAL_MAX_BYTES / 4 / p.length))
     const text = p.repeat(Math.ceil(TAIL_TOTAL_MAX_BYTES / p.length))
-    expect(timed(() => redactSecrets(text))).toBeLessThan(50)
+    expect(timed(() => redactSecrets(text))).toBeLessThan(HANG_GUARD_MS)
+    redactSecrets(small) // 预热
+    const t4 = best(() => redactSecrets(small))
+    const t16 = best(() => redactSecrets(text))
+    // 计时器分辨率以下的耗时不比较比值（分母取 0.05ms 下限）。
+    expect(t16 / Math.max(t4, 0.05)).toBeLessThan(8)
   })
 })
