@@ -1,6 +1,14 @@
 import { type FSWatcher, watch } from 'node:fs'
 import { join } from 'node:path'
-import { EMPTY_INBOX_CONFIG, flowPaths, type InboxConfig, loadInboxConfig } from '@flow/core'
+import {
+  EMPTY_INBOX_CONFIG,
+  flowPaths,
+  type InboxConfig,
+  inboxCadence,
+  loadInboxConfig,
+} from '@flow/core'
+import { type ChannelManager, createChannelManager } from '../channels/manager.ts'
+import type { ChannelSpec, InboxActFn } from '../channels/types.ts'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { Scheduler } from '../scheduler/index.ts'
 import type { HubClock } from '../server/clock.ts'
@@ -17,8 +25,8 @@ export * from './reactor.ts'
 export * from './routes.ts'
 
 /**
- * 中枢内的收件箱组件：分级与节奏配置（含热加载）、反应器、提案目录监听（3.1），推送节奏（3.3）。
- * 渠道（4.1）之后挂在这里。
+ * 中枢内的收件箱组件：分级与节奏配置（含热加载）、反应器、提案目录监听（3.1），
+ * 推送节奏（3.3）与渠道管理器（4.1）。
  */
 
 export interface InboxServiceOptions {
@@ -33,8 +41,14 @@ export interface InboxServiceOptions {
   debounceMs?: number
   /** 内部定时规则（Decide 时间点、静默结束、每日摘要）挂在调度器上。 */
   scheduler?: Pick<Scheduler, 'setInternalRules'>
-  /** 推送到期条目的回调（渠道管理器，4.1 接上）。 */
-  flush?: () => Promise<void>
+  /** 推送渠道（Telegram 等由 5.x 注册）。 */
+  channels?: readonly ChannelSpec[]
+  /** 渠道入站操作调用的收件箱操作（3.2 的 inbox_act）。 */
+  act?: InboxActFn
+  /** 解析渠道配置中的 `secret://` 引用。 */
+  resolve?: <T>(value: T) => { value: T; missing: string[] }
+  /** 渠道退避参数（测试用）。 */
+  backoff?: { baseMs?: number; maxMs?: number }
   staleKnowledge?: () => number | Promise<number>
 }
 
@@ -42,6 +56,7 @@ export interface InboxService {
   reactor: InboxReactor
   proposals: ProposalWatcher
   pusher: InboxPusher
+  channels: ChannelManager
   /** 当前生效的分级配置。 */
   config(): InboxConfig
   /** 重新读取 config/inbox.yaml；文件级错误时保留上一次的配置。 */
@@ -83,11 +98,21 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
     ...(o.debounceMs !== undefined ? { debounceMs: o.debounceMs } : {}),
   })
 
+  const channels = createChannelManager({
+    ledger: o.ledger,
+    clock: o.clock,
+    cadence: () => inboxCadence(current),
+    ...(o.channels ? { channels: o.channels } : {}),
+    ...(o.act ? { act: o.act } : {}),
+    ...(o.resolve ? { resolve: o.resolve } : {}),
+    ...(o.backoff ? { backoff: o.backoff } : {}),
+    ...(o.logger ? { logger: o.logger } : {}),
+  })
   pusher = createInboxPusher({
     ledger: o.ledger,
     clock: o.clock,
     config,
-    ...(o.flush ? { flush: o.flush } : {}),
+    flush: () => channels.flush(),
     ...(o.scheduler ? { scheduler: o.scheduler } : {}),
     ...(o.staleKnowledge ? { staleKnowledge: o.staleKnowledge } : {}),
     ...(o.logger ? { logger: o.logger } : {}),
@@ -124,6 +149,7 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
     reactor,
     proposals,
     pusher: activePusher,
+    channels,
     config,
     reloadConfig,
     idle: () => reactor.idle(),
@@ -133,6 +159,7 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
       activePusher.stop()
       proposals.stop()
       reactor.stop()
+      await channels.stop()
     },
   }
 }

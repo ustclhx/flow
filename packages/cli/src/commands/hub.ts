@@ -3,6 +3,7 @@ import {
   fail,
   flowPaths,
   HubClient,
+  type HubStatus,
   type HubTokenView,
   ok,
   renderTable,
@@ -45,6 +46,29 @@ export const hubStartCommand = defineCommand({
   human: () => '中枢已停止',
 })
 
+const CHANNEL_STATE: Record<string, string> = {
+  running: '正常',
+  backoff: '重试中',
+  disabled: '未启动',
+  stopped: '已停止',
+}
+
+/** 渠道状态一行：缺少密钥的渠道列出缺少的路径（secret-provider "token 未配置"）。 */
+function channelSummary(channels: NonNullable<HubStatus['channels']>): string {
+  if (channels.length === 0) return '（未配置）'
+  return channels
+    .map((c) => {
+      const extra =
+        c.missing_secrets.length > 0
+          ? `，缺少 ${c.missing_secrets.map((p) => `secret://${p}`).join('、')}`
+          : c.state === 'backoff'
+            ? `，已连续失败 ${c.failures} 次，${c.next_retry_at ?? ''} 重试`
+            : ''
+      return `${c.id}：${CHANNEL_STATE[c.state] ?? c.state}${extra}`
+    })
+    .join('；')
+}
+
 export const hubStatusCommand = defineCommand({
   name: 'hub status',
   summary: '查看中枢版本、运行时长、账本与备份状态',
@@ -73,6 +97,7 @@ export const hubStatusCommand = defineCommand({
             '（无）',
         ],
         ...(status.secrets?.error ? [['密钥解析错误', status.secrets.error]] : []),
+        ['推送渠道', channelSummary(status.channels ?? [])],
       ],
       [
         { header: '项目', value: (row) => row[0] ?? '' },

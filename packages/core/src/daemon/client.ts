@@ -42,6 +42,7 @@ export type HubStatus = HealthData & {
   last_backup: HubStatusData['last_backup']
   secrets?: HubStatusData['secrets']
   policies?: HubStatusData['policies']
+  channels?: HubStatusData['channels']
 }
 
 type JsonEndpoint = Exclude<EndpointName, 'events'>

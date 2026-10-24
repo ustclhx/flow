@@ -1,7 +1,9 @@
 import {
+  fail,
   flowPaths,
   type HubConfig,
   type HubStatusData,
+  inboxActRequest,
   loadHubConfig,
   loadPoliciesConfig,
   type Result,
@@ -10,7 +12,14 @@ import {
   VERSION,
 } from '@flow/core'
 import { Hono } from 'hono'
-import { createInboxRoutes, type InboxService, startInbox } from '../inbox/index.ts'
+import type { ChannelSpec } from '../channels/types.ts'
+import {
+  actOnInbox,
+  createInboxRoutes,
+  type InboxActionDeps,
+  type InboxService,
+  startInbox,
+} from '../inbox/index.ts'
 import { createTaskRoutes } from '../ledger/routes.ts'
 import { type LedgerStore, openLedger } from '../ledger/store.ts'
 import { createTaskService, workspaceCheckFromHome } from '../ledger/tasks.ts'
@@ -40,13 +49,16 @@ export interface RunHubOptions
     /** 是否监听 config/inbox.yaml 与提案目录，默认 true。 */
     watch?: boolean
     proposalIntervalMs?: number
+    /** 推送渠道（Telegram 由 5.x 注册；测试注入假渠道）。 */
+    channels?: readonly ChannelSpec[]
+    backoff?: { baseMs?: number; maxMs?: number }
   }
 }
 
 /**
  * 生产用的中枢组合：取得锁后打开 `state/flow.db`，挂载任务路由与节点协议路由，
  * 启动租约过期扫描、睡眠检测与定时调度，把每日备份写成 `hub.backup_done`，启动成功后写入 `hub.started`，
- * 然后启动收件箱（反应器与提案目录监听）。
+ * 然后启动收件箱（反应器、提案目录监听、推送节奏与渠道管理器）。
  * 注入的 clock 同时用于账本的事件时间戳，保证租约到期时间与扫描用同一个时钟。
  */
 export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> {
@@ -65,12 +77,18 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     ...(options.secrets?.debounceMs !== undefined
       ? { debounceMs: options.secrets.debounceMs }
       : {}),
-    ...(options.secrets?.onChange ? { onChange: options.secrets.onChange } : {}),
+    onChange: (status) => {
+      options.secrets?.onChange?.(status)
+      // 密钥补上后，之前因缺少密钥未启动的渠道重试启动。
+      void inbox?.channels.refresh()
+    },
   })
   let stopWatch: (() => void) | undefined
   const startedAt = clock.now()
   let scheduler: Scheduler | undefined
   let inbox: InboxService | undefined
+  /** 收件箱操作的依赖：HTTP 路由与中枢内渠道共用同一个实现（actOnInbox）。 */
+  let inboxActions: InboxActionDeps | undefined
   let ledger: LedgerStore | undefined
   let config: HubConfig | undefined
   let protocol: NodeProtocol | undefined
@@ -119,7 +137,8 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         onResume: () => scheduler?.resume(),
         ...(options.logger ? { logger: options.logger } : {}),
       })
-      const inboxDeps = {
+      // HTTP 路由、/ui 与中枢内渠道共用同一个收件箱操作实现（actOnInbox）。
+      const inboxDeps: InboxActionDeps = {
         ledger,
         tasks,
         home: options.home,
@@ -127,6 +146,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
           await inbox?.proposals.scan()
         },
       }
+      inboxActions = inboxDeps
       const status = new Hono()
       status.get('/v1/hub/status', async (c) => {
         const policies = await loadPoliciesConfig(options.home)
@@ -158,6 +178,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
                   },
                 ],
               },
+          channels: inbox?.channels.status() ?? [],
         }
         return c.json({ ok: true as const, data })
       })
@@ -242,6 +263,16 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     clock,
     logger,
     scheduler,
+    resolve: (value) => secrets.resolve(value),
+    ...(options.inbox?.channels ? { channels: options.inbox.channels } : {}),
+    // 渠道在中枢进程内运行，不经过 HTTP 鉴权，直接以 user 身份执行并记录 via（design D9）。
+    act: async (id, action, text, via) => {
+      if (!inboxActions) return fail('retryable', 'hub_starting', '中枢尚未就绪')
+      const input = inboxActRequest.safeParse({ action, ...(text ? { text } : {}), via })
+      if (!input.success) return fail('usage', 'invalid_arguments', '条目操作参数不合法')
+      return actOnInbox(inboxActions, id, input.data, 'user')
+    },
+    ...(options.inbox?.backoff ? { backoff: options.inbox.backoff } : {}),
     ...(options.inbox?.watch !== undefined ? { watch: options.inbox.watch } : {}),
     ...(options.inbox?.proposalIntervalMs !== undefined
       ? { proposalIntervalMs: options.inbox.proposalIntervalMs }

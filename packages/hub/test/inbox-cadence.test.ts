@@ -1,25 +1,20 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_INBOX_CADENCE, type InboxItemView, parseInboxConfig } from '@flow/core'
 import {
-  createScheduler,
   type EventInput,
   isQuiet,
   type LedgerStore,
   lastTimePoint,
-  openLedger,
   planPushes,
   quietEnd,
-  startInbox,
 } from '../src/index.ts'
+import { createItem, inboxRig, local, MemoryChannel, specOf } from './channel-fixtures.ts'
 import { drafts, must, WS } from './ledger-helpers.ts'
-import { FakeClock } from './server-fixtures.ts'
 
 /**
  * 推送节奏（add-m1-inbox 3.3；inbox spec "推送节奏"）：注入时钟，时间按系统本地时区。
- * 渠道侧的推送（4.1）接上之后再验证消息内容。
  */
 
 const cleanups: (() => Promise<void> | void)[] = []
@@ -27,60 +22,19 @@ afterEach(async () => {
   for (const c of cleanups.splice(0)) await c()
 })
 
-const local = (day: number, h: number, m = 0) => new Date(2026, 9, day, h, m).getTime()
-
-async function rig(start: number) {
-  const dir = mkdtempSync(join(tmpdir(), 'flow-inbox-cadence-'))
-  const home = join(dir, 'home')
-  const clock = new FakeClock(start)
-  const ledger = await openLedger(join(dir, 'flow.db'), { now: clock.now })
-  const scheduler = await createScheduler({ ledger, clock, home })
-  const flushes: number[] = []
-  const inbox = await startInbox({
-    ledger,
-    home,
-    clock,
-    watch: false,
-    scheduler,
-    flush: async () => {
-      flushes.push(clock.now())
-    },
-  })
-  cleanups.push(async () => {
-    await inbox.stop()
-    scheduler.stop()
-    ledger.close()
-    rmSync(dir, { recursive: true, force: true })
-  })
-  const settle = async () => {
-    for (let i = 0; i < 3; i++) {
-      await inbox.idle()
-      await clock.advance(0)
-    }
-  }
-  await settle()
-  return { home, clock, ledger, inbox, flushes, settle }
-}
-
-function createItem(
-  ledger: LedgerStore,
-  id: string,
-  level: 'interrupt' | 'decide' | 'digest',
-  source: 'supervisor' | 'policy' = 'supervisor',
-) {
-  must(
-    ledger.append(
-      {
-        type: 'inbox.item_created',
-        payload: { item_id: id, level, source, source_ref: id, title: `条目 ${id}` },
-      },
-      { actor: 'hub' },
-    ),
-  )
+async function rig(start: number, channels = [new MemoryChannel()]) {
+  const r = await inboxRig({ start, channels: channels.map((c) => specOf(c)) })
+  cleanups.push(r.cleanup)
+  await r.settle()
+  return { ...r, channel: channels[0] as MemoryChannel, channels }
 }
 
 /** 建任务、开始执行、卡住；反应器据此开出 Interrupt 条目。 */
-function blockTask(ledger: LedgerStore, id: string) {
+function blockTask(
+  ledger: LedgerStore,
+  id: string,
+  reason: 'question' | 'no_progress' = 'question',
+) {
   const d = drafts(id)
   must(ledger.append(d['task.created'] as EventInput, { actor: 'user' }))
   must(ledger.appendMany([d['task.started'], d['lease.granted']] as EventInput[], { actor: 'hub' }))
@@ -90,7 +44,7 @@ function blockTask(ledger: LedgerStore, id: string) {
         task_id: id,
         workspace: WS,
         type: 'task.blocked',
-        payload: { reason: 'question', message: '用哪个分支？', lease_held: true },
+        payload: { reason, message: '用哪个分支？', tail: ['$ git status'], lease_held: true },
       },
       { actor: 'node:n1' },
     ),
@@ -209,42 +163,115 @@ describe('配置', () => {
   })
 })
 
-describe('定时与顺延', () => {
-  test('夜间卡住：条目立即生成，deferred_until 写到 08:00；到点唤醒推送', async () => {
+describe('Interrupt', () => {
+  test('白天生成的 Interrupt 立即推送，推送记录投影到 pushed_at 与 channels', async () => {
+    const r = await rig(local(26, 10))
+    const blocked = blockTask(r.ledger, 't-day')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    const id = `blk.${blocked.seq}`
+    expect(r.channel.sentIds()).toEqual([[id]])
+    const item = r.ledger.getInboxItem(id) as InboxItemView
+    expect(item.deferred_until).toBeNull()
+    expect(item.pushed_at).not.toBeNull()
+    expect(item.channels).toEqual([
+      {
+        channel: 'memory',
+        ref: 'memory-1',
+        kind: 'item',
+        sent_at: item.pushed_at as string,
+        synced_at: null,
+      },
+    ])
+    const pushed = r.ledger.latestEvent(undefined, 'inbox.pushed')
+    expect(pushed?.payload).toEqual({
+      channel: 'memory',
+      ref: 'memory-1',
+      op: 'send',
+      kind: 'item',
+      item_ids: [id],
+    })
+  })
+
+  test('夜间卡住：条目立即生成，推送顺延到 08:00（inbox.item_updated 写 deferred_until）', async () => {
     const r = await rig(local(27, 2))
     const blocked = blockTask(r.ledger, 't-night')
     await r.settle()
+    await r.inbox.pusher.tick()
     const id = `blk.${blocked.seq}`
     const item = r.ledger.getInboxItem(id) as InboxItemView
     expect(item.state).toBe('open')
     expect(item.deferred_until).toBe(new Date(local(27, 8)).toISOString())
-    expect(r.ledger.latestEvent(undefined, 'inbox.item_updated')?.payload).toEqual({
-      item_id: id,
-      deferred_until: item.deferred_until,
-    })
-    // 此时该条目还不到推送时间
-    expect(planPushes([item], 'any', r.clock.now(), { ...DEFAULT_INBOX_CADENCE })).toEqual([])
-    r.flushes.length = 0
-    await r.clock.advance(local(27, 8) - r.clock.now())
-    await r.settle()
-    expect(r.flushes).toContain(local(27, 8))
-    const due = r.ledger.getInboxItem(id) as InboxItemView
-    expect(planPushes([due], 'any', r.clock.now(), { ...DEFAULT_INBOX_CADENCE })).toHaveLength(1)
-  })
+    const updated = r.ledger.latestEvent(undefined, 'inbox.item_updated')
+    expect(updated?.payload).toEqual({ item_id: id, deferred_until: item.deferred_until })
+    expect(r.channel.sent).toHaveLength(0)
 
-  test('Decide 时间点（09:00、18:00）唤醒推送', async () => {
+    await r.clock.advance(local(27, 7, 59) - r.clock.now())
+    await r.settle()
+    expect(r.channel.sent).toHaveLength(0)
+
+    await r.clock.advance(60_000)
+    await r.settle()
+    expect(r.channel.sentIds()).toEqual([[id]])
+  })
+})
+
+describe('Decide', () => {
+  test('按时间点合并成一条消息推送', async () => {
     const r = await rig(local(26, 10))
-    r.flushes.length = 0
+    for (const id of ['sup.a', 'sup.b', 'sup.c']) createItem(r.ledger, id, 'decide')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.channel.sent).toHaveLength(0)
+
+    await r.clock.advance(local(26, 18) - r.clock.now())
+    await r.settle()
+    expect(r.channel.sentIds()).toEqual([['sup.a', 'sup.b', 'sup.c']])
+    expect(r.channel.sent[0]?.message.kind).toBe('batch')
+    const pushed = r.ledger.latestEvent(undefined, 'inbox.pushed')
+    expect(pushed?.payload).toMatchObject({ kind: 'batch', item_ids: ['sup.a', 'sup.b', 'sup.c'] })
+
+    // 之后新生成的 Decide 等下一个时间点
+    createItem(r.ledger, 'sup.d', 'decide')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.channel.sent).toHaveLength(1)
     await r.clock.advance(local(27, 9) - r.clock.now())
     await r.settle()
-    expect(r.flushes).toContain(local(26, 18))
-    expect(r.flushes).toContain(local(27, 9))
+    // 08:30 的每日摘要也会推送；这里只看 Decide 合并消息
+    expect(r.channel.sentIds().filter((ids) => !ids[0]?.startsWith('dig.'))).toEqual([
+      ['sup.a', 'sup.b', 'sup.c'],
+      ['sup.d'],
+    ])
+  })
+
+  test('未推送的 Decide 达到阈值（5）时提前推送；静默时段内不提前', async () => {
+    const r = await rig(local(26, 10))
+    for (let i = 1; i <= 4; i++) createItem(r.ledger, `sup.${i}`, 'decide')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.channel.sent).toHaveLength(0)
+    createItem(r.ledger, 'sup.5', 'decide')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.channel.sentIds()).toEqual([['sup.1', 'sup.2', 'sup.3', 'sup.4', 'sup.5']])
+
+    // 夜里攒够 5 条：等到静默时段结束
+    await r.clock.advance(local(26, 23, 30) - r.clock.now())
+    for (let i = 6; i <= 10; i++) createItem(r.ledger, `sup.${i}`, 'decide')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.channel.sent).toHaveLength(1)
+    await r.clock.advance(local(27, 8) - r.clock.now())
+    await r.settle()
+    expect(r.channel.sentIds()[1]).toEqual(['sup.6', 'sup.7', 'sup.8', 'sup.9', 'sup.10'])
   })
 })
 
 describe('每日摘要', () => {
-  test('08:30 生成：昨天完成与失败的任务、auto-report 记录、待处理 Decide 数、过时知识数', async () => {
+  test('08:30 生成并推送：昨天完成与失败的任务、auto-report 记录、待处理 Decide 数、过时知识数', async () => {
     const r = await rig(local(25, 15))
+    // 昨天（25 日）完成一个、失败一个
     const done = drafts('t-done')
     must(r.ledger.append(done['task.created'] as EventInput, { actor: 'user' }))
     must(
@@ -253,27 +280,139 @@ describe('每日摘要', () => {
       }),
     )
     must(r.ledger.append(done['task.done'] as EventInput, { actor: 'node:n1' }))
-    createItem(r.ledger, 'pol.1', 'digest', 'policy')
+    const failed = drafts('t-failed')
+    must(r.ledger.append(failed['task.created'] as EventInput, { actor: 'user' }))
+    must(
+      r.ledger.appendMany([failed['task.started'], failed['lease.granted']] as EventInput[], {
+        actor: 'hub',
+      }),
+    )
+    must(r.ledger.append(failed['task.failed'] as EventInput, { actor: 'node:n1' }))
+    createItem(r.ledger, 'pol.1', 'digest', { source: 'policy' })
     createItem(r.ledger, 'sup.d1', 'decide')
     await r.settle()
+
     await r.clock.advance(local(26, 8, 30) - r.clock.now())
     await r.settle()
     const digest = r.ledger.getInboxItem('dig.2026-10-26') as InboxItemView
+    expect(digest).not.toBeNull()
     expect(digest.level).toBe('digest')
-    expect(digest.body).toContain('昨天（2026-10-25）完成 1 个任务，失败 0 个。')
+    expect(digest.source).toBe('digest')
+    expect(digest.body).toContain('昨天（2026-10-25）完成 1 个任务，失败 1 个。')
+    expect(digest.body).toContain('(t-done)'.replace('(', '（').replace(')', '）'))
     expect(digest.body).toContain('策略自动放行记录 1 条。')
     expect(digest.body).toContain('待处理的 Decide 条目 1 个。')
     expect(digest.body).toContain('可能过时的知识条目 0 个。')
+    // 策略记录写进摘要后关闭
     expect(r.ledger.getInboxItem('pol.1')?.closed?.reason).toBe('digested')
+    // 摘要单独推送；Decide 在 18:00 前的时间点之前生成，也随之合并推送（09:00 之前不推）
+    expect(r.channel.sentIds()).toContainEqual(['dig.2026-10-26'])
+    expect(r.channel.sentIds()).toContainEqual(['sup.d1'])
+
+    // 第二天的摘要取代前一份
     await r.clock.advance(local(27, 8, 30) - r.clock.now())
     await r.settle()
     expect(r.ledger.getInboxItem('dig.2026-10-26')?.closed?.reason).toBe('superseded')
+    expect(r.ledger.getInboxItem('dig.2026-10-27')?.state).toBe('open')
+    // 已推送的旧摘要消息改为"已被新的条目取代"
+    const upd = r.channel.updates.find(
+      (u) => u.message.kind === 'item' && u.message.item.id === 'dig.2026-10-26',
+    )
+    expect(upd?.message.kind === 'item' && upd.message.item.closed?.label).toBe('已被新的条目取代')
+
+    // 重复触发不会生成第二份
     await r.inbox.pusher.fireDigest()
     expect(r.ledger.listInboxItems({ source: 'digest', limit: 100 })).toHaveLength(2)
   })
+
+  test('用户把 no_progress 调为 Digest：不单独推送，只出现在每日摘要中', async () => {
+    const r = await rig(local(26, 10))
+    mkdirSync(join(r.home, 'config'), { recursive: true })
+    writeFileSync(
+      join(r.home, 'config', 'inbox.yaml'),
+      'levels:\n  - reason: no_progress\n    level: digest\n',
+    )
+    await r.inbox.reloadConfig()
+    const blocked = blockTask(r.ledger, 't-slow', 'no_progress')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    const id = `blk.${blocked.seq}`
+    expect(r.ledger.getInboxItem(id)?.level).toBe('digest')
+    expect(r.channel.sent).toHaveLength(0)
+
+    await r.clock.advance(local(27, 8, 30) - r.clock.now())
+    await r.settle()
+    const digest = r.ledger.getInboxItem('dig.2026-10-27') as InboxItemView
+    expect(digest.body).toContain('只进摘要的卡住任务 1 个')
+    expect(r.channel.sentIds()).toEqual([['dig.2026-10-27']])
+    // 卡住的任务条目仍保持打开，直到任务恢复
+    expect(r.ledger.getInboxItem(id)?.state).toBe('open')
+  })
+
+  test('中枢停机期间错过了摘要时间：重启后补发一份', async () => {
+    const r = await rig(local(26, 7))
+    createItem(r.ledger, 'sup.x', 'decide')
+    await r.settle()
+    await r.inbox.stop()
+    r.scheduler.stop()
+    // 中枢停到 10:00 才重启：用同一个账本重新起一套
+    r.clock.time = local(26, 10)
+    const { createScheduler, startInbox } = await import('../src/index.ts')
+    const scheduler = await createScheduler({ ledger: r.ledger, clock: r.clock, home: r.home })
+    const channel = new MemoryChannel()
+    const inbox = await startInbox({
+      ledger: r.ledger,
+      home: r.home,
+      clock: r.clock,
+      watch: false,
+      scheduler,
+      channels: [specOf(channel)],
+    })
+    cleanups.unshift(async () => {
+      await inbox.stop()
+      scheduler.stop()
+    })
+    await r.clock.advance(0)
+    await inbox.pusher.tick()
+    expect(r.ledger.getInboxItem('dig.2026-10-26')?.state).toBe('open')
+    expect(channel.sentIds()).toContainEqual(['dig.2026-10-26'])
+  })
 })
 
-describe('推送记录', () => {
+describe('可重建', () => {
+  test('推送与同步记录在投影重建后一致', async () => {
+    const r = await rig(local(26, 10))
+    createItem(r.ledger, 'sup.r', 'interrupt')
+    for (let i = 1; i <= 5; i++) createItem(r.ledger, `sup.b${i}`, 'decide')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    must(
+      r.ledger.append(
+        { type: 'inbox.item_closed', payload: { item_id: 'sup.b2', reason: 'answered' } },
+        { actor: 'hub' },
+      ),
+    )
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.channel.updates).toHaveLength(1)
+    const before = r.ledger.snapshot({ includeSoft: false })
+    expect(before.channel_messages).toHaveLength(6)
+    must(r.ledger.rebuild())
+    const after = r.ledger.snapshot({ includeSoft: false })
+    expect(after.inbox_items).toEqual(before.inbox_items)
+    expect(after.channel_messages).toEqual(before.channel_messages)
+    expect(r.ledger.getInboxItem('sup.b2')?.channels[0]?.synced_at).not.toBeNull()
+    expect(r.ledger.channelMessageItems('memory', 'memory-2')).toEqual([
+      'sup.b1',
+      'sup.b2',
+      'sup.b3',
+      'sup.b4',
+      'sup.b5',
+    ])
+  })
+})
+
+describe('推送记录（直接写事件）', () => {
   test('inbox.pushed 投影到 pushed_at、channels 与 channel_messages，重建后一致', async () => {
     const r = await rig(local(26, 10))
     for (const id of ['sup.a', 'sup.b']) createItem(r.ledger, id, 'decide')
