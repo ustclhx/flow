@@ -2,7 +2,7 @@
  * 账本表结构（design D2）。
  *
  * - `events`：只追加。用触发器禁止 UPDATE / DELETE，保证已写入的事件不可修改。
- * - 投影表：`tasks`、`nodes`、`leases`、`schedule_fires`、`replies`、`inbox_items`，全部由 `apply(event)` 维护，
+ * - 投影表：`tasks`、`nodes`、`leases`、`schedule_fires`、`replies`、`inbox_items`、`channel_messages`，全部由 `apply(event)` 维护，
  *   可随时清空后按 seq 重放得到（`rebuild()`）。
  * - 软状态列（不由事件派生，重建时按 D2 重置，见 `SOFT_COLUMNS`）：
  *   `tasks.last_activity_at`、`tasks.activity_json`、`nodes.last_seen_at`、`leases.expires_at`。
@@ -15,6 +15,7 @@ export const PROJECTION_TABLES = [
   'schedule_fires',
   'replies',
   'inbox_items',
+  'channel_messages',
 ] as const
 export type ProjectionTable = (typeof PROJECTION_TABLES)[number]
 
@@ -26,6 +27,7 @@ export const SOFT_COLUMNS: Readonly<Record<ProjectionTable, readonly string[]>> 
   schedule_fires: [],
   replies: [],
   inbox_items: [],
+  channel_messages: [],
 }
 
 /** 每张投影表的主键（快照排序用）。 */
@@ -36,6 +38,7 @@ export const PROJECTION_KEYS: Readonly<Record<ProjectionTable, string>> = {
   schedule_fires: 'rule_id, planned_at',
   replies: 'id',
   inbox_items: 'id',
+  channel_messages: 'channel, ref, item_id',
 }
 
 export const LEDGER_DDL = `
@@ -167,6 +170,25 @@ CREATE TABLE IF NOT EXISTS inbox_items (
 CREATE INDEX IF NOT EXISTS inbox_open ON inbox_items (state, level, created_seq);
 CREATE INDEX IF NOT EXISTS inbox_task ON inbox_items (task_id, state);
 CREATE INDEX IF NOT EXISTS inbox_source ON inbox_items (source, state);
+
+-- 渠道消息与条目的对应（add-m1-inbox D4 的 channel_messages；由 inbox.pushed 派生）：
+-- 渠道把用户对某条消息的回复映射回条目，条目关闭后据此找到要改为"已处理"的消息。
+-- 发送失败（op=failed、没有 ref）的条目记一行 ref = ''，failed_* 有值，视为已处理、不再推送；
+-- "已处理"同步失败时在原消息行上记 failed_*，synced_at 取放弃的时间。
+CREATE TABLE IF NOT EXISTS channel_messages (
+  channel       TEXT NOT NULL,
+  ref           TEXT NOT NULL,
+  item_id       TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  sent_at       TEXT NOT NULL,
+  sent_seq      INTEGER NOT NULL,
+  synced_at     TEXT,
+  failed_at     TEXT,
+  failed_reason TEXT,
+  PRIMARY KEY (channel, ref, item_id)
+);
+CREATE INDEX IF NOT EXISTS channel_messages_item ON channel_messages (item_id);
+CREATE INDEX IF NOT EXISTS channel_messages_sync ON channel_messages (channel, synced_at);
 `
 
 /**

@@ -140,6 +140,26 @@ export const policiesStatus = z.object({
   ),
 })
 
+/** 推送渠道的状态（notify-channel；add-m1-inbox 4.1）。 */
+export const channelStatus = z.object({
+  id: z.string(),
+  state: z.enum(['running', 'backoff', 'disabled', 'stopped']).meta({
+    description:
+      'running 正常；backoff 失败后等待重试；disabled 缺少密钥等原因未启动；stopped 正在停止',
+  }),
+  missing_secrets: z.array(z.string()).meta({ description: '该渠道缺少的密钥路径' }),
+  failures: z.number().int().min(0).meta({ description: '连续失败次数' }),
+  next_retry_at: timestamp.nullable(),
+  last_error: z.string().nullable().meta({ description: '最近一次失败的说明（已脱敏）' }),
+  failed_items: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .meta({ description: '记为推送失败（放弃推送或同步）的条目数' }),
+})
+export type ChannelStatusData = z.infer<typeof channelStatus>
+
 export const hubStatusData = healthData
   .extend({
     pid: z.number().int().positive(),
@@ -153,6 +173,7 @@ export const hubStatusData = healthData
     last_backup: z.object({ path: z.string(), at: timestamp }).nullable(),
     secrets: secretsStatus.default({ loaded: 0, missing: [], error: null }),
     policies: policiesStatus.default({ loaded: 0, errors: [] }),
+    channels: z.array(channelStatus).default([]).meta({ description: '推送渠道的状态' }),
   })
   .meta({ title: 'GET /v1/hub/status' })
 export type HubStatusData = z.infer<typeof hubStatusData>

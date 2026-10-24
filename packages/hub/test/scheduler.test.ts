@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -310,3 +310,67 @@ test.each([false, true])(
     }
   },
 )
+
+describe('内部定时规则（add-m1-inbox D8）', () => {
+  test('按本地时间触发、不写 schedule.fired；id 必须带命名空间；替换后旧规则不再触发', async () => {
+    const f = await fixture([])
+    const scheduler = await f.start()
+    const fired: string[] = []
+    const bad = scheduler.setInternalRules('inbox:', [
+      { id: 'digest', cron: '0 * * * *', onFire: () => {} },
+    ])
+    expect(!bad.ok && bad.error.code).toBe('invalid_rule')
+    const badCron = scheduler.setInternalRules('inbox:', [
+      { id: 'inbox:x', cron: '61 * * * *', onFire: () => {} },
+    ])
+    expect(!badCron.ok && badCron.error.code).toBe('invalid_rule')
+    expect(scheduler.setInternalRules('inbox', []).ok).toBe(false)
+
+    must(
+      scheduler.setInternalRules('inbox:', [
+        { id: 'inbox:hourly', cron: '0 * * * *', onFire: (p) => void fired.push(p.toISOString()) },
+      ]),
+    )
+    await f.clock.advance(60_000)
+    expect(fired).toEqual(['2026-10-24T09:00:00.000Z'])
+    expect(f.fires()).toHaveLength(0)
+    // yaml 规则重新加载不影响内部规则
+    await scheduler.reload()
+    must(scheduler.setInternalRules('inbox:', []))
+    await f.clock.advance(3600_000)
+    expect(fired).toHaveLength(1)
+  })
+
+  test('停机期间错过：内部规则首次设置时补发最近一次（missed）', async () => {
+    const f = await fixture([])
+    const first = await f.start()
+    // 停机前账本的最后一条事件（08:59）
+    must(
+      f.ledger.append(
+        { type: 'hub.rebuilt', payload: { events_replayed: 0, duration_ms: 0 } },
+        { actor: 'hub' },
+      ),
+    )
+    first.stop()
+    await f.clock.advance(3 * 3600_000)
+    const restarted = await f.start()
+    const fired: [string, boolean][] = []
+    must(
+      restarted.setInternalRules('inbox:', [
+        {
+          id: 'inbox:hourly',
+          cron: '0 * * * *',
+          onFire: (p, missed) => void fired.push([p.toISOString(), missed]),
+        },
+      ]),
+    )
+    expect(fired).toEqual([['2026-10-24T11:00:00.000Z', true]])
+  })
+
+  test('schedules.yaml 不能使用 inbox: 前缀', async () => {
+    const f = await fixture([rule({ id: 'inbox:mine' }), rule()])
+    const scheduler = await f.start()
+    expect(scheduler.errors()).toMatchObject([{ rule_id: 'inbox:mine', code: 'reserved_rule_id' }])
+    expect(scheduler.loaded()).toBe(1)
+  })
+})
