@@ -111,7 +111,8 @@ export function createApplier(db: Database): Applier {
         setStatus(
           e,
           'running',
-          ', attempt = ?, started_at = ?, blocked_json = NULL',
+          // resume 只给紧接着的这一次执行，开始执行即消费（重建时同样在此清空）。
+          ', attempt = ?, started_at = ?, blocked_json = NULL, resume_json = NULL',
           e.payload.attempt,
           e.ts,
         )

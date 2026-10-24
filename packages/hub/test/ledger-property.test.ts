@@ -321,7 +321,7 @@ async function runSeed(seed: number) {
           const ops: string[] = ['requeued', 'cancelled', 'failed']
           if (!pending) ops.push('replied', 'replied')
           if (held) {
-            ops.push('unblocked', 'cancel_requested', 'lease_expired')
+            ops.push('unblocked', 'cancel_requested', 'lease_expired', 'crashed')
             if (pending) ops.push('unblocked_reply', 'unblocked_reply', 'not_running')
           }
           const op = pick(ops)
@@ -382,9 +382,31 @@ async function runSeed(seed: number) {
                 attempt: lease.attempt,
               },
             } as const
+            const nodeLost = {
+              ...base,
+              type: 'task.blocked',
+              payload: {
+                reason: 'node_lost',
+                message: '等待回复期间掉线',
+                node_id: lease.node_id,
+                lease_held: false,
+                ...(session ? { session } : {}),
+              },
+            } as const
             write(
               'task.lease_expired(blocked)',
-              pending ? [expired, requeueWith(pending.id)] : [expired],
+              pending ? [expired, requeueWith(pending.id)] : [expired, nodeLost],
+            )
+          } else if (op === 'crashed' && lease) {
+            const crashed = {
+              ...base,
+              type: 'task.blocked',
+              payload: { reason: 'crashed', message: '崩溃', node_id: node, lease_held: false },
+            } as const
+            write(
+              'task.blocked(blocked→crashed)',
+              pending ? [crashed, requeueWith(pending.id)] : [crashed],
+              `node:${node}`,
             )
           } else if (op === 'requeued')
             write(
@@ -448,6 +470,7 @@ describe('性质：增量投影 == 重建投影', () => {
       'task.requeued_with_reply',
       'task.cancel_requested(blocked)',
       'task.lease_expired(blocked)',
+      'task.blocked(blocked→crashed)',
       'task.requeued(manual)',
       'task.cancel_requested',
       'task.cancelled',

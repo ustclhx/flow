@@ -6,6 +6,7 @@ import { cancelTaskRequest, listTasksQuery, type ReplyTaskRequest } from '../led
 import { type TaskContractInput, type TaskView, taskContract } from '../ledger/task.ts'
 import { fail } from '../result.ts'
 import { loadRoles } from '../roles.ts'
+import { USER_ACTOR } from '../write/policy.ts'
 import { defineOperation, type OpContext } from './operation.ts'
 
 const client = (ctx: OpContext) => new HubClient(ctx)
@@ -124,13 +125,29 @@ export function replyRequestOf(input: TaskReplyInput): ReplyTaskRequest {
   return { kind: 'text', text: input.text as string }
 }
 
+const userOnly = (actor: string) =>
+  fail(
+    'failure',
+    'user_only',
+    `只有用户本人（actor=user，经 CLI）可以回复卡住的任务，当前为 ${actor}`,
+    {
+      actor,
+    },
+  )
+
 export const taskReplyOp = defineOperation({
   name: 'task_reply',
   cli: 'task reply',
   summary: '回复卡住的任务：文字、--approve 或 --deny（可附理由）',
   input: taskReplyInput,
   positional: ['id', 'text'],
-  run: (input: TaskReplyInput, ctx) => client(ctx).replyTask(input.id, replyRequestOf(input)),
+  run: async (input: TaskReplyInput, ctx) => {
+    // 防止 AI 自批：回复与审批只允许人（actor=user，经 CLI）。MCP 的调用方一定是 AI harness，
+    // worker 可能借此批准自己的授权请求，所以一律拒绝。supervisor 代为答复留到变更 ④ 再放开
+    // （届时由策略引擎决定哪些请求可以由 supervisor 答复）。中枢 /v1/tasks/:id/reply 同样校验 actor。
+    if (ctx.via !== 'cli' || ctx.actor !== USER_ACTOR) return userOnly(ctx.actor)
+    return client(ctx).replyTask(input.id, replyRequestOf(input))
+  },
   human: ({ task, reply, requeued }) =>
     [
       `已回复（${reply.kind === 'approve' ? '批准' : reply.kind === 'deny' ? '拒绝' : '文字'}）：${taskSummary(task)}`,

@@ -53,6 +53,7 @@ export const PROTOCOL_ERRORS = {
   reply_kind_mismatch: { status: 409, kind: 'failure' },
   reply_pending: { status: 409, kind: 'failure' },
   reply_not_found: { status: 404, kind: 'failure' },
+  user_only: { status: 403, kind: 'failure' },
   hub_busy: { status: 503, kind: 'retryable' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
@@ -304,6 +305,12 @@ export const renewLeaseRequest = z
         reason: blockedReason,
         message: z.string().min(1),
         tail: z.array(z.string()).max(200).optional(),
+        session: z
+          .string()
+          .min(1)
+          .max(512)
+          .optional()
+          .meta({ description: '执行器会话 id；重新排队时随 resume 带给下一次执行' }),
       })
       .optional()
       .meta({

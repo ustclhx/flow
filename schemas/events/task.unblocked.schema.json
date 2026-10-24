@@ -45,6 +45,15 @@
           "description": "因送达这条回复而解除卡住（ack-reply）；没有时为执行器自行恢复",
           "type": "string",
           "pattern": "^r-[A-Za-z0-9_.-]{1,64}$"
+        },
+        "dropped_reply_ids": {
+          "description": "worker 自行恢复时尚未送达、因此被丢弃的回复（供收件箱通知回复者）",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
+            "description": "回复 id，由中枢在收到回复时分配"
+          }
         }
       },
       "additionalProperties": false

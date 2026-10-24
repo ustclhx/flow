@@ -203,6 +203,7 @@ describe('事件触发的状态转换', () => {
     'task.blocked': [
       ['running', 'blocked'],
       ['verifying', 'blocked'],
+      ['blocked', 'blocked'],
     ],
     'task.unblocked': [['blocked', 'running']],
     'task.replied': [['blocked', 'blocked']],
@@ -266,6 +267,20 @@ describe('事件触发的状态转换', () => {
     } as never)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.code).toBe('invalid_transition')
+  })
+
+  test('blocked → blocked 只接受 lease_held=false（本轮结束）', () => {
+    const held = {
+      type: 'task.blocked',
+      payload: { reason: 'question', message: 'x', lease_held: true },
+    } as never
+    const ended = {
+      type: 'task.blocked',
+      payload: { reason: 'crashed', message: 'x', lease_held: false },
+    } as never
+    expect(checkTaskEvent('blocked', held).ok).toBe(false)
+    expect(checkTaskEvent('blocked', ended)).toEqual({ ok: true, data: 'blocked' })
+    expect(checkTaskEvent('running', held)).toEqual({ ok: true, data: 'blocked' })
   })
 
   test('task.requeued 的 reason 必须与来源状态匹配', () => {

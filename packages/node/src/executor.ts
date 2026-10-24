@@ -51,6 +51,8 @@ export interface StuckSnapshot {
 export interface StuckVerdict {
   reason: BlockedReason
   message: string
+  /** 执行器会话 id；任务之后重新排队时随 resume 带给下一次执行。也可放在 idle 信号的 hint.session。 */
+  session?: string
 }
 
 /** 回复送达结果：worker 已不在运行时返回 not_running，中枢会让任务带着回复重新排队。 */

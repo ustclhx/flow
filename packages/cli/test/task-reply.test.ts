@@ -145,26 +145,40 @@ describe('task_reply', () => {
     }
   })
 
-  test('MCP：回复者为 MCP 的 actor；与 CLI 共用同一个操作', async () => {
-    const id = await create(ask)
-    await until(id, (t) => t.status === 'blocked', 'blocked')
-    const mcp = await connect({ home, actor: 'agent:supervisor' })
+  test('防止 AI 自批：MCP 一律 user_only，CLI 的 --actor 非 user 也拒绝，中枢同样校验（审查第 2 条）', async () => {
+    const id = await create([
+      { do: 'output', text: 'Allow command `git push`? [y/n]' },
+      { do: 'idle' },
+      { do: 'await_reply' },
+    ])
+    await until(id, (t) => t.blocked?.reason === 'awaiting_approval', 'awaiting_approval')
+    const before = data(await client().showTask(id)).events.length
+    const mcp = await connect({ home, actor: 'agent:worker' })
     try {
-      const r = await callJson(mcp, 'task_reply', { id, text: '用 main' })
-      expect(r.doc).toMatchObject({ ok: true, data: { reply: { by: 'agent:supervisor' } } })
+      const r = await callJson(mcp, 'task_reply', { id, approve: true })
+      expect(r.doc).toMatchObject({ ok: false, error: { code: 'user_only' } })
     } finally {
       await mcp.close()
     }
-    await until(id, (t) => t.status === 'done', 'done')
+    const viaCli = await runCli(
+      ['task', 'reply', id, '--approve', '--actor', 'agent:worker', '--json'],
+      commands,
+    )
+    expect(viaCli.exitCode).toBe(1)
+    expect(JSON.parse(viaCli.stdout).error.code).toBe('user_only')
+    // 绕过操作直接调用中枢：中枢也拒绝非 user 的回复。
+    const direct = await new HubClient({ home, actor: 'agent:worker' }).replyTask(id, {
+      kind: 'approve',
+    })
+    expect(direct.ok ? 'ok' : direct.error.code).toBe('user_only')
+    expect(data(await client().showTask(id)).events.length).toBe(before)
+    // 人可以批准。
     const viaOp = await invokeOperation(
       taskReplyOp,
-      { id, text: 'x' },
-      {
-        home,
-        actor: 'user',
-        via: 'cli',
-      },
+      { id, approve: true },
+      { home, actor: 'user', via: 'cli' },
     )
-    expect(viaOp.ok ? 'ok' : viaOp.error.code).toBe('not_blocked')
+    expect(viaOp.ok).toBe(true)
+    await until(id, (t) => t.status === 'done', 'done')
   })
 })

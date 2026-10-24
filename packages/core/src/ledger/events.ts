@@ -86,6 +86,9 @@ export const eventPayloads = {
     reply_id: replyId
       .optional()
       .meta({ description: '因送达这条回复而解除卡住（ack-reply）；没有时为执行器自行恢复' }),
+    dropped_reply_ids: z.array(replyId).optional().meta({
+      description: 'worker 自行恢复时尚未送达、因此被丢弃的回复（供收件箱通知回复者）',
+    }),
   }),
   'task.replied': z
     .strictObject({
@@ -289,7 +292,8 @@ export const TASK_EVENT_RULES: Readonly<
   'task.verifying': { from: ['running'], to: 'verifying' },
   'task.done': { from: ['running', 'verifying'], to: 'done' },
   'task.failed': { from: ['running', 'verifying', 'blocked'], to: 'failed' },
-  'task.blocked': { from: ['running', 'verifying'], to: 'blocked' },
+  // blocked → blocked：只用于"本轮结束"（lease_held=false），例如卡住期间 worker 崩溃、节点掉线（D7a）。
+  'task.blocked': { from: ['running', 'verifying', 'blocked'], to: 'blocked' },
   'task.unblocked': { from: ['blocked'], to: 'running' },
   'task.replied': { from: ['blocked'], to: 'unchanged' },
   'task.requeued_with_reply': { from: ['blocked'], to: 'queued' },
@@ -320,6 +324,11 @@ export function checkTaskEvent(
       type: event.type,
     })
   if (!rule.from.includes(current)) return reject(`不能接受 ${event.type}`)
+  if (event.type === 'task.blocked' && current === 'blocked') {
+    const held = (event.payload as { lease_held?: boolean }).lease_held === true
+    if (held) return reject('已卡住的任务只能以 lease_held=false 再次上报 task.blocked（本轮结束）')
+    return ok('blocked')
+  }
   if (event.type === 'task.requeued' && current !== null) {
     const reason = (event.payload as EventPayload<'task.requeued'>).reason
     const expected = current === 'blocked' ? 'manual' : 'lease_expired'

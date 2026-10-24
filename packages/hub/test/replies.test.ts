@@ -28,7 +28,7 @@ interface Ctx {
   clock: FakeClock
   protocol: NodeProtocol
   tasks: TaskService
-  create(fake?: Record<string, unknown>): Promise<string>
+  create(over?: Record<string, unknown>): Promise<string>
 }
 
 let cleanups: Array<() => void> = []
@@ -62,8 +62,8 @@ async function setup(): Promise<Ctx> {
     clock,
     protocol,
     tasks,
-    async create() {
-      const c = await tasks.createTask(contractInput(), { actor: 'user' })
+    async create(over = {}) {
+      const c = await tasks.createTask(contractInput(over), { actor: 'user' })
       if (!c.ok) throw new Error(c.error.message)
       return c.data.task.id
     },
@@ -164,7 +164,7 @@ describe('回复卡住的任务（task-interaction）', () => {
       'invalid_arguments',
     )
     expect(
-      code(ctx.tasks.replyTask('t-missing', { kind: 'text', text: 'x' }, { actor: 'u' })),
+      code(ctx.tasks.replyTask('t-missing', { kind: 'text', text: 'x' }, { actor: 'user' })),
     ).toBe('not_found')
     expect(code(ctx.tasks.replyTask(id, { kind: 'text', text: '继续' }, { actor: 'user' }))).toBe(
       'ok',
@@ -309,11 +309,16 @@ describe('回复卡住的任务（task-interaction）', () => {
     const b = await blockedHeld(ctx2)
     await ctx2.clock.advance((TTL + 5) * 1000)
     expect(ctx2.protocol.sweep()).toBe(1)
+    // 没有待送达回复：转为 blocked(node_lost)，原来的问题保留在说明里（审查第 4 条）。
     expect(ctx2.ledger.getTask(b.id)).toMatchObject({
       status: 'blocked',
       lease: null,
-      blocked: { reason: 'question', lease_held: false },
+      blocked: { reason: 'node_lost', lease_held: false },
     })
+    expect(ctx2.ledger.getTask(b.id)?.blocked?.message).toContain(
+      '原卡住原因：question — 用哪个分支？',
+    )
+    expect(types(ctx2, b.id).slice(-2)).toEqual(['task.lease_expired', 'task.blocked'])
     const r = ctx2.tasks.replyTask(b.id, { kind: 'text', text: '用 main' }, { actor: 'user' })
     expect(r.ok && r.data.requeued).toBe(true)
   })
@@ -335,11 +340,144 @@ describe('回复卡住的任务（task-interaction）', () => {
   test('显示任务时带上回复列表', async () => {
     const ctx = await setup()
     const { id } = await blockedEnded(ctx)
-    ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'agent:claude' })
+    ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'user' })
     const shown = ctx.tasks.getTask(id)
     expect(shown.ok && shown.data.replies).toMatchObject([
-      { id: 'r-1', by: 'agent:claude', state: 'requeued', text: '用 main' },
+      { id: 'r-1', by: 'user', state: 'requeued', text: '用 main' },
     ])
+  })
+
+  test('防止 AI 自批：非 user 的回复一律 user_only，账本不变', async () => {
+    const ctx = await setup()
+    const { id } = await blockedHeld(ctx, 'awaiting_approval')
+    const before = ctx.ledger.seq()
+    for (const actor of ['agent:claude', 'agent:supervisor', 'node:n1', 'unknown']) {
+      expect(code(ctx.tasks.replyTask(id, { kind: 'approve' }, { actor }))).toBe('user_only')
+    }
+    expect(ctx.ledger.seq()).toBe(before)
+  })
+
+  test('resume 只交给紧接着的一次执行：之后租约过期重试不再带同一条回复（审查第 1 条）', async () => {
+    const ctx = await setup()
+    const id = await ctx.create({ retry: { max_attempts: 3 } })
+    const first = await grant(ctx)
+    ctx.protocol.service.complete(first.lease_id, {
+      lease_token: first.lease_token,
+      outcome: 'blocked',
+      blocked_reason: 'question',
+      message: '用哪个分支？',
+      session: 'sess-1',
+    })
+    ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'user' })
+    const second = await grant(ctx)
+    expect(second.resume?.session).toBe('sess-1')
+    expect(ctx.ledger.taskResume(id)).toBeNull()
+    await ctx.clock.advance((TTL + 5) * 1000)
+    expect(ctx.protocol.sweep()).toBe(1)
+    const third = await grant(ctx)
+    expect(third.attempt).toBe(3)
+    expect(third.resume).toBeUndefined()
+    // 重建投影后同样已被消费。
+    expect(ctx.ledger.rebuild().ok).toBe(true)
+    expect(ctx.ledger.taskResume(id)).toBeNull()
+  })
+
+  test('交互式卡住上报会话 id：写入 task.blocked，重新排队时随 resume 带上（审查第 3 条）', async () => {
+    const ctx = await setup()
+    const id = await ctx.create()
+    const lease = await grant(ctx)
+    ctx.protocol.service.renew(lease.lease_id, {
+      lease_token: lease.lease_token,
+      blocked: { reason: 'question', message: '用哪个分支？', session: 'orca-term-9' },
+    })
+    expect(ctx.ledger.getTask(id)?.blocked).toMatchObject({
+      session: 'orca-term-9',
+      lease_held: true,
+    })
+    await ctx.clock.advance((TTL + 5) * 1000)
+    ctx.protocol.sweep()
+    expect(ctx.ledger.getTask(id)?.blocked).toMatchObject({
+      reason: 'node_lost',
+      session: 'orca-term-9',
+    })
+    ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'user' })
+    const next = await grant(ctx)
+    expect(next.resume).toMatchObject({ session: 'orca-term-9', reply: { text: '用 main' } })
+  })
+
+  test('卡住期间 worker 崩溃：不丢回复，带着回复重新排队（审查第 5 条）', async () => {
+    const ctx = await setup()
+    const { id, lease } = await blockedHeld(ctx)
+    ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'user' })
+    const r = ctx.protocol.service.complete(lease.lease_id, {
+      lease_token: lease.lease_token,
+      outcome: 'blocked',
+      blocked_reason: 'crashed',
+      message: '执行器进程意外退出（退出码 137）',
+    })
+    expect(r.ok && r.data.task.status).toBe('queued')
+    expect(types(ctx, id).slice(-4)).toEqual([
+      'task.blocked',
+      'task.replied',
+      'task.blocked',
+      'task.requeued_with_reply',
+    ])
+    expect(ctx.ledger.getReply('r-1')?.state).toBe('requeued')
+    expect(ctx.ledger.activeLease(id)).toBeNull()
+  })
+
+  test('卡住期间 worker 崩溃且没有回复：blocked → blocked(crashed)，租约释放', async () => {
+    const ctx = await setup()
+    const { id, lease } = await blockedHeld(ctx)
+    const r = ctx.protocol.service.complete(lease.lease_id, {
+      lease_token: lease.lease_token,
+      outcome: 'blocked',
+      blocked_reason: 'crashed',
+      message: '退出码 1',
+    })
+    expect(r.ok && r.data.task.blocked).toMatchObject({ reason: 'crashed', lease_held: false })
+    expect(ctx.ledger.activeLease(id)).toBeNull()
+  })
+
+  test('自行恢复时丢弃的回复记在 task.unblocked 的 dropped_reply_ids（审查第 5 条）', async () => {
+    const ctx = await setup()
+    const { id, lease } = await blockedHeld(ctx)
+    ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'user' })
+    ctx.protocol.service.renew(lease.lease_id, {
+      lease_token: lease.lease_token,
+      resumed: { note: '用户在终端里答复了' },
+    })
+    expect(ctx.ledger.taskEvents(id).at(-1)).toMatchObject({
+      type: 'task.unblocked',
+      payload: { dropped_reply_ids: ['r-1'] },
+    })
+    expect(ctx.ledger.getReply('r-1')?.state).toBe('dropped')
+  })
+
+  test('末尾输出入账前脱敏并限长（审查第 7 条）', async () => {
+    const ctx = await setup()
+    const id = await ctx.create()
+    const lease = await grant(ctx)
+    // 运行时拼出来的假令牌，源码中不出现像真密钥的字面量。
+    const fakeToken = ['gh', 'p_', 'Z'.repeat(36)].join('')
+    const tail = [
+      `export GH_TOKEN=${fakeToken}`,
+      'x'.repeat(5000),
+      ...Array.from({ length: 150 }, (_, i) => `${i}:${'y'.repeat(190)}`),
+    ]
+    ctx.protocol.service.renew(lease.lease_id, {
+      lease_token: lease.lease_token,
+      blocked: { reason: 'question', message: `用 ${fakeToken} 推送吗？`, tail },
+    })
+    const blocked = ctx.ledger.getTask(id)?.blocked
+    const stored = JSON.stringify(ctx.ledger.taskEvents(id))
+    expect(stored).not.toContain(fakeToken)
+    expect(blocked?.message).toContain('[REDACTED:')
+    expect(Buffer.byteLength((blocked?.tail ?? []).join('\n'), 'utf8')).toBeLessThanOrEqual(
+      16 * 1024,
+    )
+    expect(blocked?.tail?.at(-1)).toBe(`149:${'y'.repeat(190)}`)
+    expect(blocked?.tail?.every((l) => l.length <= 2001)).toBe(true)
   })
 })
 

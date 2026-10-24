@@ -77,9 +77,13 @@ export interface Bench {
   close(): Promise<void>
 }
 
+/** 拦截节点发往中枢的请求：返回 Response 即替代中枢的响应（注入故障用）。 */
+export type Intercept = (url: string, init?: RequestInit) => Response | undefined
+
 export async function bench(
   nodeOptions: Partial<StartNodeOptions> = {},
   leaseTtlS = 60,
+  intercept?: Intercept,
 ): Promise<Bench> {
   const clock = new ManualClock()
   const home = join(mkdtempSync(join(tmpdir(), 'flow-node-bench-')), 'home')
@@ -95,7 +99,9 @@ export async function bench(
       { path: '/', app: protocol.routes },
     ],
   })
-  const fetch = async (input: string, init?: RequestInit) => app.fetch(new Request(input, init))
+  const hubFetch = async (input: string, init?: RequestInit) => app.fetch(new Request(input, init))
+  const fetch = async (input: string, init?: RequestInit) =>
+    intercept?.(input, init) ?? hubFetch(input, init)
   const started = await startNode({
     home,
     clock,
@@ -120,7 +126,7 @@ export async function bench(
     protocol,
     node,
     async api<T>(method: string, path: string, body?: unknown, actor = 'user') {
-      const res = await fetch(`http://hub.test${path}`, {
+      const res = await hubFetch(`http://hub.test${path}`, {
         method,
         headers: {
           Authorization: `Bearer ${TOKEN}`,

@@ -19,6 +19,8 @@ import {
   type Result,
   registerNodeRequest,
   renewLeaseRequest,
+  sanitizeMessage,
+  sanitizeTail,
   type TaskView,
 } from '@flow/core'
 import type { z } from 'zod'
@@ -124,11 +126,17 @@ const WAKING: ReadonlySet<LedgerEvent['type']> = new Set([
   'hub.rebuilt',
 ])
 
-/** 提交结束对应的事件（纯函数）。 */
+/**
+ * 提交结束对应的事件（纯函数）。
+ * 任务已处于 blocked（交互式卡住期间 worker 崩溃或这一轮直接以 blocked 结束）时，
+ * 写 blocked → blocked（lease_held=false）；此时若有待送达的回复，同一事务带着回复重新排队，
+ * 回复不会被静默丢弃（PR #16 审查第 5 条）。末尾输出与说明入账前脱敏、限长（第 7 条）。
+ */
 export function completionDrafts(
   task: TaskView,
   lease: LeaseRecord,
   req: CompleteLeaseRequest,
+  pendingReply: ReplyView | null = null,
 ): EventInput[] {
   const base = { task_id: task.id, workspace: task.workspace }
   switch (req.outcome) {
@@ -136,21 +144,32 @@ export function completionDrafts(
       return [{ ...base, type: 'task.done', payload: { result: req.result } }]
     case 'failed':
       return [{ ...base, type: 'task.failed', payload: { result: req.result } }]
-    case 'blocked':
-      return [
-        {
-          ...base,
-          type: 'task.blocked',
-          payload: {
-            reason: req.blocked_reason,
-            message: req.message,
-            ...(req.tail ? { tail: req.tail } : {}),
-            ...(req.session ? { session: req.session } : {}),
-            node_id: lease.node_id,
-            lease_held: false,
-          },
+    case 'blocked': {
+      const session = req.session ?? task.blocked?.session
+      const blocked: EventInput = {
+        ...base,
+        type: 'task.blocked',
+        payload: {
+          reason: req.blocked_reason,
+          message: sanitizeMessage(req.message),
+          ...(req.tail ? { tail: sanitizeTail(req.tail) } : {}),
+          ...(session ? { session } : {}),
+          node_id: lease.node_id,
+          lease_held: false,
         },
-      ]
+      }
+      if (task.status === 'blocked' && pendingReply) {
+        return [
+          blocked,
+          {
+            ...base,
+            type: 'task.requeued_with_reply',
+            payload: { reply_id: pendingReply.id, ...(session ? { session } : {}) },
+          },
+        ]
+      }
+      return [blocked]
+    }
     case 'cancelled':
       return [
         {
@@ -207,7 +226,29 @@ export function expiryDrafts(
         },
       ]
     }
-    return [expired]
+    // 没有待送达的回复：转为 blocked(node_lost)，让用户看到节点已掉线、worker 已不在。
+    // 不按 retry 自动重新排队：任务正在等人答复，自动重跑会丢掉这个问题（PR #16 审查第 4 条）。
+    // 原来的卡住原因与说明保留在 message 里，之后的文字回复会让任务带着回复重新排队。
+    const was = task.blocked
+    const session = was?.session
+    return [
+      expired,
+      {
+        ...base,
+        type: 'task.blocked',
+        payload: {
+          reason: 'node_lost',
+          message: sanitizeMessage(
+            `节点 ${lease.node_id} 在等待回复期间掉线（租约 ${lease.expires_at} 过期）` +
+              (was ? `；原卡住原因：${was.reason} — ${was.message}` : ''),
+          ),
+          ...(was?.tail ? { tail: was.tail } : {}),
+          ...(session ? { session } : {}),
+          node_id: lease.node_id,
+          lease_held: false,
+        },
+      },
+    ]
   }
   const maxAttempts = task.contract.retry?.max_attempts ?? 1
   if (task.attempt < maxAttempts) {
@@ -257,6 +298,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   function tryGrant(nodeId: string, capabilities: readonly string[]): LeaseGrant | null {
     for (const task of ledger.queuedTasks()) {
       if (!capabilitiesSatisfy(capabilities, task.contract)) continue
+      // resume 只交给紧接着的这一次执行：task.started 会在投影里清空它（PR #16 审查第 1 条）。
+      const resume = ledger.taskResume(task.id)
       const leaseId = newLeaseId()
       const token = newLeaseToken()
       const attempt = task.attempt + 1
@@ -287,7 +330,6 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       // 被其他请求抢先（理论上不会发生，见文件头）：换下一个任务。
       if (!written.ok) continue
       ledger.touchNode(nodeId)
-      const resume = ledger.taskResume(task.id)
       return {
         lease_id: leaseId,
         lease_token: token,
@@ -481,7 +523,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
           { from: task.status, type: 'task.cancelled' },
         )
       }
-      const written = ledger.appendMany(completionDrafts(task, lease, req.data), {
+      const pending = task.status === 'blocked' ? ledger.pendingReply(task.id) : null
+      const written = ledger.appendMany(completionDrafts(task, lease, req.data, pending), {
         actor: `node:${lease.node_id}`,
       })
       if (!written.ok) return written
@@ -522,11 +565,19 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     const actor = { actor: `node:${lease.node_id}` }
     // 重复上报（上一次的响应丢失后重试）时任务已经处于目标状态，忽略即可。
     if (req.resumed && task.status === 'blocked') {
+      // 自行恢复时尚未送达的回复会被丢弃：记下它们的 id，供收件箱通知回复者（PR #16 审查第 5 条）。
+      const dropped = ledger
+        .taskReplies(task.id)
+        .filter((r) => r.state === 'pending')
+        .map((r) => r.id)
       const written = ledger.append(
         {
           ...base,
           type: 'task.unblocked',
-          payload: { note: req.resumed.note ?? 'worker 自行恢复' },
+          payload: {
+            note: req.resumed.note ?? 'worker 自行恢复',
+            ...(dropped.length > 0 ? { dropped_reply_ids: dropped } : {}),
+          },
         },
         actor,
       )
@@ -539,8 +590,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
           type: 'task.blocked',
           payload: {
             reason: req.blocked.reason,
-            message: req.blocked.message,
-            ...(req.blocked.tail ? { tail: req.blocked.tail } : {}),
+            message: sanitizeMessage(req.blocked.message),
+            ...(req.blocked.tail ? { tail: sanitizeTail(req.blocked.tail) } : {}),
+            ...(req.blocked.session ? { session: req.blocked.session } : {}),
             node_id: lease.node_id,
             lease_held: true,
           },

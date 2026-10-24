@@ -164,7 +164,7 @@ export function noProgressMs(contract: TaskContract, resolver?: NoProgressResolv
 }
 
 type RenewSignal =
-  | { blocked: { reason: BlockedReason; message: string; tail?: string[] } }
+  | { blocked: { reason: BlockedReason; message: string; tail?: string[]; session?: string } }
   | { resumed: { note: string } }
 
 /** 节点上报 blocked 时附带的末尾输出行数（stuck-detection "卡住的原因分类"）。 */
@@ -308,22 +308,34 @@ class LeaseRunner {
       this.abort.abort()
       await this.run?.cancel().catch(() => {})
     }
-    if (r.data.reply && !this.cancelRequested) await this.deliver(r.data.reply)
+    if (r.data.reply && !this.cancelRequested && !this.unacked) this.deliver(r.data.reply)
     if (this.unacked) await this.ack()
     this.scheduleRenew()
   }
 
-  /** 把回复交给执行器（每条只交一次），结果留待 ack。 */
-  private async deliver(reply: DeliveredReply) {
+  /**
+   * 把回复交给执行器（每条只交一次），结果留待 ack。不阻塞续约循环：送达可能很慢
+   * （例如往终端里输入），等它会让租约过期（PR #16 审查第 9 条）。
+   * - 执行器明确返回 not_running，或根本不支持 deliver：确认 worker 不在；
+   * - deliver 抛出异常：视为临时错误，不确认、不取消执行器，下一次续约再送（第 6 条）。
+   */
+  private deliver(reply: DeliveredReply) {
     if (this.delivered.has(reply.reply_id) || this.released) return
     this.delivered.add(reply.reply_id)
-    let outcome: DeliverResult = 'not_running'
-    try {
-      outcome = (await this.run?.deliver?.(reply)) ?? 'not_running'
-    } catch (err) {
-      this.env.logger.warn(`回复 ${reply.reply_id} 送达失败`, String(err))
-    }
-    this.unacked = { reply_id: reply.reply_id, outcome }
+    const run = this.run
+    void (async () => {
+      let outcome: DeliverResult
+      try {
+        outcome = run?.deliver ? await run.deliver(reply) : 'not_running'
+      } catch (err) {
+        this.env.logger.warn(`回复 ${reply.reply_id} 送达失败，下一次续约重试`, String(err))
+        this.delivered.delete(reply.reply_id)
+        return
+      }
+      if (this.released) return
+      this.unacked = { reply_id: reply.reply_id, outcome }
+      void this.renewNow()
+    })()
   }
 
   private async ack() {
@@ -340,6 +352,8 @@ class LeaseRunner {
       if (r.error.kind !== 'retryable') {
         this.env.logger.warn(`回复 ${u.reply_id} 的送达确认被拒绝`, r.error.code)
         this.unacked = undefined
+        // 中枢若仍把它当作待送达，下一次续约会再次返回它，允许重新送达（PR #16 审查第 8 条）。
+        this.delivered.delete(u.reply_id)
       }
       return
     }
@@ -413,8 +427,14 @@ class LeaseRunner {
     this.phase = 'blocked'
     this.cancelIdle()
     this.pauseTimeout()
+    const session = v.session ?? (typeof hint?.session === 'string' ? hint.session : undefined)
     this.signal = {
-      blocked: { reason: v.reason, message: v.message, ...(tail.length > 0 ? { tail } : {}) },
+      blocked: {
+        reason: v.reason,
+        message: v.message,
+        ...(tail.length > 0 ? { tail } : {}),
+        ...(session ? { session } : {}),
+      },
     }
     void this.renewNow()
   }
@@ -503,9 +523,10 @@ class LeaseRunner {
     }
     if (this.released) return
     const req = this.completion(outcome)
-    // 卡住期间执行器结束（例如用户直接在终端里答复后 worker 完成了）：blocked 不能直接转 done / blocked，
-    // 先上报恢复为 running。
-    if (this.phase === 'blocked' && (req.outcome === 'done' || req.outcome === 'blocked')) {
+    // 卡住期间执行器完成（例如用户直接在终端里答复后 worker 做完了）：blocked 不能直接转 done，
+    // 先上报恢复为 running。崩溃或以 blocked 结束时不上报恢复：中枢写 blocked → blocked，
+    // 有待送达的回复时带着回复重新排队（PR #16 审查第 5 条）。
+    if (this.phase === 'blocked' && req.outcome === 'done') {
       this.phase = 'running'
       this.signal = { resumed: { note: '执行器已结束' } }
     }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type Bench, bench, fake } from './harness.ts'
+import { type Bench, bench, fake, type Intercept } from './harness.ts'
 
 /**
  * 回复与送达（add-m1-executors 1.3；task-interaction spec、node-protocol 增量）：
@@ -13,8 +13,8 @@ afterEach(async () => {
   await current?.close()
   current = undefined
 })
-const open = async () => {
-  current = await bench()
+const open = async (...args: Parameters<typeof bench>) => {
+  current = await bench(...args)
   return current
 }
 
@@ -104,14 +104,11 @@ describe('送达与恢复', () => {
       }),
     )
     await b.until(id, (t) => t.blocked?.reason === 'awaiting_approval')
-    const r = await reply(b, id, { kind: 'approve' }, 'agent:supervisor')
-    expect(r).toMatchObject({
-      ok: true,
-      data: { reply: { kind: 'approve', by: 'agent:supervisor' } },
-    })
+    const r = await reply(b, id, { kind: 'approve' })
+    expect(r).toMatchObject({ ok: true, data: { reply: { kind: 'approve', by: 'user' } } })
     await b.until(id, (t) => t.status === 'done', 60_000)
     expect(b.events(id).find((e) => e.type === 'task.unblocked')?.payload).toMatchObject({
-      note: 'agent:supervisor 批准',
+      note: 'user 批准',
     })
   })
 
@@ -179,5 +176,118 @@ describe('送达与恢复', () => {
     const t = await b.until(id, (t) => t.status === 'cancelled', 2 * 60_000)
     expect(t.finished_at).not.toBeNull()
     expect(b.events(id).at(-1)).toMatchObject({ type: 'task.cancelled', actor: 'node:n-bench' })
+  })
+
+  test('卡住期间 worker 崩溃：不上报恢复，已提交的回复随重新排队带到下一次执行（审查第 5 条）', async () => {
+    const b = await open()
+    const id = await b.create(
+      fake({
+        deliver_failures: 1_000_000,
+        script: [
+          { do: 'output', text: '要基于哪个分支？' },
+          { do: 'idle' },
+          { do: 'wait', ms: 120_000 },
+          { do: 'exit', code: 137 },
+        ],
+      }),
+    )
+    await b.until(id, (t) => t.status === 'blocked')
+    expect(await reply(b, id, { kind: 'text', text: '用 main' })).toMatchObject({ ok: true })
+    const t = await b.until(id, (t) => t.status === 'done', 10 * 60_000)
+    expect(t.result?.summary).toBe('已恢复（会话 无）：text 用 main')
+    const types = b.types(id)
+    expect(types).not.toContain('task.unblocked')
+    expect(types.slice(3, 7)).toEqual([
+      'task.blocked',
+      'task.replied',
+      'task.blocked',
+      'task.requeued_with_reply',
+    ])
+    expect(b.events(id)[5]?.payload).toMatchObject({ reason: 'crashed', lease_held: false })
+  })
+
+  test('deliver 临时失败：不取消 worker，下一次续约重试直到送达（审查第 6 条）', async () => {
+    const b = await open()
+    const id = await b.create({
+      ...interactive(),
+      inputs: { fake: { ...interactive().inputs.fake, deliver_failures: 2 } },
+    })
+    await b.until(id, (t) => t.status === 'blocked')
+    await reply(b, id, { kind: 'text', text: '用 main' })
+    const t = await b.until(id, (t) => t.status === 'done', 5 * 60_000)
+    expect(t.attempt).toBe(1)
+    expect(b.types(id).slice(3)).toEqual([
+      'task.blocked',
+      'task.replied',
+      'task.unblocked',
+      'task.done',
+    ])
+    const got = b.ledger.taskActivity(id).filter((a) => a.text?.startsWith('收到回复'))
+    expect(got).toHaveLength(1)
+  })
+
+  test('deliver 很慢（超过 TTL）：续约不被阻塞，租约不过期（审查第 9 条）', async () => {
+    const b = await open()
+    const id = await b.create({
+      ...interactive(),
+      inputs: { fake: { ...interactive().inputs.fake, deliver_delay_ms: 150_000 } },
+    })
+    await b.until(id, (t) => t.status === 'blocked')
+    await reply(b, id, { kind: 'text', text: '用 main' })
+    for (let i = 0; i < 20; i++) {
+      await b.clock.advance(10_000)
+      b.sweep()
+    }
+    expect(b.types(id)).not.toContain('task.lease_expired')
+    await b.until(id, (t) => t.status === 'done', 5 * 60_000)
+  })
+
+  test('ack 被非重试错误拒绝：允许中枢再次返回时重新送达，不会永久卡住（审查第 8 条）', async () => {
+    let rejected = 0
+    const intercept: Intercept = (url) => {
+      if (url.endsWith('/ack-reply') && rejected === 0) {
+        rejected++
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              kind: 'failure',
+              code: 'invalid_transition',
+              message: '注入的拒绝',
+              retryable: false,
+            },
+          },
+          { status: 409 },
+        )
+      }
+      return undefined
+    }
+    const b = await open({}, 60, intercept)
+    const id = await b.create(interactive([{ do: 'await_reply' }]))
+    await b.until(id, (t) => t.status === 'blocked')
+    await reply(b, id, { kind: 'text', text: '用 main' })
+    const t = await b.until(id, (t) => t.status === 'done', 5 * 60_000)
+    expect(rejected).toBe(1)
+    expect(t.status).toBe('done')
+    expect(b.ledger.taskReplies(id)).toMatchObject([{ state: 'delivered' }])
+  })
+
+  test('交互式卡住时执行器给出的会话 id 写入 task.blocked（审查第 3 条）', async () => {
+    const b = await open()
+    const id = await b.create(
+      fake({
+        script: [
+          { do: 'output', text: '要基于哪个分支？' },
+          { do: 'idle', hint: { session: 'orca-term-3' } },
+          { do: 'hang' },
+        ],
+      }),
+    )
+    const t = await b.until(id, (t) => t.status === 'blocked')
+    expect(t.blocked).toMatchObject({
+      reason: 'question',
+      session: 'orca-term-3',
+      lease_held: true,
+    })
   })
 })

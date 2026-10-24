@@ -219,6 +219,19 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
     },
 
     replyTask(id, body, opts) {
+      // 防止 AI 自批：只接受 actor=user 的回复（与 task_reply 操作一致）。
+      // X-Flow-Actor 是自报身份，不是安全边界（ledger-daemon D7 的已知缺口）；
+      // supervisor 代为答复留到变更 ④。
+      if (opts.actor !== 'user') {
+        return fail(
+          'failure',
+          'user_only',
+          `只有用户本人可以回复卡住的任务，当前为 ${opts.actor}`,
+          {
+            actor: opts.actor,
+          },
+        )
+      }
       const parsed = replyTaskRequest.safeParse(body)
       if (!parsed.success) return invalidArguments('回复', parsed.error.issues, body)
       const { kind, text } = parsed.data

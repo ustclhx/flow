@@ -182,6 +182,20 @@ const fakeShape = {
     .min(1)
     .optional()
     .meta({ description: '以 blocked 结束时上报的会话 id（模拟无头执行器的 resume）' }),
+  deliver_failures: z
+    .number()
+    .int()
+    .min(0)
+    .max(1_000_000)
+    .optional()
+    .meta({ description: 'deliver 前 N 次抛出异常（模拟临时送达失败）' }),
+  deliver_delay_ms: z
+    .number()
+    .int()
+    .min(0)
+    .max(86_400_000)
+    .optional()
+    .meta({ description: 'deliver 耗时（毫秒），模拟缓慢的送达' }),
 }
 
 type FakeOutcomeFields = { outcome: string; blocked_reason?: unknown }

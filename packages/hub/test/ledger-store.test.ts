@@ -210,7 +210,8 @@ const ALLOWED: Record<TaskStatus | 'none', DraftKey[]> = {
     'task.lease_expired',
   ],
   // blocked 且租约已释放（lease_held=false）：不能 unblocked（D7a，应重新排队）。
-  blocked: ['task.failed', 'task.requeued:manual', 'task.cancelled'],
+  // blocked → blocked（lease_held=false）表示本轮结束，例如卡住期间崩溃、节点掉线。
+  blocked: ['task.failed', 'task.blocked', 'task.requeued:manual', 'task.cancelled'],
   done: [],
   failed: [],
   cancelled: [],
@@ -250,6 +251,7 @@ function reach(store: LedgerStore, status: TaskStatus | 'none') {
 describe('状态机：blocked 且仍持有租约（lease_held，D7a）', () => {
   const HELD: DraftKey[] = [
     'task.failed',
+    'task.blocked',
     'task.unblocked',
     'task.requeued:manual',
     'task.cancelled',
