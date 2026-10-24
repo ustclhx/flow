@@ -344,6 +344,40 @@
                                   "ignore_cancel"
                                 ],
                                 "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "approval"
+                                  },
+                                  "tool": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 128,
+                                    "description": "请求审批的工具名，例如 Bash"
+                                  },
+                                  "command": {
+                                    "description": "命令文本",
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "paths": {
+                                    "description": "涉及的路径",
+                                    "maxItems": 200,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "tool"
+                                ],
+                                "additionalProperties": false
                               }
                             ],
                             "title": "Fake executor step"
@@ -554,6 +588,40 @@
                                     "required": [
                                       "do",
                                       "ignore_cancel"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "approval"
+                                      },
+                                      "tool": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 128,
+                                        "description": "请求审批的工具名，例如 Bash"
+                                      },
+                                      "command": {
+                                        "description": "命令文本",
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "paths": {
+                                        "description": "涉及的路径",
+                                        "maxItems": 200,
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "tool"
                                     ],
                                     "additionalProperties": false
                                   }

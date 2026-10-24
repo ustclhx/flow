@@ -128,7 +128,9 @@ export type VerifyStep = z.infer<typeof verifyStep>
  * - `await_reply`：等待节点送达回复（`deliver`），收到后上报一条"收到回复"的输出；
  * - `resumed`：上报"worker 自行恢复"的信号（`data.resumed=true`）；
  * - `exit`：模拟进程意外退出（附退出码），执行到此结束；
- * - `hang`：永远不结束；`ignore_cancel` 为 true 时连取消也不理会（测试超时强制结束）。
+ * - `hang`：永远不结束；`ignore_cancel` 为 true 时连取消也不理会（测试超时强制结束）；
+ * - `approval`：模拟一次审批请求（add-m1-inbox 2.3）：先经节点做策略预检，判定 auto / auto-report
+ *   时直接继续；否则上报 idle（awaiting_approval）并等待回复，收到 deny 时以 failed 结束。
  */
 export const fakeStep = z
   .discriminatedUnion('do', [
@@ -149,6 +151,12 @@ export const fakeStep = z
       signal: z.string().min(1).optional(),
     }),
     z.strictObject({ do: z.literal('hang'), ignore_cancel: z.boolean().default(false) }),
+    z.strictObject({
+      do: z.literal('approval'),
+      tool: z.string().min(1).max(128).meta({ description: '请求审批的工具名，例如 Bash' }),
+      command: z.string().min(1).optional().meta({ description: '命令文本' }),
+      paths: z.array(z.string().min(1)).max(200).optional().meta({ description: '涉及的路径' }),
+    }),
   ])
   .meta({ title: 'Fake executor step' })
 export type FakeStep = z.infer<typeof fakeStep>

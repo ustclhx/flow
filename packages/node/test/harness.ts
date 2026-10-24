@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { LedgerEvent, TaskContractInput, TaskView } from '@flow/core'
@@ -7,11 +7,14 @@ import {
   createNodeProtocol,
   createTaskRoutes,
   createTaskService,
+  type HubTokenStore,
   type LedgerStore,
   type NodeProtocol,
   openLedger,
   type TaskService,
 } from '@flow/hub'
+// 策略路由未从 @flow/hub 的入口导出；测试直接引用源文件（不改动中枢包）。
+import { createPolicyRoutes } from '../../hub/src/policy/routes.ts'
 import { type RunningNode, type StartNodeOptions, startNode } from '../src/index.ts'
 
 /**
@@ -65,6 +68,8 @@ export interface Bench {
   tasks: TaskService
   protocol: NodeProtocol
   node: RunningNode
+  /** 中枢应用的 fetch（不经拦截）。 */
+  hubFetch(input: string, init?: RequestInit): Promise<Response>
   /** 经 HTTP 调用中枢（与节点同一个应用）。 */
   api<T>(method: string, path: string, body?: unknown, actor?: string): Promise<T>
   create(over?: Partial<TaskContractInput>): Promise<string>
@@ -81,22 +86,39 @@ export interface Bench {
 export type Intercept = (url: string, init?: RequestInit) => Response | undefined
 
 export async function bench(
-  nodeOptions: Partial<StartNodeOptions> & { readRoles?: boolean } = {},
+  nodeOptions: Partial<StartNodeOptions> & {
+    readRoles?: boolean
+    /** 写入 `config/policies.yaml` 的规则；提供时挂载真实的 `POST /v1/policy/check`。 */
+    policies?: unknown[]
+    /** 绑定 token 的存储（测试节点身份的鉴权）。 */
+    tokens?: HubTokenStore
+  } = {},
   leaseTtlS = 60,
   intercept?: Intercept,
 ): Promise<Bench> {
-  const { readRoles, ...startOptions } = nodeOptions
+  const { readRoles, policies, tokens, ...startOptions } = nodeOptions
   const clock = new ManualClock()
   const home = join(mkdtempSync(join(tmpdir(), 'flow-node-bench-')), 'home')
+  if (policies) {
+    mkdirSync(join(home, 'config'), { recursive: true })
+    writeFileSync(join(home, 'config', 'policies.yaml'), JSON.stringify(policies))
+  }
   const ledger = await openLedger(':memory:', { now: clock.now })
   const tasks = createTaskService({ ledger, workspaceExists: () => true, now: clock.now })
   const protocol = createNodeProtocol({ ledger, clock, leaseTtlS, leaseWaitMaxS: 30 })
+  const leaseHolders = (taskId: string) => {
+    const lease = ledger.activeLease(taskId)
+    return lease && Date.parse(lease.expires_at) > clock.now() ? [lease.node_id] : []
+  }
   const app = createHubApp({
     token: TOKEN,
     ledger,
     clock,
+    leaseHolders,
+    ...(tokens ? { tokens } : {}),
     mount: [
       { path: '/', app: createTaskRoutes({ ledger, tasks }) },
+      ...(policies ? [{ path: '/', app: createPolicyRoutes({ home, ledger, leaseHolders }) }] : []),
       { path: '/', app: protocol.routes },
     ],
   })
@@ -129,6 +151,7 @@ export async function bench(
     tasks,
     protocol,
     node,
+    hubFetch,
     async api<T>(method: string, path: string, body?: unknown, actor = 'user') {
       const res = await hubFetch(`http://hub.test${path}`, {
         method,

@@ -42,6 +42,7 @@ import {
   type StuckVerdict,
 } from './executor.ts'
 import { createFakeExecutor } from './fake.ts'
+import { createPolicyPrecheck } from './precheck.ts'
 import { verifyTask } from './verify.ts'
 
 /**
@@ -102,6 +103,8 @@ export interface StartNodeOptions {
   deliverTimeoutMs?: number
   /** deliver 超过多少毫秒仍无结果就按 not_running 处理，默认 10 分钟。 */
   deliverGiveUpMs?: number
+  /** 策略预检的超时毫秒（add-m1-inbox 2.3），默认 5 秒；超时按需要用户处理。 */
+  precheckTimeoutMs?: number
   logger?: NodeLogger
 }
 
@@ -161,6 +164,7 @@ interface Env {
   timeoutGraceMs: number
   deliverTimeoutMs: number
   deliverGiveUpMs: number
+  precheckTimeoutMs: number | undefined
 }
 
 /** 按合同（通常按角色）给出无进展阈值分钟数；返回 undefined 表示没有设定。 */
@@ -594,6 +598,13 @@ class LeaseRunner {
           env: executorEnv(),
           signal: this.abort.signal,
           ...(grant.resume ? { resume: grant.resume } : {}),
+          precheck: createPolicyPrecheck({
+            client: env.client,
+            taskId: grant.task_id,
+            clock: env.clock,
+            signal: this.abort.signal,
+            ...(env.precheckTimeoutMs === undefined ? {} : { timeoutMs: env.precheckTimeoutMs }),
+          }),
         })
         const run = this.run
         const forced = new Promise<Result<ExecutorOutcome>>((resolve) => {
@@ -818,6 +829,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     timeoutGraceMs: options.timeoutGraceMs ?? TIMEOUT_GRACE_MS,
     deliverTimeoutMs: options.deliverTimeoutMs ?? DELIVER_TIMEOUT_MS,
     deliverGiveUpMs: options.deliverGiveUpMs ?? DELIVER_GIVE_UP_MS,
+    precheckTimeoutMs: options.precheckTimeoutMs,
   }
 
   const runners = new Set<LeaseRunner>()

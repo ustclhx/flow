@@ -24,6 +24,7 @@ import {
   type StuckSnapshot,
   type StuckVerdict,
 } from './executor.ts'
+import { autoApprovedText, needsUserText } from './precheck.ts'
 
 /**
  * fake 执行器（add-m1-ledger-daemon D11；add-m1-executors 1.2 / 1.3 的扩展指令）。
@@ -199,6 +200,43 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
               }),
             )
             return false
+          case 'approval': {
+            // 审批请求：先问策略引擎（没有预检时一律交给用户），放行则直接继续。
+            const what = `${s.tool}${s.command ? ` ${s.command}` : ''}`
+            const verdict = ctx.precheck
+              ? await ctx.precheck({
+                  tool: s.tool,
+                  ...(s.command === undefined ? {} : { command: s.command }),
+                  ...(s.paths === undefined ? {} : { paths: s.paths }),
+                })
+              : undefined
+            if (finished) return false
+            if (verdict?.allow) {
+              queue.push({
+                ts: iso(),
+                kind: 'status',
+                text: autoApprovedText(what, verdict),
+                data: { policy: { level: verdict.level, actions: verdict.actions, tool: s.tool } },
+              })
+              break
+            }
+            if (verdict) queue.push({ ts: iso(), kind: 'status', text: needsUserText(verdict) })
+            const message = `等待授权：${what}`
+            queue.push(idleSignal(iso(), message, { reason: 'awaiting_approval', message }))
+            while (replies.length === 0 && !finished) {
+              await new Promise<void>((resolve) => {
+                replyWaiter = resolve
+              })
+            }
+            const r = replies.shift()
+            if (!r) return false
+            output(`收到审批回复（${r.kind}，${r.by}）`)
+            if (r.kind === 'deny') {
+              finish(ok({ outcome: 'failed', result: result(`审批被拒绝：${what}`) }))
+              return false
+            }
+            break
+          }
           case 'hang':
             ignoringCancel = s.ignore_cancel
             await new Promise<void>((resolve) => {

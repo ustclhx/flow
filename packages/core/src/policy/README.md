@@ -82,4 +82,13 @@ level, matched_rules, actions }`：`request.actions` 是动作 id，外层 `acti
 把调试的 auto-report 结果记为真实放行并产生 Digest；加 `--record` 才传 false 并入账。
 只有 user 能使用 dry run；节点省略该字段或传 false 均入账，传 true 返回 400
 `invalid_arguments`，不能绕过审计。此命令走 HubClient，属于管理命令，不注册为知识访问操作。
-节点的自动放行与 blocked 上报由任务 2.3 接入，Digest 和收件箱条目由任务 3.1 的反应器生成。
+Digest 和收件箱条目由任务 3.1 的反应器生成。
+
+节点侧预检（任务 2.3）在 `packages/node/src/precheck.ts`：节点为每个租约构造绑定任务 id 的
+`ctx.precheck`，超时 5 秒。只有合法响应的汇总档位与所有参与判定的动作明细都是 `auto` /
+`auto-report` 时才在本地放行；`draft-approve` / `notify` / `user`，以及网络错误、5xx、超时、
+401/403、`scope_denied`、响应不合 schema 一律照常上报 `blocked(awaiting_approval)`。
+请求映射：claude-sdk 的 Bash 取 `command`，其他工具取 `file_path` / `notebook_path` / `path`
+作为 `paths`（编辑类工具缺少路径时不预检）；codex-orca 以工具名 `CodexCommand` 加授权弹窗中
+严格解析出的命令（`approvalForPrecheck`）预检，发回车前重读终端核对弹窗与命令未变；
+fake 执行器的 `approval` 步骤用于端到端测试。codex-exec 无头运行、没有交互审批，不接入。
