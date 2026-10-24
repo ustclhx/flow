@@ -636,6 +636,54 @@ describe('runHub 端到端', () => {
     expect(ch.stopped).toBe(1)
   })
 
+  test('在网页（via=web）关闭的条目，渠道消息同样改为已处理', async () => {
+    const h = await home()
+    const ch = new MemoryChannel('telegram', 'telegram')
+    // 用提案生成条目（分级调为 interrupt，立即推送），中枢启动时扫描发现它
+    writeFileSync(
+      join(h, 'config', 'inbox.yaml'),
+      'quiet_hours: false\nlevels:\n  - source: proposal\n    level: interrupt\n',
+    )
+    const dir = join(flowPaths(h).state, 'proposals')
+    mkdirSync(dir, { recursive: true })
+    const id = '1761292800000-aaaaaaaaaaaa'
+    writeFileSync(
+      join(dir, `${id}.json`),
+      JSON.stringify({
+        id,
+        created_at: '2026-10-24T08:00:00.000Z',
+        actor: 'agent:claude',
+        target: 'resources/domains/payments',
+        base_hash: null,
+        content: '---\ntype: domain\n---\n正文\n',
+        reason: '补充支付领域',
+        sources: [],
+      }),
+    )
+    hub = must(
+      await runHub({
+        home: h,
+        port: 0,
+        logger: quiet as never,
+        inbox: { watch: false, channels: [specOf(ch)] },
+        secrets: { load: async () => ok(new Map()), watch: false },
+      }),
+    )
+    await until(() => ch.sent.length === 1)
+    const pushed = itemOf(ch.sent[0]?.message)
+    expect(pushed.id).toBe(`prop.${id}`)
+    const token = readFileSync(flowPaths(h).hubToken, 'utf8').trim()
+    const auth = { Authorization: `Bearer ${token}`, 'X-Flow-Actor': 'user' }
+    const res = await fetch(`${hub.url}/v1/inbox/${pushed.id}/act`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'dismiss', via: 'web' }),
+    })
+    expect(res.status).toBe(200)
+    await until(() => ch.updates.length === 1)
+    expect(itemOf(ch.updates[0]?.message).closed?.label).toBe('已忽略（来自 网页）')
+  })
+
   test('缺少密钥的渠道不启动，flow hub status 报告缺少的路径', async () => {
     const h = await home()
     const ch = new MemoryChannel('telegram')
