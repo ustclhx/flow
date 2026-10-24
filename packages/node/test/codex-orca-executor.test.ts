@@ -183,6 +183,22 @@ describe('监控循环', () => {
     await s.run.cancel()
   })
 
+  test('信任提示只自动确认一次：成功后即使提示仍在也不再发回车；发送失败时才重试', async () => {
+    const s = await start({}, (o) => o.show('trust-prompt'))
+    s.orca.sends.push({
+      ok: false,
+      error: { kind: 'failure', code: 'orca_failed', message: 'runtime busy' },
+    })
+    await ready(s)
+    await s.poll(5)
+    // 第一次失败、第二次成功，之后提示还在也不再发送。
+    expect(sends(s)).toEqual([
+      { handle: s.orca.handle, enter: true },
+      { handle: s.orca.handle, enter: true },
+    ])
+    await s.run.cancel()
+  })
+
   test('出现过忙碌标记之后，再看到信任提示也不自动发回车', async () => {
     const s = await start({}, (o) => o.show('working', 'trust-prompt'))
     await ready(s)
@@ -362,6 +378,50 @@ describe('监控循环', () => {
       readFileSync(join(h?.home ?? '', 'state/tasks/t-orca-1/orca.json'), 'utf8'),
     )
     expect(state.handle).toBe(replacement)
+    await s.run.cancel()
+  })
+
+  test('stale 后接管：过滤孤儿和已断开的终端，只接管进程身份一致的那个', async () => {
+    const wt = () => h?.worktree ?? ''
+    const s = await start({}, (o) => {
+      o.identity = { ptyId: 'pty-A', incarnationId: 'inc-A' }
+      o.reads.push(staleHandle())
+      o.show('question')
+    })
+    await ready(s)
+    const statePath = join(h?.home ?? '', 'state/tasks/t-orca-1/orca.json')
+    await until(() => readFileSync(statePath, 'utf8').includes('inc-A'), '进程身份落盘')
+    expect(JSON.parse(readFileSync(statePath, 'utf8'))).toMatchObject({
+      pty_id: 'pty-A',
+      incarnation_id: 'inc-A',
+    })
+    const codex = (handle: string, extra: Record<string, unknown>) => ({
+      handle,
+      worktreePath: wt(),
+      agentIdentity: 'codex',
+      ...extra,
+    })
+    // 第一轮：孤儿、已断开的被过滤；剩下唯一的那个身份不一致 → 不接管。
+    s.orca.terminals = ok([
+      codex('term_orphan', { orphaned: true, ptyId: 'pty-A', incarnationId: 'inc-A' }),
+      codex('term_gone', { connected: false, ptyId: 'pty-A', incarnationId: 'inc-A' }),
+      codex('term_other', { connected: true, ptyId: 'pty-B', incarnationId: 'inc-B' }),
+    ])
+    await s.poll()
+    const handles = () =>
+      (s.orca.ops('terminalRead') as Array<{ input: { handle: string } }>).map(
+        (c) => c.input.handle,
+      )
+    expect(handles().every((x) => x === s.orca.handle)).toBe(true)
+    // 第二轮：身份一致的终端出现 → 接管。
+    s.orca.reads.unshift(staleHandle())
+    s.orca.terminals = ok([
+      codex('term_orphan', { orphaned: true, ptyId: 'pty-A', incarnationId: 'inc-A' }),
+      codex('term_same', { connected: true, ptyId: 'pty-A', incarnationId: 'inc-A' }),
+    ])
+    await s.poll(2)
+    expect(handles().at(-1)).toBe('term_same')
+    expect(JSON.parse(readFileSync(statePath, 'utf8')).handle).toBe('term_same')
     await s.run.cancel()
   })
 

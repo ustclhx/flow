@@ -15,8 +15,8 @@ import type { StuckSnapshot, StuckVerdict } from '../executor.ts'
  *    `Would you like to make the following edits?`、`Yes, proceed (y)` 等，**并且**弹窗还在屏幕最底部
  *    （最后一行是 `Press enter to confirm or esc to cancel`，或最后两行是 `1. Yes` / `3. No` 这样的选项行且其后没有输入框）；
  *    说明中带上 `$ <命令>` 那一行；
- * 4. 信任提示：末尾 8 行内**同时**出现 `Trust this folder?`、`Trust and continue`、`enter continue`，
- *    最后一行就是 `enter continue …`，并且没有命中任何授权规则。授权判断排在信任提示之前
+ * 4. 信任提示：末尾 8 行是完整的信任弹窗布局（`Folder access`、`Trust this folder?`、`1. Trust and continue`、
+ *    `2. Quit`，最后一行是 `enter continue · esc quit`），并且没有命中任何授权规则。授权判断排在信任提示之前
  *    （PR #24 审查第 1 条：历史输出或 Reason 里的信任文字，不能让执行器在授权弹窗上按回车）；
  * 5. 提问：最后一条消息以问号结尾，或含"请确认""是否""你希望""需要我""which""should I"等；
  * 6. PR 链接：最后一条消息中出现 GitHub PR 链接。只用于说明，是否 done 只看 `gh pr list`；
@@ -54,6 +54,17 @@ export const BUSY_RE = /Working \(|esc to interrupt/
 /** 只在末尾这么多行里找忙碌标记：更早的行是历史记录。 */
 const BUSY_WINDOW = 15
 const TRUST_WINDOW = 8
+/**
+ * 信任弹窗的完整布局（以 fixture trust-prompt 的真实输出为准）：Folder access 标题、问句、两个选项，
+ * 最后一行是 `enter continue · esc quit`。缺任何一段都不算（PR #24 复核：未知弹窗不能冒充）。
+ */
+const TRUST_LAYOUT = [
+  /^\s*Folder access\s*$/,
+  /Trust this folder\?/,
+  /^\s*(?:›\s*)?1\. Trust and continue\s*$/,
+  /^\s*(?:›\s*)?2\. Quit\s*$/,
+]
+const TRUST_LAST_RE = /^\s*enter continue · esc quit\s*$/
 const APPROVAL_RES = [
   /Would you like to run the following command\?/,
   /Would you like to make the following edits\?/,
@@ -166,9 +177,8 @@ export function analyzeTail(tail: readonly string[]): TailAnalysis {
   if (
     approvalAt < 0 &&
     !trustLines.some(matchesApproval) &&
-    trustLines.some((l) => /Trust this folder\?/.test(l)) &&
-    trustLines.some((l) => /Trust and continue/.test(l)) &&
-    /enter continue/.test(body.at(-1) ?? '')
+    TRUST_LAYOUT.every((re) => trustLines.some((l) => re.test(l))) &&
+    TRUST_LAST_RE.test(body.at(-1) ?? '')
   ) {
     return { kind: 'trust_prompt', message: 'Codex 停在文件夹信任提示上', last_message: trustLines }
   }

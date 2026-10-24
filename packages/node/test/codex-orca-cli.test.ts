@@ -128,7 +128,11 @@ describe('orca 封装', () => {
       title: 't-1 | 目标',
       command: "codex 'hi'",
     })
-    expect(created).toEqual({ ok: true, data: { handle: HANDLE } })
+    // 创建结果带上进程身份（incarnationId），用于 stale 后确认接管的是同一个终端。
+    expect(created).toEqual({
+      ok: true,
+      data: { handle: HANDLE, incarnationId: '00000000-0000-4000-8000-000000000005' },
+    })
     const read = await orca.terminalRead({ handle: HANDLE, limit: 200 })
     expect(read.ok && read.data.status).toBe('running')
     expect(read.ok && read.data.tail.some((l) => l.includes('Working ('))).toBe(true)

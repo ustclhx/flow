@@ -132,6 +132,9 @@ const stateSchema = z.object({
   branch: z.string(),
   base_branch: z.string(),
   handle: z.string().optional(),
+  /** 创建终端时 Orca 给出的进程身份；stale 后接管其他 handle 前必须一致（PR #24 复核）。 */
+  pty_id: z.string().optional(),
+  incarnation_id: z.string().optional(),
   /** 按 reply_id 的送达状态（PR #24 审查第 8 条：节点重启后不重复送达）。 */
   replies: z.record(z.string(), replyStateSchema).default({}),
 })
@@ -417,13 +420,21 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (!state) return false
         const r = await orca.terminalList({ worktreePath: state.worktree_path })
         if (!r.ok) return false
+        const s = state
+        // 只考虑仍连接、未成为孤儿的 Codex 终端。
         const codex = r.data.filter(
           (t) =>
-            (t.worktreePath === undefined || t.worktreePath === state?.worktree_path) &&
-            t.agentIdentity === 'codex',
+            (t.worktreePath === undefined || t.worktreePath === s.worktree_path) &&
+            t.agentIdentity === 'codex' &&
+            t.orphaned !== true &&
+            t.connected !== false,
         )
-        const next = codex.length === 1 ? codex[0]?.handle : undefined
-        if (!next || next === handle) return false
+        const only = codex.length === 1 ? codex[0] : undefined
+        const next = only?.handle
+        if (!only || !next || next === handle) return false
+        // 记录过进程身份时必须一致：不一致（或候选没有该字段）说明不是同一个终端，不接管，继续重试。
+        if (s.pty_id !== undefined && only.ptyId !== s.pty_id) return false
+        if (s.incarnation_id !== undefined && only.incarnationId !== s.incarnation_id) return false
         status(`终端 handle 已失效，改用同一 worktree 中的 Codex 终端 ${next}`)
         handle = next
         state.handle = next
@@ -587,6 +598,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             // 新终端启动时的信任提示（仓库已确认属于 workspace）：只发回车确认（发 "1" 会被拒绝）。
             trustSent++
             const s = await send({ handle, enter: true })
+            // 信任提示只会出现一次：成功确认过一次就关闭自动确认，只有发送失败时才重试。
+            if (s.ok) trustSent = trustRetries
             status(
               s.ok
                 ? '已自动确认 Codex 的文件夹信任提示'
@@ -617,6 +630,10 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (!list.ok) return undefined
         const t = list.data.find((x) => x.handle === h)
         if (!t || (t.worktreePath !== undefined && t.worktreePath !== wt)) return undefined
+        if (state?.pty_id !== undefined && t.ptyId !== state.pty_id) return undefined
+        if (state?.incarnation_id !== undefined && t.incarnationId !== state.incarnation_id) {
+          return undefined
+        }
         const alive = await orca.terminalRead({ handle: h, limit: 50 })
         return alive.ok && alive.data.status === 'running' ? alive.data.tail : undefined
       }
@@ -712,6 +729,10 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           handle = term.data.handle
           launchedHere = true
           st.handle = handle
+          if (term.data.ptyId) st.pty_id = term.data.ptyId
+          else delete st.pty_id
+          if (term.data.incarnationId) st.incarnation_id = term.data.incarnationId
+          else delete st.incarnation_id
           await saveState()
           status(`已在终端 ${handle} 中启动 Codex`)
         }

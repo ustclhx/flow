@@ -176,6 +176,25 @@ describe('对抗与顺序（PR #24 审查第 1、2、5 条）', () => {
     expect(analyzeTail(t).kind).toBe('awaiting_approval')
   })
 
+  test('对抗：不在授权规则里的未知弹窗含信任文案、最后一行是 "enter continue · esc cancel"，不判为信任提示', () => {
+    const unknown = [
+      '  Folder access',
+      '  /tmp/scratch',
+      '  Trust this folder? Codex can read, edit, and run files here.',
+      '› 1. Trust and continue',
+      '  2. Quit',
+      '  enter continue · esc cancel',
+    ]
+    expect(analyzeTail(unknown).kind).not.toBe('trust_prompt')
+    // 布局缺一段（没有 Folder access 标题或没有 2. Quit）也不算。
+    expect(analyzeTail(trust().filter((l) => !l.includes('Folder access'))).kind).not.toBe(
+      'trust_prompt',
+    )
+    expect(analyzeTail(trust().filter((l) => !l.includes('2. Quit'))).kind).not.toBe('trust_prompt')
+    // 真实布局仍然识别。
+    expect(analyzeTail(trust()).kind).toBe('trust_prompt')
+  })
+
   test('信任提示的三段文字必须同时出现在末尾 8 行内，且最后一行是 enter continue', () => {
     expect(
       analyzeTail([...trust(), '› Ask Codex to do anything', '  ? for shortcuts']).kind,

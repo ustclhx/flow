@@ -76,8 +76,20 @@ export const orcaWorktreeResult = z.looseObject({
 export type OrcaWorktree = z.infer<typeof orcaWorktreeResult>['worktree']
 
 export const orcaTerminalCreateResult = z.looseObject({
-  terminal: z.looseObject({ handle: z.string().min(1) }),
+  terminal: z.looseObject({
+    handle: z.string().min(1),
+    /** 终端进程的身份：Orca 重启后 handle 会变，这两个字段用于确认接管的是同一个终端。 */
+    ptyId: z.string().optional(),
+    incarnationId: z.string().optional(),
+  }),
 })
+
+/** 新建终端的 handle 与进程身份。 */
+export interface OrcaTerminalIdentity {
+  handle: string
+  ptyId?: string
+  incarnationId?: string
+}
 
 export const orcaTerminalReadResult = z.looseObject({
   terminal: z.looseObject({
@@ -99,6 +111,9 @@ export const orcaTerminalListResult = z.looseObject({
       title: z.string().optional(),
       agentIdentity: z.string().optional(),
       connected: z.boolean().optional(),
+      orphaned: z.boolean().optional(),
+      ptyId: z.string().optional(),
+      incarnationId: z.string().optional(),
     }),
   ),
 })
@@ -166,7 +181,7 @@ export interface OrcaCli {
     worktreePath: string
     command: string
     title?: string
-  }): Promise<Result<{ handle: string }>>
+  }): Promise<Result<OrcaTerminalIdentity>>
   terminalRead(input: { handle: string; limit?: number }): Promise<Result<OrcaTerminalRead>>
   terminalSend(input: TerminalSendInput): Promise<Result<OrcaSendResult>>
   /** `terminal list --worktree path:<wt>`：这个 worktree 中仍在运行的终端。 */
@@ -267,7 +282,13 @@ export function createOrcaCli(options: OrcaCliOptions = {}): OrcaCli {
       if (input.title) args.push('--title', input.title)
       args.push('--command', input.command)
       const r = await call(args, orcaTerminalCreateResult, 'terminal create')
-      return r.ok ? ok({ handle: r.data.terminal.handle }) : r
+      if (!r.ok) return r
+      const t = r.data.terminal
+      return ok({
+        handle: t.handle,
+        ...(t.ptyId ? { ptyId: t.ptyId } : {}),
+        ...(t.incarnationId ? { incarnationId: t.incarnationId } : {}),
+      })
     },
     async terminalRead(input) {
       const args = ['terminal', 'read', '--terminal', input.handle]

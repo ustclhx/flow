@@ -78,6 +78,8 @@ export class FakeOrca implements OrcaCli {
   handle = 'term_00000000-0000-4000-8000-0000000000aa'
   /** `terminal list` 的结果；缺省为本 worktree 中只有当前 handle 这一个 Codex 终端。 */
   terminals: Result<OrcaTerminalInfo[]> | undefined
+  /** `terminal create` 返回的进程身份（ptyId / incarnationId）；缺省没有。 */
+  identity: { ptyId?: string; incarnationId?: string } = {}
 
   constructor(public worktreePath: string) {
     this.worktreeResult = ok({ path: worktreePath, branch: 'refs/heads/example-user/t-orca-1' })
@@ -103,7 +105,7 @@ export class FakeOrca implements OrcaCli {
   }
   async terminalCreate(input: unknown) {
     this.calls.push({ op: 'terminalCreate', input })
-    return ok({ handle: this.handle })
+    return ok({ handle: this.handle, ...this.identity })
   }
   async terminalRead(input: unknown): Promise<Result<OrcaTerminalRead>> {
     this.calls.push({ op: 'terminalRead', input })
