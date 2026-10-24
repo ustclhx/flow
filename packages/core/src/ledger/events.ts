@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { policyDecisionSchema } from '../policy/decide.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
@@ -45,6 +46,15 @@ export const executorInfo = z
   .meta({ title: 'Executor info' })
 
 export const eventPayloads = {
+  'policy.decided': policyDecisionSchema.extend({
+    task_id: taskId,
+    request: z.strictObject({
+      tool: z.string().min(1).max(128),
+      actions: z.array(z.string().min(1)),
+      command: z.string().max(2000).optional(),
+      paths: z.array(z.string().max(2000)).max(200).optional(),
+    }),
+  }),
   'task.created': z.strictObject({ contract: taskContract }),
   'task.started': z.strictObject({
     node_id: nodeId,
@@ -184,6 +194,7 @@ export type EventPayload<T extends EventType> = z.infer<(typeof eventPayloads)[T
 /** 信封中 task_id / workspace 的要求。 */
 type Scope = 'task' | 'workspace' | 'none'
 export const EVENT_SCOPES: Record<EventType, Scope> = {
+  'policy.decided': 'task',
   'task.created': 'task',
   'task.started': 'task',
   'task.verifying': 'task',
@@ -291,6 +302,10 @@ export interface TransitionRule {
 export const TASK_EVENT_RULES: Readonly<
   Record<Exclude<EventType, `node.${string}` | `hub.${string}` | 'schedule.fired'>, TransitionRule>
 > = {
+  'policy.decided': {
+    from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed', 'cancelled'],
+    to: 'unchanged',
+  },
   'task.created': { from: [null], to: 'queued' },
   'task.started': { from: ['queued'], to: 'running' },
   'lease.granted': { from: ['running'], to: 'unchanged' },

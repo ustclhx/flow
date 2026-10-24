@@ -14,6 +14,7 @@ import {
   type IssueTokenRequest,
   type listTasksQuery,
   okBody,
+  type PolicyCheckRequest,
   type ReplyTaskRequest,
 } from '../ledger/protocol.ts'
 import type { TaskContractInput } from '../ledger/task.ts'
@@ -39,6 +40,7 @@ export type HubStatus = HealthData & {
   schedules: HubStatusData['schedules']
   last_backup: HubStatusData['last_backup']
   secrets?: HubStatusData['secrets']
+  policies?: HubStatusData['policies']
 }
 
 type JsonEndpoint = Exclude<EndpointName, 'events'>
@@ -134,6 +136,9 @@ export class HubClient {
   }
   replyTask(id: string, input: ReplyTaskRequest) {
     return this.request('tasks-reply', input, id)
+  }
+  checkPolicy(input: PolicyCheckRequest) {
+    return this.request('policy-check', input)
   }
   health() {
     return this.request('health')

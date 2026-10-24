@@ -16,6 +16,7 @@ import { initCommand } from './init.ts'
 import { kbValidateCommand } from './kb-validate.ts'
 import { mcpCommand } from './mcp.ts'
 import { nodeListCommand, nodeStartCommand } from './node.ts'
+import { policyCheckCommand } from './policy.ts'
 import { secretsCommands } from './secrets.ts'
 
 /**
@@ -38,5 +39,6 @@ export const commands = [
   mcpCommand,
   nodeStartCommand,
   nodeListCommand,
+  policyCheckCommand,
   ...operations.map(commandFromOperation),
 ] as Command<unknown>[]

@@ -1,12 +1,35 @@
+import { z } from 'zod'
 import {
   commandWords,
   hasCommandPrefix,
   normalizePolicyPath,
   SENSITIVE_ACTIONS,
 } from './actions.ts'
-import type { IndexedPolicyRule, PolicyLevel, PolicyRule } from './config.ts'
+import {
+  type IndexedPolicyRule,
+  type PolicyRule,
+  policyLevelSchema,
+  policyRuleSchema,
+} from './config.ts'
 
-export type PolicyDecisionLevel = PolicyLevel | 'user'
+export const policyDecisionLevelSchema = policyLevelSchema.or(z.literal('user'))
+export const indexedPolicyRuleSchema = z.strictObject({
+  rule_index: z.number().int().min(0),
+  rule: policyRuleSchema,
+})
+export const actionDecisionSchema = z.strictObject({
+  action: z.string().min(1),
+  level: policyDecisionLevelSchema.or(z.literal('skipped')),
+  matched_rules: z.array(indexedPolicyRuleSchema),
+  guarded: z.boolean(),
+})
+export const policyDecisionSchema = z.strictObject({
+  level: policyDecisionLevelSchema,
+  matched_rules: z.array(indexedPolicyRuleSchema),
+  actions: z.array(actionDecisionSchema),
+})
+
+export type PolicyDecisionLevel = z.infer<typeof policyDecisionLevelSchema>
 export interface PolicyRequest {
   scope: { workspace: string; role: string }
   actions: readonly string[]

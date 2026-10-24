@@ -32,12 +32,13 @@ export interface HubAuthOptions {
   /** user token（`state/hub.token`）。 */
   token?: string
   tokens?: BoundTokenLookup
-  /** 某任务当前活动租约所属的节点 id；用于 node:* 身份只读自己持有租约的任务。 */
+  /** 某任务未过期的活动租约所属节点 id；用于任务详情与策略检查的 scope 校验。 */
   leaseHolders?: (taskId: string) => readonly string[]
 }
 
-/** node:* 身份可以访问的接口（节点协议）；tasks-show 另按租约归属判断。 */
+/** node:* 身份可以访问的接口；任务详情与策略检查还要校验任务级 scope。 */
 const NODE_ENDPOINTS: readonly EndpointName[] = [
+  'policy-check',
   'nodes-register',
   'leases-acquire',
   'leases-renew',
@@ -52,9 +53,24 @@ const matcher = (name: EndpointName) => {
 }
 const nodeMatchers = NODE_ENDPOINTS.map((n) => ({ name: n, match: matcher(n) }))
 const taskShow = matcher('tasks-show')
+const policyCheck = matcher('policy-check')
+
+/** 任务级 scope：user 可调试任意任务；节点只能操作自己持有未过期活动租约的任务。 */
+export function checkTaskScope(
+  c: Context,
+  taskId: string,
+  leaseHolders: HubAuthOptions['leaseHolders'],
+): Response | null {
+  const actor = c.get('actor')
+  if (actor === USER_ACTOR) return null
+  if (isNodeActor(actor) && leaseHolders?.(taskId).includes(actor.slice('node:'.length)))
+    return null
+  return errorResponse(c, 'scope_denied', `身份 ${actor} 不能访问该任务`)
+}
 
 /**
- * node:* 身份的权限范围：只能访问节点协议接口，以及自己持有活动租约的任务详情。
+ * node:* 身份的权限范围：节点协议接口，以及自己持有活动租约任务的详情和策略检查。
+ * 策略检查需要先校验请求并查到任务，再在路由中调用 checkTaskScope。
  * 注册与领取时，请求体中的 node_id 必须与身份一致。
  */
 async function checkNodeScope(
@@ -81,7 +97,7 @@ async function checkNodeScope(
     return null
   }
   const show = taskShow(c)
-  if (show?.[1] && leaseHolders?.(decodeURIComponent(show[1])).includes(nodeId)) return null
+  if (show?.[1]) return checkTaskScope(c, decodeURIComponent(show[1]), leaseHolders)
   return denied()
 }
 
@@ -154,6 +170,9 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
       c.set('auth', { kind: 'bound', token_id: bound.id, remote: bound.remote })
     } else return errorResponse(c, 'unauthorized', '未授权')
     c.set('actor', actor)
+    if (policyCheck(c) && actor !== USER_ACTOR && !isNodeActor(actor)) {
+      return errorResponse(c, 'scope_denied', '策略检查只允许 user 或持有活动租约的节点调用')
+    }
     if (isNodeActor(actor)) {
       const denied = await checkNodeScope(c, actor, leaseHolders)
       if (denied) return denied

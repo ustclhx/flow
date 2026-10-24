@@ -1,4 +1,11 @@
-import { type EventType, redactKnownSecrets, redactSecrets } from '@flow/core'
+import {
+  clipText,
+  type EventType,
+  PROTOCOL_MESSAGE_MAX,
+  redactKnownSecrets,
+  redactSecrets,
+  sanitizeText,
+} from '@flow/core'
 import { redactDeep } from '../secrets/redactor.ts'
 
 /**
@@ -23,6 +30,14 @@ const RESULT_TEXT: readonly FieldPath[] = [
 ]
 
 export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> = {
+  'policy.decided': [
+    ['request', 'command'],
+    ['request', 'paths', '*'],
+    ['matched_rules', '*', 'rule', 'when', 'command_prefix'],
+    ['matched_rules', '*', 'rule', 'when', 'paths', '*'],
+    ['actions', '*', 'matched_rules', '*', 'rule', 'when', 'command_prefix'],
+    ['actions', '*', 'matched_rules', '*', 'rule', 'when', 'paths', '*'],
+  ],
   'task.done': RESULT_TEXT,
   'task.failed': [...RESULT_TEXT, ['message']],
   'task.cancelled': [...RESULT_TEXT, ['reason']],
@@ -55,7 +70,14 @@ export function scrubPayload(
   const known = (text: string) => redactKnownSecrets(extra ? extra(text) : text)
   let out = redactDeep(payload, known)
   for (const path of FREE_TEXT_FIELDS[type as EventType] ?? []) {
-    out = mapPath(out, path, redactSecrets)
+    out = mapPath(
+      out,
+      path,
+      // 策略命令先在协议上限内脱敏，再裁剪审计文本，避免 2000 字符边界切断 token。
+      type === 'policy.decided'
+        ? (s) => clipText(sanitizeText(s, PROTOCOL_MESSAGE_MAX), 2000)
+        : redactSecrets,
+    )
   }
   return out
 }

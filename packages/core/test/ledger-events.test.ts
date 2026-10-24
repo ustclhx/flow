@@ -25,6 +25,19 @@ const samples: Record<
   EventType,
   { valid: Record<string, unknown>; invalid: Record<string, unknown> }
 > = {
+  'policy.decided': {
+    valid: {
+      ...task,
+      payload: {
+        task_id: task.task_id,
+        request: { tool: 'Bash', actions: ['tool:Bash', 'git.push'], command: 'git push' },
+        level: 'user',
+        matched_rules: [],
+        actions: [{ action: 'git.push', level: 'user', matched_rules: [], guarded: false }],
+      },
+    },
+    invalid: { ...task, payload: { level: 'always' } },
+  },
   'task.created': {
     valid: { ...task, payload: { contract } },
     invalid: { ...task, payload: { contract: { ...contract, workspace: undefined } } },
@@ -187,6 +200,7 @@ describe('事件 schema', () => {
 describe('事件触发的状态转换', () => {
   /** 期望表：事件 → 允许的当前状态（null=任务不存在）→ 之后的状态。独立于实现手写。 */
   const expected: Record<string, [TaskStatus | null, TaskStatus][]> = {
+    'policy.decided': TASK_STATUSES.map((status) => [status, status]),
     'task.created': [[null, 'queued']],
     'task.started': [['queued', 'running']],
     'lease.granted': [['running', 'running']],

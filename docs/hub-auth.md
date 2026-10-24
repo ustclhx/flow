@@ -63,13 +63,16 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | `POST /v1/nodes`（注册）、`POST /v1/leases`（领取） | ✓ | ✓ | 仅 `node_id` 为自己 | 403 |
 | `POST /v1/leases/:id/renew`、`complete`、`ack-reply` | ✓ | ✓ | ✓（凭 lease_token） | 403 |
 | `GET /v1/tasks/:id` | ✓ | ✓ | 仅自己持有活动租约的任务 | 403 |
+| `POST /v1/policy/check` | ✓（人工调试） | 403 `scope_denied` | 仅自己持有未过期活动租约的任务 | 403 |
 | `GET/POST /v1/tasks`、`POST /v1/tasks/:id/cancel`、`GET /v1/events`、`GET /v1/nodes`、`GET /v1/hub/status` | ✓ | ✓ | 403 `scope_denied` | 403 |
 | `POST /v1/tasks/:id/reply` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/hub/rebuild` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `/v1/hub/tokens`（签发、列出、撤销） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 
 remote token 一列的 403 都是 `remote_not_allowed`。以后的 `inbox_act`（除"忽略自己发起的条目"）
-与读取密钥接口也使用 `userOnly` 中间件。所有 403 都在读取请求体、调用服务之前返回，不产生任何事件。
+与读取密钥接口也使用 `userOnly` 中间件。只有用户能做的接口在读取请求体、调用服务之前拒绝；
+策略检查的节点 scope 需要读取请求体中的 `task_id`，加载策略后在入账前再次校验租约。
+所有权限拒绝均不产生事件。任务不存在时，策略检查返回 404 `not_found`。
 MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有读取密钥的工具）保留，作为第一道防线。
 
 ## 命令

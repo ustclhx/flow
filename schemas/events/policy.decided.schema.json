@@ -1,0 +1,323 @@
+{
+  "$id": "https://flow.local/schemas/events/policy.decided.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "账本序号，单调递增"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+    },
+    "type": {
+      "type": "string",
+      "const": "policy.decided"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "任务 id，由中枢在创建时分配"
+    },
+    "actor": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "notify",
+                "draft-approve",
+                "auto-report",
+                "auto"
+              ]
+            },
+            {
+              "type": "string",
+              "const": "user"
+            }
+          ]
+        },
+        "matched_rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule_index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "rule": {
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "*"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                        "description": "workspace 标识，形如 ws/<id>"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^[^\\s/*]+$"
+                      }
+                    ]
+                  },
+                  "action": {
+                    "type": "string",
+                    "pattern": "^[^\\s]+$"
+                  },
+                  "level": {
+                    "type": "string",
+                    "enum": [
+                      "notify",
+                      "draft-approve",
+                      "auto-report",
+                      "auto"
+                    ]
+                  },
+                  "when": {
+                    "type": "object",
+                    "properties": {
+                      "command_prefix": {
+                        "description": "按命令词匹配前缀；串联请求的每段命令都必须满足",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "paths": {
+                        "description": "每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "scope",
+                  "action",
+                  "level"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "rule_index",
+              "rule"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "minLength": 1
+              },
+              "level": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "notify",
+                          "draft-approve",
+                          "auto-report",
+                          "auto"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "const": "user"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "const": "skipped"
+                  }
+                ]
+              },
+              "matched_rules": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "rule_index": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "rule": {
+                      "type": "object",
+                      "properties": {
+                        "scope": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "const": "*"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                              "description": "workspace 标识，形如 ws/<id>"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^[^\\s/*]+$"
+                            }
+                          ]
+                        },
+                        "action": {
+                          "type": "string",
+                          "pattern": "^[^\\s]+$"
+                        },
+                        "level": {
+                          "type": "string",
+                          "enum": [
+                            "notify",
+                            "draft-approve",
+                            "auto-report",
+                            "auto"
+                          ]
+                        },
+                        "when": {
+                          "type": "object",
+                          "properties": {
+                            "command_prefix": {
+                              "description": "按命令词匹配前缀；串联请求的每段命令都必须满足",
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "paths": {
+                              "description": "每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /",
+                              "minItems": 1,
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "scope",
+                        "action",
+                        "level"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "rule_index",
+                    "rule"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "guarded": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "action",
+              "level",
+              "matched_rules",
+              "guarded"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "request": {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "command": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "paths": {
+              "maxItems": 200,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 2000
+              }
+            }
+          },
+          "required": [
+            "tool",
+            "actions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "level",
+        "matched_rules",
+        "actions",
+        "task_id",
+        "request"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "seq",
+    "ts",
+    "type",
+    "workspace",
+    "task_id",
+    "actor",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "title": "policy.decided"
+}

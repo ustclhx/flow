@@ -13,7 +13,7 @@
 ## 2. 策略引擎
 
 - [x] 2.1 `config/policies.yaml` 的 schema 与加载（单条规则出错不影响其他规则）；core 中的动作识别映射表（工具名，以及 git push、gh pr create、gh pr merge、wrangler deploy 等命令前缀）；导出 JSON Schema；验证 policy-engine 的"一条规则写错"和"命令映射"场景
-- [ ] 2.2 判定算法（具体程度排序、并列时取保守档位）、`pr.merge` 和 `deploy` 的特殊规则、`policy.decided` 事件，以及 `POST /v1/policy/check`；验证 policy-engine 的其余场景，并用表驱动测试覆盖优先级组合（纯判定部分已在 2.1 的 PR 中实现）
+- [x] 2.2 判定算法（具体程度排序、并列时取保守档位）、`pr.merge` 和 `deploy` 的特殊规则、`policy.decided` 事件，以及 `POST /v1/policy/check`；验证 policy-engine 的其余场景，并用表驱动测试覆盖优先级组合（纯判定部分已在 2.1 的 PR 中实现）
 - [ ] 2.3 节点侧的预检：执行器发起审批请求时先调用 policy check，结果为 auto 或 auto-report 时在本地放行，调用失败时按需要用户处理；codex-orca 把 approve 和 deny 映射为 Codex 授权提示的按键；验证 fake 执行器和 codex-orca 的 fixture 测试
 
 ## 3. 收件箱核心
