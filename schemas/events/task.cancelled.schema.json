@@ -40,6 +40,137 @@
         "reason": {
           "type": "string"
         },
+        "result": {
+          "description": "取消时已执行的验收命令结果",
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "description": "结果摘要"
+            },
+            "artifacts": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "file",
+                      "pr",
+                      "commit",
+                      "url",
+                      "other"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "文件路径、PR 链接、提交 sha 或 URL"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ref"
+                ],
+                "additionalProperties": false,
+                "title": "Task artifact"
+              }
+            },
+            "verify": {
+              "default": [],
+              "description": "每条验收命令的结果",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "cmd": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "执行的 argv"
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "exit_code": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "退出码；被信号终止或超时时为 null"
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "timed_out": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "output_tail": {
+                    "default": [],
+                    "description": "合并 stdout/stderr 后的末尾若干行",
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "cmd",
+                  "exit_code",
+                  "duration_ms",
+                  "timed_out",
+                  "output_tail"
+                ],
+                "additionalProperties": false,
+                "title": "Verify outcome",
+                "description": "一条验收命令的执行结果"
+              }
+            },
+            "executor": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$",
+              "description": "执行器类型，例如 fake、codex-orca、claude-sdk、codex-exec"
+            },
+            "node_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+            },
+            "reason": {
+              "description": "失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）",
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            }
+          },
+          "required": [
+            "summary",
+            "artifacts",
+            "verify",
+            "executor",
+            "node_id"
+          ],
+          "additionalProperties": false,
+          "title": "Flow task result"
+        },
         "node_id": {
           "description": "由持有租约的节点确认取消时填写",
           "type": "string",

@@ -109,6 +109,12 @@ export const verifyStep = z
       .min(1)
       .meta({ description: '命令 argv 数组（不经 shell），例如 ["bun", "test"]' }),
     cwd: z.string().min(1).optional().meta({ description: '工作目录；缺省为任务的 cwd' }),
+    timeout_s: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .meta({ description: '单条命令超时秒数，缺省为 600（10 分钟）' }),
   })
   .meta({ title: 'Verify step', description: '一条验收命令' })
 export type VerifyStep = z.infer<typeof verifyStep>

@@ -378,6 +378,7 @@ export const completeLeaseRequest = z
       ...token,
       outcome: z.literal('cancelled'),
       message: z.string().max(PROTOCOL_MESSAGE_MAX).optional(),
+      result: taskResult.optional().meta({ description: '取消时已执行的验收命令结果' }),
     }),
   ])
   .meta({

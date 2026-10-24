@@ -122,6 +122,7 @@ export const eventPayloads = {
   'task.cancel_requested': z.strictObject({ reason: z.string().optional() }),
   'task.cancelled': z.strictObject({
     reason: z.string().optional(),
+    result: taskResult.optional().meta({ description: '取消时已执行的验收命令结果' }),
     node_id: nodeId.optional().meta({ description: '由持有租约的节点确认取消时填写' }),
   }),
   'task.lease_expired': z.strictObject({

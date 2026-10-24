@@ -190,6 +190,7 @@ export function completionDrafts(
           type: 'task.cancelled',
           payload: {
             ...(req.message ? { reason: req.message } : {}),
+            ...(req.result ? { result: req.result } : {}),
             node_id: lease.node_id,
           },
         },
