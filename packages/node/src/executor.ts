@@ -30,6 +30,8 @@ export interface ExecutorContext {
   nodeId: string
   /** 取消信号：节点在续约响应中得知取消、超时、租约丢失或节点停止时触发。 */
   signal: AbortSignal
+  /** 子进程环境；缺省继承节点环境。codex-exec 会剔除中枢认证凭据。 */
+  env?: NodeJS.ProcessEnv
   /** 任务带着回复重新排队后的这一次执行：上一轮的会话 id 与回复（D6、D7）。 */
   resume?: TaskResume
 }

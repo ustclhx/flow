@@ -34,7 +34,7 @@ describe('fixture 清单', () => {
     for (const name of TUI_FIXTURES) expect(Array.isArray(tuiFixture(name).tail)).toBe(true)
   })
 
-  test('所有 fixture 目录（codex-tui、orca）都不含用户信息与疑似令牌', () => {
+  test('所有 fixture 目录（codex-tui、orca、codex-exec）都不含用户信息与疑似令牌', () => {
     // 真实的账号名与主机名在运行时拼出，避免它们以字面量出现在公开仓库里。
     const names = [['ust', 'clhx'].join(''), ['hx', 'lee'].join(''), ['hxde', 'MacBook'].join('')]
     const forbidden: RegExp[] = [
@@ -53,11 +53,12 @@ describe('fixture 清单', () => {
       /actions\/runs\/(?!1000000001\b)\d+/,
     ]
     const root = join(import.meta.dir, 'fixtures')
-    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) =>
-      f.endsWith('.json'),
+    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter(
+      (f) => f.endsWith('.json') || f.endsWith('.jsonl'),
     )
     expect(files.some((f) => f.startsWith('orca'))).toBe(true)
     expect(files.some((f) => f.startsWith('codex-tui'))).toBe(true)
+    expect(files.some((f) => f.startsWith('codex-exec'))).toBe(true)
     for (const f of files) {
       const text = readFileSync(join(root, f), 'utf8')
       for (const re of forbidden) {

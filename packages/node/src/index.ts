@@ -37,6 +37,7 @@ export {
   type RegisterRequest,
 } from './client.ts'
 export { type NodeClock, sleep, systemClock } from './clock.ts'
+export { type CodexExecOptions, createCodexExecExecutor } from './codex-exec.ts'
 export {
   analyzeTail,
   BUSY_RE,
