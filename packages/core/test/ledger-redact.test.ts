@@ -9,6 +9,16 @@ import {
   TAIL_TOTAL_MAX_BYTES,
 } from '../src/index.ts'
 
+describe('中枢绑定 token 与名单标签', () => {
+  test('fht_ 前缀的绑定 token 被替换；[secret:<路径>] 标签不被正则再次改写', () => {
+    const bound = `fht_${randomBytes(32).toString('base64url')}`
+    expect(redactSecrets(`token ${bound} end`)).toBe('token [REDACTED:flow-hub-token] end')
+    expect(redactSecrets('API_TOKEN=[secret:telegram/bot-token]')).toBe(
+      'API_TOKEN=[secret:telegram/bot-token]',
+    )
+  })
+})
+
 /**
  * 末尾输出入账前的脱敏与限长（PR #16 审查第 7 条）。
  * 样例在运行时拼接，源码中不出现像真密钥的字面量。

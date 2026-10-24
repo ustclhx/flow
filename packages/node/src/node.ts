@@ -13,6 +13,7 @@ import {
   type DeliveredReply,
   fail,
   flowPaths,
+  HUB_TOKEN_ENV,
   LEDGER_ID_RE,
   type LeaseGrant,
   loadHubConfig,
@@ -762,7 +763,8 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
   const nodeConfig = await loadNodeConfig(home)
   if (!nodeConfig.ok) return nodeConfig
 
-  let token = options.token
+  // 本机节点用 user token 并声明 node:<id>；FLOW_HUB_TOKEN 可指定绑定 token（design D9）。
+  let token = options.token ?? (process.env[HUB_TOKEN_ENV]?.trim() || undefined)
   if (token === undefined) {
     const path = flowPaths(home).hubToken
     if (!existsSync(path)) {

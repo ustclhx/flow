@@ -15,6 +15,7 @@ import {
   fail,
   flowPaths,
   HEADERS,
+  HUB_TOKEN_ENV,
   HUB_UNAVAILABLE,
   listNodesData,
   loadHubConfig,
@@ -87,11 +88,15 @@ export async function nodeHubClientFromHome(
   if (!hub.ok) return hub
   const node = await loadNodeConfig(home)
   if (!node.ok) return node
-  const path = flowPaths(home).hubToken
-  if (!existsSync(path)) {
-    return fail('retryable', HUB_UNAVAILABLE, `缺少 ${path}，中枢尚未启动过（flow hub start）`)
+  // 本机节点用 user token 并声明 node:<id>；设置了 FLOW_HUB_TOKEN（绑定 token）时用它（design D9）。
+  let token = process.env[HUB_TOKEN_ENV]?.trim()
+  if (!token) {
+    const path = flowPaths(home).hubToken
+    if (!existsSync(path)) {
+      return fail('retryable', HUB_UNAVAILABLE, `缺少 ${path}，中枢尚未启动过（flow hub start）`)
+    }
+    token = (await readFile(path, 'utf8')).trim()
   }
-  const token = (await readFile(path, 'utf8')).trim()
   return ok(createNodeHubClient({ ...opts, url: resolveHubUrl(hub.data, node.data), token }))
 }
 

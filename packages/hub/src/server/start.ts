@@ -6,6 +6,7 @@ import { systemClock } from './clock.ts'
 import { acquireHubLock } from './lock.ts'
 import { type MaintenanceOptions, startMaintenance } from './maintenance.ts'
 import { ensureHubToken } from './token.ts'
+import { type HubTokenStore, openTokenStore } from './tokens.ts'
 
 type HubLedger = LedgerReader & LedgerMaintenance
 
@@ -40,6 +41,7 @@ export async function startHub(options: StartHubOptions): Promise<Result<Running
   let ledger: HubLedger | undefined
   let server: RunningServer | undefined
   let maintenance: ReturnType<typeof startMaintenance> | undefined
+  let tokens: HubTokenStore | undefined
   const shutdown = new AbortController()
   let stopping: Promise<void> | undefined
   const onSignal = () => {
@@ -65,7 +67,11 @@ export async function startHub(options: StartHubOptions): Promise<Result<Running
           try {
             ledger?.close()
           } finally {
-            await lock.release()
+            try {
+              await tokens?.close()
+            } finally {
+              await lock.release()
+            }
           }
         }
       }
@@ -78,6 +84,12 @@ export async function startHub(options: StartHubOptions): Promise<Result<Running
       await stop()
       return token
     }
+    const opened = await openTokenStore(options.home)
+    if (!opened.ok) {
+      await stop()
+      return opened
+    }
+    tokens = opened.data
     const config = await loadHubConfig(options.home)
     if (!config.ok) {
       await stop()
@@ -88,6 +100,7 @@ export async function startHub(options: StartHubOptions): Promise<Result<Running
     const clock = options.clock ?? systemClock
     const app = createHubApp({
       token: token.data,
+      tokens,
       clock,
       signal: shutdown.signal,
       ...(ledger ? { ledger } : {}),

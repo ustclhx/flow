@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { scheduleErrorSchema } from '../daemon/schedules.ts'
 import { workspaceRef } from '../schema/common.ts'
-import { capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
+import { actor, capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import { executorInfo, ledgerEvent } from './events.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import {
@@ -23,7 +23,9 @@ import {
  *
  * 约定：
  * - 全部路径以 `/v1` 开头，只监听 127.0.0.1。
- * - 除 `GET /v1/health` 外都需要 `Authorization: Bearer <token>`；操作者经 `X-Flow-Actor` 传递。
+ * - 除 `GET /v1/health` 外都需要 `Authorization: Bearer <token>`。操作者由 token 决定（design D9）：
+ *   `state/hub.token` 是 user，可用 `X-Flow-Actor` 降级声明非 user 身份；绑定 token 的身份固定，
+ *   请求头与之不一致时返回 403 `actor_mismatch`。
  * - 成功响应：`{ ok: true, data }`；失败响应与 CLI `--json` 一致：
  *   `{ ok: false, error: { kind, code, message, details?, retryable } }`（见 `toJsonDocument`）。
  * - 请求体与响应 `data` 都用这里的 zod 定义校验，并导出到 `schemas/protocol/`。
@@ -66,6 +68,7 @@ export const PROTOCOL_ERRORS = {
   reply_pending: { status: 409, kind: 'failure' },
   reply_not_found: { status: 404, kind: 'failure' },
   user_only: { status: 403, kind: 'failure' },
+  actor_mismatch: { status: 403, kind: 'failure' },
   hub_busy: { status: 503, kind: 'retryable' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
@@ -131,6 +134,70 @@ export const hubStatusData = healthData
   })
   .meta({ title: 'GET /v1/hub/status' })
 export type HubStatusData = z.infer<typeof hubStatusData>
+
+// ---------------------------------------------------------------------------
+// hub tokens（design D9：按 token 绑定操作者身份）
+// ---------------------------------------------------------------------------
+
+/**
+ * 绑定 token 不能使用的身份：`user` 只属于 `state/hub.token`；`hub`、`scheduler`、`policy`
+ * 是中枢内部写事件用的身份，`unknown` 是历史上缺省的占位，也不允许签发。
+ */
+export const RESERVED_BOUND_ACTORS = ['user', 'hub', 'scheduler', 'policy', 'unknown'] as const
+
+export const hubTokenId = z
+  .string()
+  .regex(/^tok_[0-9a-f]{12}$/, 'token id 格式为 tok_ 加 12 位十六进制')
+  .meta({ description: '绑定 token 的 id（不是 token 本身）' })
+
+export const boundActor = actor.refine(
+  (a) => !(RESERVED_BOUND_ACTORS as readonly string[]).includes(a),
+  { message: `绑定 token 的身份不能是 ${RESERVED_BOUND_ACTORS.join('、')}` },
+)
+
+/** token 记录的公开视图：不含摘要。 */
+export const hubTokenView = z
+  .object({
+    id: hubTokenId,
+    actor,
+    issued_at: timestamp,
+    note: z.string().optional(),
+    last_used_at: timestamp.nullable(),
+    revoked_at: timestamp.nullable(),
+    remote: z
+      .boolean()
+      .optional()
+      .meta({ description: '供远程调用方使用（变更 ⑤ 的远程入口）；本变更只做标注' }),
+  })
+  .meta({ title: 'Hub token' })
+export type HubTokenView = z.infer<typeof hubTokenView>
+
+export const issueTokenRequest = z
+  .strictObject({
+    actor: boundActor,
+    note: z.string().max(200).optional(),
+    remote: z.boolean().optional(),
+  })
+  .meta({ title: 'POST /v1/hub/tokens', description: '签发绑定 token；仅 user' })
+export type IssueTokenRequest = z.infer<typeof issueTokenRequest>
+
+export const issueTokenData = z
+  .object({
+    token: hubTokenView,
+    secret: z.string().meta({ description: 'token 明文，只在签发时返回这一次' }),
+  })
+  .meta({ title: 'POST /v1/hub/tokens 响应' })
+export type IssueTokenData = z.infer<typeof issueTokenData>
+
+export const listTokensData = z
+  .object({ tokens: z.array(hubTokenView) })
+  .meta({ title: 'GET /v1/hub/tokens' })
+export type ListTokensData = z.infer<typeof listTokensData>
+
+export const revokeTokenData = z
+  .object({ token: hubTokenView })
+  .meta({ title: 'POST /v1/hub/tokens/:id/revoke' })
+export type RevokeTokenData = z.infer<typeof revokeTokenData>
 
 export const rebuildData = z
   .object({
@@ -441,6 +508,25 @@ export const ENDPOINTS = {
   health: { method: 'GET', path: '/v1/health', auth: false, response: healthData },
   'hub-status': { method: 'GET', path: '/v1/hub/status', auth: true, response: hubStatusData },
   'hub-rebuild': { method: 'POST', path: '/v1/hub/rebuild', auth: true, response: rebuildData },
+  'hub-tokens-issue': {
+    method: 'POST',
+    path: '/v1/hub/tokens',
+    auth: true,
+    request: issueTokenRequest,
+    response: issueTokenData,
+  },
+  'hub-tokens-list': {
+    method: 'GET',
+    path: '/v1/hub/tokens',
+    auth: true,
+    response: listTokensData,
+  },
+  'hub-tokens-revoke': {
+    method: 'POST',
+    path: '/v1/hub/tokens/:id/revoke',
+    auth: true,
+    response: revokeTokenData,
+  },
   'tasks-create': {
     method: 'POST',
     path: '/v1/tasks',

@@ -1,0 +1,94 @@
+{
+  "$id": "https://flow.local/schemas/protocol/hub-tokens-issue.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^tok_[0-9a-f]{12}$",
+              "description": "绑定 token 的 id（不是 token 本身）"
+            },
+            "actor": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+              "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+            },
+            "issued_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+            },
+            "note": {
+              "type": "string"
+            },
+            "last_used_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revoked_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "remote": {
+              "description": "供远程调用方使用（变更 ⑤ 的远程入口）；本变更只做标注",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "actor",
+            "issued_at",
+            "last_used_at",
+            "revoked_at"
+          ],
+          "additionalProperties": false,
+          "title": "Hub token"
+        },
+        "secret": {
+          "type": "string",
+          "description": "token 明文，只在签发时返回这一次"
+        }
+      },
+      "required": [
+        "token",
+        "secret"
+      ],
+      "additionalProperties": false,
+      "title": "POST /v1/hub/tokens 响应"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}

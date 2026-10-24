@@ -1,0 +1,25 @@
+{
+  "$id": "https://flow.local/schemas/protocol/hub-tokens-issue.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "remote": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "actor"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/hub/tokens",
+  "description": "签发绑定 token；仅 user"
+}
