@@ -10,6 +10,7 @@ import {
   VERSION,
 } from '@flow/core'
 import { Hono } from 'hono'
+import { type InboxService, startInbox } from '../inbox/index.ts'
 import { createTaskRoutes } from '../ledger/routes.ts'
 import { type LedgerStore, openLedger } from '../ledger/store.ts'
 import { createTaskService, workspaceCheckFromHome } from '../ledger/tasks.ts'
@@ -32,11 +33,18 @@ export interface RunHubOptions
     /** 是否监听 config/ 的变化，默认 true。 */
     watch?: boolean
   }
+  /** 收件箱的注入点（测试用）。 */
+  inbox?: {
+    /** 是否监听 config/inbox.yaml 与提案目录，默认 true。 */
+    watch?: boolean
+    proposalIntervalMs?: number
+  }
 }
 
 /**
  * 生产用的中枢组合：取得锁后打开 `state/flow.db`，挂载任务路由与节点协议路由，
- * 启动租约过期扫描、睡眠检测与定时调度，把每日备份写成 `hub.backup_done`，启动成功后写入 `hub.started`。
+ * 启动租约过期扫描、睡眠检测与定时调度，把每日备份写成 `hub.backup_done`，启动成功后写入 `hub.started`，
+ * 然后启动收件箱（反应器与提案目录监听）。
  * 注入的 clock 同时用于账本的事件时间戳，保证租约到期时间与扫描用同一个时钟。
  */
 export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> {
@@ -60,6 +68,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let stopWatch: (() => void) | undefined
   const startedAt = clock.now()
   let scheduler: Scheduler | undefined
+  let inbox: InboxService | undefined
   let ledger: LedgerStore | undefined
   let config: HubConfig | undefined
   let protocol: NodeProtocol | undefined
@@ -147,6 +156,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       ]
     },
     onStop: () => {
+      inbox?.stop()
       scheduler?.stop()
       protocol?.stop()
       stopWatch?.()
@@ -196,6 +206,17 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     clock,
     home: options.home,
     ...(options.logger ? { logger: options.logger } : {}),
+  })
+  // 收件箱（add-m1-inbox 3.1）：hub.started 之后补处理停机期间的事件，再开始监听。
+  inbox = await startInbox({
+    ledger,
+    home: options.home,
+    clock,
+    logger,
+    ...(options.inbox?.watch !== undefined ? { watch: options.inbox.watch } : {}),
+    ...(options.inbox?.proposalIntervalMs !== undefined
+      ? { proposalIntervalMs: options.inbox.proposalIntervalMs }
+      : {}),
   })
   protocol?.start()
   if (options.secrets?.watch !== false) stopWatch = secrets.watch()

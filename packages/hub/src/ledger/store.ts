@@ -6,6 +6,11 @@ import {
   type EventType,
   type eventPayloads,
   fail,
+  INBOX_LEVEL_RANK,
+  type InboxItemView,
+  type InboxLevel,
+  type InboxSource,
+  inboxShortId,
   type LedgerEvent,
   type LedgerEventDraft,
   type ListTasksQuery,
@@ -94,6 +99,17 @@ export interface OpenLedgerOptions {
   redact?: (text: string) => string
 }
 
+/** 收件箱条目的查询条件（3.2 的 inbox_list 在此之上加参数校验）。 */
+export interface InboxItemFilter {
+  state?: 'open' | 'closed'
+  level?: InboxLevel
+  workspace?: string
+  task_id?: string
+  source?: InboxSource
+  /** 默认 200。 */
+  limit?: number
+}
+
 /** 每张投影表按主键排序后的行（JSON 字段保持原文）。 */
 export type ProjectionSnapshot = Record<ProjectionTable, Record<string, unknown>[]>
 
@@ -129,6 +145,15 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   taskReplies(taskId: string): ReplyView[]
   /** 任务带着回复重新排队后，下一次执行要带上的恢复信息。 */
   taskResume(taskId: string): TaskResume | null
+
+  getInboxItem(itemId: string): InboxItemView | null
+  /** 按级别（interrupt → digest）再按创建先后排序。 */
+  listInboxItems(filter?: InboxItemFilter): InboxItemView[]
+  /**
+   * 收件箱反应器已处理到的账本位置的下界：全部收件箱事件中 `source_seq` 与 `cause_seq` 的最大值。
+   * 反应器按 seq 顺序处理，写出某个源事件的条目时，更早的事件都已处理过。
+   */
+  inboxCursor(): number
 
   // ---- 软状态（不入账本，D2） ----
   /** 刷新节点最近活动时间；节点不存在时返回 false。 */
@@ -230,6 +255,69 @@ interface NodeRow {
   last_seen_at: string | null
   active_leases: number
 }
+
+interface InboxRow {
+  id: string
+  level: InboxLevel
+  source: InboxSource
+  source_ref: string
+  reason: string | null
+  workspace: string | null
+  task_id: string | null
+  title: string
+  body: string
+  actions_json: string
+  state: 'open' | 'closed'
+  created_seq: number
+  created_at: string
+  created_by: string
+  updated_at: string
+  deferred_until: string | null
+  pushed_at: string | null
+  close_reason: string | null
+  close_note: string | null
+  closed_at: string | null
+  closed_by: string | null
+  cause_actor: string | null
+  closed_via: string | null
+}
+
+function rowToInbox(r: InboxRow): InboxItemView {
+  return {
+    id: r.id,
+    short_id: inboxShortId(r.created_seq),
+    level: r.level,
+    source: r.source,
+    source_ref: r.source_ref,
+    reason: r.reason,
+    workspace: r.workspace,
+    task_id: r.task_id,
+    title: r.title,
+    body: r.body,
+    actions: JSON.parse(r.actions_json),
+    state: r.state,
+    created_at: r.created_at,
+    created_by: r.created_by,
+    updated_at: r.updated_at,
+    deferred_until: r.deferred_until,
+    pushed_at: r.pushed_at,
+    closed:
+      r.state === 'closed' && r.closed_at !== null && r.closed_by !== null
+        ? {
+            reason: r.close_reason as NonNullable<InboxItemView['closed']>['reason'],
+            note: r.close_note,
+            at: r.closed_at,
+            by: r.closed_by,
+            cause_actor: r.cause_actor,
+            via: r.closed_via as NonNullable<InboxItemView['closed']>['via'],
+          }
+        : null,
+  }
+}
+
+const LEVEL_ORDER = `CASE level ${Object.entries(INBOX_LEVEL_RANK)
+  .map(([level, rank]) => `WHEN '${level}' THEN ${rank}`)
+  .join(' ')} END`
 
 const TASK_SELECT = `SELECT t.*, l.lease_id AS lease_id, l.node_id AS lease_node_id,
   l.expires_at AS lease_expires_at
@@ -432,6 +520,31 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         )
         if (!lease || lease.task_id !== draft.task_id || lease.state !== 'active') {
           return invalidEvent(`租约 ${draft.payload.lease_id} 不是该任务的活动租约`)
+        }
+        return ok(null)
+      }
+      case 'inbox.item_created': {
+        // 条目 id 由来源确定性生成：同一来源重复写入（反应器重放、重启续跑）在这里被拒绝。
+        if (get('SELECT 1 FROM inbox_items WHERE id = ?', draft.payload.item_id)) {
+          return fail('failure', 'duplicate_item', `收件箱条目 ${draft.payload.item_id} 已存在`, {
+            item_id: draft.payload.item_id,
+          })
+        }
+        return ok(null)
+      }
+      case 'inbox.item_updated':
+      case 'inbox.item_closed': {
+        const item = get<{ state: string }>(
+          'SELECT state FROM inbox_items WHERE id = ?',
+          draft.payload.item_id,
+        )
+        if (!item) {
+          return fail('failure', 'not_found', `收件箱条目 ${draft.payload.item_id} 不存在`)
+        }
+        if (item.state !== 'open') {
+          return fail('failure', 'item_closed', `收件箱条目 ${draft.payload.item_id} 已关闭`, {
+            item_id: draft.payload.item_id,
+          })
         }
         return ok(null)
       }
@@ -707,6 +820,36 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         taskId,
       )
       return r?.resume_json ? (JSON.parse(r.resume_json) as TaskResume) : null
+    },
+
+    getInboxItem(itemId) {
+      const r = get<InboxRow>('SELECT * FROM inbox_items WHERE id = ?', itemId)
+      return r ? rowToInbox(r) : null
+    },
+    listInboxItems(filter = {}) {
+      const where: string[] = []
+      const params: SqlValue[] = []
+      for (const key of ['state', 'level', 'workspace', 'task_id', 'source'] as const) {
+        const v = filter[key]
+        if (v !== undefined) {
+          where.push(`${key} = ?`)
+          params.push(v)
+        }
+      }
+      params.push(filter.limit ?? 200)
+      const clause = where.length === 0 ? '' : `WHERE ${where.join(' AND ')}`
+      return all<InboxRow>(
+        `SELECT * FROM inbox_items ${clause} ORDER BY ${LEVEL_ORDER}, created_seq LIMIT ?`,
+        ...params,
+      ).map(rowToInbox)
+    },
+    inboxCursor() {
+      return (
+        get<{ s: number }>(
+          `SELECT MAX(COALESCE(MAX(source_seq), 0), COALESCE(MAX(cause_seq), 0)) AS s
+           FROM inbox_items`,
+        )?.s ?? 0
+      )
     },
 
     touchNode(nodeId, at = iso()) {

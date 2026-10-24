@@ -12,6 +12,7 @@ export {
 export {
   type AppendOptions,
   type EventInput,
+  type InboxItemFilter,
   type LeaseRecord,
   type LedgerStore,
   type OpenLedgerOptions,

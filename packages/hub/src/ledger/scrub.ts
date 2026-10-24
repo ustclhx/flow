@@ -1,6 +1,9 @@
 import {
   clipText,
   type EventType,
+  INBOX_BODY_MAX,
+  INBOX_NOTE_MAX,
+  INBOX_TITLE_MAX,
   PROTOCOL_MESSAGE_MAX,
   redactKnownSecrets,
   redactSecrets,
@@ -46,6 +49,20 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task.replied': [['text']],
   'task.requeued': [['note']],
   'task.cancel_requested': [['reason']],
+  // 收件箱条目的文字会外发到渠道（notify-channel "外发内容脱敏"），入账前就按自由文本处理。
+  'inbox.item_created': [['title'], ['body']],
+  'inbox.item_updated': [['title'], ['body']],
+  'inbox.item_closed': [['note']],
+}
+
+/**
+ * 自由文本字段的长度上限（字符）：正则兜底前后各截断一次（同 core 的 sanitizeText），
+ * 保证脱敏后的载荷仍不超过 schema 的上限。未列出的字段由各自的协议 / 写入方限长。
+ */
+export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string, number>>>> = {
+  'inbox.item_created': { title: INBOX_TITLE_MAX, body: INBOX_BODY_MAX },
+  'inbox.item_updated': { title: INBOX_TITLE_MAX, body: INBOX_BODY_MAX },
+  'inbox.item_closed': { note: INBOX_NOTE_MAX },
 }
 
 function mapPath(value: unknown, path: FieldPath, fn: (s: string) => string): unknown {
@@ -69,14 +86,18 @@ export function scrubPayload(
 ): unknown {
   const known = (text: string) => redactKnownSecrets(extra ? extra(text) : text)
   let out = redactDeep(payload, known)
+  const limits = FREE_TEXT_LIMITS[type as EventType] ?? {}
   for (const path of FREE_TEXT_FIELDS[type as EventType] ?? []) {
+    const max = limits[path.join('.')]
     out = mapPath(
       out,
       path,
       // 策略命令先在协议上限内脱敏，再裁剪审计文本，避免 2000 字符边界切断 token。
       type === 'policy.decided'
         ? (s) => clipText(sanitizeText(s, PROTOCOL_MESSAGE_MAX), 2000)
-        : redactSecrets,
+        : max === undefined
+          ? redactSecrets
+          : (s) => clipText(redactSecrets(clipText(s, max)), max),
     )
   }
   return out

@@ -1,0 +1,75 @@
+{
+  "$id": "https://flow.local/schemas/config/inbox.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "levels": {
+      "default": [],
+      "description": "分级覆盖规则，按条件多少与先后决定优先级",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "description": "只匹配该来源；缺省匹配所有来源",
+            "type": "string",
+            "enum": [
+              "task",
+              "proposal",
+              "policy",
+              "supervisor",
+              "digest"
+            ]
+          },
+          "workspace": {
+            "description": "只匹配该 workspace（ws/<id>）；缺省或 * 匹配所有",
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "*"
+              },
+              {
+                "type": "string",
+                "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                "description": "workspace 标识，形如 ws/<id>"
+              }
+            ]
+          },
+          "reason": {
+            "description": "只匹配该卡住原因（任务来源）；缺省匹配所有原因",
+            "type": "string",
+            "enum": [
+              "awaiting_approval",
+              "question",
+              "no_progress",
+              "crashed",
+              "node_lost",
+              "other"
+            ]
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "interrupt",
+              "decide",
+              "digest",
+              "Interrupt",
+              "Decide",
+              "Digest"
+            ],
+            "description": "级别：interrupt、decide 或 digest（首字母大小写均可）"
+          }
+        },
+        "required": [
+          "level"
+        ],
+        "additionalProperties": false,
+        "title": "Inbox level rule",
+        "description": "一条分级覆盖规则"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "title": "Flow inbox config",
+  "description": "config/inbox.yaml：收件箱配置"
+}

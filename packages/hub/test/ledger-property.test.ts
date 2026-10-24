@@ -39,6 +39,8 @@ async function runSeed(seed: number) {
   const tasks: { id: string; ws: string }[] = []
   let leaseCounter = 0
   let fireCounter = 0
+  /** 已创建的收件箱条目（open 表示还可更新、关闭）。 */
+  const items: { id: string; open: boolean }[] = []
 
   const write = (label: string, events: EventInput[], actor = 'hub') => {
     const r = store.appendMany(events, { actor })
@@ -147,6 +149,99 @@ async function runSeed(seed: number) {
         // 偶尔重建一次，之后继续追加（重建后的投影也要能继续增量维护）
         expect(store.rebuild().ok).toBe(true)
         hit('hub.rebuilt')
+        continue
+      }
+      if (roll < 0.39) {
+        // 收件箱事件（add-m1-inbox 3.1）：创建（任务来源或全局来源）、更新、关闭，以及被拒绝的重复写入
+        const open = items.filter((i) => i.open)
+        const kind = open.length === 0 ? 'created' : pick(['created', 'updated', 'closed'] as const)
+        if (kind === 'created') {
+          const id = `blk.${seed}-${items.length}`
+          const t = chance(0.6) ? pick(tasks) : undefined
+          write(
+            'inbox.item_created',
+            [
+              {
+                type: 'inbox.item_created',
+                ...(t ? { task_id: t.id, workspace: t.ws } : {}),
+                payload: {
+                  item_id: id,
+                  level: pick(['interrupt', 'decide', 'digest'] as const),
+                  source: t ? 'task' : pick(['proposal', 'policy', 'digest'] as const),
+                  source_ref: t?.id ?? `ref-${items.length}`,
+                  ...(t ? { reason: pick(BLOCKED_REASONS) } : {}),
+                  title: `条目 ${step}`,
+                  body: chance(0.5) ? `正文 ${step}` : '',
+                  actions: chance(0.5) ? ['reply'] : [],
+                  ...(chance(0.7) ? { source_seq: store.seq() } : {}),
+                  ...(chance(0.2) ? { deferred_until: new Date(now()).toISOString() } : {}),
+                },
+              },
+            ],
+            'hub',
+          )
+          items.push({ id, open: true })
+        } else if (kind === 'updated') {
+          const it = pick(open)
+          write(
+            'inbox.item_updated',
+            [
+              {
+                type: 'inbox.item_updated',
+                payload: {
+                  item_id: it.id,
+                  ...(chance(0.5)
+                    ? { level: pick(['interrupt', 'decide', 'digest'] as const) }
+                    : {}),
+                  ...(chance(0.5) ? { title: `改 ${step}` } : { body: `改正文 ${step}` }),
+                  ...(chance(0.3) ? { deferred_until: null } : {}),
+                },
+              },
+            ],
+            'hub',
+          )
+        } else {
+          const it = pick(open)
+          write(
+            'inbox.item_closed',
+            [
+              {
+                type: 'inbox.item_closed',
+                payload: {
+                  item_id: it.id,
+                  reason: pick(['task_running', 'dismissed', 'superseded'] as const),
+                  ...(chance(0.5) ? { cause_seq: store.seq(), cause_actor: 'user' } : {}),
+                  ...(chance(0.3) ? { via: pick(['telegram', 'web', 'cli'] as const) } : {}),
+                },
+              },
+            ],
+            pick(['hub', 'user']),
+          )
+          it.open = false
+          // 负样本：已关闭的条目不能再关闭、不能重复创建
+          const before = store.seq()
+          const again = store.append(
+            { type: 'inbox.item_closed', payload: { item_id: it.id, reason: 'dismissed' } },
+            { actor: 'user' },
+          )
+          expect(again.ok ? null : again.error.code).toBe('item_closed')
+          const dup = store.append(
+            {
+              type: 'inbox.item_created',
+              payload: {
+                item_id: it.id,
+                level: 'decide',
+                source: 'proposal',
+                source_ref: 'x',
+                title: 't',
+              },
+            },
+            { actor: 'hub' },
+          )
+          expect(dup.ok ? null : dup.error.code).toBe('duplicate_item')
+          expect(store.seq()).toBe(before)
+          hit('inbox.rejected')
+        }
         continue
       }
 
@@ -484,6 +579,10 @@ describe('性质：增量投影 == 重建投影', () => {
       'hub.rebuilt',
       'soft-state',
       'rejected',
+      'inbox.item_created',
+      'inbox.item_updated',
+      'inbox.item_closed',
+      'inbox.rejected',
     ]
     expect(kinds.filter((k) => (coverage.get(k) ?? 0) === 0)).toEqual([])
   }, 120_000)

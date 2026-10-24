@@ -1,4 +1,15 @@
 import { z } from 'zod'
+import {
+  INBOX_BODY_MAX,
+  INBOX_NOTE_MAX,
+  INBOX_TITLE_MAX,
+  inboxAction,
+  inboxCloseReason,
+  inboxItemId,
+  inboxLevel,
+  inboxSource,
+  inboxVia,
+} from '../inbox/schema.ts'
 import { policyDecisionSchema } from '../policy/decide.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
@@ -185,6 +196,56 @@ export const eventPayloads = {
     events_replayed: z.number().int().min(0),
     duration_ms: z.number().int().min(0),
   }),
+  // 收件箱（add-m1-inbox design D1）：由中枢的反应器与提案监听写入，折叠成 inbox_items 投影。
+  'inbox.item_created': z.strictObject({
+    item_id: inboxItemId,
+    level: inboxLevel,
+    source: inboxSource,
+    source_ref: z
+      .string()
+      .min(1)
+      .max(256)
+      .meta({ description: '关联对象：任务 id、提案 id 或源事件 seq' }),
+    reason: z
+      .string()
+      .min(1)
+      .max(64)
+      .optional()
+      .meta({ description: '来源内的原因，例如卡住原因 question' }),
+    title: z.string().min(1).max(INBOX_TITLE_MAX),
+    body: z.string().max(INBOX_BODY_MAX).default(''),
+    actions: z.array(inboxAction).default([]).meta({
+      description: '可用的操作；忽略（dismiss）总是可用，不写在这里',
+    }),
+    source_seq: z.number().int().min(1).optional().meta({
+      description: '触发该条目的账本事件 seq（反应器的幂等键）；提案等账本外的来源没有',
+    }),
+    deferred_until: timestamp
+      .optional()
+      .meta({ description: '静默时段内生成时，顺延推送到此时（3.3）' }),
+  }),
+  'inbox.item_updated': z
+    .strictObject({
+      item_id: inboxItemId,
+      level: inboxLevel.optional(),
+      title: z.string().min(1).max(INBOX_TITLE_MAX).optional(),
+      body: z.string().max(INBOX_BODY_MAX).optional(),
+      actions: z.array(inboxAction).optional(),
+      deferred_until: timestamp.nullable().optional().meta({ description: 'null 表示取消顺延' }),
+    })
+    .refine((p) => Object.keys(p).length > 1, { message: 'inbox.item_updated 至少要改一个字段' }),
+  'inbox.item_closed': z.strictObject({
+    item_id: inboxItemId,
+    reason: inboxCloseReason,
+    note: z.string().max(INBOX_NOTE_MAX).optional(),
+    cause_seq: z.number().int().min(1).optional().meta({
+      description: '导致关闭的账本事件 seq（例如 task.unblocked），反应器据此续跑',
+    }),
+    cause_actor: actor.optional().meta({
+      description: '导致关闭的操作者，例如答复任务的 user（渠道据此显示"已处理（来自 CLI）"）',
+    }),
+    via: inboxVia.optional().meta({ description: '操作发起的渠道；缺省表示命令行或自动关闭' }),
+  }),
 } as const
 
 export type EventType = keyof typeof eventPayloads
@@ -215,6 +276,10 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'hub.resumed': 'none',
   'hub.backup_done': 'none',
   'hub.rebuilt': 'none',
+  // 任务来源的条目带 task_id 与 workspace；提案等全局来源都可省略。
+  'inbox.item_created': 'none',
+  'inbox.item_updated': 'none',
+  'inbox.item_closed': 'none',
 }
 
 const scopeShape = (scope: Scope) =>
@@ -300,7 +365,10 @@ export interface TransitionRule {
 
 /** 每种任务事件的转换规则；`apply(event)` 与写入前的校验都以此为准。 */
 export const TASK_EVENT_RULES: Readonly<
-  Record<Exclude<EventType, `node.${string}` | `hub.${string}` | 'schedule.fired'>, TransitionRule>
+  Record<
+    Exclude<EventType, `node.${string}` | `hub.${string}` | `inbox.${string}` | 'schedule.fired'>,
+    TransitionRule
+  >
 > = {
   'policy.decided': {
     from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed', 'cancelled'],
