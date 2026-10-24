@@ -27,7 +27,11 @@ export function doctorOptions(home: string, overrides: DoctorOptions = {}) {
           return execCommand(bin, args, opts)
       }
     },
-    inspectClaudeSdk: async () => ({ version: '0.3.310', cliPath: '/fake/sdk/claude' }),
+    inspectClaudeSdk: async () => ({
+      version: '0.3.310',
+      expectedVersion: '0.3.310',
+      cliPath: '/fake/sdk/claude',
+    }),
     ...overrides,
     env: { PATH: process.env.PATH, CLAUDE_CODE_OAUTH_TOKEN: 'fixture', ...overrides.env },
   } satisfies DoctorOptions

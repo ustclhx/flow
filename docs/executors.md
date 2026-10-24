@@ -27,7 +27,7 @@ flow doctor --json
 | `tool.codex` | PATH 中的可执行文件、`codex --version` 的退出码与版本；最低验证版本 `0.164.0` |
 | `tool.orca` | PATH 中的可执行文件、`orca --version` 的退出码与版本；最低验证版本 `1.4.218` |
 | `orca.app` | `orca terminal list --json` 返回成功信封和 terminals 数组；失败时提示启动 Orca 应用 |
-| `tool.claude-sdk` | 能 import `@anthropic-ai/claude-agent-sdk`、存在 query 导出、包版本可解析（当前固定 `0.3.310`） |
+| `tool.claude-sdk` | 能 import `@anthropic-ai/claude-agent-sdk`、存在 query 导出、包版本可解析；从 `@flow/node` 的 package.json 位置解析 SDK，并读取其中声明的期望版本 |
 | `tool.claude` | SDK 默认使用的当前平台原生 CLI 文件存在且可执行；PATH 上另装的 claude 不会替代缺失的 SDK 原生包 |
 | `claude.credentials` | `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN` 之一非空，或 Claude 配置目录下存在 `.credentials.json` |
 

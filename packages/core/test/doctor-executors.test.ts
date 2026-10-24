@@ -63,9 +63,7 @@ describe('doctor 执行器依赖', () => {
       const r = await report(home, {
         findExecutable: (name, env) =>
           ['codex', 'orca', 'claude'].includes(name) ? null : find(name, env),
-        inspectClaudeSdk: async () => {
-          throw new Error('模拟 SDK 缺失')
-        },
+        inspectClaudeSdk: async () => null,
         env: { CLAUDE_CODE_OAUTH_TOKEN: undefined },
       })
       const codes = r.checks.filter((c) => !c.ok && c.severity === 'error').map((c) => c.id)
@@ -80,6 +78,8 @@ describe('doctor 执行器依赖', () => {
               : [],
       )
       expect(r.ok).toBe(executor === 'fake')
+      if (executor === 'claude-sdk')
+        expect(check(r, 'tool.claude-sdk').message).toContain('SDK 未安装')
       expect(check(r, 'tool.codex').message).toContain(
         executor?.startsWith('codex') ? `角色：${executor}` : '没有角色引用',
       )
@@ -154,7 +154,11 @@ describe('doctor 执行器依赖', () => {
   test('SDK 可 import 但原生 CLI 缺失：PATH 上另装的 claude 不会掩盖故障', async () => {
     const home = await setup(['claude-sdk'])
     const r = await report(home, {
-      inspectClaudeSdk: async () => ({ version: '0.3.310', cliPath: null }),
+      inspectClaudeSdk: async () => ({
+        version: '0.3.310',
+        expectedVersion: '0.3.310',
+        cliPath: null,
+      }),
     })
     expect(check(r, 'tool.claude-sdk').ok).toBe(true)
     expect(check(r, 'tool.claude')).toMatchObject({

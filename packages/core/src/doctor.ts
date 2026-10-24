@@ -57,7 +57,7 @@ export interface DoctorOptions {
   runCommand?: typeof execCommand
   findExecutable?: typeof findExecutable
   /** 测试注入模拟 SDK，绝不加载或运行真实 Claude。 */
-  inspectClaudeSdk?: () => Promise<DoctorSdk>
+  inspectClaudeSdk?: () => Promise<DoctorSdk | null>
   /** 凭证只检查文件是否存在；测试必须注入临时用户目录。 */
   userHome?: string
   platform?: NodeJS.Platform
@@ -215,9 +215,17 @@ async function checkExecutors(
   }
   let sdk: DoctorSdk | undefined
   try {
-    sdk = await (opts.inspectClaudeSdk ?? inspectClaudeSdk)()
+    sdk = (await (opts.inspectClaudeSdk ?? inspectClaudeSdk)()) ?? undefined
     checks.push(
-      dependency('tool.claude-sdk', true, `Claude Agent SDK ${sdk.version} 可 import`, claudeRoles),
+      dependency(
+        'tool.claude-sdk',
+        Boolean(sdk),
+        sdk
+          ? `Claude Agent SDK ${sdk.version} 可 import（node 声明：${sdk.expectedVersion}）`
+          : 'Claude Agent SDK 未安装（无法从 @flow/node 解析）',
+        claudeRoles,
+        '在 Flow 仓库运行 bun install --frozen-lockfile，安装 @flow/node 声明的 SDK',
+      ),
     )
   } catch {
     checks.push(
