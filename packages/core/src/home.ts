@@ -43,8 +43,11 @@ export interface FlowPaths {
   policiesConfig: string
   /** 任务账本 `state/flow.db`，只由中枢打开（design D1）。 */
   ledgerDb: string
-  /** 中枢 token（0600）与单实例锁。 */
+  /** 中枢 token（0600）。 */
   hubToken: string
+  /** 中枢单实例锁：SQLite 文件上的排他锁，进程退出（含崩溃）时由操作系统释放。 */
+  hubLock: string
+  /** 中枢 pid 记录（pid + token），仅供提示与状态查询，不参与互斥。 */
   hubPid: string
   /** 本机节点 id。 */
   nodeId: string
@@ -82,6 +85,7 @@ export function flowPaths(home: string): FlowPaths {
     policiesConfig: join(config, 'policies.yaml'),
     ledgerDb: join(state, 'flow.db'),
     hubToken: join(state, 'hub.token'),
+    hubLock: join(state, 'hub.lock'),
     hubPid: join(state, 'hub.pid'),
     nodeId: join(state, 'node-id'),
     backups: join(state, 'backups'),
