@@ -1,0 +1,46 @@
+{
+  "$id": "https://flow.local/schemas/config/channels.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "telegram": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "false 时不启动 Telegram 渠道（重启中枢后生效）",
+          "type": "boolean"
+        },
+        "bot_token": {
+          "default": "secret://telegram/bot-token",
+          "description": "bot token 的密钥引用，默认 secret://telegram/bot-token",
+          "type": "string",
+          "pattern": "^secret:\\/\\/\\S+$"
+        },
+        "proxy": {
+          "description": "访问 api.telegram.org 的 HTTP(S) 代理；缺省时使用 HTTPS_PROXY 环境变量",
+          "type": "string",
+          "format": "uri"
+        },
+        "chat_id": {
+          "description": "已绑定的私聊 chat id（绑定时写入）",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "user_id": {
+          "description": "绑定时记录的 Telegram 用户 id；只接受该用户的消息和按钮",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "title": "Telegram channel",
+      "description": "Telegram Bot 渠道"
+    }
+  },
+  "additionalProperties": false,
+  "title": "Flow channels config",
+  "description": "config/channels.yaml：推送渠道配置"
+}

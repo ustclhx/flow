@@ -123,6 +123,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
 
   /** 最近一条事件；beforeSeq 用于取得本次 hub.started 之前的恢复边界。 */
   latestEvent(beforeSeq?: number, type?: EventType): LedgerEvent | null
+  /** 某时刻（含）之后策略自动放行（auto、auto-report）的次数（Telegram `/status`）。 */
+  countAutoDecisions(sinceIso: string): number
   hasScheduleFire(ruleId: string, plannedAt: string): boolean
 
   getTask(id: string): TaskView | null
@@ -754,6 +756,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         type ?? null,
       )
       return row ? rowToEvent(row) : null
+    },
+    countAutoDecisions(sinceIso) {
+      return (
+        get<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM events WHERE type = 'policy.decided' AND ts >= ?
+             AND json_extract(payload_json, '$.level') IN ('auto', 'auto-report')`,
+          sinceIso,
+        )?.n ?? 0
+      )
     },
     hasScheduleFire(ruleId, plannedAt) {
       return !!get(

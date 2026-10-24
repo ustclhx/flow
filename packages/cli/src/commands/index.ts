@@ -18,6 +18,7 @@ import { mcpCommand } from './mcp.ts'
 import { nodeListCommand, nodeStartCommand } from './node.ts'
 import { policyCheckCommand } from './policy.ts'
 import { secretsCommands } from './secrets.ts'
+import { telegramLinkCommand, telegramUnlinkCommand } from './telegram.ts'
 import { uiCommand } from './ui.ts'
 
 /**
@@ -42,6 +43,8 @@ export const commands = [
   nodeListCommand,
   policyCheckCommand,
   uiCommand,
+  telegramLinkCommand,
+  telegramUnlinkCommand,
   ...operations.flatMap((op) =>
     [op.cli, ...(op.cliAliases ?? [])].map((cli) => commandFromOperation({ ...op, cli })),
   ),

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import {
   channelId,
@@ -49,6 +50,11 @@ import {
 // ---------------------------------------------------------------------------
 // 载荷
 // ---------------------------------------------------------------------------
+
+/** 渠道 chat id 的摘要（sha256 十六进制前 16 位），账本里不记明文 chat id。 */
+export const chatDigestSchema = z.string().regex(/^[0-9a-f]{16}$/)
+export const chatDigest = (channel: string, chatId: number): string =>
+  createHash('sha256').update(`${channel}-chat:${chatId}`).digest('hex').slice(0, 16)
 
 export const executorInfo = z
   .strictObject({
@@ -283,6 +289,30 @@ export const eventPayloads = {
       message: '只有 op=failed 带 reason，且必须带',
       path: ['reason'],
     }),
+  /**
+   * 用户下达给 supervisor 的指令（telegram-channel "命令"：`/ask <workspace> <内容>`）。
+   * 由变更 ④ 的 supervisor 消费；在它上线之前只入账，不产生任何投影。
+   */
+  /**
+   * 渠道改绑（add-m1-inbox 5.1 审查）：已绑定的 Telegram 被新的绑定码改绑到另一个 chat。
+   * 只记 chat id 的摘要（`chatDigest`），不记明文 id；改绑前已通知原 chat。
+   */
+  'channel.rebound': z.strictObject({
+    channel: channelId,
+    from_chat: chatDigestSchema.meta({ description: '原 chat id 的摘要' }),
+    to_chat: chatDigestSchema.meta({ description: '新 chat id 的摘要' }),
+    via: inboxVia,
+  }),
+  /** 渠道解除绑定（`flow telegram unlink`）。 */
+  'channel.unlinked': z.strictObject({
+    channel: channelId,
+    chat: chatDigestSchema.meta({ description: '解除绑定的 chat id 的摘要' }),
+    via: inboxVia,
+  }),
+  'user.instruction': z.strictObject({
+    text: z.string().min(1).max(INBOX_BODY_MAX).meta({ description: '指令原文' }),
+    via: inboxVia.meta({ description: '指令来自哪个渠道' }),
+  }),
 } as const
 
 export type EventType = keyof typeof eventPayloads
@@ -318,6 +348,9 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'inbox.item_updated': 'none',
   'inbox.item_closed': 'none',
   'inbox.pushed': 'none',
+  'channel.rebound': 'none',
+  'channel.unlinked': 'none',
+  'user.instruction': 'workspace',
 }
 
 const scopeShape = (scope: Scope) =>
@@ -404,7 +437,15 @@ export interface TransitionRule {
 /** 每种任务事件的转换规则；`apply(event)` 与写入前的校验都以此为准。 */
 export const TASK_EVENT_RULES: Readonly<
   Record<
-    Exclude<EventType, `node.${string}` | `hub.${string}` | `inbox.${string}` | 'schedule.fired'>,
+    Exclude<
+      EventType,
+      | `node.${string}`
+      | `hub.${string}`
+      | `inbox.${string}`
+      | `user.${string}`
+      | `channel.${string}`
+      | 'schedule.fired'
+    >,
     TransitionRule
   >
 > = {

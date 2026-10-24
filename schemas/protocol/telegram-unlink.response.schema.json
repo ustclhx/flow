@@ -1,0 +1,30 @@
+{
+  "$id": "https://flow.local/schemas/protocol/telegram-unlink.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "unlinked": {
+          "type": "boolean",
+          "description": "false 表示原本就没有绑定"
+        }
+      },
+      "required": [
+        "unlinked"
+      ],
+      "additionalProperties": false,
+      "title": "POST /v1/telegram/unlink 响应"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}

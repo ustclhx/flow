@@ -8,6 +8,8 @@ export * from './secrets/index.ts'
 export {
   currentRuntime,
   type FetchHandler,
+  type OutboundFetch,
+  proxiedFetch,
   type RunningServer,
   type Runtime,
   type ServeOptions,

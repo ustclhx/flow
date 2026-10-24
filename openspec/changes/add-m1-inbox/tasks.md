@@ -28,8 +28,8 @@
 
 ## 5. Telegram 渠道
 
-- [ ] 5.1 Bot API 客户端（getUpdates 长轮询、sendMessage HTML 转义、editMessageText、answerCallbackQuery、代理配置）、offset 持久化、`flow telegram link` 绑定流程与 chat 白名单；验证用假的 Telegram HTTP 服务测试绑定、陌生 chat 被忽略、重启后不重复处理
-- [ ] 5.2 条目消息的渲染与内联按钮（callback_data 不超过 64 字节）、按钮操作与消息回改、回复消息到条目的映射、命令 `/inbox`、`/status`、`/capture`、`/ask`；验证 telegram-channel spec 的全部场景（假服务）
+- [x] 5.1 Bot API 客户端（getUpdates 长轮询、sendMessage HTML 转义、editMessageText、answerCallbackQuery、代理配置）、offset 持久化、`flow telegram link` 绑定流程与 chat 白名单；验证用假的 Telegram HTTP 服务测试绑定、陌生 chat 被忽略、重启后不重复处理
+- [x] 5.2 条目消息的渲染与内联按钮（callback_data 不超过 64 字节）、按钮操作与消息回改、回复消息到条目的映射、命令 `/inbox`、`/status`、`/capture`、`/ask`；验证 telegram-channel spec 的全部场景（假服务）
 
 ## 6. Web 页面
 

@@ -113,6 +113,21 @@ export interface ChannelPlugin {
    */
   start(onAction: InboundHandler): Promise<void>
   stop(): Promise<void>
+  /**
+   * 可选：插件自己报告的健康状况。`disabled` 非空时（例如 Telegram 返回 401，token 无效），
+   * 管理器不再调用该插件、状态报告为 `disabled` 并附上原因；密钥变化（`refresh()`）后重新创建插件。
+   * `ignored` 是被忽略的入站访问次数（例如陌生 chat 的消息），在 `flow hub status` 中报告。
+   */
+  health?(): ChannelHealth
+}
+
+export interface ChannelHealth {
+  disabled: string | null
+  ignored: number
+  /** 需要用户注意的情况（例如"可能有人在使用同一个 bot token"）。 */
+  warning?: string | null
+  /** 停用时插件自己下一次重试的时间（ISO）。 */
+  retry_at?: string | null
 }
 
 /**
@@ -149,4 +164,10 @@ export interface ChannelStatus {
   last_error: string | null
   /** 记为推送失败（op=failed）的条目数。 */
   failed_items: number
+  /** 被忽略的入站访问次数（插件报告）。 */
+  ignored_inbound: number
+  /** 插件报告的警告。 */
+  warning: string | null
+  /** 最近一次改绑（`channel.rebound`）的时间。 */
+  last_rebound_at: string | null
 }

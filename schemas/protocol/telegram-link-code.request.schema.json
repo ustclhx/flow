@@ -1,0 +1,14 @@
+{
+  "$id": "https://flow.local/schemas/protocol/telegram-link-code.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "rebind": {
+      "default": false,
+      "description": "已绑定时必须为 true 才发码（改绑到另一个账号）；改绑成功前会通知原 chat",
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "title": "POST /v1/telegram/link-code"
+}

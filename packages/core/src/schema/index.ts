@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { channelsConfigSchema } from '../channels/config.ts'
 import { inboxConfigSchema } from '../inbox/config.ts'
 import { inboxItemView } from '../inbox/schema.ts'
 import { ledgerSchemaEntries } from '../ledger/index.ts'
@@ -40,6 +41,11 @@ export function jsonSchemas(): Record<string, JsonSchema> {
       'input',
     ),
     'config/inbox.schema.json': toJson(inboxConfigSchema, 'config/inbox.schema.json', 'input'),
+    'config/channels.schema.json': toJson(
+      channelsConfigSchema,
+      'config/channels.schema.json',
+      'input',
+    ),
     'inbox/item.schema.json': toJson(inboxItemView, 'inbox/item.schema.json'),
   }
   for (const type of ENTRY_TYPES) {

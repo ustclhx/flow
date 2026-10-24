@@ -157,6 +157,19 @@ export const channelStatus = z.object({
     .min(0)
     .default(0)
     .meta({ description: '记为推送失败（放弃推送或同步）的条目数' }),
+  ignored_inbound: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .meta({ description: '被忽略的入站消息与按钮数（例如陌生 chat 发来的），自中枢启动起计' }),
+  warning: z.string().nullable().default(null).meta({
+    description: '需要用户注意的情况，例如"可能有人在使用同一个 bot token"',
+  }),
+  last_rebound_at: timestamp
+    .nullable()
+    .default(null)
+    .meta({ description: '最近一次改绑（channel.rebound）的时间' }),
 })
 export type ChannelStatusData = z.infer<typeof channelStatus>
 
@@ -279,6 +292,38 @@ export const uiLoginCodeData = z
   })
   .meta({ title: 'POST /v1/ui/login-code 响应' })
 export type UiLoginCodeData = z.infer<typeof uiLoginCodeData>
+
+/**
+ * Telegram 绑定码（add-m1-inbox 5.1，telegram-channel "绑定用户本人"）：`flow telegram link` 申请，
+ * 用户在 Telegram 中给 bot 发送 `/link <绑定码>`（或打开 `link_url`）。绑定码至少 64 位随机，
+ * 只在中枢内存中以摘要保存，10 分钟内有效，只能使用一次；仅 user。
+ */
+export const telegramLinkCodeRequest = z
+  .strictObject({
+    rebind: z.boolean().default(false).meta({
+      description: '已绑定时必须为 true 才发码（改绑到另一个账号）；改绑成功前会通知原 chat',
+    }),
+  })
+  .meta({ title: 'POST /v1/telegram/link-code' })
+export type TelegramLinkCodeRequest = z.input<typeof telegramLinkCodeRequest>
+
+/** `POST /v1/telegram/unlink`：解除 Telegram 绑定（仅 user）。 */
+export const telegramUnlinkData = z
+  .object({ unlinked: z.boolean().meta({ description: 'false 表示原本就没有绑定' }) })
+  .meta({ title: 'POST /v1/telegram/unlink 响应' })
+export type TelegramUnlinkData = z.infer<typeof telegramUnlinkData>
+
+export const telegramLinkCodeData = z
+  .object({
+    code: z.string().meta({ description: '一次性绑定码明文，只在申请时返回这一次' }),
+    command: z.string().meta({ description: '要发给 bot 的完整命令，例如 /link <绑定码>' }),
+    link_url: z.string().nullable().meta({
+      description: 't.me 深链接（打开后点"开始"即发送绑定码）；不知道 bot 用户名时为 null',
+    }),
+    expires_at: timestamp,
+  })
+  .meta({ title: 'POST /v1/telegram/link-code 响应' })
+export type TelegramLinkCodeData = z.infer<typeof telegramLinkCodeData>
 
 export const rebuildData = z
   .object({
@@ -650,6 +695,19 @@ export const ENDPOINTS = {
     path: '/v1/ui/login-code',
     auth: true,
     response: uiLoginCodeData,
+  },
+  'telegram-link-code': {
+    method: 'POST',
+    path: '/v1/telegram/link-code',
+    auth: true,
+    request: telegramLinkCodeRequest,
+    response: telegramLinkCodeData,
+  },
+  'telegram-unlink': {
+    method: 'POST',
+    path: '/v1/telegram/unlink',
+    auth: true,
+    response: telegramUnlinkData,
   },
   'tasks-create': {
     method: 'POST',

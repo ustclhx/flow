@@ -300,6 +300,36 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "ignored_inbound": {
+                "default": 0,
+                "description": "被忽略的入站消息与按钮数（例如陌生 chat 发来的），自中枢启动起计",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "warning": {
+                "default": null,
+                "description": "需要用户注意的情况，例如\"可能有人在使用同一个 bot token\"",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "last_rebound_at": {
+                "default": null,
+                "description": "最近一次改绑（channel.rebound）的时间",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -309,7 +339,10 @@
               "failures",
               "next_retry_at",
               "last_error",
-              "failed_items"
+              "failed_items",
+              "ignored_inbound",
+              "warning",
+              "last_rebound_at"
             ],
             "additionalProperties": false
           }

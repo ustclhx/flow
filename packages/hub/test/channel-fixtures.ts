@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { InboxItemAction, InboxLevel, InboxVia } from '@flow/core'
 import type {
   ChannelCallOptions,
+  ChannelHealth,
   ChannelMessage,
   ChannelPlugin,
   ChannelSpec,
@@ -44,6 +45,8 @@ export class MemoryChannel implements ChannelPlugin {
   started = 0
   stopped = 0
   handler: InboundHandler | undefined
+  /** 可选：模拟插件自己报告的健康状况（例如 token 无效）。 */
+  health?: () => ChannelHealth
   private n = 0
 
   constructor(
