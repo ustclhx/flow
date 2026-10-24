@@ -2,19 +2,23 @@ import { type FSWatcher, watch } from 'node:fs'
 import { join } from 'node:path'
 import { EMPTY_INBOX_CONFIG, flowPaths, type InboxConfig, loadInboxConfig } from '@flow/core'
 import type { LedgerStore } from '../ledger/store.ts'
+import type { Scheduler } from '../scheduler/index.ts'
 import type { HubClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
 import { createProposalWatcher, type ProposalWatcher } from './proposals.ts'
+import { createInboxPusher, type InboxPusher } from './pusher.ts'
 import { createInboxReactor, type InboxReactor } from './reactor.ts'
 
 export * from './actions.ts'
+export * from './cadence.ts'
 export * from './proposals.ts'
+export * from './pusher.ts'
 export * from './reactor.ts'
 export * from './routes.ts'
 
 /**
- * 中枢内的收件箱组件（add-m1-inbox 3.1）：分级配置（含热加载）、反应器、提案目录监听。
- * 推送节奏（3.3）与渠道（4.1）之后挂在这里。
+ * 中枢内的收件箱组件：分级与节奏配置（含热加载）、反应器、提案目录监听（3.1），推送节奏（3.3）。
+ * 渠道（4.1）之后挂在这里。
  */
 
 export interface InboxServiceOptions {
@@ -27,18 +31,24 @@ export interface InboxServiceOptions {
   /** 提案定时扫描间隔，默认 60 秒。 */
   proposalIntervalMs?: number
   debounceMs?: number
+  /** 内部定时规则（Decide 时间点、静默结束、每日摘要）挂在调度器上。 */
+  scheduler?: Pick<Scheduler, 'setInternalRules'>
+  /** 推送到期条目的回调（渠道管理器，4.1 接上）。 */
+  flush?: () => Promise<void>
+  staleKnowledge?: () => number | Promise<number>
 }
 
 export interface InboxService {
   reactor: InboxReactor
   proposals: ProposalWatcher
+  pusher: InboxPusher
   /** 当前生效的分级配置。 */
   config(): InboxConfig
   /** 重新读取 config/inbox.yaml；文件级错误时保留上一次的配置。 */
   reloadConfig(): Promise<void>
   /** 等反应器的队列处理完。 */
   idle(): Promise<void>
-  stop(): void
+  stop(): Promise<void>
 }
 
 export async function startInbox(o: InboxServiceOptions): Promise<InboxService> {
@@ -51,7 +61,9 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
     }
     current = loaded.data
     for (const issue of current.errors) o.logger?.warn('config/inbox.yaml 规则有误，已跳过', issue)
+    pusher?.reconfigure()
   }
+  let pusher: InboxPusher | undefined
   await reloadConfig()
 
   const config = () => current
@@ -70,6 +82,17 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
     ...(o.proposalIntervalMs !== undefined ? { intervalMs: o.proposalIntervalMs } : {}),
     ...(o.debounceMs !== undefined ? { debounceMs: o.debounceMs } : {}),
   })
+
+  pusher = createInboxPusher({
+    ledger: o.ledger,
+    clock: o.clock,
+    config,
+    ...(o.flush ? { flush: o.flush } : {}),
+    ...(o.scheduler ? { scheduler: o.scheduler } : {}),
+    ...(o.staleKnowledge ? { staleKnowledge: o.staleKnowledge } : {}),
+    ...(o.logger ? { logger: o.logger } : {}),
+  })
+  const activePusher = pusher
 
   reactor.start()
   let watcher: FSWatcher | undefined
@@ -93,15 +116,21 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
     await proposals.scan()
   }
 
+  // 反应器补处理完停机期间的事件之后再推送，避免推送随即被关闭的条目。
+  await reactor.idle()
+  await activePusher.start()
+
   return {
     reactor,
     proposals,
+    pusher: activePusher,
     config,
     reloadConfig,
     idle: () => reactor.idle(),
-    stop() {
+    async stop() {
       if (timer) clearTimeout(timer)
       watcher?.close()
+      activePusher.stop()
       proposals.stop()
       reactor.stop()
     },

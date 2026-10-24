@@ -1,5 +1,8 @@
 import { z } from 'zod'
 import {
+  channelId,
+  channelMessageKind,
+  channelRef,
   INBOX_BODY_MAX,
   INBOX_NOTE_MAX,
   INBOX_TITLE_MAX,
@@ -247,6 +250,20 @@ export const eventPayloads = {
     }),
     via: inboxVia.optional().meta({ description: '操作发起的渠道；缺省表示命令行或自动关闭' }),
   }),
+  /**
+   * 渠道推送记录（add-m1-inbox 3.3 / 4.1）：
+   * - `op: send`：消息已发出，`item_ids` 是消息里的条目（Decide 合并消息有多个）；
+   * - `op: update`：条目关闭后消息已改为"已处理"，`item_ids` 是这次同步了关闭状态的条目。
+   * 投影维护 `pushed_at`、`channels`（channel_refs_json）与 `channel_messages`，可重建。
+   * 条目关闭后仍可写入（推送与关闭可能交错）。
+   */
+  'inbox.pushed': z.strictObject({
+    channel: channelId,
+    ref: channelRef,
+    op: z.enum(['send', 'update']).default('send'),
+    kind: channelMessageKind.default('item'),
+    item_ids: z.array(inboxItemId).min(1).max(500),
+  }),
 } as const
 
 export type EventType = keyof typeof eventPayloads
@@ -281,6 +298,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'inbox.item_created': 'none',
   'inbox.item_updated': 'none',
   'inbox.item_closed': 'none',
+  'inbox.pushed': 'none',
 }
 
 const scopeShape = (scope: Scope) =>

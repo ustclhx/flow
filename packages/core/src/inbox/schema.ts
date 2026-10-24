@@ -60,7 +60,8 @@ export const inboxVia = z.enum(INBOX_VIA).meta({ description: '操作发起的�
  * - `superseded`：同一任务再次卡住（原因变了），由新条目取代；
  * - `proposal_accepted` / `proposal_rejected` / `proposal_removed`：提案已处理或已不存在；
  * - `answered`：提问已被答复（变更 ④）；
- * - `dismissed`：用户忽略（3.2）；`acted`：用户在条目上执行了操作（3.2）。
+ * - `dismissed`：用户忽略（3.2）；`acted`：用户在条目上执行了操作（3.2）；
+ * - `digested`：策略执行记录已写进每日摘要（3.3），不再单独保留。
  */
 export const INBOX_CLOSE_REASONS = [
   'task_running',
@@ -75,6 +76,7 @@ export const INBOX_CLOSE_REASONS = [
   'answered',
   'dismissed',
   'acted',
+  'digested',
 ] as const
 export type InboxCloseReason = (typeof INBOX_CLOSE_REASONS)[number]
 export const inboxCloseReason = z.enum(INBOX_CLOSE_REASONS).meta({ description: '条目关闭原因' })
@@ -96,6 +98,42 @@ export const inboxItemId = z
 export const INBOX_TITLE_MAX = 200
 export const INBOX_BODY_MAX = 4000
 export const INBOX_NOTE_MAX = 1000
+
+/**
+ * 推送渠道 id（notify-channel "渠道插件接口"）：例如 `telegram`、`ntfy`。
+ * 也用在 `inbox.pushed` 事件与条目的消息引用中。
+ */
+export const CHANNEL_ID_RE = /^[a-z][a-z0-9-]{0,31}$/
+export const channelId = z
+  .string()
+  .regex(CHANNEL_ID_RE, '渠道 id 应为小写字母开头的短名，例如 telegram')
+  .meta({ description: '推送渠道 id，例如 telegram' })
+
+/** 渠道内的消息引用（由渠道生成，中枢只保存不解析），例如 Telegram 的 `<chat_id>:<message_id>`。 */
+export const CHANNEL_REF_MAX = 256
+export const channelRef = z
+  .string()
+  .min(1)
+  .max(CHANNEL_REF_MAX)
+  .meta({ description: '渠道内的消息引用，由渠道生成' })
+
+/**
+ * 推送的消息形态：`item` 是单个条目（Interrupt、每日摘要），`batch` 是多条 Decide 合并成的一条消息。
+ */
+export const CHANNEL_MESSAGE_KINDS = ['item', 'batch'] as const
+export type ChannelMessageKind = (typeof CHANNEL_MESSAGE_KINDS)[number]
+export const channelMessageKind = z.enum(CHANNEL_MESSAGE_KINDS)
+
+/** 条目在某个渠道上的一条消息（`inbox.pushed` 折叠而来）。 */
+export const inboxChannelRef = z.strictObject({
+  channel: channelId,
+  ref: channelRef,
+  kind: channelMessageKind,
+  sent_at: timestamp,
+  /** 条目关闭后，消息已改为"已处理"的时间；未关闭或尚未同步时为 null。 */
+  synced_at: timestamp.nullable(),
+})
+export type InboxChannelRef = z.infer<typeof inboxChannelRef>
 
 /** 条目视图（3.2 的 `inbox_list` 与渠道都读它）。 */
 export const inboxItemView = z
@@ -119,6 +157,9 @@ export const inboxItemView = z
       .nullable()
       .meta({ description: '静默时段内生成的 Interrupt 条目顺延到此时推送（3.3）' }),
     pushed_at: timestamp.nullable().meta({ description: '首次推送到渠道的时间（4.1 维护）' }),
+    channels: z
+      .array(inboxChannelRef)
+      .meta({ description: '条目在各渠道上的消息（推送与"已处理"同步记录）' }),
     closed: z
       .strictObject({
         reason: inboxCloseReason,

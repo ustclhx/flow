@@ -176,6 +176,10 @@ const samples: Record<
     valid: { ...task, payload: { item_id: 'blk.12', reason: 'task_running', cause_seq: 13 } },
     invalid: { payload: { item_id: 'blk.12', reason: 'whatever' } },
   },
+  'inbox.pushed': {
+    valid: { payload: { channel: 'telegram', ref: '42:7', item_ids: ['blk.12'] } },
+    invalid: { payload: { channel: 'Tele Gram', ref: '42:7', item_ids: [] } },
+  },
 }
 
 const envelope = (type: EventType, body: Record<string, unknown>) => ({

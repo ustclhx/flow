@@ -1,4 +1,5 @@
 import {
+  fail,
   loadSchedulesConfig,
   ok,
   type Result,
@@ -17,7 +18,24 @@ export interface SchedulerOptions {
   home: string
   logger?: Pick<HubLogger, 'warn'>
 }
+/**
+ * 中枢内部的定时规则（add-m1-inbox design D8）：与 `schedules.yaml` 的规则共用触发与睡眠补发机制，
+ * 但 id 以 `<命名空间>:` 开头（例如 `inbox:digest`），不写进 `schedules.yaml`，
+ * 触发时不写 `schedule.fired`，而是回调（回调方自己保证幂等，例如按日期确定的条目 id）。
+ * 时间按系统本地时区计算。
+ */
+export interface InternalRule {
+  id: string
+  cron: string
+  onFire(planned: Date, missed: boolean): void | Promise<void>
+}
+
 export interface Scheduler {
+  /**
+   * 替换某个命名空间（例如 `inbox:`）下的全部内部规则；cron 写错时整组不生效并返回错误。
+   * 不受 `reload()` 影响。某个 id 第一次设置时，若中枢停机期间错过了它的触发时间，补发最近一次（missed）。
+   */
+  setInternalRules(prefix: string, rules: readonly InternalRule[]): Result<{ loaded: number }>
   /** 重新读取配置并替换定时器；文件级错误也可由 errors() 查询。 */
   reload(): Promise<Result<{ loaded: number }>>
   /** 睡眠检测发现唤醒后调用；每条规则最多补发最近一次。 */
@@ -28,9 +46,12 @@ export interface Scheduler {
 }
 
 interface ActiveRule {
-  rule: ScheduleRule
+  id: string
   cron: Cron
   cancel: () => void
+  fire: (planned: Date, missed: boolean) => void
+  /** 最近一次触发的计划时间（毫秒）：睡眠补发与定时器先后到达时不重复触发。 */
+  last?: number
 }
 // Node 的 setTimeout 超出有符号 32 位范围会退化为 1ms；分段等待时仍使用绝对计划时间。
 const MAX_TIMEOUT_MS = 2_147_483_647
@@ -42,24 +63,39 @@ export async function createScheduler(o: SchedulerOptions): Promise<Scheduler> {
   const latest = ledger.latestEvent()
   const previous = latest?.type === 'hub.started' ? ledger.latestEvent(latest.seq) : latest
   let since = previous ? Date.parse(previous.ts) : clock.now()
+  /** 本次启动前账本的最后位置：内部规则首次设置时，据此补发停机期间错过的最近一次。 */
+  const bootSince = since
+  const seenInternal = new Set<string>()
   let active: ActiveRule[] = []
+  /** 内部规则，按命名空间分组。 */
+  const internal = new Map<string, ActiveRule[]>()
+  const allRules = () => [...active, ...[...internal.values()].flat()]
   let errors: ScheduleError[] = []
   let stopped = false
   let generation = 0
 
-  const emit = (entry: ActiveRule, planned: Date, missed: boolean) => {
+  const emitter = (rule: ScheduleRule) => (planned: Date, missed: boolean) => {
     const planned_at = planned.toISOString()
-    if (ledger.hasScheduleFire(entry.rule.id, planned_at)) return
+    if (ledger.hasScheduleFire(rule.id, planned_at)) return
     const result = ledger.append(
       {
         type: 'schedule.fired',
-        workspace: entry.rule.workspace,
-        payload: { rule_id: entry.rule.id, planned_at, payload: entry.rule.payload, missed },
+        workspace: rule.workspace,
+        payload: { rule_id: rule.id, planned_at, payload: rule.payload, missed },
       },
       { actor: 'hub' },
     )
     if (!result.ok && result.error.code !== 'duplicate_fire') {
       logger.warn('定时事件写入失败', result.error)
+    }
+  }
+  const emit = (entry: ActiveRule, planned: Date, missed: boolean) => {
+    if (entry.last !== undefined && planned.getTime() <= entry.last) return
+    entry.last = planned.getTime()
+    try {
+      entry.fire(planned, missed)
+    } catch (err) {
+      logger.warn('定时规则回调失败', { rule_id: entry.id, error: String(err) })
     }
   }
   // croner 按秒排除 ref 所在秒；以后一秒为参照，包含当前秒的计划时间。
@@ -95,7 +131,7 @@ export async function createScheduler(o: SchedulerOptions): Promise<Scheduler> {
   const resume = () => {
     if (stopped) return
     const now = clock.now()
-    for (const entry of active) {
+    for (const entry of allRules()) {
       const recent = previousRun(entry, now)
       if (recent && recent.getTime() > since) emit(entry, recent, true)
       arm(entry)
@@ -104,6 +140,50 @@ export async function createScheduler(o: SchedulerOptions): Promise<Scheduler> {
   }
 
   const scheduler: Scheduler = {
+    setInternalRules(prefix, rules) {
+      if (!/^[a-z]+:$/.test(prefix)) {
+        return fail('usage', 'invalid_prefix', `内部规则的命名空间应形如 inbox:，收到 ${prefix}`)
+      }
+      const built: ActiveRule[] = []
+      for (const rule of rules) {
+        if (!rule.id.startsWith(prefix) || rule.id.length === prefix.length) {
+          return fail('usage', 'invalid_rule', `内部规则 ${rule.id} 的 id 应以 ${prefix} 开头`)
+        }
+        try {
+          const cron = new Cron(rule.cron, { paused: true })
+          cron.nextRun(new Date(clock.now()))
+          built.push({
+            id: rule.id,
+            cron,
+            cancel: () => {},
+            fire: (planned, missed) => {
+              void Promise.resolve(rule.onFire(planned, missed)).catch((err) =>
+                logger.warn('内部定时规则回调失败', { rule_id: rule.id, error: String(err) }),
+              )
+            },
+          })
+        } catch (err) {
+          for (const b of built) b.cron.stop()
+          return fail('usage', 'invalid_rule', `内部规则 ${rule.id} 的 cron 无效：${String(err)}`)
+        }
+      }
+      for (const entry of internal.get(prefix) ?? []) {
+        entry.cancel()
+        entry.cron.stop()
+      }
+      if (stopped) return ok({ loaded: 0 })
+      internal.set(prefix, built)
+      const now = clock.now()
+      for (const entry of built) {
+        if (!seenInternal.has(entry.id)) {
+          seenInternal.add(entry.id)
+          const recent = previousRun(entry, now)
+          if (recent && recent.getTime() > bootSince) emit(entry, recent, true)
+        }
+        arm(entry)
+      }
+      return ok({ loaded: built.length })
+    },
     async reload() {
       const version = ++generation
       const loaded = await loadSchedulesConfig(o.home)
@@ -131,7 +211,7 @@ export async function createScheduler(o: SchedulerOptions): Promise<Scheduler> {
           })
           // 提前计算，保证解析失败不会留到定时器回调中才暴露。
           cron.nextRun(new Date(clock.now()))
-          active.push({ rule, cron, cancel: () => {} })
+          active.push({ id: rule.id, cron, cancel: () => {}, fire: emitter(rule) })
         } catch (err) {
           errors.push({
             rule_id: rule.id,
@@ -151,11 +231,12 @@ export async function createScheduler(o: SchedulerOptions): Promise<Scheduler> {
     stop() {
       stopped = true
       generation++
-      for (const entry of active) {
+      for (const entry of allRules()) {
         entry.cancel()
         entry.cron.stop()
       }
       active = []
+      internal.clear()
     },
   }
   await scheduler.reload()

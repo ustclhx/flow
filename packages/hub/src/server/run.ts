@@ -182,8 +182,8 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         { path: '/', app: protocol.routes },
       ]
     },
-    onStop: () => {
-      inbox?.stop()
+    onStop: async () => {
+      await inbox?.stop()
       scheduler?.stop()
       protocol?.stop()
       stopWatch?.()
@@ -241,6 +241,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     home: options.home,
     clock,
     logger,
+    scheduler,
     ...(options.inbox?.watch !== undefined ? { watch: options.inbox.watch } : {}),
     ...(options.inbox?.proposalIntervalMs !== undefined
       ? { proposalIntervalMs: options.inbox.proposalIntervalMs }

@@ -7,6 +7,9 @@ import { workspaceRef } from '../schema/common.ts'
 import { formatZodIssues } from '../validation-issue.ts'
 import { loadWorkspaces } from '../workspaces.ts'
 
+/** 中枢内部定时规则保留的 id 前缀（add-m1-inbox D8：例如 `inbox:digest`），schedules.yaml 不能用。 */
+export const RESERVED_RULE_PREFIXES: readonly string[] = ['inbox:']
+
 export const scheduleRuleSchema = z.strictObject({
   id: z.string().min(1),
   cron: z.string().min(1),
@@ -89,6 +92,15 @@ export async function loadSchedulesConfig(home: string): Promise<Result<Schedule
       return
     }
     ids.add(rule.id)
+    if (RESERVED_RULE_PREFIXES.some((prefix) => rule.id.startsWith(prefix))) {
+      errors.push({
+        ...context,
+        field: 'id',
+        code: 'reserved_rule_id',
+        message: `规则 id 不能以 ${rule.id.split(':')[0]}: 开头（中枢内部规则保留）`,
+      })
+      return
+    }
     if (!refs.has(rule.workspace)) {
       errors.push({
         ...context,
