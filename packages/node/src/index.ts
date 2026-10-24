@@ -5,6 +5,25 @@
  */
 export { loadNodeConfig, type NodeConfig, nodeConfigSchema, resolveHubUrl } from '@flow/core'
 export {
+  type ApprovalPrecheck,
+  type ApprovalRequest,
+  buildOptions as buildClaudeSdkOptions,
+  CLAUDE_SDK_EXECUTOR,
+  type ClaudeQueryFn,
+  type ClaudeQueryHandle,
+  type ClaudeSdkExecutorOptions,
+  type ClaudeSdkPermissions,
+  classifyClaudeSdk,
+  claudeSdkPermissions,
+  costOf,
+  createClaudeSdkExecutor,
+  DEFAULT_APPROVAL_TIMEOUT_MINUTES,
+  DEFAULT_CLAUDE_MODEL,
+  renderReply,
+  renderTaskPrompt,
+  summarizeToolInput,
+} from './claude-sdk.ts'
+export {
   createNodeHubClient,
   type FetchLike,
   type NodeHubClient,

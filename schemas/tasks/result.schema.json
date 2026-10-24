@@ -116,6 +116,49 @@
       "description": "失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）",
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "session": {
+      "description": "执行器会话 id（例如 Claude Agent SDK 的 session_id），便于事后查看或恢复",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "cost": {
+      "type": "object",
+      "properties": {
+        "usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "估算费用（美元）"
+        },
+        "turns": {
+          "description": "模型往返轮数",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "usd"
+      ],
+      "additionalProperties": false,
+      "title": "Task cost",
+      "description": "执行器上报的费用与用量（估算）"
     }
   },
   "required": [

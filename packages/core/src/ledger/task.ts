@@ -365,6 +365,18 @@ export const verifyOutcome = z
   .meta({ title: 'Verify outcome', description: '一条验收命令的执行结果' })
 export type VerifyOutcome = z.infer<typeof verifyOutcome>
 
+/** 执行器上报的费用与用量（估算值，不是账单）。 */
+export const taskCost = z
+  .strictObject({
+    usd: z.number().min(0).meta({ description: '估算费用（美元）' }),
+    turns: z.number().int().min(0).optional().meta({ description: '模型往返轮数' }),
+    duration_ms: z.number().int().min(0).optional(),
+    input_tokens: z.number().int().min(0).optional(),
+    output_tokens: z.number().int().min(0).optional(),
+  })
+  .meta({ title: 'Task cost', description: '执行器上报的费用与用量（估算）' })
+export type TaskCost = z.infer<typeof taskCost>
+
 export const taskResult = z
   .strictObject({
     summary: z.string().min(1).meta({ description: '结果摘要' }),
@@ -377,6 +389,10 @@ export const taskResult = z
       .regex(/^[a-z][a-z0-9_]*$/)
       .optional()
       .meta({ description: '失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）' }),
+    session: z.string().min(1).max(200).optional().meta({
+      description: '执行器会话 id（例如 Claude Agent SDK 的 session_id），便于事后查看或恢复',
+    }),
+    cost: taskCost.optional(),
   })
   .meta({ title: 'Flow task result', description: '任务结束（done / failed）时的结果' })
 export type TaskResult = z.infer<typeof taskResult>
