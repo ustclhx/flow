@@ -410,6 +410,48 @@ describe('策略判定优先级表', () => {
 })
 
 describe('策略条件、保护与审计明细', () => {
+  test.each([
+    {
+      command: 'gh pr merge 1',
+      rules: [rule('ws/a', 'pr.merge')],
+      level: 'auto',
+    },
+    {
+      command: 'gh pr create && gh pr merge',
+      rules: [rule('*', 'pr.create', 'auto-report')],
+      level: 'user',
+    },
+    {
+      command: "bash -c 'gh pr merge'",
+      rules: [rule('ws/a', 'pr.merge')],
+      level: 'user',
+    },
+    {
+      command: 'ls',
+      rules: [rule('*', 'tool:Bash')],
+      level: 'auto',
+    },
+    {
+      command: 'gh pr create',
+      rules: [rule('*', 'pr.create', 'auto-report')],
+      level: 'auto-report',
+    },
+  ])('工具动作兜底：$command → $level', ({ command, rules, level }) => {
+    const actions = classifyAction({ tool: 'Bash', command })
+    const result = decide(indexed(...rules), {
+      scope: { workspace: 'ws/a', role: 'dev' },
+      actions,
+      command,
+    })
+    expect(result.level).toBe(level)
+    expect(result.actions[0]).toMatchObject({
+      action: 'tool:Bash',
+      level: command === 'ls' ? 'auto' : 'skipped',
+      guarded: false,
+    })
+    if (command !== 'ls') expect(result.actions[0]?.matched_rules).toEqual([])
+  })
+
   test('无匹配、空动作以及任一未覆盖动作都交给用户；notify 保留最高提醒级别', () => {
     expect(decide([], request)).toEqual({
       level: 'user',
@@ -418,14 +460,14 @@ describe('策略条件、保护与审计明细', () => {
     })
     expect(decide(indexed(rule('other')), request).level).toBe('user')
     expect(decide(indexed(rule()), { ...request, actions: [] }).level).toBe('user')
-    const multi = { ...request, actions: ['tool:Bash', 'git.push'] }
+    const multi = { ...request, actions: ['tool:Bash', 'git.push', 'pr.merge'] }
     expect(decide(indexed(rule()), multi).level).toBe('user')
     expect(decide(indexed(rule('*', 'git.push', 'notify')), multi).level).toBe('notify')
   })
 
-  test('工具与具体动作逐一判定；保留命中内容、原始序号、并列规则，动作和汇总规则去重', () => {
+  test('具体动作存在时忽略工具规则；保留命中内容、原始序号、并列规则，动作和汇总规则去重', () => {
     const rules = indexed(
-      rule('*', 'tool:*', 'auto'),
+      rule('*', 'tool:*', 'notify'),
       rule('dev', 'git.push', 'auto-report'),
       rule('dev', 'git.push', 'auto-report'),
     )
@@ -435,10 +477,10 @@ describe('策略条件、保护与审计明细', () => {
     })
     expect(result).toEqual({
       level: 'auto-report',
-      matched_rules: rules,
+      matched_rules: rules.slice(1),
       actions: [
-        { action: 'tool:Bash', level: 'auto', matched_rules: rules.slice(0, 1), guarded: false },
-        { action: 'tool:Read', level: 'auto', matched_rules: rules.slice(0, 1), guarded: false },
+        { action: 'tool:Bash', level: 'skipped', matched_rules: [], guarded: false },
+        { action: 'tool:Read', level: 'skipped', matched_rules: [], guarded: false },
         { action: 'git.push', level: 'auto-report', matched_rules: rules.slice(1), guarded: false },
       ],
     })
@@ -449,7 +491,7 @@ describe('策略条件、保护与审计明细', () => {
     expect(decide(indexed(rule('*', '*')), { ...request, actions })).toMatchObject({
       level: 'draft-approve',
       actions: [
-        { action: 'tool:Bash', level: 'auto', guarded: false },
+        { action: 'tool:Bash', level: 'skipped', guarded: false },
         { action: 'pr.merge', level: 'draft-approve', guarded: true },
       ],
     })

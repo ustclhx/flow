@@ -40,13 +40,20 @@ shell 解释器、`eval`、`source`、点号命令与 Python/Node/Ruby/Perl 解�
 `policy.edit`。此外，命令文本只要包含 `policies.yaml` 就增加 `policy.edit`，包括读取、
 输出文字或备份文件名等可能的误报。不访问文件系统或解析符号链接。
 
-`decide(config.rules, request)` 是纯函数。workspace 使用完整的 `ws/<id>`；每个动作
-分别按 workspace、角色、全局排序，同层精确 action 优先，其余通配模式一律并列，最后
+`decide(config.rules, request)` 是纯函数。workspace 使用完整的 `ws/<id>`。
+`tool:<名称>` 只作为兜底：请求中存在任何非 `tool:` 开头的具体动作（包括 `shell.opaque`）
+时，只按具体动作判定，工具动作明细的 `level` 为 `skipped`、命中规则为空，不参与档位
+合并或汇总命中规则。没有具体动作时才按工具动作判定，例如 `ls` 可由 `tool:Bash` 的
+`auto` 规则放行。每个参与判定的动作分别按 workspace、角色、全局排序，同层精确 action
+优先，其余通配模式一律并列，最后
 取最保守档位。`when` 不增加具体程度：条件之间按且组合，命令前缀按归一后的词边界匹配，
 串联请求的每段命令都须满足；每个请求路径须匹配至少一个模式。路径 `*` 不跨 `/`，
 `**` 跨目录，`?` 匹配单字符，其余字符按字面处理。缺少条件输入时不匹配该规则。
 
-无匹配动作返回 `user`；只配具体命令动作、未覆盖工具动作时，整个请求仍需用户处理。
+每个参与判定的动作都必须命中规则，否则该动作返回 `user`，最终取最保守的结果。
+只配置 workspace 的 `pr.merge: auto` 即可放行直接的 `gh pr merge`，无需另配工具规则；
+但 `gh pr create && gh pr merge` 必须同时覆盖两个具体动作。`bash -c 'gh pr merge'`
+还包含 `shell.opaque` 等敏感动作，只配置 `pr.merge` 仍交给用户处理。
 合并次序为 `notify > user > draft-approve > auto-report > auto`，空动作也返回 `user`。
 **安全底线是：敏感动作只能由显式规则放行，识别不确定时按敏感处理。**
 `shell.opaque` 和上述四个敏感动作均只有具体 workspace 或角色 scope 加精确 action

@@ -15,7 +15,8 @@ export interface PolicyRequest {
 }
 export interface ActionDecision {
   action: string
-  level: PolicyDecisionLevel
+  /** 已识别出具体动作时，工具动作仅留作来源明细，不参与判定。 */
+  level: PolicyDecisionLevel | 'skipped'
   /** 最高具体程度的全部规则；按保守档位、原始序号排序，首条决定档位。 */
   matched_rules: IndexedPolicyRule[]
   /** 自动档位因缺少显式授权而提升至 draft-approve。 */
@@ -89,7 +90,12 @@ export function decide(
   rules: readonly IndexedPolicyRule[],
   request: PolicyRequest,
 ): PolicyDecision {
-  const actions = [...new Set(request.actions)].map((action): ActionDecision => {
+  const uniqueActions = [...new Set(request.actions)]
+  const hasSpecificAction = uniqueActions.some((action) => !action.startsWith('tool:'))
+  const actions = uniqueActions.map((action): ActionDecision => {
+    if (hasSpecificAction && action.startsWith('tool:')) {
+      return { action, level: 'skipped', matched_rules: [], guarded: false }
+    }
     const candidates = rules.filter(
       ({ rule }) =>
         scopeRank(rule.scope, request) >= 0 &&
@@ -113,7 +119,9 @@ export function decide(
   })
   const level = actions.reduce<PolicyDecisionLevel>(
     (current, action) =>
-      CONSERVATISM[action.level] > CONSERVATISM[current] ? action.level : current,
+      action.level !== 'skipped' && CONSERVATISM[action.level] > CONSERVATISM[current]
+        ? action.level
+        : current,
     actions.length ? 'auto' : 'user',
   )
   const matched = new Map<number, IndexedPolicyRule>()
