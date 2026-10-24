@@ -124,6 +124,11 @@
               "type": "string",
               "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
               "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+            },
+            "reason": {
+              "description": "失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）",
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
             }
           },
           "required": [
@@ -265,6 +270,11 @@
               "type": "string",
               "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
               "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+            },
+            "reason": {
+              "description": "失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）",
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
             }
           },
           "required": [
@@ -317,6 +327,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "session": {
+          "description": "执行器会话 id，回复后下一次执行据此恢复",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
         }
       },
       "required": [

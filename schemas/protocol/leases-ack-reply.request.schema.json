@@ -1,0 +1,30 @@
+{
+  "$id": "https://flow.local/schemas/protocol/leases-ack-reply.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "lease_token": {
+      "type": "string",
+      "minLength": 16
+    },
+    "reply_id": {
+      "type": "string",
+      "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
+      "description": "回复 id，由中枢在收到回复时分配"
+    },
+    "outcome": {
+      "default": "delivered",
+      "type": "string",
+      "enum": [
+        "delivered",
+        "not_running"
+      ]
+    }
+  },
+  "required": [
+    "lease_token",
+    "reply_id"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/leases/:id/ack-reply"
+}

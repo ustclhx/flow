@@ -251,9 +251,11 @@ async function runSeed(seed: number) {
               ],
               `node:${node}`,
             )
-          else if (op === 'blocked')
+          else if (op === 'blocked') {
+            // 交互式执行器卡住时继续持有租约（D7a）；无头执行器结束这一轮、释放租约。
+            const held = chance(0.5)
             write(
-              'task.blocked',
+              held ? 'task.blocked(lease_held)' : 'task.blocked',
               [
                 {
                   ...base,
@@ -262,13 +264,15 @@ async function runSeed(seed: number) {
                     reason: pick(BLOCKED_REASONS),
                     message: '卡住',
                     ...(chance(0.5) ? { tail: ['a', 'b'] } : {}),
+                    ...(chance(0.3) ? { session: `s-${step}` } : {}),
                     node_id: node,
+                    lease_held: held,
                   },
                 },
               ],
               `node:${node}`,
             )
-          else if (op === 'cancel_requested')
+          } else if (op === 'cancel_requested')
             write(
               'task.cancel_requested',
               [{ ...base, type: 'task.cancel_requested', payload: {} }],
@@ -311,14 +315,78 @@ async function runSeed(seed: number) {
           break
         }
         case 'blocked': {
-          const op = pick(['unblocked', 'requeued', 'cancelled', 'failed'] as const)
-          if (op === 'unblocked')
+          const held = lease !== null
+          const pending = store.pendingReply(t.id)
+          const session = task?.blocked?.session
+          const ops: string[] = ['requeued', 'cancelled', 'failed']
+          if (!pending) ops.push('replied', 'replied')
+          if (held) {
+            ops.push('unblocked', 'cancel_requested', 'lease_expired')
+            if (pending) ops.push('unblocked_reply', 'unblocked_reply', 'not_running')
+          }
+          const op = pick(ops)
+          const replyId = `r-${seed}-${step}`
+          const requeueWith = (id: string) =>
+            ({
+              ...base,
+              type: 'task.requeued_with_reply',
+              payload: { reply_id: id, ...(session ? { session } : {}) },
+            }) as const
+          if (op === 'replied') {
+            const kind = pick(['text', 'approve', 'deny'] as const)
+            const replied = {
+              ...base,
+              type: 'task.replied',
+              payload: {
+                reply_id: replyId,
+                kind,
+                ...(kind === 'text' || chance(0.3) ? { text: '答复' } : {}),
+              },
+            } as const
+            if (held) write('task.replied', [replied], 'user')
+            else write('task.replied+requeued_with_reply', [replied, requeueWith(replyId)], 'user')
+          } else if (op === 'unblocked_reply' && pending)
+            write(
+              'task.unblocked(reply)',
+              [
+                {
+                  ...base,
+                  type: 'task.unblocked',
+                  payload: { reply_id: pending.id, note: '已送达' },
+                },
+              ],
+              `node:${node}`,
+            )
+          else if (op === 'not_running' && pending)
+            write('task.requeued_with_reply', [requeueWith(pending.id)], `node:${node}`)
+          else if (op === 'unblocked')
             write(
               'task.unblocked',
-              [{ ...base, type: 'task.unblocked', payload: chance(0.5) ? { note: '答复' } : {} }],
+              [{ ...base, type: 'task.unblocked', payload: chance(0.5) ? { note: '恢复' } : {} }],
+              `node:${node}`,
+            )
+          else if (op === 'cancel_requested')
+            write(
+              'task.cancel_requested(blocked)',
+              [{ ...base, type: 'task.cancel_requested', payload: {} }],
               'user',
             )
-          else if (op === 'requeued')
+          else if (op === 'lease_expired' && lease) {
+            const expired = {
+              ...base,
+              type: 'task.lease_expired',
+              payload: {
+                lease_id: lease.lease_id,
+                node_id: lease.node_id,
+                expired_at: lease.expires_at,
+                attempt: lease.attempt,
+              },
+            } as const
+            write(
+              'task.lease_expired(blocked)',
+              pending ? [expired, requeueWith(pending.id)] : [expired],
+            )
+          } else if (op === 'requeued')
             write(
               'task.requeued(manual)',
               [{ ...base, type: 'task.requeued', payload: { reason: 'manual' } }],
@@ -372,7 +440,14 @@ describe('性质：增量投影 == 重建投影', () => {
       'task.done',
       'task.failed',
       'task.blocked',
+      'task.blocked(lease_held)',
       'task.unblocked',
+      'task.unblocked(reply)',
+      'task.replied',
+      'task.replied+requeued_with_reply',
+      'task.requeued_with_reply',
+      'task.cancel_requested(blocked)',
+      'task.lease_expired(blocked)',
       'task.requeued(manual)',
       'task.cancel_requested',
       'task.cancelled',

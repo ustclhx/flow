@@ -230,7 +230,7 @@ describe('任务视图', () => {
     started_at: '2026-10-24T08:00:05.000Z',
     finished_at: null,
     cancel_requested: false,
-    blocked: { reason: 'question', message: '用哪个分支？' },
+    blocked: { reason: 'question', message: '用哪个分支？', lease_held: false },
     lease: null,
     result: null,
     created_by: 'agent:supervisor',

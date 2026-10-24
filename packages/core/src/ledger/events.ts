@@ -2,7 +2,15 @@ import { z } from 'zod'
 import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
-import { blockedReason, canTransition, type TaskStatus, taskContract, taskResult } from './task.ts'
+import {
+  blockedReason,
+  canTransition,
+  replyId,
+  replyKind,
+  type TaskStatus,
+  taskContract,
+  taskResult,
+} from './task.ts'
 
 /**
  * 账本事件（design D2：事件类型集中定义在这里，导出到 `schemas/events/`）。
@@ -62,9 +70,41 @@ export const eventPayloads = {
       .optional()
       .meta({ description: '卡住时终端或输出的末尾若干行' }),
     node_id: nodeId.optional(),
+    lease_held: z.boolean().default(false).meta({
+      description:
+        'true：交互式执行器的 worker 还活着，节点继续持有并续约租约（D7a）；false：这一轮执行已结束，租约随之释放',
+    }),
+    session: z
+      .string()
+      .min(1)
+      .max(512)
+      .optional()
+      .meta({ description: '执行器的会话 id；带回复重新排队时附到下一次执行（D6）' }),
   }),
   'task.unblocked': z.strictObject({
     note: z.string().optional().meta({ description: '解除卡住的说明，例如用户的答复摘要' }),
+    reply_id: replyId
+      .optional()
+      .meta({ description: '因送达这条回复而解除卡住（ack-reply）；没有时为执行器自行恢复' }),
+  }),
+  'task.replied': z
+    .strictObject({
+      reply_id: replyId,
+      kind: replyKind,
+      text: z.string().min(1).max(16_384).optional().meta({ description: '回复文字或拒绝理由' }),
+    })
+    .refine((p) => p.kind !== 'text' || p.text !== undefined, {
+      message: '文字回复必须带 text',
+      path: ['text'],
+    }),
+  'task.requeued_with_reply': z.strictObject({
+    reply_id: replyId,
+    session: z
+      .string()
+      .min(1)
+      .max(512)
+      .optional()
+      .meta({ description: '上一轮卡住时上报的会话 id，下一次执行据此恢复' }),
   }),
   'task.requeued': z.strictObject({
     reason: z.enum(['lease_expired', 'manual']).meta({
@@ -143,6 +183,8 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task.failed': 'task',
   'task.blocked': 'task',
   'task.unblocked': 'task',
+  'task.replied': 'task',
+  'task.requeued_with_reply': 'task',
   'task.requeued': 'task',
   'task.cancel_requested': 'task',
   'task.cancelled': 'task',
@@ -249,10 +291,13 @@ export const TASK_EVENT_RULES: Readonly<
   'task.failed': { from: ['running', 'verifying', 'blocked'], to: 'failed' },
   'task.blocked': { from: ['running', 'verifying'], to: 'blocked' },
   'task.unblocked': { from: ['blocked'], to: 'running' },
+  'task.replied': { from: ['blocked'], to: 'unchanged' },
+  'task.requeued_with_reply': { from: ['blocked'], to: 'queued' },
   'task.requeued': { from: ['blocked', 'running', 'verifying'], to: 'queued' },
-  'task.cancel_requested': { from: ['running', 'verifying'], to: 'unchanged' },
+  // blocked：交互式执行器卡住期间仍持有租约（D7a），可以请求取消、租约也可能过期。
+  'task.cancel_requested': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   'task.cancelled': { from: ['queued', 'running', 'verifying', 'blocked'], to: 'cancelled' },
-  'task.lease_expired': { from: ['running', 'verifying'], to: 'unchanged' },
+  'task.lease_expired': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
 }
 
 export const isTaskEventType = (type: EventType): type is keyof typeof TASK_EVENT_RULES =>

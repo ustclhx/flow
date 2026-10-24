@@ -65,11 +65,23 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
           "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+        },
+        "lease_held": {
+          "default": false,
+          "description": "true：交互式执行器的 worker 还活着，节点继续持有并续约租约（D7a）；false：这一轮执行已结束，租约随之释放",
+          "type": "boolean"
+        },
+        "session": {
+          "description": "执行器的会话 id；带回复重新排队时附到下一次执行（D6）",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
         }
       },
       "required": [
         "reason",
-        "message"
+        "message",
+        "lease_held"
       ],
       "additionalProperties": false
     }

@@ -113,52 +113,116 @@ export const verifyStep = z
   .meta({ title: 'Verify step', description: '一条验收命令' })
 export type VerifyStep = z.infer<typeof verifyStep>
 
+/**
+ * fake 执行器脚本的一步（add-m1-executors 1.2：覆盖卡住检测的各种情形）。按顺序执行：
+ * - `output`：上报一条输出（kind=output）；
+ * - `wait`：等待若干毫秒（期间没有任何活动，可用来触发无进展计时）；
+ * - `idle`：上报"worker 停下了"的信号（status 活动，`data.idle=true`，可附带 hint），
+ *   节点随即调用执行器的 `classify` 判定卡住原因；
+ * - `await_reply`：等待节点送达回复（`deliver`），收到后上报一条"收到回复"的输出；
+ * - `resumed`：上报"worker 自行恢复"的信号（`data.resumed=true`）；
+ * - `exit`：模拟进程意外退出（附退出码），执行到此结束；
+ * - `hang`：永远不结束；`ignore_cancel` 为 true 时连取消也不理会（测试超时强制结束）。
+ */
+export const fakeStep = z
+  .discriminatedUnion('do', [
+    z.strictObject({ do: z.literal('output'), text: z.string() }),
+    z.strictObject({ do: z.literal('wait'), ms: z.number().int().min(0).max(86_400_000) }),
+    z.strictObject({
+      do: z.literal('idle'),
+      hint: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .meta({ description: '随 idle 信号附带的结构化信息，交给 classify' }),
+    }),
+    z.strictObject({ do: z.literal('await_reply') }),
+    z.strictObject({ do: z.literal('resumed') }),
+    z.strictObject({
+      do: z.literal('exit'),
+      code: z.number().int().nullable().meta({ description: '退出码；被信号终止时为 null' }),
+      signal: z.string().min(1).optional(),
+    }),
+    z.strictObject({ do: z.literal('hang'), ignore_cancel: z.boolean().default(false) }),
+  ])
+  .meta({ title: 'Fake executor step' })
+export type FakeStep = z.infer<typeof fakeStep>
+
+const fakeShape = {
+  outcome: z
+    .enum(['done', 'failed', 'blocked'])
+    .default('done')
+    .meta({ description: '模拟的结束方式' }),
+  delay_ms: z
+    .number()
+    .int()
+    .min(0)
+    .max(86_400_000)
+    .default(0)
+    .meta({ description: '结束前等待的毫秒数，用于模拟长时间运行' }),
+  blocked_reason: blockedReason
+    .optional()
+    .meta({ description: 'outcome=blocked 时必填的卡住原因' }),
+  message: z
+    .string()
+    .min(1)
+    .optional()
+    .meta({ description: '卡住或失败时的说明；done 时作为结果摘要' }),
+  activity: z
+    .array(z.string())
+    .max(1000)
+    .default([])
+    .meta({ description: '执行期间依次上报的输出片段（kind=output）' }),
+  script: z
+    .array(fakeStep)
+    .max(1000)
+    .optional()
+    .meta({ description: '在 activity / delay_ms 之前依次执行的脚本步骤' }),
+  session: z
+    .string()
+    .min(1)
+    .optional()
+    .meta({ description: '以 blocked 结束时上报的会话 id（模拟无头执行器的 resume）' }),
+}
+
+type FakeOutcomeFields = { outcome: string; blocked_reason?: unknown }
+const checkBlockedReason = (v: FakeOutcomeFields, ctx: z.RefinementCtx) => {
+  if (v.outcome === 'blocked' && v.blocked_reason === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['blocked_reason'],
+      message: 'outcome 为 blocked 时必须提供 blocked_reason',
+    })
+  }
+  if (v.outcome !== 'blocked' && v.blocked_reason !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['blocked_reason'],
+      message: '只有 outcome 为 blocked 时才能提供 blocked_reason',
+    })
+  }
+}
+
+/** 带回复恢复执行（`resume`）时 fake 执行器的行为；缺省为 done，摘要中带上会话 id 与回复。 */
+export const fakeResumeInputs = z
+  .strictObject(fakeShape)
+  .superRefine(checkBlockedReason)
+  .meta({ title: 'Fake executor resume inputs' })
+
 /** fake 执行器的指令（design D11）；只在 `executor === 'fake'` 时允许。 */
 export const fakeInputs = z
   .strictObject({
-    outcome: z
-      .enum(['done', 'failed', 'blocked'])
-      .default('done')
-      .meta({ description: '模拟的结束方式' }),
-    delay_ms: z
-      .number()
-      .int()
-      .min(0)
-      .max(86_400_000)
-      .default(0)
-      .meta({ description: '结束前等待的毫秒数，用于模拟长时间运行' }),
-    blocked_reason: blockedReason
+    ...fakeShape,
+    resume: fakeResumeInputs
       .optional()
-      .meta({ description: 'outcome=blocked 时必填的卡住原因' }),
-    message: z
-      .string()
-      .min(1)
-      .optional()
-      .meta({ description: '卡住或失败时的说明；done 时作为结果摘要' }),
-    activity: z
-      .array(z.string())
-      .max(1000)
-      .default([])
-      .meta({ description: '执行期间依次上报的输出片段（kind=output）' }),
+      .meta({ description: '任务带着回复重新排队后，下一次执行改按这里的指令' }),
   })
-  .superRefine((v, ctx) => {
-    if (v.outcome === 'blocked' && v.blocked_reason === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['blocked_reason'],
-        message: 'outcome 为 blocked 时必须提供 blocked_reason',
-      })
-    }
-    if (v.outcome !== 'blocked' && v.blocked_reason !== undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['blocked_reason'],
-        message: '只有 outcome 为 blocked 时才能提供 blocked_reason',
-      })
-    }
-  })
+  .superRefine(checkBlockedReason)
   .meta({ title: 'Fake executor inputs' })
 export type FakeInputs = z.infer<typeof fakeInputs>
+export type FakeResumeInputs = z.infer<typeof fakeResumeInputs>
+
+/** 无进展阈值的默认分钟数（stuck-detection "无进展超时"）。 */
+export const DEFAULT_NO_PROGRESS_MINUTES = 15
 
 export const DEFAULT_TIMEOUT_S = 3600
 
@@ -183,6 +247,10 @@ export const taskContract = z
       .positive()
       .default(DEFAULT_TIMEOUT_S)
       .meta({ description: '单次尝试的超时秒数，默认 3600' }),
+    no_progress_minutes: z.number().positive().max(10_080).optional().meta({
+      description:
+        '无进展阈值（分钟）：执行器这么久没有任何新活动即上报 blocked(no_progress)；缺省取角色设置，再缺省为 15',
+    }),
     retry: z
       .strictObject({
         max_attempts: z
@@ -277,10 +345,68 @@ export const taskResult = z
     verify: z.array(verifyOutcome).default([]).meta({ description: '每条验收命令的结果' }),
     executor: executorType,
     node_id: nodeId,
+    reason: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]*$/)
+      .optional()
+      .meta({ description: '失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）' }),
   })
   .meta({ title: 'Flow task result', description: '任务结束（done / failed）时的结果' })
 export type TaskResult = z.infer<typeof taskResult>
 export type TaskResultInput = z.input<typeof taskResult>
+
+// ---------------------------------------------------------------------------
+// 回复（task-interaction spec；design D7）
+// ---------------------------------------------------------------------------
+
+export const REPLY_KINDS = ['text', 'approve', 'deny'] as const
+export type ReplyKind = (typeof REPLY_KINDS)[number]
+export const replyKind = z.enum(REPLY_KINDS).meta({
+  description: 'text 文字回复；approve 批准；deny 拒绝（可以附带理由）',
+})
+
+export const replyId = z
+  .string()
+  .regex(/^r-[A-Za-z0-9_.-]{1,64}$/, '回复 id 形如 r-<随机串>')
+  .meta({ description: '回复 id，由中枢在收到回复时分配' })
+
+/** 回复的状态：pending 待送达；delivered 已送进运行中的 worker；requeued 随重新排队附到下一次执行；dropped 任务已不再等待它。 */
+export const REPLY_STATES = ['pending', 'delivered', 'requeued', 'dropped'] as const
+export const replyState = z.enum(REPLY_STATES)
+
+/** 送达给执行器的回复。 */
+export const deliveredReply = z
+  .object({
+    reply_id: replyId,
+    kind: replyKind,
+    text: z.string().optional(),
+    by: z.string().meta({ description: '回复者（task.replied 的 actor）' }),
+  })
+  .meta({ title: 'Task reply', description: '待送达给执行器的一条回复' })
+export type DeliveredReply = z.infer<typeof deliveredReply>
+
+export const replyView = z
+  .object({
+    id: replyId,
+    task_id: taskId,
+    kind: replyKind,
+    text: z.string().nullable(),
+    by: z.string(),
+    created_at: timestamp,
+    state: replyState,
+    delivered_at: timestamp.nullable().meta({ description: '送达或随重新排队附上的时间' }),
+  })
+  .meta({ title: 'Task reply view' })
+export type ReplyView = z.infer<typeof replyView>
+
+/** 带回复重新排队后，下一次执行要带上的恢复信息（design D6、D7）。 */
+export const taskResume = z
+  .object({
+    reply: deliveredReply,
+    session: z.string().optional().meta({ description: '上一轮卡住时执行器上报的会话 id' }),
+  })
+  .meta({ title: 'Task resume', description: '下一次执行据此恢复（例如 codex exec resume）' })
+export type TaskResume = z.infer<typeof taskResume>
 
 // ---------------------------------------------------------------------------
 // 任务视图（tasks 投影对外的形态，用于 API 响应）
@@ -299,7 +425,15 @@ export const taskView = z
     finished_at: timestamp.nullable().meta({ description: '进入终态的时间' }),
     cancel_requested: z.boolean(),
     blocked: z
-      .object({ reason: blockedReason, message: z.string(), tail: z.array(z.string()).optional() })
+      .object({
+        reason: blockedReason,
+        message: z.string(),
+        tail: z.array(z.string()).optional(),
+        session: z.string().optional().meta({ description: '执行器上报的会话 id（用于恢复）' }),
+        lease_held: z
+          .boolean()
+          .meta({ description: 'true 表示节点仍持有租约、worker 还活着（交互式执行器，D7a）' }),
+      })
       .nullable()
       .meta({ description: '当前处于 blocked 时的原因与说明' }),
     lease: z

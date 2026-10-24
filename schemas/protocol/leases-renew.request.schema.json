@@ -56,6 +56,50 @@
       "description": "开始执行验收命令时带上，中枢写入 task.verifying",
       "type": "string",
       "const": "verifying"
+    },
+    "blocked": {
+      "description": "worker 卡住但仍活着（交互式执行器）：中枢写入 task.blocked(lease_held=true)，租约照常续约",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "enum": [
+            "awaiting_approval",
+            "question",
+            "no_progress",
+            "crashed",
+            "node_lost",
+            "other"
+          ],
+          "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、node_lost 节点掉线（租约过期）、other 其他"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tail": {
+          "maxItems": 200,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "reason",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "resumed": {
+      "description": "worker 未经回复自行恢复（或即将结束）：中枢写入 task.unblocked",
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [

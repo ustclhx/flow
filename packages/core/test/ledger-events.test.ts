@@ -50,8 +50,16 @@ const samples: Record<
     invalid: { ...task, payload: { reason: 'tired', message: 'x' } },
   },
   'task.unblocked': {
-    valid: { ...task, payload: { note: '用 main' } },
+    valid: { ...task, payload: { note: '用 main', reply_id: 'r-1' } },
     invalid: { ...task, payload: { note: 1 } },
+  },
+  'task.replied': {
+    valid: { ...task, payload: { reply_id: 'r-1', kind: 'text', text: '用 main' } },
+    invalid: { ...task, payload: { reply_id: 'r-1', kind: 'text' } },
+  },
+  'task.requeued_with_reply': {
+    valid: { ...task, payload: { reply_id: 'r-1', session: 'sess-1' } },
+    invalid: { ...task, payload: { reply_id: 'bad' } },
   },
   'task.requeued': {
     valid: { ...task, payload: { reason: 'lease_expired' } },
@@ -197,6 +205,8 @@ describe('事件触发的状态转换', () => {
       ['verifying', 'blocked'],
     ],
     'task.unblocked': [['blocked', 'running']],
+    'task.replied': [['blocked', 'blocked']],
+    'task.requeued_with_reply': [['blocked', 'queued']],
     'task.requeued': [
       ['blocked', 'queued'],
       ['running', 'queued'],
@@ -205,6 +215,7 @@ describe('事件触发的状态转换', () => {
     'task.cancel_requested': [
       ['running', 'running'],
       ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
     ],
     'task.cancelled': [
       ['queued', 'cancelled'],
@@ -215,6 +226,7 @@ describe('事件触发的状态转换', () => {
     'task.lease_expired': [
       ['running', 'running'],
       ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
     ],
   }
 

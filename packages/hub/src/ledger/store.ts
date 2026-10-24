@@ -13,8 +13,10 @@ import {
   openDatabase,
   parseLedgerEventDraft,
   type RebuildData,
+  type ReplyView,
   type Result,
   type SqlValue,
+  type TaskResume,
   type TaskStatus,
   type TaskView,
 } from '@flow/core'
@@ -22,6 +24,7 @@ import type { z } from 'zod'
 import { type Applier, createApplier } from './apply.ts'
 import type { EventFilter, LedgerMaintenance, LedgerReader } from './port.ts'
 import {
+  LEDGER_COLUMN_MIGRATIONS,
   LEDGER_DDL,
   PROJECTION_KEYS,
   PROJECTION_TABLES,
@@ -109,6 +112,13 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   /** 任务当前的活动租约。 */
   activeLease(taskId: string): LeaseRecord | null
   activeLeases(): LeaseRecord[]
+  /** 某任务最早一条待送达的回复。 */
+  pendingReply(taskId: string): ReplyView | null
+  getReply(replyId: string): ReplyView | null
+  /** 某任务的全部回复（按收到先后）。 */
+  taskReplies(taskId: string): ReplyView[]
+  /** 任务带着回复重新排队后，下一次执行要带上的恢复信息。 */
+  taskResume(taskId: string): TaskResume | null
 
   // ---- 软状态（不入账本，D2） ----
   /** 刷新节点最近活动时间；节点不存在时返回 false。 */
@@ -129,7 +139,16 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
 export async function openLedger(path: string, opts: OpenLedgerOptions = {}): Promise<LedgerStore> {
   const db = await openDatabase(path)
   db.exec(LEDGER_DDL)
+  migrateColumns(db)
   return createStore(db, opts)
+}
+
+/** 给旧账本补上新增的投影列（见 `LEDGER_COLUMN_MIGRATIONS`）。 */
+function migrateColumns(db: Database) {
+  for (const m of LEDGER_COLUMN_MIGRATIONS) {
+    const cols = db.prepare(`PRAGMA table_info(${m.table})`).all() as { name: string }[]
+    if (!cols.some((c) => c.name === m.column)) db.exec(m.ddl)
+  }
 }
 
 class Abort extends Error {
@@ -167,6 +186,28 @@ interface TaskRow {
   lease_node_id: string | null
   lease_expires_at: string | null
 }
+
+interface ReplyRow {
+  id: string
+  task_id: string
+  kind: ReplyView['kind']
+  text: string | null
+  by: string
+  created_at: string
+  state: ReplyView['state']
+  delivered_at: string | null
+}
+
+const rowToReply = (r: ReplyRow): ReplyView => ({
+  id: r.id,
+  task_id: r.task_id,
+  kind: r.kind,
+  text: r.text,
+  by: r.by,
+  created_at: r.created_at,
+  state: r.state,
+  delivered_at: r.delivered_at,
+})
 
 interface NodeRow {
   node_id: string
@@ -211,7 +252,11 @@ function rowToTask(r: TaskRow): TaskView {
     started_at: r.started_at,
     finished_at: r.finished_at,
     cancel_requested: r.cancel_requested === 1,
-    blocked: r.blocked_json === null ? null : JSON.parse(r.blocked_json),
+    // lease_held 不单独存储：blocked 期间仍有活动租约即为持有（D7a）。
+    blocked:
+      r.blocked_json === null
+        ? null
+        : { ...JSON.parse(r.blocked_json), lease_held: r.lease_id !== null },
     lease:
       r.lease_id === null || r.lease_node_id === null || r.lease_expires_at === null
         ? null
@@ -256,6 +301,24 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       'SELECT status, workspace, attempt FROM tasks WHERE id = ?',
       id,
     )
+
+  const hasActiveLease = (taskId: string | undefined) =>
+    !!get("SELECT 1 FROM leases WHERE task_id = ? AND state = 'active'", taskId ?? null)
+  const noLease = (from: TaskStatus | null, type: string, why: string) =>
+    fail('failure', 'invalid_transition', why, { from, type })
+  /** 事件引用的回复必须是该任务尚未送达的回复。 */
+  const pendingReplyOf = (draft: {
+    task_id?: string | undefined
+    payload: { reply_id?: string | undefined }
+  }) => {
+    const r = get<{ task_id: string; state: string }>(
+      'SELECT task_id, state FROM replies WHERE id = ?',
+      draft.payload.reply_id ?? null,
+    )
+    return r && r.task_id === draft.task_id && r.state === 'pending'
+      ? ok(null)
+      : invalidEvent(`回复 ${draft.payload.reply_id} 不是该任务待送达的回复`)
+  }
 
   /** 写入前的校验：信封、状态机与投影一致性。只读投影，不写任何东西。 */
   function validate(draft: LedgerEventDraft): Result<null> {
@@ -305,7 +368,47 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'task.blocked': {
+        if (draft.payload.lease_held && !hasActiveLease(draft.task_id)) {
+          return noLease(task?.status ?? null, draft.type, 'lease_held=true 要求任务仍有活动租约')
+        }
+        return ok(null)
+      }
+      case 'task.unblocked': {
+        // D7a：没有活动租约就不能回到 running（否则成了"running 但无人持有"），应改为重新排队。
+        if (!hasActiveLease(draft.task_id)) {
+          return noLease(task?.status ?? null, draft.type, '任务没有活动租约，应改为重新排队')
+        }
+        if (draft.payload.reply_id !== undefined) return pendingReplyOf(draft)
+        return ok(null)
+      }
+      case 'task.cancel_requested': {
+        if (task?.status === 'blocked' && !hasActiveLease(draft.task_id)) {
+          return noLease('blocked', draft.type, '没有节点持有该任务，应直接取消')
+        }
+        return ok(null)
+      }
+      case 'task.replied': {
+        if (get('SELECT 1 FROM replies WHERE id = ?', draft.payload.reply_id)) {
+          return invalidEvent(`回复 ${draft.payload.reply_id} 已存在`)
+        }
+        const pending = get<{ id: string }>(
+          "SELECT id FROM replies WHERE task_id = ? AND state = 'pending'",
+          draft.task_id ?? null,
+        )
+        if (pending) {
+          return fail('failure', 'reply_pending', `任务已有尚未送达的回复 ${pending.id}`, {
+            reply_id: pending.id,
+          })
+        }
+        return ok(null)
+      }
+      case 'task.requeued_with_reply':
+        return pendingReplyOf(draft)
       case 'task.lease_expired': {
+        if (task?.status === 'blocked' && !hasActiveLease(draft.task_id)) {
+          return noLease('blocked', draft.type, '任务卡住时没有持有租约，不存在可过期的租约')
+        }
         const lease = get<{ task_id: string; state: string }>(
           'SELECT task_id, state FROM leases WHERE lease_id = ?',
           draft.payload.lease_id,
@@ -551,6 +654,30 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     },
     activeLeases() {
       return all<LeaseRecord>("SELECT * FROM leases WHERE state = 'active' ORDER BY expires_at")
+    },
+    pendingReply(taskId) {
+      const r = get<ReplyRow>(
+        "SELECT * FROM replies WHERE task_id = ? AND state = 'pending' ORDER BY created_seq LIMIT 1",
+        taskId,
+      )
+      return r ? rowToReply(r) : null
+    },
+    getReply(replyId) {
+      const r = get<ReplyRow>('SELECT * FROM replies WHERE id = ?', replyId)
+      return r ? rowToReply(r) : null
+    },
+    taskReplies(taskId) {
+      return all<ReplyRow>(
+        'SELECT * FROM replies WHERE task_id = ? ORDER BY created_seq',
+        taskId,
+      ).map(rowToReply)
+    },
+    taskResume(taskId) {
+      const r = get<{ resume_json: string | null }>(
+        'SELECT resume_json FROM tasks WHERE id = ?',
+        taskId,
+      )
+      return r?.resume_json ? (JSON.parse(r.resume_json) as TaskResume) : null
     },
 
     touchNode(nodeId, at = iso()) {

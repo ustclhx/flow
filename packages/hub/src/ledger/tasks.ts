@@ -8,7 +8,10 @@ import {
   listTasksQuery,
   loadWorkspaces,
   ok,
+  type ReplyKind,
+  type ReplyTaskData,
   type Result,
+  replyTaskRequest,
   type ShowTaskData,
   taskContract,
 } from '@flow/core'
@@ -42,12 +45,25 @@ export function generateTaskId(nowMs: number, random: () => string = defaultRand
 }
 const defaultRandom = () => randomBytes(3).toString('hex')
 
+/** 回复 id：`r-<16 位十六进制>`。 */
+export const generateReplyId = () => `r-${randomBytes(8).toString('hex')}`
+
+/**
+ * 各卡住原因接受的回复类型（task-interaction "审批答复不能用于提问"）：
+ * awaiting_approval 接受 approve / deny / 文字，其余原因（question、no_progress、crashed…）只接受文字。
+ */
+export function acceptedReplyKinds(reason: string | undefined): readonly ReplyKind[] {
+  return reason === 'awaiting_approval' ? ['approve', 'deny', 'text'] : ['text']
+}
+
 export interface TaskServiceOptions {
   ledger: LedgerStore
   workspaceExists: WorkspaceCheck
   now?: () => number
   /** 生成任务 id，默认 `generateTaskId`。 */
   newTaskId?: (nowMs: number) => string
+  /** 生成回复 id，默认 `generateReplyId`。 */
+  newReplyId?: () => string
 }
 
 export interface CreateTaskOptions {
@@ -61,11 +77,16 @@ export interface CancelTaskOptions {
   reason?: string
 }
 
+export interface ReplyTaskOptions {
+  actor: string
+}
+
 export interface TaskService {
   createTask(contractInput: unknown, opts: CreateTaskOptions): Promise<Result<CreateTaskData>>
   listTasks(filter?: unknown): Result<ListTasksData>
   getTask(id: string): Result<ShowTaskData>
   cancelTask(id: string, opts: CancelTaskOptions): Result<CancelTaskData>
+  replyTask(id: string, body: unknown, opts: ReplyTaskOptions): Result<ReplyTaskData>
 }
 
 /** zod issues → 逐字段错误（field、code=missing_field|invalid_field、message）。 */
@@ -91,6 +112,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
   const { ledger } = o
   const now = o.now ?? Date.now
   const newTaskId = o.newTaskId ?? ((ms: number) => generateTaskId(ms))
+  const newReplyId = o.newReplyId ?? generateReplyId
 
   const notFound = (id: string) => fail('failure', 'not_found', `没有任务 ${id}`)
 
@@ -150,7 +172,9 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
 
     getTask(id) {
       const task = ledger.getTask(id)
-      return task ? ok({ task, events: ledger.taskEvents(id) }) : notFound(id)
+      return task
+        ? ok({ task, events: ledger.taskEvents(id), replies: ledger.taskReplies(id) })
+        : notFound(id)
     },
 
     cancelTask(id, opts) {
@@ -158,7 +182,10 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       if (!task) return notFound(id)
       const reason = opts.reason === undefined ? {} : { reason: opts.reason }
       const base = { task_id: id, workspace: task.workspace }
-      switch (task.status) {
+      // blocked 但节点仍持有租约（D7a）：与 running 一样经续约通知节点停止执行器。
+      const status =
+        task.status === 'blocked' && ledger.activeLease(id) !== null ? 'running' : task.status
+      switch (status) {
         case 'queued':
         case 'blocked': {
           const r = ledger.append(
@@ -189,6 +216,64 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       }
       const after = ledger.getTask(id)
       return after ? ok({ task: after }) : notFound(id)
+    },
+
+    replyTask(id, body, opts) {
+      const parsed = replyTaskRequest.safeParse(body)
+      if (!parsed.success) return invalidArguments('回复', parsed.error.issues, body)
+      const { kind, text } = parsed.data
+      const task = ledger.getTask(id)
+      if (!task) return notFound(id)
+      if (task.status !== 'blocked') {
+        return fail(
+          'failure',
+          'not_blocked',
+          `任务状态为 ${task.status}，只有 blocked 的任务可以回复`,
+          {
+            status: task.status,
+          },
+        )
+      }
+      const reason = task.blocked?.reason
+      const accepted = acceptedReplyKinds(reason)
+      if (!accepted.includes(kind)) {
+        return fail(
+          'failure',
+          'reply_kind_mismatch',
+          `任务卡在 ${reason}，只接受 ${accepted.join(' / ')} 回复，不接受 ${kind}`,
+          { reason, kind, accepted },
+        )
+      }
+      const replyId = newReplyId()
+      const base = { task_id: id, workspace: task.workspace }
+      // 没有节点持有该任务（无头执行器已结束这一轮、或节点掉线）：带着回复重新排队（D7、D7a）。
+      const requeue = ledger.activeLease(id) === null
+      const session = task.blocked?.session
+      const written = ledger.appendMany(
+        [
+          {
+            ...base,
+            type: 'task.replied',
+            payload: { reply_id: replyId, kind, ...(text === undefined ? {} : { text }) },
+          },
+          ...(requeue
+            ? [
+                {
+                  ...base,
+                  type: 'task.requeued_with_reply' as const,
+                  payload: { reply_id: replyId, ...(session ? { session } : {}) },
+                },
+              ]
+            : []),
+        ],
+        { actor: opts.actor },
+      )
+      if (!written.ok) return written
+      const after = ledger.getTask(id)
+      const reply = ledger.getReply(replyId)
+      return after && reply
+        ? ok({ task: after, reply, requeued: requeue })
+        : fail('failure', 'internal_error', '回复写入后不可见')
     },
   }
 }

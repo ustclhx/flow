@@ -24,12 +24,56 @@
         "cancel_requested": {
           "type": "boolean",
           "description": "为 true 时节点应停止执行器并提交 cancelled"
+        },
+        "reply": {
+          "default": null,
+          "description": "任务处于 blocked 时最早一条未送达的回复；节点交给执行器后用 ack-reply 确认，确认前每次续约都会返回它",
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "reply_id": {
+                  "type": "string",
+                  "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
+                  "description": "回复 id，由中枢在收到回复时分配"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "approve",
+                    "deny"
+                  ],
+                  "description": "text 文字回复；approve 批准；deny 拒绝（可以附带理由）"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "by": {
+                  "type": "string",
+                  "description": "回复者（task.replied 的 actor）"
+                }
+              },
+              "required": [
+                "reply_id",
+                "kind",
+                "by"
+              ],
+              "additionalProperties": false,
+              "title": "Task reply",
+              "description": "待送达给执行器的一条回复"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "lease_id",
         "expires_at",
-        "cancel_requested"
+        "cancel_requested",
+        "reply"
       ],
       "additionalProperties": false,
       "title": "POST /v1/leases/:id/renew 响应"

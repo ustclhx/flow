@@ -1,8 +1,11 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import {
+  type AckReplyData,
+  type AckReplyRequest,
   type AcquireLeaseData,
   type AcquireLeaseRequest,
+  ackReplyData,
   acquireLeaseData,
   type CompleteLeaseData,
   type CompleteLeaseRequest,
@@ -29,7 +32,7 @@ import {
 import type { z } from 'zod'
 
 /**
- * 节点访问中枢的最小 HTTP 客户端：只覆盖 nodes / leases 端点（node-protocol spec）。
+ * 节点访问中枢的最小 HTTP 客户端：只覆盖 nodes / leases（含 ack-reply）端点（node-protocol spec）。
  * 与 core 的 HubClient（tasks.md 5.1）职责不重叠，之后可以合并。
  *
  * - 成功响应按协议 schema 校验 `data`；
@@ -62,6 +65,10 @@ export interface NodeHubClient {
     req: Partial<RenewLeaseRequest> & Pick<RenewLeaseRequest, 'lease_token'>,
   ): Promise<Result<RenewLeaseData>>
   complete(leaseId: string, req: CompleteLeaseRequest): Promise<Result<CompleteLeaseData>>
+  ackReply(
+    leaseId: string,
+    req: Partial<AckReplyRequest> & Pick<AckReplyRequest, 'lease_token' | 'reply_id'>,
+  ): Promise<Result<AckReplyData>>
 }
 
 /** 注册请求（调用方形态：带默认值的字段可省略）。 */
@@ -151,5 +158,7 @@ export function createNodeHubClient(o: NodeHubClientOptions): NodeHubClient {
       call('POST', leasePath(ENDPOINTS['leases-renew'].path, id), renewLeaseData, req),
     complete: (id, req) =>
       call('POST', leasePath(ENDPOINTS['leases-complete'].path, id), completeLeaseData, req),
+    ackReply: (id, req) =>
+      call('POST', leasePath(ENDPOINTS['leases-ack-reply'].path, id), ackReplyData, req),
   }
 }

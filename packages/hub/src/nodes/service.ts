@@ -1,6 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import {
+  type AckReplyData,
   type AcquireLeaseData,
+  ackReplyRequest,
   acquireLeaseRequest,
   type CompleteLeaseData,
   type CompleteLeaseRequest,
@@ -13,6 +15,7 @@ import {
   ok,
   type RenewLeaseData,
   type RenewLeaseRequest,
+  type ReplyView,
   type Result,
   registerNodeRequest,
   renewLeaseRequest,
@@ -37,10 +40,12 @@ import { type HubClock, systemClock } from '../server/clock.ts'
  * - 过期扫描：按合同 retry 决定 `task.requeued(lease_expired)` 或 `task.blocked(node_lost)`，
  *   同一事务先写 `task.lease_expired`。
  *
- * 为变更 ② 的 D7a（交互式执行器 blocked 期间持有租约）预留：
- * - 令牌校验（`authorize`）与"任务处于什么状态才能续约"（`RENEWABLE`）分开；
- * - 续约的各个步骤（活动、阶段、到期时间）各自独立，以后可在其中加入"续约中上报 blocked / 送达回复"；
- * - 提交结束（`completionDrafts`）与过期处理（`expiryDrafts`）都是纯函数，以后按 `lease_held` 分支即可。
+ * 交互式执行器 blocked 期间持有租约（add-m1-executors D7a）：
+ * - 续约可以带 `blocked`（写 `task.blocked`，lease_held=true，租约不释放）或 `resumed`（写 `task.unblocked`）；
+ * - blocked 任务的续约响应带上最早一条待送达的回复；节点送达后调用 ack-reply，中枢在同一事务中
+ *   写 `task.unblocked`（带 reply_id）并把回复标记为已送达；worker 已不在时写 `task.requeued_with_reply`；
+ * - 持有租约的 blocked 任务租约过期：记 `task.lease_expired`，有待送达回复时同一事务带着回复重新排队，
+ *   已请求取消时直接取消，否则保持 blocked（之后的回复会让它重新排队）。
  */
 
 export interface NodeProtocolConfig {
@@ -68,6 +73,7 @@ export interface NodeService {
   acquire(body: unknown, opts?: AcquireOptions): Promise<Result<AcquireLeaseData>>
   renew(leaseId: string, body: unknown): Result<RenewLeaseData>
   complete(leaseId: string, body: unknown): Result<CompleteLeaseData>
+  ackReply(leaseId: string, body: unknown): Result<AckReplyData>
   /** 处理全部已到期的活动租约，返回处理的数量。 */
   expireDue(): number
   /** 当前挂起的 long-poll 数（测试与诊断）。 */
@@ -77,6 +83,15 @@ export interface NodeService {
 }
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
+
+/** `task.unblocked` 的说明：回复者与回复摘要。 */
+function replyNote(reply: ReplyView): string {
+  const what = reply.kind === 'approve' ? '批准' : reply.kind === 'deny' ? '拒绝' : '回复'
+  const text = reply.text
+    ? `：${reply.text.length > 200 ? `${reply.text.slice(0, 200)}…` : reply.text}`
+    : ''
+  return `${reply.by} ${what}${text}`
+}
 
 function tokenMatches(token: string, expectedHex: string): boolean {
   const a = Buffer.from(sha256(token), 'hex')
@@ -99,8 +114,8 @@ function parse<S extends z.ZodType>(schema: S, body: unknown, what: string): Res
   )
 }
 
-/** 持有活动租约时允许续约的任务状态。D7a 加入 lease_held 后在这里加上 blocked。 */
-const RENEWABLE: ReadonlySet<TaskView['status']> = new Set(['running', 'verifying'])
+/** 持有活动租约时允许续约的任务状态；blocked 且租约仍是 active 即 lease_held（D7a）。 */
+const RENEWABLE: ReadonlySet<TaskView['status']> = new Set(['running', 'verifying', 'blocked'])
 
 /** 唤醒等待者的事件：有任务可能变为 queued。 */
 const WAKING: ReadonlySet<LedgerEvent['type']> = new Set([
@@ -130,7 +145,9 @@ export function completionDrafts(
             reason: req.blocked_reason,
             message: req.message,
             ...(req.tail ? { tail: req.tail } : {}),
+            ...(req.session ? { session: req.session } : {}),
             node_id: lease.node_id,
+            lease_held: false,
           },
         },
       ]
@@ -148,8 +165,15 @@ export function completionDrafts(
   }
 }
 
-/** 租约过期对应的事件（纯函数；node-protocol "租约过期处理"）。 */
-export function expiryDrafts(task: TaskView, lease: LeaseRecord): EventInput[] {
+/**
+ * 租约过期对应的事件（纯函数；node-protocol "租约过期处理"）。
+ * blocked（lease_held）任务的过期见文件头；`pendingReply` 为该任务待送达的回复。
+ */
+export function expiryDrafts(
+  task: TaskView,
+  lease: LeaseRecord,
+  pendingReply: ReplyView | null = null,
+): EventInput[] {
   const base = { task_id: task.id, workspace: task.workspace }
   const expired: EventInput = {
     ...base,
@@ -160,6 +184,30 @@ export function expiryDrafts(task: TaskView, lease: LeaseRecord): EventInput[] {
       expired_at: lease.expires_at,
       attempt: lease.attempt,
     },
+  }
+  if (task.status === 'blocked') {
+    if (task.cancel_requested) {
+      return [
+        expired,
+        {
+          ...base,
+          type: 'task.cancelled',
+          payload: { reason: `已请求取消，节点 ${lease.node_id} 的租约在卡住期间过期` },
+        },
+      ]
+    }
+    if (pendingReply) {
+      const session = task.blocked?.session
+      return [
+        expired,
+        {
+          ...base,
+          type: 'task.requeued_with_reply',
+          payload: { reply_id: pendingReply.id, ...(session ? { session } : {}) },
+        },
+      ]
+    }
+    return [expired]
   }
   const maxAttempts = task.contract.retry?.max_attempts ?? 1
   if (task.attempt < maxAttempts) {
@@ -239,6 +287,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       // 被其他请求抢先（理论上不会发生，见文件头）：换下一个任务。
       if (!written.ok) continue
       ledger.touchNode(nodeId)
+      const resume = ledger.taskResume(task.id)
       return {
         lease_id: leaseId,
         lease_token: token,
@@ -248,6 +297,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         attempt,
         ttl_s: ttl,
         expires_at: expiresAt,
+        ...(resume ? { resume } : {}),
       }
     }
     return null
@@ -360,11 +410,61 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       ledger.renewLease(lease.lease_id, expiresAt)
       ledger.touchNode(lease.node_id)
       const after = ledger.getTask(task.id) ?? task
+      const pending = after.status === 'blocked' ? ledger.pendingReply(task.id) : null
       return ok({
         lease_id: lease.lease_id,
         expires_at: expiresAt,
         cancel_requested: after.cancel_requested,
+        reply: pending
+          ? {
+              reply_id: pending.id,
+              kind: pending.kind,
+              ...(pending.text === null ? {} : { text: pending.text }),
+              by: pending.by,
+            }
+          : null,
       })
+    },
+
+    ackReply(leaseId, body) {
+      const req = parse(ackReplyRequest, body, '回复确认请求')
+      if (!req.ok) return req
+      const auth = authorize(leaseId, req.data.lease_token)
+      if (!auth.ok) return auth
+      const { lease, task } = auth.data
+      const reply = ledger.getReply(req.data.reply_id)
+      if (!reply || reply.task_id !== task.id) {
+        return fail('failure', 'reply_not_found', `任务 ${task.id} 没有回复 ${req.data.reply_id}`)
+      }
+      // 重复确认（例如上一次的响应丢失）：已送达就直接返回，保证只送达一次。
+      if (reply.state === 'delivered' && req.data.outcome === 'delivered') return ok({ task })
+      if (reply.state !== 'pending' || task.status !== 'blocked') {
+        return fail(
+          'failure',
+          'invalid_transition',
+          `回复 ${reply.id} 状态为 ${reply.state}、任务状态为 ${task.status}，不能确认送达`,
+          { from: task.status, type: 'task.unblocked' },
+        )
+      }
+      const base = { task_id: task.id, workspace: task.workspace }
+      const session = task.blocked?.session
+      const draft: EventInput =
+        req.data.outcome === 'delivered'
+          ? {
+              ...base,
+              type: 'task.unblocked',
+              payload: { reply_id: reply.id, note: replyNote(reply) },
+            }
+          : {
+              ...base,
+              type: 'task.requeued_with_reply',
+              payload: { reply_id: reply.id, ...(session ? { session } : {}) },
+            }
+      const written = ledger.append(draft, { actor: `node:${lease.node_id}` })
+      if (!written.ok) return written
+      ledger.touchNode(lease.node_id)
+      const after = ledger.getTask(task.id)
+      return after ? ok({ task: after }) : fail('failure', 'internal_error', '任务不可见')
     },
 
     complete(leaseId, body) {
@@ -398,7 +498,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         if (Date.parse(lease.expires_at) > now) break
         const task = ledger.getTask(lease.task_id)
         if (!task) continue
-        const written = ledger.appendMany(expiryDrafts(task, lease), { actor: 'hub' })
+        const pending = task.status === 'blocked' ? ledger.pendingReply(task.id) : null
+        const written = ledger.appendMany(expiryDrafts(task, lease, pending), { actor: 'hub' })
         if (written.ok) handled++
       }
       return handled
@@ -414,10 +515,45 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     },
   }
 
-  /** 续约附带的动作：记录活动、阶段切换。各步独立，D7a 可在此追加。 */
+  /** 续约附带的动作：记录活动、阶段切换、卡住与自行恢复（D7a）。各步独立。 */
   function renewSteps(task: TaskView, lease: LeaseRecord, req: RenewLeaseRequest): Result<null> {
     if (req.activity.length > 0) ledger.recordActivity(task.id, req.activity)
-    if (req.phase === 'verifying' && task.status === 'running') {
+    const base = { task_id: task.id, workspace: task.workspace }
+    const actor = { actor: `node:${lease.node_id}` }
+    // 重复上报（上一次的响应丢失后重试）时任务已经处于目标状态，忽略即可。
+    if (req.resumed && task.status === 'blocked') {
+      const written = ledger.append(
+        {
+          ...base,
+          type: 'task.unblocked',
+          payload: { note: req.resumed.note ?? 'worker 自行恢复' },
+        },
+        actor,
+      )
+      if (!written.ok) return written
+    }
+    if (req.blocked && (task.status === 'running' || task.status === 'verifying')) {
+      const written = ledger.append(
+        {
+          ...base,
+          type: 'task.blocked',
+          payload: {
+            reason: req.blocked.reason,
+            message: req.blocked.message,
+            ...(req.blocked.tail ? { tail: req.blocked.tail } : {}),
+            node_id: lease.node_id,
+            lease_held: true,
+          },
+        },
+        actor,
+      )
+      if (!written.ok) return written
+      return ok(null)
+    }
+    if (
+      req.phase === 'verifying' &&
+      (ledger.getTask(task.id)?.status ?? task.status) === 'running'
+    ) {
       const written = ledger.append(
         {
           task_id: task.id,

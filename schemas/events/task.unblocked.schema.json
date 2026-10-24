@@ -40,6 +40,11 @@
         "note": {
           "description": "解除卡住的说明，例如用户的答复摘要",
           "type": "string"
+        },
+        "reply_id": {
+          "description": "因送达这条回复而解除卡住（ack-reply）；没有时为执行器自行恢复",
+          "type": "string",
+          "pattern": "^r-[A-Za-z0-9_.-]{1,64}$"
         }
       },
       "additionalProperties": false

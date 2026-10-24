@@ -10,6 +10,7 @@ import {
   PROTOCOL_ERRORS,
   type Result,
   rebuildData,
+  replyTaskData,
   showTaskData,
   toJsonDocument,
 } from '@flow/core'
@@ -20,7 +21,7 @@ import type { LedgerStore } from './store.ts'
 import { fieldIssues, type TaskService } from './tasks.ts'
 
 /**
- * 任务相关路由（protocol.ts 的 tasks-create / tasks-list / tasks-show / tasks-cancel，
+ * 任务相关路由（protocol.ts 的 tasks-create / tasks-list / tasks-show / tasks-cancel / tasks-reply，
  * 以及 hub-rebuild）。作为独立的 Hono 子应用导出，由中枢主应用挂载（`app.route('/', ...)`）；
  * 认证中间件由主应用负责，这里不处理。
  */
@@ -119,6 +120,18 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
       ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
     })
     return respond(c, r, cancelTaskData)
+  })
+
+  app.post(ENDPOINTS['tasks-reply'].path, async (c) => {
+    const actor = actorOf(c)
+    if (!actor.ok) return respond(c, actor, replyTaskData)
+    const body = await jsonBody(c, false)
+    if (!body.ok) return respond(c, body, replyTaskData)
+    return respond(
+      c,
+      tasks.replyTask(c.req.param('id'), body.data, { actor: actor.data }),
+      replyTaskData,
+    )
   })
 
   app.post(ENDPOINTS['hub-rebuild'].path, (c) => {
