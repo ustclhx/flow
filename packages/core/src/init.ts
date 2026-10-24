@@ -12,6 +12,7 @@ import {
 } from './git.ts'
 import { flowPaths, GIT_REPOS, type RepoName } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
+import { DEFAULT_ROLE_FILES } from './role-templates.ts'
 import {
   BRAIN_INDEX_MD,
   BRAIN_LOG_MD,
@@ -37,7 +38,13 @@ interface RepoFile {
 }
 
 const REPO_FILES: Record<RepoName, RepoFile[]> = {
-  config: [{ path: '.gitleaks.toml', content: () => GITLEAKS_TOML }],
+  config: [
+    { path: '.gitleaks.toml', content: () => GITLEAKS_TOML },
+    ...Object.entries(DEFAULT_ROLE_FILES).map(([name, content]) => ({
+      path: `roles/${name}`,
+      content: () => content,
+    })),
+  ],
   brain: [
     { path: '.gitleaks.toml', content: () => GITLEAKS_TOML },
     { path: 'AGENTS.md', content: brainAgentsMd },

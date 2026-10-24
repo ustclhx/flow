@@ -4,6 +4,7 @@ import { checkDaemonPlists, launchAgentsDirectory } from './daemon/plist.ts'
 import { execCommand, git, hasCommits, hookPath, isRepoRoot } from './git.ts'
 import { type Env, flowPaths, GIT_REPOS } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
+import { KNOWN_EXECUTORS, loadRoles } from './roles.ts'
 
 /** 外部工具的最低版本。gitleaks 8.19.0 起提供 `git --staged` 与 `stdin` 子命令。 */
 export const MIN_VERSIONS = { git: '2.28.0', gitleaks: '8.19.0' } as const
@@ -190,6 +191,29 @@ export async function runDoctor(
         ? { id: `brain.${name}`, ok: true, message: `brain/${name} 存在` }
         : { id: `brain.${name}`, ok: false, message: `缺少 brain/${name}`, hint: INIT_HINT },
     )
+  }
+
+  const roles = await loadRoles(home)
+  if (!roles.ok) {
+    checks.push({ id: 'roles.config', ok: false, message: roles.error.message })
+  } else {
+    for (const error of roles.data.errors) {
+      checks.push({
+        id: `roles.config.${error.file}.${error.field ?? ''}`,
+        ok: false,
+        message: `${error.file}${error.field ? `：${error.field}` : ''}：${error.message}`,
+        hint: '修正角色配置后重新运行 flow doctor',
+      })
+    }
+    for (const role of roles.data.roles) {
+      const known = (KNOWN_EXECUTORS as readonly string[]).includes(role.executor)
+      checks.push({
+        id: `role.${role.name}.executor`,
+        ok: known,
+        message: `config/roles/${role.name}.yaml：executor ${role.executor}${known ? '' : ' 不存在'}`,
+        ...(known ? {} : { hint: `将 executor 改为 ${KNOWN_EXECUTORS.join('、')} 之一` }),
+      })
+    }
   }
 
   for (const plist of checkDaemonPlists(opts.launchAgentsDir ?? launchAgentsDirectory())) {

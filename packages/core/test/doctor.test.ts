@@ -11,7 +11,7 @@ import {
   findExecutable,
 } from '../src/doctor.ts'
 import { initFlowHome } from '../src/init.ts'
-import { tempHome } from './helpers.ts'
+import { tempHome, writeText } from './helpers.ts'
 
 /** 只包含 git 的 PATH，用来模拟未安装 gitleaks。 */
 function pathWithoutGitleaks(): string {
@@ -30,6 +30,35 @@ const runDoctor = (home: string, source: DoctorReport['homeSource'], options: Do
   actualDoctor(home, source, { launchAgentsDir: join(home, 'LaunchAgents'), ...options })
 
 describe('flow doctor', () => {
+  test('执行器未知：报告角色文件和 executor，已知执行器全部通过；配置错误带字段', async () => {
+    const home = tempHome('flow-doctor-roles-')
+    await initFlowHome(home)
+    writeText(join(home, 'config/roles/fake.yaml'), 'name: fake\nexecutor: fake\nprompt: 测试\n')
+    writeText(
+      join(home, 'config/roles/custom.yaml'),
+      'name: custom\nexecutor: gpt-cli\nprompt: 测试\n',
+    )
+    writeText(join(home, 'config/roles/broken.yaml'), 'name: broken\nprompt: 测试\n')
+    const result = await runDoctor(home, 'FLOW_HOME')
+    expect(result.ok).toBe(false)
+    const report = reportOf(result)
+    const unknown = report.checks.find((c) => c.id === 'role.custom.executor')
+    expect(unknown).toMatchObject({ ok: false })
+    expect(unknown?.message).toContain('config/roles/custom.yaml：executor gpt-cli 不存在')
+    expect(
+      report.checks.filter((c) => /^role\.(dev|reviewer|triage|fake)\.executor$/.test(c.id)),
+    ).toEqual(
+      expect.arrayContaining(
+        ['dev', 'reviewer', 'triage', 'fake'].map((name) =>
+          expect.objectContaining({ id: `role.${name}.executor`, ok: true }),
+        ),
+      ),
+    )
+    expect(
+      report.checks.find((c) => c.id === 'roles.config.config/roles/broken.yaml.executor'),
+    ).toMatchObject({ ok: false, message: expect.stringContaining('executor') })
+  })
+
   test('已安装 plist 的 bun 或入口失效时报错并提示重新安装；有效路径通过', async () => {
     const home = tempHome('flow-doctor-')
     await initFlowHome(home)

@@ -25,6 +25,8 @@ export interface FlowPaths {
   state: string
   /** `config/workspaces/`：workspace 定义。 */
   workspaces: string
+  /** `config/roles/`：角色定义及提示词。 */
+  roles: string
   /** brain 中的固定文件。 */
   brainAgents: string
   brainIndex: string
@@ -66,6 +68,7 @@ export function flowPaths(home: string): FlowPaths {
     raw,
     state,
     workspaces: join(config, 'workspaces'),
+    roles: join(config, 'roles'),
     brainAgents: join(brain, 'AGENTS.md'),
     brainIndex: join(brain, 'index.md'),
     brainLog: join(brain, 'log.md'),

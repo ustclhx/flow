@@ -56,6 +56,11 @@ async function start() {
 
 beforeEach(async () => {
   home = await initTempHome('flow-tasks-hub-')
+  // 非默认角色必须显式定义，不能依赖 task_create 跳过角色校验。
+  await writeFile(
+    join(home, 'config/roles/developer.yaml'),
+    'name: developer\nexecutor: fake\nprompt: 完成测试任务\n',
+  )
   savedHome = process.env.FLOW_HOME
   process.env.FLOW_HOME = home
 })
@@ -68,6 +73,48 @@ afterEach(async () => {
 })
 
 describe('任务操作与真实中枢', () => {
+  test('引用未定义角色：CLI 与 MCP 均返回 unknown_role，退出码 1，账本不新增任务', async () => {
+    await start()
+    const input = { ...contract, role: 'designer' }
+    const file = join(home, 'unknown-role.json')
+    await writeFile(file, JSON.stringify(input))
+    const cli = await runCli(['task', 'create', '--file', file, '--json'], commands)
+    expect(cli.exitCode).toBe(1)
+    const doc = JSON.parse(cli.stdout)
+    expect(doc).toMatchObject({ ok: false, error: { kind: 'failure', code: 'unknown_role' } })
+    const mcp = await connect({ home, actor: 'test-agent' })
+    try {
+      const result = await callJson(mcp, 'task_create', input)
+      expect(result.isError).toBe(true)
+      expect(result.doc).toEqual(doc)
+    } finally {
+      await mcp.close()
+    }
+    expect(data(await client().listTasks()).tasks).toEqual([])
+  })
+
+  test('角色目录缺失或角色配置非法时仍拒绝创建；合同 executor 可以覆盖角色', async () => {
+    await start()
+    const created = data(await invokeOperation(taskCreateOp, { ...contract, role: 'dev' }, ctx()))
+    expect(created.task.contract.executor).toBe('fake')
+    await writeFile(join(home, 'config/roles/dev.yaml'), 'name: dev\nexecutor: fake\n')
+    expect(await invokeOperation(taskCreateOp, { ...contract, role: 'dev' }, ctx())).toMatchObject({
+      ok: false,
+      error: {
+        code: 'unknown_role',
+        details: {
+          errors: [expect.objectContaining({ file: 'config/roles/dev.yaml', field: 'prompt' })],
+        },
+      },
+    })
+    await rm(join(home, 'config/roles'), { recursive: true })
+    expect(await invokeOperation(taskCreateOp, contract, ctx())).toMatchObject({
+      ok: false,
+      error: { code: 'unknown_role' },
+    })
+    expect(data(await client().listTasks()).tasks).toHaveLength(1)
+  })
+
   test('四个操作共享 HTTP 协议、保留 actor，并支持筛选和幂等创建', async () => {
     await start()
     const created = data(

@@ -6,6 +6,7 @@ import { findExecutable } from '../src/doctor.ts'
 import { flowAuthor, git, gitCommit } from '../src/git.ts'
 import { resolveFlowHome } from '../src/home.ts'
 import { formatInitReport, initFlowHome } from '../src/init.ts'
+import { loadRoles } from '../src/roles.ts'
 import { fakeStripeKey, snapshot, tempHome, writeText } from './helpers.ts'
 
 const init = async (home: string) => {
@@ -61,6 +62,69 @@ describe('flow init', () => {
     const after = snapshot(home)
     expect([...after.keys()].sort()).toEqual([...before.keys()].sort())
     for (const [file, v] of before) expect(after.get(file)).toEqual(v)
+  })
+
+  test('旧 home 补齐三个默认角色及提示词，在 config 提交；已有角色和提示词不覆盖', async () => {
+    const home = tempHome('flow-init-roles-')
+    await init(home)
+    const config = join(home, 'config')
+    await git(config, ['rm', '-r', 'roles'])
+    await gitCommit(config, { message: '模拟旧 home', author: flowAuthor('test'), noVerify: true })
+    const report = await init(home)
+    expect(report.committed).toEqual(['config'])
+    const expected = [
+      'dev.md',
+      'dev.yaml',
+      'reviewer.md',
+      'reviewer.yaml',
+      'triage.md',
+      'triage.yaml',
+    ]
+    expect(report.created.sort()).toEqual(expected.map((f) => `config/roles/${f}`))
+    expect(
+      (await git(config, ['show', '--name-only', '--format=', 'HEAD'])).stdout
+        .trim()
+        .split('\n')
+        .sort(),
+    ).toEqual(expected.map((f) => `roles/${f}`))
+    const loaded = await loadRoles(home)
+    if (!loaded.ok) throw new Error(loaded.error.message)
+    expect(loaded.data.errors).toEqual([])
+    expect(loaded.data.roles).toEqual([
+      expect.objectContaining({
+        name: 'dev',
+        executor: 'codex-orca',
+        model: 'gpt-6.1-sol',
+        effort: 'high',
+        permissions: { approval: 'never', sandbox: 'danger-full-access' },
+      }),
+      expect.objectContaining({
+        name: 'reviewer',
+        executor: 'claude-sdk',
+        model: 'claude-opus-5-5',
+        permissions: {
+          permissionMode: 'auto',
+          allowedTools: ['Read', 'Glob', 'Grep', 'Bash(gh pr comment:*)', 'Bash(gh pr review:*)'],
+          disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
+        },
+      }),
+      expect.objectContaining({
+        name: 'triage',
+        executor: 'codex-exec',
+        permissions: { sandbox: 'read-only' },
+      }),
+    ])
+    for (const role of loaded.data.roles) {
+      expect(role.prompt).toMatch(/[\u4e00-\u9fff]/)
+      expect(role.prompt.trim().split('\n').length).toBeGreaterThanOrEqual(3)
+    }
+    writeFileSync(join(config, 'roles/dev.yaml'), '用户自定义配置\n')
+    writeFileSync(join(config, 'roles/dev.md'), '用户自定义提示词\n')
+    rmSync(join(config, 'roles/triage.yaml'))
+    const repaired = await init(home)
+    expect(repaired.created).toEqual(['config/roles/triage.yaml'])
+    expect(readFileSync(join(config, 'roles/dev.yaml'), 'utf8')).toBe('用户自定义配置\n')
+    expect(readFileSync(join(config, 'roles/dev.md'), 'utf8')).toBe('用户自定义提示词\n')
   })
 
   test('用户修改 AGENTS.md 后再次初始化：保持不变；缺失项被补齐并报告', async () => {
