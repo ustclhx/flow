@@ -488,4 +488,6 @@ policy:
 
    ② 和 ③ 依赖 ①，④ 依赖 ② 和 ③。
 
+   2026-10-25 追加 ⑤ Grok Bot 接入（`add-grok-bridge`）：Grok 经 Tailscale 官方插件访问中枢的远程 MCP 入口，身份固定为 AI，只读加写提案；Flow 经 routine webhook 向 Grok 派活。⑤ 依赖 ② 和 ③（按 token 绑定身份）。
+
    **M1 验收场景**：用户在 Telegram 给 product-res 下一条指令 → supervisor 拆成任务 → Codex 在 worktree 中执行 → 卡住时用户收到推送并回复，worker 继续 → 提 PR → Claude 审查 → 合并 → 验证 main 的发布流水线 → 写 journal。整个过程中用户只操作两次手机。
