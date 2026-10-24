@@ -35,4 +35,4 @@
 
 ## 7. 收尾
 
-- [ ] 7.1 `flow doctor` 增加 Codex、Orca、Claude SDK 的版本与可用性检查；`docs/executors.md` 写明三种执行器的适用场景、角色配置示例，以及从 `~/.claude/scripts/orca-codex` 迁移的步骤；验证 doctor 测试与文档中的命令都能照着运行
+- [x] 7.1 `flow doctor` 增加 Codex、Orca、Claude SDK 的版本与可用性检查；`docs/executors.md` 写明三种执行器的适用场景、角色配置示例，以及从 `~/.claude/scripts/orca-codex` 迁移的步骤；验证 doctor 测试与文档中的命令都能照着运行

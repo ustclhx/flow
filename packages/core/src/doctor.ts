@@ -1,17 +1,29 @@
+import { execFile } from 'node:child_process'
 import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { z } from 'zod'
 import { checkDaemonPlists, launchAgentsDirectory } from './daemon/plist.ts'
-import { execCommand, git, hasCommits, hookPath, isRepoRoot } from './git.ts'
+import { type DoctorSdk, inspectClaudeSdk } from './doctor-sdk.ts'
+import type { execCommand } from './git.ts'
+import { isRepoRoot } from './git.ts'
 import { type Env, flowPaths, GIT_REPOS } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
-import { KNOWN_EXECUTORS, loadRoles } from './roles.ts'
+import { KNOWN_EXECUTORS, loadRoles, type Role } from './roles.ts'
 
-/** 外部工具的最低版本。gitleaks 8.19.0 起提供 `git --staged` 与 `stdin` 子命令。 */
-export const MIN_VERSIONS = { git: '2.28.0', gitleaks: '8.19.0' } as const
+/** gitleaks 需 staged/stdin；Codex 需 exec --json/resume；Codex、Orca 下限取已验证的 fixture 版本。 */
+export const MIN_VERSIONS = {
+  git: '2.28.0',
+  gitleaks: '8.19.0',
+  codex: '0.164.0',
+  orca: '1.4.218',
+} as const
 
 const INIT_HINT = '运行 flow init 补齐（已有文件不会被覆盖）'
 
 export const INSTALL_HINTS = {
+  codex: '安装或更新 Codex CLI，并确保 codex 在节点的 PATH 中',
+  orca: '安装或更新 Orca，并确保 orca 在节点的 PATH 中；运行 Orca 应用后重试',
   git: '安装 git：xcode-select --install 或 brew install git',
   gitleaks:
     '安装 gitleaks：brew install gitleaks（其他平台见 https://github.com/gitleaks/gitleaks#installing）',
@@ -21,6 +33,8 @@ export interface DoctorCheck {
   /** 稳定的检查标识，例如 `tool.gitleaks`、`repo.brain`、`hook.raw`。 */
   id: string
   ok: boolean
+  /** info / warning 不影响退出码；旧检查省略时，失败按 error、成功按 info。 */
+  severity?: 'error' | 'warning' | 'info'
   message: string
   /** 失败时的修复提示。 */
   hint?: string
@@ -39,6 +53,14 @@ export interface DoctorOptions {
   launchAgentsDir?: string
   /** 用于查找外部工具的环境（主要是 PATH）；测试中注入以模拟缺少工具。 */
   env?: Env
+  /** 所有外部命令（包括 git）；缺省 argv 执行，10 秒超时、最多 1MB 输出。 */
+  runCommand?: typeof execCommand
+  findExecutable?: typeof findExecutable
+  /** 测试注入模拟 SDK，绝不加载或运行真实 Claude。 */
+  inspectClaudeSdk?: () => Promise<DoctorSdk | null>
+  /** 凭证只检查文件是否存在；测试必须注入临时用户目录。 */
+  userHome?: string
+  platform?: NodeJS.Platform
 }
 
 /** 在 PATH 中查找可执行文件，返回绝对路径。 */
@@ -70,39 +92,194 @@ export function compareVersions(a: string, b: string): number {
 const extractVersion = (text: string): string | null =>
   /(\d+\.\d+(?:\.\d+)?)/.exec(text)?.[1] ?? null
 
+const doctorCommand: typeof execCommand = (bin, args, opts = {}) =>
+  new Promise((resolve) => {
+    execFile(
+      bin,
+      args,
+      { ...opts, timeout: 10_000, maxBuffer: 1024 * 1024, encoding: 'utf8' },
+      (err, stdout, stderr) => {
+        resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout, stderr })
+      },
+    )
+  })
+
 async function checkTool(
   name: keyof typeof MIN_VERSIONS,
   args: string[],
   env: Env,
+  run: typeof execCommand,
+  find: typeof findExecutable,
+  roles?: string[],
 ): Promise<{ check: DoctorCheck; bin: string | null }> {
   const id = `tool.${name}`
-  const bin = findExecutable(name, env)
-  if (!bin) {
+  if (roles?.length === 0) {
     return {
-      bin,
-      check: { id, ok: false, message: `未找到 ${name}`, hint: INSTALL_HINTS[name] },
+      bin: null,
+      check: { id, ok: false, severity: 'info', message: `${name} 没有角色引用，跳过检查` },
     }
   }
-  const r = await execCommand(bin, args, { env })
-  const version = extractVersion(r.stdout || r.stderr)
-  const min = MIN_VERSIONS[name]
-  if (!version || compareVersions(version, min) < 0) {
+  const bin = find(name, env)
+  const suffix = roles ? `（角色：${roles.join('、')}）` : ''
+  if (!bin) {
     return {
       bin,
       check: {
         id,
         ok: false,
-        message: `${name} 版本 ${version ?? '未知'} 低于最低要求 ${min}`,
+        severity: 'error',
+        message: `未找到 ${name}${suffix}`,
         hint: INSTALL_HINTS[name],
       },
     }
   }
-  return { bin, check: { id, ok: true, message: `${name} ${version}（${bin}）` } }
+  const r = await run(bin, args, { env })
+  const version = extractVersion(`${r.stdout}\n${r.stderr}`)
+  const min = MIN_VERSIONS[name]
+  if (r.code !== 0 || !version || compareVersions(version, min) < 0) {
+    return {
+      bin,
+      check: {
+        id,
+        ok: false,
+        severity: r.code === 0 && version && roles ? 'warning' : 'error',
+        message: `${name}${r.code !== 0 ? ' 版本命令失败' : !version ? ' 版本无法解析' : ` 版本 ${version} 低于最低要求 ${min}`}${suffix}`,
+        hint: INSTALL_HINTS[name],
+      },
+    }
+  }
+  return { bin, check: { id, ok: true, message: `${name} ${version}（${bin}）${suffix}` } }
+}
+
+const orcaTerminals = z.object({
+  ok: z.literal(true),
+  result: z.object({ terminals: z.array(z.object({})) }),
+})
+
+async function checkExecutors(
+  roles: Role[],
+  env: Env,
+  opts: DoctorOptions,
+  run: typeof execCommand,
+  find: typeof findExecutable,
+): Promise<DoctorCheck[]> {
+  const users = (...executors: string[]) =>
+    roles.filter((r) => executors.includes(r.executor)).map((r) => r.name)
+  const codex = await checkTool(
+    'codex',
+    ['--version'],
+    env,
+    run,
+    find,
+    users('codex-orca', 'codex-exec'),
+  )
+  const orcaRoles = users('codex-orca')
+  const orca = await checkTool('orca', ['--version'], env, run, find, orcaRoles)
+  const checks = [codex.check, orca.check]
+  const dependency = (
+    id: string,
+    available: boolean,
+    message: string,
+    usedBy: string[],
+    hint?: string,
+  ): DoctorCheck => ({
+    id,
+    ok: available,
+    severity: !available && usedBy.length > 0 ? 'error' : 'info',
+    message: `${message}（${usedBy.length ? `角色：${usedBy.join('、')}` : '没有角色引用'}）`,
+    ...(!available && hint ? { hint } : {}),
+  })
+  if (orca.bin) {
+    const r = await run(orca.bin, ['terminal', 'list', '--json'], { env })
+    let available = false
+    try {
+      available = r.code === 0 && orcaTerminals.safeParse(JSON.parse(r.stdout)).success
+    } catch {
+      // 非 JSON / 不合法信封按不可用报告，不把终端内容或命令输出带进报告。
+    }
+    checks.push(
+      dependency(
+        'orca.app',
+        available,
+        available ? 'Orca 应用可连接' : '无法连接 Orca 应用或 terminal list 返回无效 JSON',
+        orcaRoles,
+        '启动 Orca 应用后重试 orca terminal list --json；若仍失败，检查 CLI 与应用版本是否匹配',
+      ),
+    )
+  }
+
+  const claudeRoles = users('claude-sdk')
+  if (claudeRoles.length === 0) {
+    checks.push(dependency('tool.claude-sdk', false, 'Claude Agent SDK 跳过检查', claudeRoles))
+    return checks
+  }
+  let sdk: DoctorSdk | undefined
+  try {
+    sdk = (await (opts.inspectClaudeSdk ?? inspectClaudeSdk)()) ?? undefined
+    checks.push(
+      dependency(
+        'tool.claude-sdk',
+        Boolean(sdk),
+        sdk
+          ? `Claude Agent SDK ${sdk.version} 可 import（node 声明：${sdk.expectedVersion}）`
+          : 'Claude Agent SDK 未安装（无法从 @flow/node 解析）',
+        claudeRoles,
+        '在 Flow 仓库运行 bun install --frozen-lockfile，安装 @flow/node 声明的 SDK',
+      ),
+    )
+  } catch {
+    checks.push(
+      dependency(
+        'tool.claude-sdk',
+        false,
+        'Claude Agent SDK 无法 import 或包版本无法解析',
+        claudeRoles,
+        '在 Flow 仓库运行 bun install --frozen-lockfile，确保 @anthropic-ai/claude-agent-sdk 安装完整',
+      ),
+    )
+  }
+  const claude = find('claude', env)
+  checks.push(
+    dependency(
+      'tool.claude',
+      Boolean(sdk?.cliPath),
+      sdk?.cliPath
+        ? `SDK 原生 claude CLI 存在：${sdk.cliPath}`
+        : `SDK 原生 claude CLI 缺失${claude ? `（PATH 有 ${claude}，SDK 不自动使用它）` : '；PATH 也未找到 claude'}`,
+      claudeRoles,
+      '重新安装 SDK 的当前平台可选依赖（不要使用 --omit=optional）；doctor 不执行 claude',
+    ),
+  )
+
+  const userHome = opts.userHome ?? env.HOME ?? homedir()
+  const configDir = env.CLAUDE_CONFIG_DIR ?? join(userHome, '.claude')
+  const credentialEnv = [
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_AUTH_TOKEN',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+  ].some((key) => Boolean(env[key]))
+  const credentialFile = existsSync(join(configDir, '.credentials.json'))
+  const auth = dependency(
+    'claude.credentials',
+    credentialEnv || credentialFile,
+    credentialEnv || credentialFile
+      ? 'Claude 凭证来源存在（未验证有效性）'
+      : '未发现 Claude 凭证环境变量或 .credentials.json',
+    claudeRoles,
+    '在节点运行环境配置 Claude 登录或凭证；仅检测存在性，不读取内容、不发起 API 调用',
+  )
+  // macOS 登录也可能只保存在 Keychain，无法仅通过文件存在性断定未登录。
+  if (!auth.ok && (opts.platform ?? process.platform) === 'darwin' && find('security', env)) {
+    auth.severity = 'warning'
+    auth.message += '；macOS Keychain 登录状态未检查，请人工确认'
+  }
+  checks.push(auth)
+  return checks
 }
 
 /**
  * 检查 flow-home 与外部依赖（flow-home spec：状态检查）。
- * 任何一项未通过时返回 `doctor_failed` 失败，details 中带完整报告。
+ * 有 error 未通过时返回 `doctor_failed` 失败，details 中带完整报告。
  */
 export async function runDoctor(
   home: string,
@@ -110,13 +287,15 @@ export async function runDoctor(
   opts: DoctorOptions = {},
 ): Promise<Result<DoctorReport>> {
   const env = opts.env ?? process.env
+  const run = opts.runCommand ?? doctorCommand
+  const find = opts.findExecutable ?? findExecutable
   const paths = flowPaths(home)
   const checks: DoctorCheck[] = []
 
-  const gitTool = await checkTool('git', ['--version'], env)
-  const gitleaksTool = await checkTool('gitleaks', ['version'], env)
+  const gitTool = await checkTool('git', ['--version'], env, run, find)
+  const gitleaksTool = await checkTool('gitleaks', ['version'], env, run, find)
   checks.push(gitTool.check, gitleaksTool.check)
-  const gitOpts = { env, bin: gitTool.bin ?? 'git' }
+  const gitRun = (cwd: string, args: string[]) => run(gitTool.bin ?? 'git', args, { env, cwd })
 
   checks.push(
     existsSync(home)
@@ -145,7 +324,7 @@ export async function runDoctor(
       })
       continue
     }
-    const committed = await hasCommits(dir, gitOpts)
+    const committed = (await gitRun(dir, ['rev-parse', '--verify', '-q', 'HEAD'])).code === 0
     checks.push(
       committed
         ? { id: `repo.${repo}`, ok: true, message: `${repo}/ 是 git 仓库` }
@@ -162,11 +341,11 @@ export async function runDoctor(
             hint: INIT_HINT,
           },
     )
-    checks.push(await checkHook(repo, dir, gitOpts))
+    checks.push(await checkHook(repo, dir, gitRun))
   }
 
   if (existsSync(paths.state) && gitTool.bin) {
-    const r = await git(paths.state, ['rev-parse', '--is-inside-work-tree'], gitOpts)
+    const r = await gitRun(paths.state, ['rev-parse', '--is-inside-work-tree'])
     const inGit = r.code === 0 && r.stdout.trim() === 'true'
     checks.push(
       inGit
@@ -216,6 +395,8 @@ export async function runDoctor(
     }
   }
 
+  checks.push(...(await checkExecutors(roles.ok ? roles.data.roles : [], env, opts, run, find)))
+
   for (const plist of checkDaemonPlists(opts.launchAgentsDir ?? launchAgentsDirectory())) {
     if (!plist.installed) continue
     checks.push({
@@ -228,7 +409,16 @@ export async function runDoctor(
     })
   }
 
-  const report: DoctorReport = { home, homeSource, ok: checks.every((c) => c.ok), checks }
+  const normalized: DoctorCheck[] = checks.map((c) => ({
+    ...c,
+    severity: c.severity ?? (c.ok ? 'info' : 'error'),
+  }))
+  const report: DoctorReport = {
+    home,
+    homeSource,
+    ok: normalized.every((c) => c.ok || c.severity !== 'error'),
+    checks: normalized,
+  }
   if (!report.ok) return fail('failure', 'doctor_failed', formatDoctorReport(report), report)
   return ok(report)
 }
@@ -236,10 +426,17 @@ export async function runDoctor(
 async function checkHook(
   repo: string,
   dir: string,
-  gitOpts: { env: Env; bin: string },
+  gitRun: (cwd: string, args: string[]) => ReturnType<typeof execCommand>,
 ): Promise<DoctorCheck> {
   const id = `hook.${repo}`
-  const p = (await hookPath(dir, 'pre-commit', gitOpts)) ?? join(dir, '.git', 'hooks', 'pre-commit')
+  const r = await gitRun(dir, ['rev-parse', '--git-path', 'hooks/pre-commit'])
+  const path = r.stdout.trim()
+  const p =
+    r.code === 0
+      ? path.startsWith('/')
+        ? path
+        : join(dir, path)
+      : join(dir, '.git', 'hooks', 'pre-commit')
   if (!existsSync(p)) {
     return {
       id,
@@ -275,9 +472,20 @@ export function formatDoctorReport(r: DoctorReport): string {
     `flow-home：${r.home}（来源：${r.homeSource === 'FLOW_HOME' ? 'FLOW_HOME' : '默认'}）`,
   ]
   for (const c of r.checks) {
-    lines.push(`${c.ok ? '[ok]  ' : '[fail]'} ${c.message}`)
+    const tag = c.ok
+      ? '[ok]  '
+      : c.severity === 'warning'
+        ? '[warn]'
+        : c.severity === 'info'
+          ? '[info]'
+          : '[fail]'
+    lines.push(`${tag} ${c.message}`)
     if (!c.ok && c.hint) lines.push(`       修复：${c.hint}`)
   }
-  lines.push(r.ok ? '全部检查通过' : `${r.checks.filter((c) => !c.ok).length} 项未通过`)
+  const errors = r.checks.filter((c) => !c.ok && (c.severity ?? 'error') === 'error').length
+  const warnings = r.checks.filter((c) => !c.ok && c.severity === 'warning').length
+  lines.push(
+    `${r.ok ? '全部检查通过' : `${errors} 项未通过`}${warnings ? `（${warnings} 项警告）` : ''}`,
+  )
   return lines.join('\n')
 }

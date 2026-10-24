@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { findExecutable } from '@flow/core'
+import { doctorOptions } from '../../core/test/doctor-helpers.ts'
 import { createDoctorCommand } from '../src/commands/doctor.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
@@ -31,9 +32,7 @@ const run = (...argv: string[]) =>
   runCli(
     argv,
     commands.map((command) =>
-      command.name === 'doctor'
-        ? createDoctorCommand({ launchAgentsDir: join(home, 'LaunchAgents') })
-        : command,
+      command.name === 'doctor' ? createDoctorCommand(doctorOptions(home)) : command,
     ),
   )
 
