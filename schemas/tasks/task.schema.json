@@ -883,9 +883,9 @@
               "type": "object",
               "properties": {
                 "usd": {
+                  "description": "估算费用（美元）；未报告时省略",
                   "type": "number",
-                  "minimum": 0,
-                  "description": "估算费用（美元）"
+                  "minimum": 0
                 },
                 "turns": {
                   "description": "模型往返轮数",
@@ -909,9 +909,6 @@
                   "maximum": 9007199254740991
                 }
               },
-              "required": [
-                "usd"
-              ],
               "additionalProperties": false,
               "title": "Task cost",
               "description": "执行器上报的费用与用量（估算）"

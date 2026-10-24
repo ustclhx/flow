@@ -98,6 +98,14 @@ const oneLine = (s: string, max = 300) => {
 }
 const matchesApproval = (l: string) => APPROVAL_RES.some((re) => re.test(l))
 
+/** 两种 Codex 执行器共用的提问识别；输入为完整的最后一条代理消息。 */
+export function questionMessage(lines: readonly string[]): string | undefined {
+  const lastLine = nonEmpty(lines).at(-1) ?? ''
+  if (!QUESTION_END_RE.test(lastLine) && !QUESTION_WORDS_RE.test(lines.join('\n'))) return
+  const q = [...nonEmpty(lines)].reverse().find((l) => /[?？]/.test(l)) ?? lastLine
+  return oneLine(q.replace(/^•\s*/, ''))
+}
+
 /** 末尾是否有忙碌标记。 */
 export function isBusy(tail: readonly string[]): boolean {
   return nonEmpty(tail)
@@ -186,11 +194,8 @@ export function analyzeTail(tail: readonly string[]): TailAnalysis {
   const msg = lastMessage(lines)
   const text = msg.join('\n')
   const lastLine = nonEmpty(msg).at(-1) ?? ''
-  if (QUESTION_END_RE.test(lastLine) || QUESTION_WORDS_RE.test(text)) {
-    // 说明取问题所在的行：以问号结尾的最后一行，否则整条消息的最后一行。
-    const q = [...nonEmpty(msg)].reverse().find((l) => /[?？]/.test(l)) ?? lastLine
-    return { kind: 'question', message: oneLine(q.replace(/^•\s*/, '')), last_message: msg }
-  }
+  const question = questionMessage(msg)
+  if (question !== undefined) return { kind: 'question', message: question, last_message: msg }
 
   const pr = PR_URL_RE.exec(text)?.[0]
   if (pr) {

@@ -368,7 +368,7 @@ export type VerifyOutcome = z.infer<typeof verifyOutcome>
 /** 执行器上报的费用与用量（估算值，不是账单）。 */
 export const taskCost = z
   .strictObject({
-    usd: z.number().min(0).meta({ description: '估算费用（美元）' }),
+    usd: z.number().min(0).optional().meta({ description: '估算费用（美元）；未报告时省略' }),
     turns: z.number().int().min(0).optional().meta({ description: '模型往返轮数' }),
     duration_ms: z.number().int().min(0).optional(),
     input_tokens: z.number().int().min(0).optional(),

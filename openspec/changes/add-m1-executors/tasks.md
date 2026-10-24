@@ -22,7 +22,7 @@
 
 ## 4. codex-exec 执行器
 
-- [ ] 4.1 `codex exec --json` 的运行、JSONL 解析（事件 schema 以本机 codex 实际输出为准，fixture 存档）、最后一条消息作为摘要、记录会话 id、提问识别（复用 2.3 的规则）、`blocked(question)` 结束一轮、带回复时用 `codex exec resume`；验证注入假 `codex` 二进制的测试覆盖 executor-codex-exec spec 的全部场景
+- [x] 4.1 `codex exec --json` 的运行、JSONL 解析（事件 schema 以本机 codex 实际输出为准，fixture 存档）、最后一条消息作为摘要、记录会话 id、提问识别（复用 2.3 的规则）、`blocked(question)` 结束一轮、带回复时用 `codex exec resume`；验证注入假 `codex` 二进制的测试覆盖 executor-codex-exec spec 的全部场景
 
 ## 5. 验收运行器
 
