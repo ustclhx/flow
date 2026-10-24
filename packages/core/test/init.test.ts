@@ -103,7 +103,8 @@ describe('flow init', () => {
         executor: 'claude-sdk',
         model: 'claude-opus-5-5',
         permissions: {
-          permissionMode: 'auto',
+          permissionMode: 'default',
+          setting_sources: [],
           allowedTools: ['Read', 'Glob', 'Grep', 'Bash(gh pr comment:*)', 'Bash(gh pr review:*)'],
           disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
         },

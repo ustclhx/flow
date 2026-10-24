@@ -18,7 +18,8 @@ executor: claude-sdk
 model: claude-opus-5-5
 prompt: reviewer.md
 permissions:
-  permissionMode: auto
+  permissionMode: default
+  setting_sources: []
   allowedTools:
     - Read
     - Glob

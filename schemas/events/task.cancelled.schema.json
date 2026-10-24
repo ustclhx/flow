@@ -164,7 +164,7 @@
               "description": "执行器会话 id（例如 Claude Agent SDK 的 session_id），便于事后查看或恢复",
               "type": "string",
               "minLength": 1,
-              "maxLength": 200
+              "maxLength": 512
             },
             "cost": {
               "type": "object",

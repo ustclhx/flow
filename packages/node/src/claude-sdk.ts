@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type {
   CanUseTool,
   EffortLevel,
@@ -8,6 +10,7 @@ import type {
   SDKMessage,
   SDKResultMessage,
   SDKUserMessage,
+  SettingSource,
 } from '@anthropic-ai/claude-agent-sdk'
 import {
   BLOCKED_REASONS,
@@ -19,6 +22,7 @@ import {
   ok,
   type Result,
   type Role,
+  redactLines,
   redactSecrets,
   type TaskContract,
   type TaskCost,
@@ -44,8 +48,9 @@ import {
  *
  * 通过 Claude Agent SDK 无头运行 Claude Code：
  * - 流式输入：首条用户消息是任务说明，运行中的文字回复再作为用户消息推入；
- * - 角色提示词追加在 `claude_code` 预设之后，只加载项目级设置（`settingSources: ['project']`）；
- * - 注入 `flow mcp --actor <角色名>`（stdio），worker 可以检索知识库、写 journal、提交提案；
+ * - 角色提示词追加在 `claude_code` 预设之后；设置来源由角色的 `setting_sources` 决定（默认 `['project']`，
+ *   为 `[]` 时改为追加 cwd 下 CLAUDE.md / AGENTS.md 的纯文本）；权限模式默认 `default`；
+ * - 注入 `flow mcp --actor <角色名>`（stdio），只放行 FLOW_MCP_AUTO_ALLOWED 中的 flow 工具，其余走审批；
  * - 工具审批：`canUseTool` 被调用时挂起，经 idle 信号上报 `blocked(awaiting_approval)`，
  *   approve / deny 经 `deliver` 送达后 resolve 对应的 Promise；超过角色设定的时限则任务失败；
  * - 结果：摘要取最后一条助手文本，记录会话 id 与费用；SDK 报错或轮次耗尽时以 failed 结束；
@@ -58,6 +63,36 @@ export const CLAUDE_SDK_EXECUTOR = 'claude-sdk'
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5'
 /** 审批等待的默认时限：24 小时。 */
 export const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 24 * 60
+
+/**
+ * 不经审批即放行的 flow MCP 工具（工具名 = `packages/core/src/ops` 中的操作名）。
+ *
+ * 只放行读知识库、写 journal / capture、提交提案（提案仍需用户接受）和只读查看任务：
+ * 这些操作都落在 AI 写入边界之内，不会让 worker 获得比自身角色更大的权限。
+ * 其余工具一律走 canUseTool 审批，尤其是：
+ * - `task_create`：只读的 reviewer 可以借此创建一个 `role: dev`（codex-orca + danger-full-access）的任务，等于提权；
+ * - `task_cancel`、`task_reply`：可以干预其他任务（包括替用户答复审批）；
+ * - `kb_proposals_accept` / `reject`、`resource_transfer`：属于用户的决定；
+ * - 以后新增的 flow 工具：默认不在清单里，需要审批，评估后再加入。
+ */
+export const FLOW_MCP_AUTO_ALLOWED = [
+  'kb_search',
+  'kb_get',
+  'kb_query',
+  'kb_journal',
+  'capture',
+  'kb_propose',
+  'ws_brief',
+  'task_list',
+  'task_show',
+] as const
+/** SDK 中 flow MCP 工具的全名前缀（服务名 flow）。 */
+export const FLOW_MCP_TOOL_PREFIX = 'mcp__flow__'
+/** 项目约定文件（setting_sources 为 [] 时作为纯文本追加到系统提示词）。 */
+export const PROJECT_INSTRUCTION_FILES = ['CLAUDE.md', 'AGENTS.md'] as const
+const PROJECT_INSTRUCTION_MAX = 16_000
+/** 取消时等 SDK 子进程（及其 flow MCP 孙进程）退出的时限。 */
+export const CANCEL_GRACE_MS = 10_000
 
 const PERMISSION_MODES = [
   'default',
@@ -75,9 +110,20 @@ const EFFORT_LEVELS = [
   'max',
 ] as const satisfies readonly EffortLevel[]
 
-/** 角色 `permissions` 在 claude-sdk 执行器下的形态（内核只校验它是对象，这里细化）。 */
+const SETTING_SOURCES = ['user', 'project', 'local'] as const satisfies readonly SettingSource[]
+
+/**
+ * 角色 `permissions` 在 claude-sdk 执行器下的形态（内核只校验它是对象，这里细化）。
+ *
+ * - `permissionMode` 默认 `default`：每一次未被允许列表放行的调用都进 canUseTool、交给 Flow 审批。
+ *   `auto` 下分类器有把握的调用根本不会进 canUseTool，等于让模型自己决定，只有角色显式写出才使用；
+ * - `setting_sources` 默认 `['project']`。注意被操作仓库的 `.claude/settings.json` 会随之生效：
+ *   其中的 hooks 会直接执行命令，`permissions.allow` 会在 canUseTool 之前放行，绕过 Flow 的审批。
+ *   审查他人仓库的角色（reviewer 模板）应设为 `[]`，此时执行器改为把 cwd 下 CLAUDE.md / AGENTS.md
+ *   的纯文本追加到系统提示词，保留项目约定但不加载 hooks 与权限规则。
+ */
 export const claudeSdkPermissions = z.strictObject({
-  permissionMode: z.enum(PERMISSION_MODES).default('auto'),
+  permissionMode: z.enum(PERMISSION_MODES).default('default'),
   allowedTools: z.array(z.string().min(1)).default([]),
   disallowedTools: z.array(z.string().min(1)).default([]),
   maxTurns: z.number().int().positive().optional(),
@@ -86,6 +132,7 @@ export const claudeSdkPermissions = z.strictObject({
     .positive()
     .max(10 * 24 * 60)
     .default(DEFAULT_APPROVAL_TIMEOUT_MINUTES),
+  setting_sources: z.array(z.enum(SETTING_SOURCES)).default(['project']),
 })
 export type ClaudeSdkPermissions = z.infer<typeof claudeSdkPermissions>
 
@@ -131,6 +178,10 @@ export interface ClaudeSdkExecutorOptions {
   reannounceMs?: number
   /** 两条 SDK 消息间隔超过这么久时附带 resumed 信号（让 no_progress 之后恢复），缺省 60 秒。 */
   resumeGapMs?: number
+  /** 取消后等 SDK 子进程退出的毫秒数，超时后 close() 强制结束；缺省 10 秒。 */
+  cancelGraceMs?: number
+  /** 读取项目约定文件；缺省读 cwd 下的文件，不存在时返回 undefined。 */
+  readProjectFile?: (path: string) => Promise<string | undefined>
 }
 
 const REANNOUNCE_MAX_MS = 10 * 60_000
@@ -226,6 +277,11 @@ class InputStream implements AsyncIterable<SDKUserMessage> {
   private waiting: ((r: IteratorResult<SDKUserMessage>) => void) | undefined
   closed = false
 
+  /** 已推入、SDK 还没读取的消息数。 */
+  get unread() {
+    return this.items.length
+  }
+
   push(item: SDKUserMessage) {
     if (this.closed) return
     const w = this.waiting
@@ -315,6 +371,8 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
   const flowCommand = options.flowCommand ?? ['flow']
   const reannounceMs = options.reannounceMs ?? 1000
   const resumeGapMs = options.resumeGapMs ?? 60_000
+  const cancelGraceMs = options.cancelGraceMs ?? CANCEL_GRACE_MS
+  const readProjectFile = options.readProjectFile ?? defaultReadProjectFile
 
   return {
     type: CLAUDE_SDK_EXECUTOR,
@@ -334,6 +392,19 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
       let lastMessageAt = clock.now()
       let cancelAnnounce = () => {}
       let announceDelay = reannounceMs
+      /**
+       * 用户看到的那条审批（tool_use_id）。节点只在 running 时接受 idle 信号、转为 blocked，
+       * 所以只有"节点可能在 running"时发出的上报才会成为用户看到的那一条：
+       * 运行开始、回复送达（节点随即回到 running）、发出 resumed 信号之后。
+       */
+      let presented: string | undefined
+      let nodeMayBeRunning = true
+      /** SDK 消息循环是否已经退出（子进程已结束输出）。 */
+      let loopClosed = false
+      let resolveLoop = () => {}
+      const loopEnded = new Promise<void>((resolve) => {
+        resolveLoop = resolve
+      })
       let settle: (r: Result<ExecutorOutcome>) => void = () => {}
       const done = new Promise<Result<ExecutorOutcome>>((resolve) => {
         settle = resolve
@@ -359,7 +430,10 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         ...extra,
       })
 
-      /** 结束：拒绝全部待决审批、关闭输入与查询、结束活动流。 */
+      /**
+       * 结束：拒绝全部待决审批、关闭输入、中止查询，等 SDK 子进程（连同它启动的 flow MCP 孙进程）
+       * 随 abort 退出，最多 cancelGraceMs，之后 close() 强制结束，再结束活动流、给出结果。
+       */
       const finish = (r: Result<ExecutorOutcome>) => {
         if (finished) return
         finished = true
@@ -370,14 +444,28 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         }
         input.close()
         abortController.abort()
-        try {
-          q?.close()
-        } catch {
-          // 已经结束的查询再 close 可能抛出，忽略。
-        }
         ctx.signal.removeEventListener('abort', onAbort)
-        queue.close()
-        settle(r)
+        const finalize = () => {
+          try {
+            q?.close()
+          } catch {
+            // 已经结束的查询再 close 可能抛出，忽略。
+          }
+          queue.close()
+          settle(r)
+        }
+        if (!q || loopClosed) {
+          finalize()
+          return
+        }
+        let cancelGrace = () => {}
+        const grace = new Promise<void>((resolve) => {
+          cancelGrace = clock.setTimeout(resolve, cancelGraceMs)
+        })
+        void Promise.race([loopEnded, grace]).then(() => {
+          cancelGrace()
+          finalize()
+        })
       }
       const onAbort = () => {
         finish(ok({ outcome: 'cancelled', message: 'claude-sdk 执行器已取消' }))
@@ -388,6 +476,10 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         cancelAnnounce()
         const head = pending[0]
         if (!head || finished) return
+        if (nodeMayBeRunning) {
+          presented = head.toolUseID
+          nodeMayBeRunning = false
+        }
         queue.push(
           idleSignal(iso(), head.message, {
             reason: 'awaiting_approval',
@@ -488,6 +580,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         // 长时间静默后又有消息：worker 自行恢复（节点只在 blocked 时据此回到 running）。
         if (now - lastMessageAt >= resumeGapMs && pending.length === 0) {
           queue.push(resumedSignal(iso(), 'Claude 恢复了输出'))
+          nodeMayBeRunning = true
         }
         lastMessageAt = now
         switch (m.type) {
@@ -604,9 +697,15 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           )
           return
         }
+        // 不加载项目设置时，把项目约定文件的纯文本追加到系统提示词（不含 hooks 与权限规则）。
+        const instructions = perms.data.setting_sources.includes('project')
+          ? undefined
+          : await projectInstructions(ctx.cwd, readProjectFile)
+        if (finished) return
         const query = options.query ?? (await loadSdkQuery())
         if (finished) return
         const options_ = buildOptions({
+          ...(instructions ? { projectInstructions: instructions } : {}),
           role: role.data,
           perms: perms.data,
           ctx,
@@ -638,18 +737,23 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         q = query({ prompt: input, options: options_ })
         let last: SDKResultMessage | undefined
         try {
-          for await (const m of q) {
-            if (finished) return
-            const r = onMessage(m)
-            if (!r) continue
-            last = r
-            // 运行中推入的回复还在排队：等它的那一轮结束。
-            if ((r.queued_turn_count ?? 0) > 0) continue
-            break
+          try {
+            for await (const m of q) {
+              if (finished) return
+              const r = onMessage(m)
+              if (!r) continue
+              last = r
+              // 运行中推入的回复还在排队（SDK 已收下但未处理，或还没读取）：等它的那一轮结束。
+              if ((r.queued_turn_count ?? 0) > 0 || input.unread > 0) continue
+              break
+            }
+          } finally {
+            loopClosed = true
+            resolveLoop()
           }
         } catch (err) {
           if (finished) return
-          for (const line of stderrTail) output(line)
+          for (const line of redactLines(stderrTail)) output(line)
           finish(
             ok({
               outcome: 'exited',
@@ -661,7 +765,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         }
         if (finished) return
         if (!last) {
-          for (const line of stderrTail) output(line)
+          for (const line of redactLines(stderrTail)) output(line)
           finish(
             ok({ outcome: 'exited', exit_code: null, message: 'Claude 在给出结果之前结束了输出' }),
           )
@@ -689,9 +793,12 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           // 按 reply_id 幂等：同一条回复只交给 Claude 一次。
           if (seenReplies.has(reply.reply_id)) return 'delivered'
           seenReplies.add(reply.reply_id)
+          // 送达确认后节点回到 running：下一次上报会成为用户看到的那一条。
+          nodeMayBeRunning = true
           const text = reply.text?.trim()
           const head = pending[0]
-          if (head) {
+          // 答复只作用于用户看到的那条审批（按 tool_use_id 匹配，而不是队列位置）。
+          if (head && head.toolUseID === presented) {
             if (reply.kind === 'approve') {
               status(`已批准 ${head.toolName}（${reply.by}）`)
               settleHead({ behavior: 'allow', updatedInput: head.input })
@@ -709,6 +816,16 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
                 message: `用户没有批准这次调用，而是回复：${text ?? ''}`,
               })
             }
+            return 'delivered'
+          }
+          if (head) {
+            // 用户答复的那条审批已经不在了（例如被 Claude 中止）：不能套到用户没见过的请求上，
+            // 文字照常推给 Claude，然后重新上报当前队首。
+            if (reply.kind === 'text' && text) input.push(userMessage(renderReply(reply)))
+            status(
+              `回复 ${reply.reply_id}（${reply.kind}）对应的审批已失效，重新上报待审批的 ${head.toolName}`,
+            )
+            resetAnnounce()
             return 'delivered'
           }
           if (reply.kind === 'text' || text) {
@@ -734,6 +851,8 @@ interface BuildOptionsInput {
   canUseTool: CanUseTool
   abortController: AbortController
   stderr: (data: string) => void
+  /** setting_sources 不含 project 时读到的项目约定纯文本（已脱敏、限长）。 */
+  projectInstructions?: string
 }
 
 /** 由角色与任务上下文拼出 SDK 的 `query()` 选项。 */
@@ -745,15 +864,24 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     args: [...prefix, 'mcp', '--actor', i.role.name],
     env: { FLOW_HOME: i.home },
   }
-  // flow MCP 的工具总是放行：写入受 Flow 自己的 AI 写入边界约束。
-  const allowedTools = [...new Set([...i.perms.allowedTools, 'mcp__flow'])]
+  // 只放行清单中的 flow 工具（见 FLOW_MCP_AUTO_ALLOWED），其余 flow 工具走 canUseTool 审批。
+  const allowedTools = [
+    ...new Set([
+      ...i.perms.allowedTools,
+      ...FLOW_MCP_AUTO_ALLOWED.map((name) => `${FLOW_MCP_TOOL_PREFIX}${name}`),
+    ]),
+  ]
+  const append = i.projectInstructions
+    ? `${i.role.prompt}\n\n${i.projectInstructions}`
+    : i.role.prompt
   return {
     cwd: i.ctx.cwd,
     model: i.role.model ?? DEFAULT_CLAUDE_MODEL,
     ...(i.role.effort ? { effort: i.role.effort as EffortLevel } : {}),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: i.role.prompt },
-    settingSources: ['project'],
+    systemPrompt: { type: 'preset', preset: 'claude_code', append },
+    settingSources: [...i.perms.setting_sources],
     mcpServers: { flow: flowMcp },
+    // 角色显式写 auto / bypassPermissions 时照原样传递；缺省为 default（见 claudeSdkPermissions）。
     permissionMode: i.perms.permissionMode,
     ...(i.perms.permissionMode === 'bypassPermissions'
       ? { allowDangerouslySkipPermissions: true }
@@ -766,4 +894,34 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     ...(i.ctx.resume?.session ? { resume: i.ctx.resume.session } : {}),
     stderr: i.stderr,
   }
+}
+
+async function defaultReadProjectFile(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 读取 cwd 下的项目约定文件（CLAUDE.md、AGENTS.md）作为纯文本：每个文件限长、经脱敏。
+ * 只取文本，不解释 `@` 引用，不加载 hooks 与权限规则。没有任何文件时返回 undefined。
+ */
+export async function projectInstructions(
+  cwd: string,
+  read: (path: string) => Promise<string | undefined> = defaultReadProjectFile,
+): Promise<string | undefined> {
+  const parts: string[] = []
+  for (const name of PROJECT_INSTRUCTION_FILES) {
+    const text = (await read(join(cwd, name)))?.trim()
+    if (!text) continue
+    parts.push(`## ${name}\n\n${safe(text, PROJECT_INSTRUCTION_MAX)}`)
+  }
+  if (parts.length === 0) return undefined
+  return [
+    '# 项目约定（Flow 读取的纯文本，未加载该仓库的 Claude Code 设置、hooks 与权限规则）',
+    '',
+    ...parts,
+  ].join('\n')
 }

@@ -389,7 +389,7 @@ export const taskResult = z
       .regex(/^[a-z][a-z0-9_]*$/)
       .optional()
       .meta({ description: '失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）' }),
-    session: z.string().min(1).max(200).optional().meta({
+    session: z.string().min(1).max(512).optional().meta({
       description: '执行器会话 id（例如 Claude Agent SDK 的 session_id），便于事后查看或恢复',
     }),
     cost: taskCost.optional(),

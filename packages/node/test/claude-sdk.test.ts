@@ -8,7 +8,15 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import { type DeliveredReply, ok, type Result, type Role, type TaskContract } from '@flow/core'
+import {
+  type DeliveredReply,
+  ok,
+  operations,
+  type Result,
+  type Role,
+  type TaskContract,
+  taskResult,
+} from '@flow/core'
 import { DEFAULT_ROLE_FILES } from '../../core/src/role-templates.ts'
 import {
   type ClaudeQueryFn,
@@ -16,11 +24,13 @@ import {
   classifyClaudeSdk,
   createClaudeSdkExecutor,
   type ExecutorOutcome,
+  FLOW_MCP_AUTO_ALLOWED,
   type NodeClock,
+  projectInstructions,
   summarizeToolInput,
   systemClock,
 } from '../src/index.ts'
-import { type Bench, bench } from './harness.ts'
+import { type Bench, bench, ManualClock } from './harness.ts'
 
 /**
  * claude-sdk 执行器（add-m1-executors 3.1 / 3.2；executor-claude-sdk spec 全部场景）。
@@ -37,7 +47,11 @@ interface MockIO {
   /** 读取流式输入的下一条用户消息（文本）；输入关闭时为 undefined。 */
   nextUser(): Promise<string | undefined>
   /** 以 SDK 的方式调用 canUseTool。 */
-  ask(tool: string, input: Record<string, unknown>): Promise<PermissionResult | null>
+  ask(
+    tool: string,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<PermissionResult | null>
 }
 type Script = (io: MockIO) => AsyncGenerator<SDKMessage, void>
 
@@ -47,13 +61,23 @@ interface MockState {
   permissions: Array<PermissionResult | null>
   closed: number
   executed: string[]
+  /** 调用顺序：abort（abortController 被中止）、end（脚本结束）、close。 */
+  events: string[]
 }
 
 function mockSdk(script: Script): { query: ClaudeQueryFn; state: MockState } {
-  const state: MockState = { calls: [], prompts: [], permissions: [], closed: 0, executed: [] }
+  const state: MockState = {
+    calls: [],
+    prompts: [],
+    permissions: [],
+    closed: 0,
+    executed: [],
+    events: [],
+  }
   let n = 0
   const query: ClaudeQueryFn = ({ prompt, options }) => {
     state.calls.push(options)
+    options.abortController?.signal.addEventListener('abort', () => state.events.push('abort'))
     const it = prompt[Symbol.asyncIterator]()
     const io: MockIO = {
       options,
@@ -66,12 +90,12 @@ function mockSdk(script: Script): { query: ClaudeQueryFn; state: MockState } {
         state.prompts.push(t)
         return t
       },
-      async ask(tool, input) {
+      async ask(tool, input, signal) {
         const canUseTool = options.canUseTool
         if (!canUseTool) throw new Error('没有 canUseTool')
         n++
         const r = await canUseTool(tool, input, {
-          signal: options.abortController?.signal ?? new AbortController().signal,
+          signal: signal ?? options.abortController?.signal ?? new AbortController().signal,
           toolUseID: `tu-${n}`,
           requestId: `rq-${n}`,
         })
@@ -80,11 +104,19 @@ function mockSdk(script: Script): { query: ClaudeQueryFn; state: MockState } {
         return r
       },
     }
-    const gen = script(io)
+    const inner = script(io)
+    const gen = (async function* () {
+      try {
+        yield* inner
+      } finally {
+        state.events.push('end')
+      }
+    })()
     return {
       [Symbol.asyncIterator]: () => gen,
       close() {
         state.closed++
+        state.events.push('close')
       },
     }
   }
@@ -297,14 +329,15 @@ describe('按角色运行', () => {
       }
       const [rev, plain] = state.calls
       expect(rev?.model).toBe('claude-opus-5-5')
-      expect(rev?.permissionMode).toBe('auto')
+      expect(rev?.permissionMode).toBe('default')
+      expect(rev?.settingSources).toEqual([])
       expect(rev?.allowedTools).toEqual([
         'Read',
         'Glob',
         'Grep',
         'Bash(gh pr comment:*)',
         'Bash(gh pr review:*)',
-        'mcp__flow',
+        ...FLOW_MCP_AUTO_ALLOWED.map((n) => `mcp__flow__${n}`),
       ])
       expect(rev?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit'])
       expect(String((rev?.systemPrompt as { append?: string } | undefined)?.append)).toContain(
@@ -317,7 +350,9 @@ describe('按角色运行', () => {
         env: { FLOW_HOME: home },
       })
       expect(plain?.model).toBe('claude-opus-5-5')
-      expect(plain?.permissionMode).toBe('auto')
+      // 角色没写：默认 default，设置来源默认 ['project']。
+      expect(plain?.permissionMode).toBe('default')
+      expect(plain?.settingSources).toEqual(['project'])
     } finally {
       rmSync(home, { recursive: true, force: true })
     }
@@ -354,7 +389,35 @@ describe('注入 Flow MCP', () => {
       command: 'flow',
       args: ['mcp', '--actor', 'reviewer'],
     })
-    expect(state.calls[0]?.allowedTools).toContain('mcp__flow')
+    const allowed = state.calls[0]?.allowedTools ?? []
+    expect(allowed).toContain('mcp__flow__kb_journal')
+    // 不再整体放行 flow 服务；创建、取消任务等不在清单里。
+    expect(allowed).not.toContain('mcp__flow')
+    for (const tool of ['task_create', 'task_cancel', 'task_reply', 'kb_proposals_accept']) {
+      expect(allowed).not.toContain(`mcp__flow__${tool}`)
+    }
+  })
+
+  test('放行清单与 flow 的实际工具名一致', () => {
+    const names = new Set(operations.map((op) => op.name))
+    for (const n of FLOW_MCP_AUTO_ALLOWED) expect(names.has(n)).toBe(true)
+  })
+
+  test('worker 创建任务需要审批：task_create 进 canUseTool，批准前不创建', async () => {
+    const { b, state, create } = await sdkBench(async function* (io) {
+      await io.nextUser()
+      const r = await io.ask('mcp__flow__task_create', { role: 'dev', goal: '改 main' })
+      yield say(r?.behavior === 'allow' ? '已创建' : '未创建')
+      yield result()
+    })
+    const id = await create()
+    const t = await b.until(id, (t) => t.status === 'blocked')
+    expect(t.blocked?.reason).toBe('awaiting_approval')
+    expect(t.blocked?.message).toContain('mcp__flow__task_create')
+    expect(state.executed).toEqual([])
+    await reply(b, id, { kind: 'deny', text: '不允许' })
+    const done = await b.until(id, (t) => t.status === 'done')
+    expect(done.result?.summary).toBe('未创建')
   })
 })
 
@@ -645,6 +708,266 @@ describe('运行中的回复与会话恢复', () => {
     expect(await run.deliver?.({ reply_id: 'r-b', kind: 'text', text: 'x', by: 'user' })).toBe(
       'not_running',
     )
+  })
+})
+
+describe('权限模式与设置来源', () => {
+  const runOnce = async (role: Role, cwd = '/repo/demo') => {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(role),
+    })
+    const r = await ex.run(contract(), ctx({ cwd })).done
+    expect(r.ok && r.data.outcome).toBe('done')
+    return state.calls[0]
+  }
+
+  test('角色显式写 auto / bypassPermissions：照原样传递（bypass 同时声明 allowDangerouslySkipPermissions）', async () => {
+    expect((await runOnce(reviewer({ permissionMode: 'auto' })))?.permissionMode).toBe('auto')
+    const bypass = await runOnce(reviewer({ permissionMode: 'bypassPermissions' }))
+    expect(bypass?.permissionMode).toBe('bypassPermissions')
+    expect(bypass?.allowDangerouslySkipPermissions).toBe(true)
+    const { permissionMode: _drop, ...rest } = reviewer().permissions ?? {}
+    const def = await runOnce({ ...reviewer(), permissions: rest })
+    expect(def?.permissionMode).toBe('default')
+    expect(def?.allowDangerouslySkipPermissions).toBeUndefined()
+  })
+
+  test('审查不受被审查仓库的设置影响：setting_sources 为 [] 时不加载设置，CLAUDE.md / AGENTS.md 以纯文本追加（限长、脱敏）', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'flow-claude-sdk-repo-'))
+    try {
+      // 运行时拼出的令牌形状文本，不是真的密钥。
+      const token = ['gh', 'p_', 'B'.repeat(36)].join('')
+      mkdirSync(join(repo, '.claude'))
+      writeFileSync(
+        join(repo, '.claude', 'settings.json'),
+        JSON.stringify({ hooks: { PreToolUse: [] }, permissions: { allow: ['Bash(*)'] } }),
+      )
+      writeFileSync(join(repo, 'CLAUDE.md'), `本仓库用 bun。\nCI_TOKEN=${token}\n`)
+      writeFileSync(join(repo, 'AGENTS.md'), `注释用中文。\n${'长'.repeat(40_000)}`)
+      const o = await runOnce(reviewer({ permissionMode: 'default', setting_sources: [] }), repo)
+      expect(o?.settingSources).toEqual([])
+      expect(o?.permissionMode).toBe('default')
+      const append = String((o?.systemPrompt as { append?: string } | undefined)?.append)
+      expect(append.startsWith('只读审查 PR。')).toBe(true)
+      expect(append).toContain('本仓库用 bun。')
+      expect(append).toContain('注释用中文。')
+      expect(append).not.toContain(token)
+      expect(append).toContain('[REDACTED:')
+      expect(append).not.toContain('Bash(*)')
+      expect(append.length).toBeLessThan(40_000)
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test('setting_sources 含 project 时不另外读取约定文件；都不存在时不追加', async () => {
+    const reads: string[] = []
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(reviewer()),
+      readProjectFile: async (path) => {
+        reads.push(path)
+        return '不应读取'
+      },
+    })
+    await ex.run(contract(), ctx()).done
+    expect(reads).toEqual([])
+    expect(state.calls[0]?.settingSources).toEqual(['project'])
+    expect(await projectInstructions('/nowhere', async () => undefined)).toBeUndefined()
+  })
+})
+
+describe('健壮性', () => {
+  test('结果到达时输入流里还有未读取的回复：继续等下一个结果，回复不丢', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield say('第一轮')
+      await gate
+      // SDK 还没读取运行中推入的回复，就报告了这一轮的结果。
+      yield result({ queued_turn_count: 0 })
+      const answer = await io.nextUser()
+      yield say(`第二轮：${answer}`)
+      yield result()
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(reviewer()),
+    })
+    const run = ex.run(contract(), ctx())
+    const pumped = (async () => {
+      for await (const _ of run.activity) {
+      }
+    })()
+    for (let i = 0; i < 100 && state.calls.length === 0; i++) await Bun.sleep(1)
+    expect(
+      await run.deliver?.({ reply_id: 'r-q', kind: 'text', text: '再看 CI', by: 'user' }),
+    ).toBe('delivered')
+    release()
+    const r = await run.done
+    await pumped
+    expect(r.ok && r.data.outcome === 'done' && r.data.result.summary).toContain('再看 CI')
+  })
+
+  test('审批按 tool_use_id 匹配：用户答复的请求已被中止时不套到下一条，重新上报队首', async () => {
+    const clock = new ManualClock()
+    const abortA = new AbortController()
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      const a = io.ask('Bash', { command: 'A' }, abortA.signal)
+      const b = io.ask('Bash', { command: 'B' })
+      await Promise.all([a, b])
+      yield result()
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      clock,
+      query,
+      resolveRole: roleResolver(reviewer()),
+      reannounceMs: 1000,
+    })
+    const run = ex.run(contract(), ctx())
+    const idles: string[] = []
+    const pumped = (async () => {
+      for await (const a of run.activity) {
+        const hint = a.data?.hint as { tool_use_id?: string } | undefined
+        if (a.data?.idle && hint?.tool_use_id) idles.push(hint.tool_use_id)
+      }
+    })()
+    await clock.advance(0)
+    expect(idles).toEqual(['tu-1'])
+    // Claude 中止了用户看到的 A；队首变成 B，但节点仍显示 A。
+    abortA.abort()
+    await clock.advance(0)
+    expect(state.permissions[0]).toMatchObject({ behavior: 'deny', message: '已中止' })
+    // 用户对 A 的批准不能落到 B 上。
+    expect(await run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'user' })).toBe('delivered')
+    expect(state.executed).toEqual([])
+    // 重新上报队首 B，之后的批准才作用于 B。
+    await clock.advance(1000)
+    expect(idles.at(-1)).toBe('tu-2')
+    expect(await run.deliver?.({ reply_id: 'r-2', kind: 'approve', by: 'user' })).toBe('delivered')
+    await clock.advance(0)
+    const r = await run.done
+    await pumped
+    expect(r.ok && r.data.outcome).toBe('done')
+    expect(state.executed).toEqual(['B'])
+  })
+
+  test('stderr 末尾上报前脱敏', async () => {
+    const token = ['gh', 'p_', 'C'.repeat(36)].join('')
+    const { query } = mockSdk(async function* (io) {
+      await io.nextUser()
+      io.options.stderr?.(`auth failed: --token ${token}\nfatal`)
+      yield say('启动失败')
+      throw new Error('Claude Code process exited with code 1')
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(reviewer()),
+    })
+    const run = ex.run(contract(), ctx())
+    const texts: string[] = []
+    for await (const a of run.activity) texts.push(a.text ?? '')
+    const r = await run.done
+    expect(r.ok && r.data.outcome).toBe('exited')
+    expect(texts.join('\n')).not.toContain(token)
+    expect(texts.some((t) => t.includes('[REDACTED:'))).toBe(true)
+    expect(texts).toContain('fatal')
+  })
+
+  test('取消：先 abort，等 SDK 子进程退出后再 close（flow MCP 孙进程随之结束）', async () => {
+    const clock = new ManualClock()
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield say('开始')
+      // 模拟子进程：收到 abort 后过一会儿才退出。
+      await new Promise<void>((resolve) =>
+        io.options.abortController?.signal.addEventListener('abort', () =>
+          clock.setTimeout(resolve, 2000),
+        ),
+      )
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      clock,
+      query,
+      resolveRole: roleResolver(reviewer()),
+    })
+    const run = ex.run(contract(), ctx())
+    const pumped = (async () => {
+      for await (const _ of run.activity) {
+      }
+    })()
+    await clock.advance(0)
+    let settled = false
+    void run.done.then(() => {
+      settled = true
+    })
+    await run.cancel()
+    await clock.advance(1000)
+    expect(settled).toBe(false)
+    expect(state.events).toEqual(['abort'])
+    await clock.advance(1000)
+    const r = await run.done
+    await pumped
+    expect(r.ok && r.data.outcome).toBe('cancelled')
+    expect(state.events).toEqual(['abort', 'end', 'close'])
+  })
+
+  test('取消：子进程 10 秒内不退出，close() 强制结束', async () => {
+    const clock = new ManualClock()
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield say('开始')
+      await new Promise<void>(() => {})
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      clock,
+      query,
+      resolveRole: roleResolver(reviewer()),
+    })
+    const run = ex.run(contract(), ctx())
+    void (async () => {
+      for await (const _ of run.activity) {
+      }
+    })()
+    await clock.advance(0)
+    let settled = false
+    void run.done.then(() => {
+      settled = true
+    })
+    await run.cancel()
+    await clock.advance(9_999)
+    expect(settled).toBe(false)
+    expect(state.closed).toBe(0)
+    await clock.advance(1)
+    const r = await run.done
+    expect(r.ok && r.data.outcome).toBe('cancelled')
+    expect(state.events).toEqual(['abort', 'close'])
+  })
+
+  test('结果中的 session 上限与 blocked 一致：512', () => {
+    const base = { summary: 's', executor: 'claude-sdk', node_id: 'n-test' }
+    expect(taskResult.safeParse({ ...base, session: 'x'.repeat(512) }).success).toBe(true)
+    expect(taskResult.safeParse({ ...base, session: 'x'.repeat(513) }).success).toBe(false)
   })
 })
 
