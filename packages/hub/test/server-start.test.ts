@@ -63,7 +63,7 @@ test.each(['bun', 'node'] as const)(
     ).toBe(10)
     expect((await fetch(`${hub.url}/v1/actor`)).status).toBe(401)
     expect(await (await fetch(`${hub.url}/v1/actor`, { headers })).json()).toEqual({
-      actor: 'unknown',
+      actor: 'user',
     })
     expect(await startHub(options)).toMatchObject({
       ok: false,

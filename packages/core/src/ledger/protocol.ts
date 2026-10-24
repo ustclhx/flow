@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { scheduleErrorSchema } from '../daemon/schedules.ts'
 import { workspaceRef } from '../schema/common.ts'
-import { capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
+import { actor, capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import { executorInfo, ledgerEvent } from './events.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import {
@@ -23,7 +23,9 @@ import {
  *
  * 约定：
  * - 全部路径以 `/v1` 开头，只监听 127.0.0.1。
- * - 除 `GET /v1/health` 外都需要 `Authorization: Bearer <token>`；操作者经 `X-Flow-Actor` 传递。
+ * - 除 `GET /v1/health` 外都需要 `Authorization: Bearer <token>`。操作者由 token 决定（design D9）：
+ *   `state/hub.token` 是 user，可用 `X-Flow-Actor` 降级声明非 user 身份；绑定 token 的身份固定，
+ *   请求头与之不一致时返回 403 `actor_mismatch`。
  * - 成功响应：`{ ok: true, data }`；失败响应与 CLI `--json` 一致：
  *   `{ ok: false, error: { kind, code, message, details?, retryable } }`（见 `toJsonDocument`）。
  * - 请求体与响应 `data` 都用这里的 zod 定义校验，并导出到 `schemas/protocol/`。
@@ -66,6 +68,11 @@ export const PROTOCOL_ERRORS = {
   reply_pending: { status: 409, kind: 'failure' },
   reply_not_found: { status: 404, kind: 'failure' },
   user_only: { status: 403, kind: 'failure' },
+  actor_mismatch: { status: 403, kind: 'failure' },
+  reserved_actor: { status: 403, kind: 'failure' },
+  remote_not_allowed: { status: 403, kind: 'failure' },
+  scope_denied: { status: 403, kind: 'failure' },
+  secret_suspected: { status: 400, kind: 'usage' },
   hub_busy: { status: 503, kind: 'retryable' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
@@ -106,6 +113,16 @@ export const healthData = z
   .meta({ title: 'GET /v1/health' })
 export type HealthData = z.infer<typeof healthData>
 
+/** 中枢运行时的密钥解析状态（secret-provider "运行时解析"）：只有个数与缺失的路径，没有值。 */
+export const secretsStatus = z.object({
+  loaded: z.number().int().min(0).meta({ description: '已解析的密钥个数' }),
+  missing: z
+    .array(z.object({ path: z.string(), file: z.string() }))
+    .meta({ description: '配置中引用了但尚未设置的密钥路径；依赖它们的功能不启动' }),
+  error: z.string().nullable().meta({ description: '最近一次解密失败的错误码' }),
+})
+export type SecretsStatusData = z.infer<typeof secretsStatus>
+
 export const hubStatusData = healthData
   .extend({
     pid: z.number().int().positive(),
@@ -117,9 +134,99 @@ export const hubStatusData = healthData
     }),
     schedule_errors: z.array(scheduleErrorSchema).default([]),
     last_backup: z.object({ path: z.string(), at: timestamp }).nullable(),
+    secrets: secretsStatus.default({ loaded: 0, missing: [], error: null }),
   })
   .meta({ title: 'GET /v1/hub/status' })
 export type HubStatusData = z.infer<typeof hubStatusData>
+
+// ---------------------------------------------------------------------------
+// hub tokens（design D9：按 token 绑定操作者身份）
+// ---------------------------------------------------------------------------
+
+/**
+ * 保留身份（比较时不区分大小写）：`user` 只属于 `state/hub.token`；`hub`、`scheduler`、`policy`
+ * 是中枢内部写事件用的身份，`unknown` 是历史上缺省的占位。`node:*` 只由中枢在节点注册流程中设置，
+ * 或由签发给 `node:<id>` 的绑定 token 使用。
+ */
+export const RESERVED_ACTORS = ['user', 'hub', 'scheduler', 'policy', 'unknown'] as const
+
+/** 名字（不区分大小写）属于保留身份。 */
+export const isReservedName = (a: string) =>
+  (RESERVED_ACTORS as readonly string[]).includes(a.toLowerCase())
+/** 身份（不区分大小写）以 `node:` 开头。 */
+export const isNodeActor = (a: string) => a.toLowerCase().startsWith('node:')
+
+/**
+ * user token 用 `X-Flow-Actor` 降级时可以声明的身份：除精确的 `user` 外，
+ * 不能是保留身份或其大小写变体，也不能是 `node:*`。
+ */
+export const isDeclarableActor = (a: string) =>
+  a === 'user' || (!isReservedName(a) && !isNodeActor(a))
+
+export const hubTokenId = z
+  .string()
+  .regex(/^tok_[0-9a-f]{12}$/, 'token id 格式为 tok_ 加 12 位十六进制')
+  .meta({ description: '绑定 token 的 id（不是 token 本身）' })
+
+const NODE_ACTOR_RE = /^node:[A-Za-z0-9][A-Za-z0-9._-]{0,57}$/
+
+/** 绑定 token 的身份：不能是保留身份（不区分大小写）；`node:` 前缀必须是小写且后接合法节点 id。 */
+export const boundActor = actor
+  .refine((a) => !isReservedName(a), {
+    message: `绑定 token 的身份不能是 ${RESERVED_ACTORS.join('、')}（不区分大小写）`,
+  })
+  .refine((a) => !isNodeActor(a) || NODE_ACTOR_RE.test(a), {
+    message: '节点身份应为 node:<节点 id>（小写 node:）',
+  })
+
+/** token 记录的公开视图：不含摘要。 */
+export const hubTokenView = z
+  .object({
+    id: hubTokenId,
+    actor,
+    issued_at: timestamp,
+    note: z.string().optional(),
+    last_used_at: timestamp.nullable(),
+    revoked_at: timestamp.nullable(),
+    remote: z
+      .boolean()
+      .optional()
+      .meta({ description: '供远程调用方使用（变更 ⑤ 的远程入口）；本变更只做标注' }),
+  })
+  .meta({ title: 'Hub token' })
+export type HubTokenView = z.infer<typeof hubTokenView>
+
+export const issueTokenRequest = z
+  .strictObject({
+    actor: boundActor,
+    note: z.string().max(200).optional(),
+    remote: z.boolean().optional(),
+  })
+  // 目前只签发两类：本机以外的节点（node:<id>），或给变更 ⑤ 远程入口用的 remote token。
+  .refine((r) => NODE_ACTOR_RE.test(r.actor) || r.remote === true, {
+    message: '目前只能签发 node:<id> 身份的 token，或带 --remote 标注的 token',
+    path: ['actor'],
+  })
+  .meta({ title: 'POST /v1/hub/tokens', description: '签发绑定 token；仅 user' })
+export type IssueTokenRequest = z.infer<typeof issueTokenRequest>
+
+export const issueTokenData = z
+  .object({
+    token: hubTokenView,
+    secret: z.string().meta({ description: 'token 明文，只在签发时返回这一次' }),
+  })
+  .meta({ title: 'POST /v1/hub/tokens 响应' })
+export type IssueTokenData = z.infer<typeof issueTokenData>
+
+export const listTokensData = z
+  .object({ tokens: z.array(hubTokenView) })
+  .meta({ title: 'GET /v1/hub/tokens' })
+export type ListTokensData = z.infer<typeof listTokensData>
+
+export const revokeTokenData = z
+  .object({ token: hubTokenView })
+  .meta({ title: 'POST /v1/hub/tokens/:id/revoke' })
+export type RevokeTokenData = z.infer<typeof revokeTokenData>
 
 export const rebuildData = z
   .object({
@@ -430,6 +537,25 @@ export const ENDPOINTS = {
   health: { method: 'GET', path: '/v1/health', auth: false, response: healthData },
   'hub-status': { method: 'GET', path: '/v1/hub/status', auth: true, response: hubStatusData },
   'hub-rebuild': { method: 'POST', path: '/v1/hub/rebuild', auth: true, response: rebuildData },
+  'hub-tokens-issue': {
+    method: 'POST',
+    path: '/v1/hub/tokens',
+    auth: true,
+    request: issueTokenRequest,
+    response: issueTokenData,
+  },
+  'hub-tokens-list': {
+    method: 'GET',
+    path: '/v1/hub/tokens',
+    auth: true,
+    response: listTokensData,
+  },
+  'hub-tokens-revoke': {
+    method: 'POST',
+    path: '/v1/hub/tokens/:id/revoke',
+    auth: true,
+    response: revokeTokenData,
+  },
   'tasks-create': {
     method: 'POST',
     path: '/v1/tasks',

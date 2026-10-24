@@ -5,6 +5,7 @@ import {
   ENDPOINTS,
   fail,
   listNodesData,
+  redactSecrets,
   registerNodeData,
   renewLeaseData,
 } from '@flow/core'
@@ -60,7 +61,9 @@ export function createNodeRoutes({ service }: NodeRoutesDeps): Hono {
     return respond(c, service.ackReply(c.req.param('id'), body.data), ackReplyData)
   })
 
-  app.onError((err, c) => respond(c, fail('failure', 'internal_error', err.message), listNodesData))
+  app.onError((err, c) =>
+    respond(c, fail('failure', 'internal_error', redactSecrets(err.message)), listNodesData),
+  )
 
   return app
 }

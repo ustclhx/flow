@@ -61,6 +61,10 @@ describe('actor 规则', () => {
     expect(codeOf('')).toMatchObject({ kind: 'usage', code: 'actor_required' })
     expect(codeOf('has space')).toMatchObject({ kind: 'usage', code: 'invalid_actor' })
     expect(codeOf('user')).toMatchObject({ kind: 'usage', code: 'invalid_actor' })
+    // 保留身份（不区分大小写）与 node:* 也不能作为 MCP 的 actor（add-m1-inbox D9）。
+    for (const reserved of ['User', 'hub', 'POLICY', 'scheduler', 'unknown', 'node:n1']) {
+      expect(codeOf(reserved)).toMatchObject({ kind: 'usage', code: 'invalid_actor' })
+    }
     expect(codeOf('user').message).toContain('不能是 user')
     expect(() => createFlowMcpServer({ actor: 'claude' })).not.toThrow()
   })

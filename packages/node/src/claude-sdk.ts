@@ -30,6 +30,7 @@ import {
 } from '@flow/core'
 import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
+import { executorEnv } from './env.ts'
 import {
   ActivityQueue,
   type DeliverResult,
@@ -876,6 +877,8 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     : i.role.prompt
   return {
     cwd: i.ctx.cwd,
+    // SDK 默认把 process.env 整个传给 Claude Code 子进程；改用去掉中枢凭证的 env（design D9）。
+    env: i.ctx.env ?? executorEnv(),
     model: i.role.model ?? DEFAULT_CLAUDE_MODEL,
     ...(i.role.effort ? { effort: i.role.effort as EffortLevel } : {}),
     systemPrompt: { type: 'preset', preset: 'claude_code', append },

@@ -1,15 +1,14 @@
 import {
-  ACTOR_RE,
   cancelTaskData,
   cancelTaskRequest,
   createTaskData,
   ENDPOINTS,
   fail,
-  HEADERS,
   listTasksData,
   PROTOCOL_ERRORS,
   type Result,
   rebuildData,
+  redactSecrets,
   replyTaskData,
   showTaskData,
   toJsonDocument,
@@ -17,6 +16,7 @@ import {
 import { type Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { z } from 'zod'
+import { userOnly } from '../server/auth.ts'
 import type { LedgerStore } from './store.ts'
 import { fieldIssues, type TaskService } from './tasks.ts'
 
@@ -56,15 +56,12 @@ export function respond<T>(
 const usage = (message: string, details?: unknown) =>
   fail('usage', 'invalid_arguments', message, details)
 
-/** 操作者取自 `X-Flow-Actor`，缺省为 `unknown`（design D7：仅作记录，不是安全边界）。 */
+/**
+ * 操作者由主应用的鉴权中间件按 token 决定（design D9），这里只读取结果。
+ * 单独挂载（测试）而没有经过鉴权时，记为 `unknown`。
+ */
 function actorOf(c: Context): Result<string> {
-  const raw = c.req.header(HEADERS.actor)?.trim()
-  if (raw === undefined || raw === '') return { ok: true, data: 'unknown' }
-  return ACTOR_RE.test(raw)
-    ? { ok: true, data: raw }
-    : usage(`${HEADERS.actor} 格式不合法`, [
-        { field: HEADERS.actor, code: 'invalid_field', message: '操作者标识格式不合法' },
-      ])
+  return { ok: true, data: c.get('actor') ?? 'unknown' }
 }
 
 /** 读取 JSON 请求体；空请求体视为 `{}`（仅当 allowEmpty）。 */
@@ -122,7 +119,8 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     return respond(c, r, cancelTaskData)
   })
 
-  app.post(ENDPOINTS['tasks-reply'].path, async (c) => {
+  // 回复卡住的任务只有用户能做：在读取请求体之前按身份拒绝，不产生任何事件。
+  app.post(ENDPOINTS['tasks-reply'].path, userOnly('回复卡住的任务'), async (c) => {
     const actor = actorOf(c)
     if (!actor.ok) return respond(c, actor, replyTaskData)
     const body = await jsonBody(c, false)
@@ -134,13 +132,16 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     )
   })
 
-  app.post(ENDPOINTS['hub-rebuild'].path, (c) => {
+  // 重建投影只有用户能做（审查意见：AI 与节点身份不应触发全量重放）。
+  app.post(ENDPOINTS['hub-rebuild'].path, userOnly('重建投影'), (c) => {
     const actor = actorOf(c)
     if (!actor.ok) return respond(c, actor, rebuildData)
     return respond(c, ledger.rebuild({ actor: actor.data }), rebuildData)
   })
 
-  app.onError((err, c) => respond(c, fail('failure', 'internal_error', err.message), rebuildData))
+  app.onError((err, c) =>
+    respond(c, fail('failure', 'internal_error', redactSecrets(err.message)), rebuildData),
+  )
 
   return app
 }

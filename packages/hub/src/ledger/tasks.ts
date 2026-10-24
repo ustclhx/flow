@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import {
   type CancelTaskData,
   type CreateTaskData,
+  checkContractSecrets,
   fail,
   formatZodIssues,
   type ListTasksData,
@@ -126,6 +127,9 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       const parsed = taskContract.safeParse(contractInput)
       if (!parsed.success) return invalidArguments('任务合同', parsed.error.issues, contractInput)
       const contract = parsed.data
+      // 合同入账时只做已知值的名单替换，不跑正则；高置信度的疑似密钥在这里直接拒绝。
+      const suspected = checkContractSecrets(contract)
+      if (!suspected.ok) return suspected
       if (
         opts.idempotency_key !== undefined &&
         contract.idempotency_key !== undefined &&
@@ -225,8 +229,8 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
 
     replyTask(id, body, opts) {
       // 防止 AI 自批：只接受 actor=user 的回复（与 task_reply 操作一致）。
-      // X-Flow-Actor 是自报身份，不是安全边界（ledger-daemon D7 的已知缺口）；
-      // supervisor 代为答复留到变更 ④。
+      // 身份由鉴权中间件按 token 决定（add-m1-inbox D9），路由层的 userOnly 先拒绝；
+      // 这里保留同样的检查作为服务层的第二道防线。supervisor 代为答复留到变更 ④。
       if (opts.actor !== 'user') {
         return fail(
           'failure',

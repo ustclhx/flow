@@ -285,6 +285,9 @@ describe('按角色运行', () => {
 
     const o = state.calls[0]
     expect(o?.cwd).toBe('/repo/demo')
+    // 子进程环境来自节点（executorEnv），不含中枢凭证。
+    expect(o?.env?.PATH).toBe(process.env.PATH)
+    expect(o?.env && 'FLOW_HUB_TOKEN' in o.env).toBe(false)
     expect(o?.model).toBe('claude-opus-5-5')
     expect(o?.settingSources).toEqual(['project'])
     expect(o?.systemPrompt).toEqual({

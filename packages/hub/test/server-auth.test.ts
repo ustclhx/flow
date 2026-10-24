@@ -60,9 +60,9 @@ describe('认证与操作者', () => {
     expect((await app().request('/v1/not-found')).status).toBe(401)
     expect((await app().request('/v1/not-found', { headers: authHeaders })).status).toBe(404)
   })
-  test('子应用能读取 actor，缺省为 unknown；不合法 actor 被拒绝', async () => {
+  test('子应用能读取 actor：user token 缺省为 user，可降级声明；不合法 actor 被拒绝', async () => {
     expect(await (await app().request('/v1/tasks', { headers: authHeaders })).json()).toEqual({
-      actor: 'unknown',
+      actor: 'user',
     })
     expect(
       await (

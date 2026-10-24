@@ -3,6 +3,7 @@ import { HubClient } from '../daemon/client.ts'
 import { renderTable } from '../format/table.ts'
 import { taskId } from '../ledger/common.ts'
 import { cancelTaskRequest, listTasksQuery, type ReplyTaskRequest } from '../ledger/protocol.ts'
+import { checkContractSecrets } from '../ledger/redact.ts'
 import { type TaskContractInput, type TaskView, taskContract } from '../ledger/task.ts'
 import { fail } from '../result.ts'
 import { loadRoles } from '../roles.ts'
@@ -29,6 +30,9 @@ export const taskCreateOp = defineOperation({
         errors: loaded.data.errors,
       })
     }
+    // 先在本地拒绝疑似密钥（中枢也会再检查一次），合同不会离开本机。
+    const suspected = checkContractSecrets(input)
+    if (!suspected.ok) return suspected
     // 合同中的 executor 优先于角色配置，允许不一致；覆盖记录留待启动执行器时写入 task.started。
     return client(ctx).createTask(input)
   },
