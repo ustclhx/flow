@@ -18,6 +18,6 @@ prompt：运行一次 `pwd`，回答 1+1，然后问接下来加哪个数字，�
 - `resumed.jsonl`：恢复轮完整 stdout，会话 id 与首轮相同，最终回复为 5。
 - 实测事件：`thread.started`、`turn.started`、`item.started`、`item.completed`、`turn.completed`。item 类型为 `agent_message`、`command_execution`。
 - 脱敏：使用 core 的 `redactSecrets`，工作目录统一换成 `/Users/user/flow-codex-fixture/work`，会话 UUID 换成固定占位值；无账号、token 或真实用户名。
-- `usage.input_tokens` 已包含缓存部分，直接映射；`cached_input_tokens` 等细分字段保留在 fixture。CLI 未报告美元费用，现有 `TaskCost.usd` 必填，执行器使用 0 占位，不代表实际免费。
+- `usage.input_tokens` 已包含缓存部分，直接映射；`cached_input_tokens` 等细分字段保留在 fixture。CLI 未报告美元费用，因此省略可选的 `TaskCost.usd` 字段。
 
 测试使用 `process.execPath` 运行临时假脚本输出这些事件，绝不启动真实 Codex。

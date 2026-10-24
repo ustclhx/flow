@@ -183,9 +183,8 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
             break
           case 'turn.completed':
             if (event.usage) {
-              // CLI 只报告 token，不提供美元费用；usd=0 是现有 TaskCost 必填字段的占位值。
+              // CLI 只报告 token，不提供美元费用，因此省略 usd。
               cost = {
-                usd: 0,
                 input_tokens: event.usage.input_tokens,
                 output_tokens: event.usage.output_tokens,
               }

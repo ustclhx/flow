@@ -129,8 +129,9 @@ describe('codex-exec 无头执行器', () => {
       summary: '5',
       session: SID,
       executor: 'codex-exec',
-      cost: { usd: 0, input_tokens: 54551, output_tokens: 120 },
+      cost: { input_tokens: 54551, output_tokens: 120 },
     })
+    expect(outcome.result.cost).not.toHaveProperty('usd')
     const report = s.report()
     expect(report.args.slice(0, 4)).toEqual(['exec', '--json', '-s', 'read-only'])
     expect(report.cwd).toBe(realpathSync(s.dir))
