@@ -19,10 +19,26 @@
 
 `classifyAction({ tool, command?, paths? })` 始终包含 `tool:<原工具名>`；提供命令时按
 `COMMAND_ACTION_MAPPINGS` 识别，调用方可传第二个参数扩展映射表。支持环境变量赋值、
-`sudo` / `env` / `command` 包装、执行文件绝对路径、空格、引号、反斜杠续行与串联命令。
-这是静态前缀识别，不执行 shell，也不展开别名、变量、脚本或 `sh -c` 等嵌套解释器。
+`sudo` / `env` / `command` / `timeout` / `nice` / `nohup` / `time` / `exec` /
+`stdbuf` / `xargs` 包装、执行文件绝对路径、空格、引号、反斜杠续行与串联命令。
+先按 git、gh 的全局选项表及包装命令的选项表跳过选项和取值，再匹配命令前缀，支持
+分离的值、短选项紧贴的值和长选项 `=value`；未知选项、缺失值、未闭合引号等解析不确定
+情形加入 `shell.opaque`。选项表依据 [Git 文档](https://git-scm.com/docs/git)、
+[gh 文档](https://cli.github.com/manual/gh_pr_merge)、
+[GNU timeout 文档](https://www.gnu.org/software/coreutils/manual/html_node/timeout-invocation.html)
+及 [xargs 文档](https://www.gnu.org/software/findutils/manual/html_node/find_html/xargs-options.html)。
+
+这是**尽力而为的静态识别**，不执行 shell，也不展开别名、变量或外部脚本。
+shell 解释器、`eval`、`source`、点号命令与 Python/Node/Ruby/Perl 解释器调用按
+`shell.opaque` 处理，范围保守覆盖 `-c` / `-e`、脚本文件及其他调用方式。
+命令文本包含 `$()`、反引号或进程替换 `<()` / `>()` 时也标记为不透明，即使位于引号或
+注释中。只要出现 `shell.opaque`，结果同时包含 `pr.merge`、`deploy`、`secrets`、
+`policy.edit`；能提取的 shell `-c` 字符串和 `eval` 文本继续递归识别，结果取并集，
+始终保留不透明标记，不以递归识别成功为自动放行依据。
+
 路径由适配器完整提供；归一后的路径等于或以 `/config/policies.yaml` 结尾时增加
-`policy.edit`。不从命令参数推导修改路径，也不访问文件系统或解析符号链接。
+`policy.edit`。此外，命令文本只要包含 `policies.yaml` 就增加 `policy.edit`，包括读取、
+输出文字或备份文件名等可能的误报。不访问文件系统或解析符号链接。
 
 `decide(config.rules, request)` 是纯函数。workspace 使用完整的 `ws/<id>`；每个动作
 分别按 workspace、角色、全局排序，同层精确 action 优先，其余通配模式一律并列，最后
@@ -32,7 +48,10 @@
 
 无匹配动作返回 `user`；只配具体命令动作、未覆盖工具动作时，整个请求仍需用户处理。
 合并次序为 `notify > user > draft-approve > auto-report > auto`，空动作也返回 `user`。
-四个受保护动作只有具体 scope 加精确 action 的规则才能自动放行；其他自动档位提升为
+**安全底线是：敏感动作只能由显式规则放行，识别不确定时按敏感处理。**
+`shell.opaque` 和上述四个敏感动作均只有具体 workspace 或角色 scope 加精确 action
+（不含通配符）的规则才能自动放行；不透明请求必须逐一满足全部动作的显式授权。
+其他自动档位提升为
 `draft-approve`，以 `guarded` 标明。每个动作的 `matched_rules` 保留最高具体程度的全部
 规则，按档位和原始序号排序；汇总按动作顺序去重。保留原始规则内容供后续审计，判定
 本身不写事件、不调用 HTTP、不生成收件箱条目。

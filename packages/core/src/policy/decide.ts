@@ -1,4 +1,9 @@
-import { commandWords, hasCommandPrefix, normalizePolicyPath } from './actions.ts'
+import {
+  commandWords,
+  hasCommandPrefix,
+  normalizePolicyPath,
+  SENSITIVE_ACTIONS,
+} from './actions.ts'
 import type { IndexedPolicyRule, PolicyLevel, PolicyRule } from './config.ts'
 
 export type PolicyDecisionLevel = PolicyLevel | 'user'
@@ -30,7 +35,7 @@ const CONSERVATISM: Record<PolicyDecisionLevel, number> = {
   user: 3,
   notify: 4,
 }
-const GUARDED_ACTIONS = new Set(['pr.merge', 'deploy', 'policy.edit', 'secrets'])
+const GUARDED_ACTIONS: ReadonlySet<string> = new Set(SENSITIVE_ACTIONS)
 
 /** 动作仅支持 *；路径还支持 **（跨目录）与 ?（单字符），其余字符按字面匹配。 */
 function globMatch(pattern: string, value: string, path = false): boolean {

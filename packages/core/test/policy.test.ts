@@ -139,6 +139,142 @@ describe('策略配置', () => {
 
 describe('动作识别', () => {
   test.each([
+    ['git -C dir push', 'git.push'],
+    ['git -c k=v push', 'git.push'],
+    ['git --git-dir=x push', 'git.push'],
+    ['git --work-tree dir --namespace ns --no-pager push', 'git.push'],
+    ['git -Cdir -ck=v push', 'git.push'],
+    ['gh -R o/r pr merge', 'pr.merge'],
+    ['gh --repo o/r pr merge', 'pr.merge'],
+    ['gh --repo=o/r pr merge', 'pr.merge'],
+    ['gh pr --repo o/r merge', 'pr.merge'],
+    ['timeout 10 git push', 'git.push'],
+    ['timeout -s TERM -k 2 10 git push', 'git.push'],
+    ['nice git push', 'git.push'],
+    ['nice -n 5 git push', 'git.push'],
+    ['nice -5 git push', 'git.push'],
+    ['nohup git push', 'git.push'],
+    ['time git push', 'git.push'],
+    ['time -f %e -o timing.log git push', 'git.push'],
+    ['exec git push', 'git.push'],
+    ['exec -a worker git push', 'git.push'],
+    ['stdbuf -oL -e 0 git push', 'git.push'],
+    ['xargs gh pr merge', 'pr.merge'],
+    ['xargs -n 1 -P2 -I{} gh -R o/r pr merge {}', 'pr.merge'],
+    [
+      'sudo timeout 10 env X=1 nice -n5 nohup time exec stdbuf -oL xargs git -C dir push',
+      'git.push',
+    ],
+  ])('绕过回归：%s', (command, action) => {
+    const actions = classifyAction({ tool: 'Bash', command })
+    expect(actions).toEqual(['tool:Bash', action])
+    expect(
+      decide(indexed(rule('*', 'tool:Bash'), rule('dev', action, 'draft-approve')), {
+        ...request,
+        actions,
+        command,
+      }).level,
+    ).toBe('draft-approve')
+  })
+
+  test.each([
+    'bash -c "git push"',
+    'sh -c "git push"',
+    'zsh -c "git push"',
+    'bash -lc "git push"',
+    'eval "git push"',
+    'source x',
+    '. x',
+    'python -c "print(1)"',
+    'python -e "print(1)"',
+    'python3 -c "print(1)"',
+    'node -c "code"',
+    'node -e "code"',
+    'ruby -c "code"',
+    'ruby -e "code"',
+    'perl -c "code"',
+    'perl -e "code"',
+    'echo $(git push)',
+    'echo "$(git push)"',
+    'echo `git push`',
+    'cat <(git push)',
+    'timeout 10 sudo /bin/bash -c "git push"',
+  ])('不透明命令回归：%s', (command) => {
+    const actions = classifyAction({ tool: 'Bash', command })
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        'tool:Bash',
+        'shell.opaque',
+        'pr.merge',
+        'deploy',
+        'secrets',
+        'policy.edit',
+      ]),
+    )
+    expect(decide(indexed(rule('*', 'tool:Bash')), { ...request, actions, command }).level).toBe(
+      'user',
+    )
+    expect(decide(indexed(rule('*', '*')), { ...request, actions, command }).level).toBe(
+      'draft-approve',
+    )
+  })
+
+  test.each([
+    'bash -c "git push"',
+    'sh -c "git push"',
+    'zsh -lc "git push"',
+    'bash -c \'sh -c "git push"\'',
+  ])('提取 shell 命令字符串递归识别：%s', (command) => {
+    expect(classifyAction({ tool: 'Bash', command })).toContain('git.push')
+  })
+
+  test.each([
+    'git --unknown value push',
+    'gh --repo',
+    'timeout --unknown 10 git push',
+    'git push "unterminated',
+    '$EXEC push',
+  ])('解析不确定时按敏感处理：%s', (command) => {
+    const actions = classifyAction({ tool: 'Bash', command })
+    expect(actions).toContain('shell.opaque')
+    expect(decide(indexed(rule('*', '*')), { ...request, actions, command }).level).toBe(
+      'draft-approve',
+    )
+  })
+
+  test('不透明请求须逐一显式授权所有敏感动作；只授权 shell.opaque 仍需用户', () => {
+    const command = 'bash -c "git push"'
+    const actions = classifyAction({ tool: 'Bash', command })
+    const rules = indexed(
+      rule('*', 'tool:Bash'),
+      rule('dev', 'git.push'),
+      rule('dev', 'shell.opaque'),
+    )
+    expect(decide(rules, { ...request, actions, command }).level).toBe('user')
+    rules.push(
+      ...['pr.merge', 'deploy', 'secrets', 'policy.edit'].map((action, index) => ({
+        rule_index: index + rules.length,
+        rule: rule('dev', action),
+      })),
+    )
+    expect(decide(rules, { ...request, actions, command }).level).toBe('auto')
+  })
+
+  test.each(['cat policies.yaml', 'echo policies.yaml.bak', 'printf policies.yaml > other'])(
+    '命令文本命中策略文件：%s',
+    (command) => {
+      expect(classifyAction({ tool: 'Bash', command })).toContain('policy.edit')
+      expect(
+        decide(indexed(rule('*', 'tool:Bash')), {
+          ...request,
+          command,
+          actions: classifyAction({ tool: 'Bash', command }),
+        }).level,
+      ).toBe('user')
+    },
+  )
+
+  test.each([
     ['git push origin feat-x', ['git.push']],
     ['gh pr create --title test', ['pr.create']],
     ['gh pr merge 42', ['pr.merge']],
@@ -319,7 +455,7 @@ describe('策略条件、保护与审计明细', () => {
     })
   })
 
-  test.each(['pr.merge', 'deploy', 'policy.edit', 'secrets'])(
+  test.each(['pr.merge', 'deploy', 'policy.edit', 'secrets', 'shell.opaque'])(
     '%s 只有具体 scope 和精确 action 才能自动放行',
     (action) => {
       for (const scope of ['*', 'dev', 'ws/xuanxue-saas']) {
