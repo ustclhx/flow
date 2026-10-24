@@ -5,6 +5,7 @@ import {
   channelRef,
   INBOX_BODY_MAX,
   INBOX_NOTE_MAX,
+  INBOX_PUSH_REASON_MAX,
   INBOX_TITLE_MAX,
   inboxAction,
   inboxCloseReason,
@@ -253,17 +254,35 @@ export const eventPayloads = {
   /**
    * 渠道推送记录（add-m1-inbox 3.3 / 4.1）：
    * - `op: send`：消息已发出，`item_ids` 是消息里的条目（Decide 合并消息有多个）；
-   * - `op: update`：条目关闭后消息已改为"已处理"，`item_ids` 是这次同步了关闭状态的条目。
+   * - `op: update`：条目关闭后消息已改为"已处理"，`item_ids` 是这次同步了关闭状态的条目；
+   * - `op: failed`：放弃推送（消息级失败连续 5 次、永久错误或超时 3 次），`reason` 说明原因。
+   *   没有 `ref` 时是发送失败（这些条目不再推送到该渠道）；有 `ref` 时是该消息的"已处理"同步失败。
+   *   投影把它视为已处理，条目视图与 `flow hub status` 中标出"推送失败"。
    * 投影维护 `pushed_at`、`channels`（channel_refs_json）与 `channel_messages`，可重建。
    * 条目关闭后仍可写入（推送与关闭可能交错）。
    */
-  'inbox.pushed': z.strictObject({
-    channel: channelId,
-    ref: channelRef,
-    op: z.enum(['send', 'update']).default('send'),
-    kind: channelMessageKind.default('item'),
-    item_ids: z.array(inboxItemId).min(1).max(500),
-  }),
+  'inbox.pushed': z
+    .strictObject({
+      channel: channelId,
+      ref: channelRef.optional(),
+      op: z.enum(['send', 'update', 'failed']).default('send'),
+      kind: channelMessageKind.default('item'),
+      item_ids: z.array(inboxItemId).min(1).max(500),
+      reason: z
+        .string()
+        .min(1)
+        .max(INBOX_PUSH_REASON_MAX)
+        .optional()
+        .meta({ description: 'op=failed 时放弃推送的原因' }),
+    })
+    .refine((p) => p.op === 'failed' || p.ref !== undefined, {
+      message: 'send / update 必须带 ref',
+      path: ['ref'],
+    })
+    .refine((p) => (p.op === 'failed') === (p.reason !== undefined), {
+      message: '只有 op=failed 带 reason，且必须带',
+      path: ['reason'],
+    }),
 } as const
 
 export type EventType = keyof typeof eventPayloads

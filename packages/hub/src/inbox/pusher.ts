@@ -57,8 +57,11 @@ export interface InboxPusher {
   start(): Promise<void>
   /** 顺延静默时段内的 Interrupt，然后让渠道推送到期的条目。 */
   tick(): Promise<void>
-  /** 生成当天的每日摘要（已存在则不动），然后推送。 */
-  fireDigest(at?: number): Promise<void>
+  /**
+   * 生成计划时间 `planned`（默认当前时间）所在日期的每日摘要（已存在则不动），然后推送。
+   * 补发时传入错过的计划时间：摘要的日期与"昨天"的范围按它算，推送仍受静默时段约束。
+   */
+  fireDigest(planned?: number): Promise<void>
   /** 配置变化后重新设置内部定时规则。 */
   reconfigure(): void
   stop(): void
@@ -95,7 +98,7 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
     }
   }
 
-  /** 静默时段内生成、尚未推送也未顺延的 Interrupt：写 deferred_until。 */
+  /** 静默时段内生成、尚未推送也未顺延的 Interrupt 与每日摘要：写 deferred_until。 */
   function deferQuiet(open: readonly InboxItemView[]) {
     const c = cadence()
     const now = clock.now()
@@ -103,7 +106,7 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
     if (end === null) return
     const drafts: EventInput[] = []
     for (const item of open) {
-      if (item.level !== 'interrupt' || item.source === 'digest') continue
+      if (item.level !== 'interrupt' && item.source !== 'digest') continue
       if (item.deferred_until !== null || item.pushed_at !== null) continue
       if (!isQuiet(Date.parse(item.created_at), c.quiet)) continue
       drafts.push({
@@ -141,7 +144,7 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
     try {
       const open = ledger.listInboxItems({ state: 'open', limit: 10_000 })
       deferQuiet(open)
-      armDeferred(ledger.listInboxItems({ state: 'open', level: 'interrupt', limit: 10_000 }))
+      armDeferred(ledger.listInboxItems({ state: 'open', limit: 10_000 }))
     } catch (err) {
       o.logger?.warn('推送节奏处理失败', String(err))
     }
@@ -154,7 +157,9 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
     await o.flush?.()
   }
 
-  async function buildDigest(now: number): Promise<EventInput[]> {
+  /** `planned` 是摘要的计划时间：决定摘要的日期（dig.<日期>）与"昨天"的范围，与实际生成时间无关。 */
+  async function buildDigest(planned: number): Promise<EventInput[]> {
+    const now = planned
     const date = localDate(now)
     const id = digestItemId(date)
     if (ledger.getInboxItem(id)) return []
@@ -217,10 +222,10 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
     return drafts
   }
 
-  async function fireDigest(at = clock.now()) {
+  async function fireDigest(planned = clock.now()) {
     if (stopped) return
     try {
-      const drafts = await buildDigest(at)
+      const drafts = await buildDigest(planned)
       if (drafts.length > 0) warnWrite('每日摘要写入失败', ledger.appendMany(drafts, { actor }))
     } catch (err) {
       o.logger?.warn('生成每日摘要失败', String(err))
@@ -240,7 +245,12 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
       ...(c.quiet
         ? [{ id: 'inbox:quiet-end', cron: dailyCron(c.quiet.end), onFire: () => tick() }]
         : []),
-      { id: 'inbox:digest', cron: dailyCron(c.digest_time), onFire: () => fireDigest() },
+      // 补发时用计划时间（例如 D 日 08:30）决定是哪一天的摘要；推送仍受静默时段约束。
+      {
+        id: 'inbox:digest',
+        cron: dailyCron(c.digest_time),
+        onFire: (planned: Date) => fireDigest(planned.getTime()),
+      },
     ]
     const key = JSON.stringify(rules.map((r) => [r.id, r.cron]))
     if (key === lastRules) return

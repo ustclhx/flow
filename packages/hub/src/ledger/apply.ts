@@ -342,21 +342,50 @@ export function createApplier(db: Database): Applier {
               `INSERT OR IGNORE INTO channel_messages
                  (channel, ref, item_id, kind, sent_at, sent_seq, synced_at)
                VALUES (?, ?, ?, ?, ?, ?, NULL)`,
-            ).run(p.channel, p.ref, itemId, p.kind, e.ts, e.seq)
+            ).run(p.channel, p.ref ?? '', itemId, p.kind, e.ts, e.seq)
             stmt('UPDATE inbox_items SET pushed_at = COALESCE(pushed_at, ?) WHERE id = ?').run(
               e.ts,
               itemId,
             )
-          } else {
+          } else if (p.op === 'update') {
             stmt(
               'UPDATE channel_messages SET synced_at = ? WHERE channel = ? AND ref = ? AND item_id = ?',
-            ).run(e.ts, p.channel, p.ref, itemId)
+            ).run(e.ts, p.channel, p.ref ?? '', itemId)
+          } else if (p.ref === undefined) {
+            // 发送失败：记一行没有消息引用的记录，该条目不再推送到这个渠道。
+            stmt(
+              `INSERT OR IGNORE INTO channel_messages
+                 (channel, ref, item_id, kind, sent_at, sent_seq, synced_at, failed_at, failed_reason)
+               VALUES (?, '', ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(p.channel, itemId, p.kind, e.ts, e.seq, e.ts, e.ts, p.reason ?? null)
+          } else {
+            stmt(
+              `UPDATE channel_messages SET synced_at = ?, failed_at = ?, failed_reason = ?
+               WHERE channel = ? AND ref = ? AND item_id = ?`,
+            ).run(e.ts, e.ts, p.reason ?? null, p.channel, p.ref, itemId)
           }
           // 条目上的消息引用（channel_refs_json）与 channel_messages 同源，按发送先后排列。
-          const refs = stmt(
-            `SELECT channel, ref, kind, sent_at, synced_at FROM channel_messages
-             WHERE item_id = ? ORDER BY sent_seq, channel, ref`,
-          ).all(itemId)
+          const rows = stmt(
+            `SELECT channel, ref, kind, sent_at, synced_at, failed_at, failed_reason
+             FROM channel_messages WHERE item_id = ? ORDER BY sent_seq, channel, ref`,
+          ).all(itemId) as {
+            channel: string
+            ref: string
+            kind: string
+            sent_at: string
+            synced_at: string | null
+            failed_at: string | null
+            failed_reason: string | null
+          }[]
+          const refs = rows.map((r) => ({
+            channel: r.channel,
+            ref: r.ref === '' ? null : r.ref,
+            kind: r.kind,
+            sent_at: r.sent_at,
+            synced_at: r.synced_at,
+            failed:
+              r.failed_at === null ? null : { reason: r.failed_reason ?? '', at: r.failed_at },
+          }))
           stmt('UPDATE inbox_items SET channel_refs_json = ? WHERE id = ?').run(
             JSON.stringify(refs),
             itemId,

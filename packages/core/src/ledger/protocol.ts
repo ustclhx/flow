@@ -151,6 +151,12 @@ export const channelStatus = z.object({
   failures: z.number().int().min(0).meta({ description: '连续失败次数' }),
   next_retry_at: timestamp.nullable(),
   last_error: z.string().nullable().meta({ description: '最近一次失败的说明（已脱敏）' }),
+  failed_items: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .meta({ description: '记为推送失败（放弃推送或同步）的条目数' }),
 })
 export type ChannelStatusData = z.infer<typeof channelStatus>
 

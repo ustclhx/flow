@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { flowPaths, type InboxItemView, initFlowHome, ok, registerKnownSecrets } from '@flow/core'
 import {
+  ChannelError,
   type ChannelMessage,
   clipTailText,
   closedLabel,
@@ -152,6 +153,164 @@ describe('渠道暂时不可用', () => {
     await r.settle()
     expect(late.started).toBe(1)
     expect(late.sentIds()).toEqual([['sup.s']])
+  })
+})
+
+describe('单条消息的失败不卡住渠道', () => {
+  const statusOf = (r: Awaited<ReturnType<typeof rig>>, id = 'memory') =>
+    r.inbox.channels.status().find((s) => s.id === id)
+
+  test('update 遇到永久错误（要编辑的消息已不存在）：记为推送失败，后面的 Interrupt 照常推送', async () => {
+    const ch = new MemoryChannel()
+    const r = await rig([ch])
+    createItem(r.ledger, 'sup.gone', 'interrupt')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    ch.failWith = (op) =>
+      op === 'update' ? new ChannelError('message to edit not found', 'permanent') : undefined
+    closeItem(r.ledger, 'sup.gone', { cause_actor: 'user' })
+    createItem(r.ledger, 'sup.next', 'interrupt')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(ch.sentIds()).toEqual([['sup.gone'], ['sup.next']])
+    expect(ch.updateCalls).toBe(1)
+    const failed = r.ledger.latestEvent(undefined, 'inbox.pushed')
+    expect(
+      r.ledger
+        .eventsAfter(0)
+        .filter((e) => e.type === 'inbox.pushed')
+        .map((e) => e.payload),
+    ).toContainEqual({
+      channel: 'memory',
+      ref: 'memory-1',
+      op: 'failed',
+      kind: 'item',
+      item_ids: ['sup.gone'],
+      reason: 'message to edit not found',
+    })
+    expect(failed).not.toBeNull()
+    expect(r.ledger.getInboxItem('sup.gone')?.channels[0]?.failed?.reason).toBe(
+      'message to edit not found',
+    )
+    expect(r.ledger.pendingChannelUpdates('memory')).toEqual([])
+    expect(statusOf(r)).toMatchObject({ state: 'running', failures: 0, failed_items: 1 })
+    // 不再重试
+    await r.inbox.pusher.tick()
+    expect(ch.updateCalls).toBe(1)
+  })
+
+  test('send 的消息级失败只跳过这一条；连续 5 次后放弃，投影视为已处理', async () => {
+    const ch = new MemoryChannel()
+    const r = await rig([ch])
+    ch.failWith = (op, m) =>
+      op === 'send' && MemoryChannel.ids(m).includes('sup.bad')
+        ? new ChannelError('message is too long', 'message')
+        : undefined
+    createItem(r.ledger, 'sup.bad', 'interrupt')
+    createItem(r.ledger, 'sup.ok', 'interrupt')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(ch.sentIds()).toEqual([['sup.ok']])
+    expect(statusOf(r)).toMatchObject({ state: 'running', failed_items: 0 })
+    for (let i = 0; i < 4; i++) await r.inbox.pusher.tick()
+    expect(ch.sendCalls).toBe(6)
+    const item = r.ledger.getInboxItem('sup.bad') as InboxItemView
+    expect(item.state).toBe('open')
+    expect(item.pushed_at).toBeNull()
+    expect(item.channels).toMatchObject([
+      { channel: 'memory', ref: null, failed: { reason: '连续 5 次失败：message is too long' } },
+    ])
+    expect(statusOf(r)?.failed_items).toBe(1)
+    await r.inbox.pusher.tick()
+    expect(ch.sendCalls).toBe(6)
+    // 重建后一致
+    const before = r.ledger.snapshot({ includeSoft: false })
+    must(r.ledger.rebuild())
+    expect(r.ledger.snapshot({ includeSoft: false }).channel_messages).toEqual(
+      before.channel_messages,
+    )
+  })
+
+  test('未分类的错误按传输层错误处理：整个渠道退避', async () => {
+    const ch = new MemoryChannel()
+    const r = await rig([ch])
+    ch.failWith = () => new Error('奇怪的错误')
+    createItem(r.ledger, 'sup.u1', 'interrupt')
+    createItem(r.ledger, 'sup.u2', 'interrupt')
+    await r.settle()
+    expect(ch.sendCalls).toBe(1)
+    expect(statusOf(r)?.state).toBe('backoff')
+  })
+})
+
+describe('超时不重复推送', () => {
+  test('超时后 abort；原请求仍在进行时不重发，最终成功只记录一次', async () => {
+    const ch = new MemoryChannel()
+    ch.slow = true
+    const r = await rig([ch])
+    createItem(r.ledger, 'sup.slow', 'interrupt')
+    await r.settle()
+    expect(ch.sendCalls).toBe(1)
+    await r.clock.advance(30_000)
+    await r.settle()
+    expect(ch.aborted).toBe(1)
+    expect(r.inbox.channels.status()[0]?.state).toBe('backoff')
+    // 退避结束：原请求还在进行，不再发起第二次
+    await r.clock.advance(5_000)
+    await r.settle()
+    expect(ch.sendCalls).toBe(1)
+    ch.slow = false
+    ch.releaseSends()
+    await r.settle()
+    expect(ch.sentIds()).toEqual([['sup.slow']])
+    const sends = r.ledger
+      .eventsAfter(0)
+      .filter((e) => e.type === 'inbox.pushed' && e.payload.op === 'send')
+    expect(sends).toHaveLength(1)
+    await r.clock.advance(10_000)
+    await r.settle()
+    expect(ch.sendCalls).toBe(1)
+  })
+
+  test('同一条消息超时 3 次后记为推送失败', async () => {
+    const ch = new MemoryChannel()
+    ch.hang = true
+    const r = await rig([ch])
+    createItem(r.ledger, 'sup.t', 'interrupt')
+    await r.settle()
+    for (let i = 0; i < 3; i++) {
+      await r.clock.advance(30_000)
+      await r.settle()
+      const retry = r.inbox.channels.status()[0]?.next_retry_at
+      if (retry) await r.clock.advance(Date.parse(retry) - r.clock.now())
+      await r.settle()
+    }
+    expect(ch.sendCalls).toBe(3)
+    expect(r.ledger.getInboxItem('sup.t')?.channels[0]?.failed?.reason).toContain('连续 3 次超时')
+    ch.hang = false
+    await r.clock.advance(60_000)
+    await r.settle()
+    expect(ch.sendCalls).toBe(3)
+  })
+
+  test('渠道返回无效的消息引用：按已发出记录（占位引用）并告警，不重发；关闭后不调用 update', async () => {
+    const ch = new MemoryChannel()
+    ch.badRef = true
+    const r = await rig([ch])
+    createItem(r.ledger, 'sup.ref', 'interrupt')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    await r.inbox.pusher.tick()
+    expect(ch.sendCalls).toBe(1)
+    expect(r.warns.some((w) => w.message.includes('消息引用无效'))).toBe(true)
+    const ref = r.ledger.getInboxItem('sup.ref')?.channels[0]?.ref
+    expect(ref?.startsWith('!invalid-ref:')).toBe(true)
+    closeItem(r.ledger, 'sup.ref')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(ch.updateCalls).toBe(0)
+    expect(r.ledger.getInboxItem('sup.ref')?.channels[0]?.failed).not.toBeNull()
+    expect(r.ledger.pendingChannelUpdates('memory')).toEqual([])
   })
 })
 
@@ -368,6 +527,7 @@ describe('缺少密钥', () => {
         failures: 0,
         next_retry_at: null,
         last_error: null,
+        failed_items: 0,
       },
     ])
     expect(created).toHaveLength(0)

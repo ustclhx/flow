@@ -98,6 +98,8 @@ export const inboxItemId = z
 export const INBOX_TITLE_MAX = 200
 export const INBOX_BODY_MAX = 4000
 export const INBOX_NOTE_MAX = 1000
+/** 推送失败原因（`inbox.pushed` op=failed）的长度上限。 */
+export const INBOX_PUSH_REASON_MAX = 500
 
 /**
  * 推送渠道 id（notify-channel "渠道插件接口"）：例如 `telegram`、`ntfy`。
@@ -127,11 +129,15 @@ export const channelMessageKind = z.enum(CHANNEL_MESSAGE_KINDS)
 /** 条目在某个渠道上的一条消息（`inbox.pushed` 折叠而来）。 */
 export const inboxChannelRef = z.strictObject({
   channel: channelId,
-  ref: channelRef,
+  /** 渠道内的消息引用；发送失败（没有发出消息）时为 null。 */
+  ref: channelRef.nullable(),
   kind: channelMessageKind,
+  /** 发出（或放弃发送）的时间。 */
   sent_at: timestamp,
-  /** 条目关闭后，消息已改为"已处理"的时间；未关闭或尚未同步时为 null。 */
+  /** 条目关闭后，消息已改为"已处理"的时间（同步失败时为放弃的时间）；未关闭或尚未同步时为 null。 */
   synced_at: timestamp.nullable(),
+  /** 推送失败：发送失败（ref 为 null）或"已处理"同步失败；没有失败时为 null。 */
+  failed: z.strictObject({ reason: z.string(), at: timestamp }).nullable(),
 })
 export type InboxChannelRef = z.infer<typeof inboxChannelRef>
 

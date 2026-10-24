@@ -153,6 +153,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   channelMessageItems(channel: string, ref: string): string[]
   /** 某渠道上条目已关闭、但消息还没改为"已处理"的消息，按发送先后。 */
   pendingChannelUpdates(channel: string): { ref: string; item_ids: string[] }[]
+  /** 某渠道上记为推送失败（op=failed）的条目数。 */
+  channelFailedCount(channel: string): number
   /** 按级别（interrupt → digest）再按创建先后排序。 */
   listInboxItems(filter?: InboxItemFilter): InboxItemView[]
   /**
@@ -547,7 +549,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
             return fail('failure', 'not_found', `收件箱条目 ${itemId} 不存在`)
           }
           if (
-            draft.payload.op === 'update' &&
+            draft.payload.ref !== undefined &&
+            draft.payload.op !== 'send' &&
             !get(
               'SELECT 1 FROM channel_messages WHERE channel = ? AND ref = ? AND item_id = ?',
               draft.payload.channel,
@@ -869,7 +872,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     channelMessageItems(channel, ref) {
       return all<{ item_id: string }>(
         `SELECT m.item_id FROM channel_messages m JOIN inbox_items i ON i.id = m.item_id
-         WHERE m.channel = ? AND m.ref = ? ORDER BY i.created_seq`,
+         WHERE m.channel = ? AND m.ref = ? AND m.ref != '' ORDER BY i.created_seq`,
         channel,
         ref,
       ).map((r) => r.item_id)
@@ -877,13 +880,21 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     pendingChannelUpdates(channel) {
       const rows = all<{ ref: string; item_id: string }>(
         `SELECT m.ref, m.item_id FROM channel_messages m JOIN inbox_items i ON i.id = m.item_id
-         WHERE m.channel = ? AND m.synced_at IS NULL AND i.state = 'closed'
+         WHERE m.channel = ? AND m.synced_at IS NULL AND m.ref != '' AND i.state = 'closed'
          ORDER BY m.sent_seq, i.created_seq`,
         channel,
       )
       const out = new Map<string, string[]>()
       for (const r of rows) out.set(r.ref, [...(out.get(r.ref) ?? []), r.item_id])
       return [...out].map(([ref, item_ids]) => ({ ref, item_ids }))
+    },
+    channelFailedCount(channel) {
+      return (
+        get<{ n: number }>(
+          'SELECT COUNT(*) AS n FROM channel_messages WHERE channel = ? AND failed_at IS NOT NULL',
+          channel,
+        )?.n ?? 0
+      )
     },
     listInboxItems(filter = {}) {
       const where: string[] = []

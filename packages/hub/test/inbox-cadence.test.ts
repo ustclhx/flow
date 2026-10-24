@@ -109,6 +109,7 @@ describe('纯函数', () => {
           kind: 'item',
           sent_at: '2026-10-26T02:00:00.000Z',
           synced_at: null,
+          failed: null,
         },
       ],
     })
@@ -181,6 +182,7 @@ describe('Interrupt', () => {
         kind: 'item',
         sent_at: item.pushed_at as string,
         synced_at: null,
+        failed: null,
       },
     ])
     const pushed = r.ledger.latestEvent(undefined, 'inbox.pushed')
@@ -376,6 +378,104 @@ describe('每日摘要', () => {
     await inbox.pusher.tick()
     expect(r.ledger.getInboxItem('dig.2026-10-26')?.state).toBe('open')
     expect(channel.sentIds()).toContainEqual(['dig.2026-10-26'])
+  })
+})
+
+describe('静默时段覆盖所有推送', () => {
+  test('渠道在凌晨恢复：Decide 合并消息与 Interrupt 都等到 08:00', async () => {
+    const r = await rig(local(26, 17))
+    r.channel.down = true
+    for (const id of ['sup.n1', 'sup.n2']) createItem(r.ledger, id, 'decide')
+    createItem(r.ledger, 'sup.i1', 'interrupt')
+    await r.settle()
+    // 18:00 到点时渠道不可用
+    await r.clock.advance(local(26, 18) - r.clock.now())
+    await r.settle()
+    expect(r.channel.sent).toHaveLength(0)
+    // 23:30 渠道恢复、凌晨 2 点仍在退避重试：静默时段内什么都不推
+    await r.clock.advance(local(26, 23, 30) - r.clock.now())
+    r.channel.down = false
+    await r.clock.advance(local(27, 2) - r.clock.now())
+    await r.settle()
+    expect(r.channel.sent).toHaveLength(0)
+    await r.clock.advance(local(27, 8) - r.clock.now())
+    await r.settle()
+    expect(r.channel.sentIds()).toEqual([['sup.i1'], ['sup.n1', 'sup.n2']])
+  })
+
+  test('静默时段内的阈值与时间点都不推送', () => {
+    const c = { ...DEFAULT_INBOX_CADENCE, decide_times: ['01:00'], decide_threshold: 1 }
+    const decide = {
+      id: 'sup.q',
+      short_id: '1',
+      level: 'decide' as const,
+      source: 'supervisor' as const,
+      source_ref: 'q',
+      reason: null,
+      workspace: null,
+      task_id: null,
+      title: 't',
+      body: '',
+      actions: [],
+      state: 'open' as const,
+      created_at: new Date(local(26, 20)).toISOString(),
+      created_by: 'hub',
+      updated_at: new Date(local(26, 20)).toISOString(),
+      deferred_until: null,
+      pushed_at: null,
+      channels: [],
+      closed: null,
+    }
+    expect(planPushes([decide], 'a', local(27, 1, 30), c)).toEqual([])
+    expect(planPushes([decide], 'a', local(27, 8), c)).toHaveLength(1)
+  })
+})
+
+describe('补发摘要按计划日期', () => {
+  test('D 日 08:30 前停机、D+1 00:30 重启：生成 dig.D 并顺延到 08:00 推送；D+1 08:30 生成 dig.D+1', async () => {
+    const r = await rig(local(26, 8))
+    // 停机前最后一条事件在 08:29
+    r.clock.time = local(26, 8, 29)
+    createItem(r.ledger, 'sup.last', 'digest')
+    await r.settle()
+    await r.inbox.stop()
+    r.scheduler.stop()
+
+    r.clock.time = local(27, 0, 30)
+    const { createScheduler, startInbox } = await import('../src/index.ts')
+    const scheduler = await createScheduler({ ledger: r.ledger, clock: r.clock, home: r.home })
+    const channel = new MemoryChannel()
+    const inbox = await startInbox({
+      ledger: r.ledger,
+      home: r.home,
+      clock: r.clock,
+      watch: false,
+      scheduler,
+      channels: [specOf(channel)],
+    })
+    cleanups.unshift(async () => {
+      await inbox.stop()
+      scheduler.stop()
+    })
+    await r.clock.advance(0)
+    await inbox.pusher.tick()
+    const digest = r.ledger.getInboxItem('dig.2026-10-26') as InboxItemView
+    expect(digest).not.toBeNull()
+    // 覆盖范围是 D 的"昨天"（25 日），不是重启当天
+    expect(digest.body).toContain('昨天（2026-10-25）')
+    expect(r.ledger.getInboxItem('dig.2026-10-27')).toBeNull()
+    expect(digest.deferred_until).toBe(new Date(local(27, 8)).toISOString())
+    expect(channel.sent).toHaveLength(0)
+
+    await r.clock.advance(local(27, 8) - r.clock.now())
+    await r.settle()
+    expect(channel.sentIds()).toEqual([['dig.2026-10-26']])
+
+    await r.clock.advance(local(27, 8, 30) - r.clock.now())
+    await r.settle()
+    expect(r.ledger.getInboxItem('dig.2026-10-27')?.body).toContain('昨天（2026-10-26）')
+    expect(r.ledger.getInboxItem('dig.2026-10-26')?.closed?.reason).toBe('superseded')
+    expect(channel.sentIds()).toEqual([['dig.2026-10-26'], ['dig.2026-10-27']])
   })
 })
 

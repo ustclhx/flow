@@ -3354,7 +3354,8 @@
               "type": "string",
               "enum": [
                 "send",
-                "update"
+                "update",
+                "failed"
               ]
             },
             "kind": {
@@ -3374,11 +3375,16 @@
                 "pattern": "^[a-z]{2,12}\\.[A-Za-z0-9_.-]{1,120}$",
                 "description": "条目 id，例如 blk.42、prop.<提案 id>"
               }
+            },
+            "reason": {
+              "description": "op=failed 时放弃推送的原因",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
             }
           },
           "required": [
             "channel",
-            "ref",
             "op",
             "kind",
             "item_ids"

@@ -173,14 +173,18 @@ CREATE INDEX IF NOT EXISTS inbox_source ON inbox_items (source, state);
 
 -- 渠道消息与条目的对应（add-m1-inbox D4 的 channel_messages；由 inbox.pushed 派生）：
 -- 渠道把用户对某条消息的回复映射回条目，条目关闭后据此找到要改为"已处理"的消息。
+-- 发送失败（op=failed、没有 ref）的条目记一行 ref = ''，failed_* 有值，视为已处理、不再推送；
+-- "已处理"同步失败时在原消息行上记 failed_*，synced_at 取放弃的时间。
 CREATE TABLE IF NOT EXISTS channel_messages (
-  channel   TEXT NOT NULL,
-  ref       TEXT NOT NULL,
-  item_id   TEXT NOT NULL,
-  kind      TEXT NOT NULL,
-  sent_at   TEXT NOT NULL,
-  sent_seq  INTEGER NOT NULL,
-  synced_at TEXT,
+  channel       TEXT NOT NULL,
+  ref           TEXT NOT NULL,
+  item_id       TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  sent_at       TEXT NOT NULL,
+  sent_seq      INTEGER NOT NULL,
+  synced_at     TEXT,
+  failed_at     TEXT,
+  failed_reason TEXT,
   PRIMARY KEY (channel, ref, item_id)
 );
 CREATE INDEX IF NOT EXISTS channel_messages_item ON channel_messages (item_id);

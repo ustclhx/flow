@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { InboxItemAction, InboxLevel, InboxVia } from '@flow/core'
 import type {
+  ChannelCallOptions,
   ChannelMessage,
   ChannelPlugin,
   ChannelSpec,
@@ -22,11 +23,24 @@ export class MemoryChannel implements ChannelPlugin {
   updates: { ref: string; message: ChannelMessage }[] = []
   /** 为 true 时 send / update 抛错（模拟 API 连续失败）。 */
   down = false
-  /** 为 true 时 send 永远不返回。 */
+  /** 为 true 时 send 一直不返回，直到超时被 abort。 */
   hang = false
+  /**
+   * 为 true 时 send 挂起，直到测试调用 `releaseSends()`；不理会 abort（模拟插件没能中止请求，
+   * 原请求最终仍然成功）。
+   */
+  slow = false
+  slowSends: { message: ChannelMessage; resolve: () => void }[] = []
+  /** 收到 abort 的调用数。 */
+  aborted = 0
+  /** 为 true 时 send 返回空的消息引用。 */
+  badRef = false
+  /** 按消息决定抛出的错误（例如某个条目一直 ChannelError('message')）。 */
+  failWith: ((op: 'send' | 'update', message: ChannelMessage) => Error | undefined) | undefined
   /** start 失败的剩余次数。 */
   startFailures = 0
   sendCalls = 0
+  updateCalls = 0
   started = 0
   stopped = 0
   handler: InboundHandler | undefined
@@ -39,17 +53,37 @@ export class MemoryChannel implements ChannelPlugin {
     this.via = via
   }
 
-  async send(message: ChannelMessage): Promise<string> {
+  async send(message: ChannelMessage, options: ChannelCallOptions): Promise<string> {
     this.sendCalls += 1
-    if (this.hang) return new Promise<string>(() => {})
+    options.signal.addEventListener('abort', () => {
+      this.aborted += 1
+    })
+    // 挂起，直到被 abort（遵守 signal 的插件）
+    if (this.hang) {
+      return new Promise<string>((_, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('已中止')))
+      })
+    }
     if (this.down) throw new Error('渠道 API 请求失败（模拟）')
+    const err = this.failWith?.('send', message)
+    if (err) throw err
+    if (this.slow) await new Promise<void>((resolve) => this.slowSends.push({ message, resolve }))
+    if (this.badRef) return ''
     const ref = `${this.id}-${++this.n}`
     this.sent.push({ ref, message })
     return ref
   }
 
-  async update(ref: string, message: ChannelMessage): Promise<void> {
+  /** 放行挂起的 send（它们随即"成功"）。 */
+  releaseSends() {
+    for (const s of this.slowSends.splice(0)) s.resolve()
+  }
+
+  async update(ref: string, message: ChannelMessage, _options: ChannelCallOptions): Promise<void> {
+    this.updateCalls += 1
     if (this.down) throw new Error('渠道 API 请求失败（模拟）')
+    const err = this.failWith?.('update', message)
+    if (err) throw err
     this.updates.push({ ref, message })
   }
 
@@ -64,6 +98,11 @@ export class MemoryChannel implements ChannelPlugin {
 
   async stop(): Promise<void> {
     this.stopped += 1
+  }
+
+  /** 消息里的条目 id。 */
+  static ids(message: ChannelMessage): string[] {
+    return message.kind === 'item' ? [message.item.id] : message.items.map((i) => i.id)
   }
 
   /** 发出的消息里的条目 id（按发送先后，合并消息展开）。 */

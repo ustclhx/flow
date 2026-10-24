@@ -63,16 +63,54 @@ export type InboundResult = Result<{ item_id: string }>
 
 export type InboundHandler = (request: InboundAction) => Promise<InboundResult>
 
+/**
+ * 渠道错误的分类（插件抛出 `ChannelError` 说明是哪一类；其他错误一律按 `transport` 处理）：
+ * - `transport`：网络、超时、限流等，与具体消息无关。整个渠道退避重试，条目保持 pending；
+ * - `message`：这一条消息的问题，可能是暂时的。只记在这条消息上，跳过它继续处理后面的；
+ *   同一条连续失败 5 次后放弃（`inbox.pushed` op=failed）；
+ * - `permanent`：这一条消息确定无法完成（例如要编辑的消息已不存在）。立即放弃这一条。
+ *
+ * 编辑消息时"内容没有变化"（例如 Telegram 的 message is not modified）由插件当作成功返回，不要抛错。
+ */
+export type ChannelErrorKind = 'transport' | 'message' | 'permanent'
+
+export class ChannelError extends Error {
+  constructor(
+    message: string,
+    readonly kind: ChannelErrorKind = 'transport',
+    options?: { cause?: unknown },
+  ) {
+    super(message, options)
+    this.name = 'ChannelError'
+  }
+}
+
+/** 错误的分类；未分类的错误按 transport 处理。 */
+export const channelErrorKind = (err: unknown): ChannelErrorKind =>
+  err instanceof ChannelError ? err.kind : 'transport'
+
+/** 发送与更新的调用选项：超时（默认 30 秒）时管理器 abort `signal`，插件应据此中止请求。 */
+export interface ChannelCallOptions {
+  signal: AbortSignal
+}
+
 export interface ChannelPlugin {
   /** 渠道 id，例如 `telegram`；同一中枢内唯一。 */
   readonly id: string
   /** 经由该渠道发起的操作记为哪个来源（design D3 的 `via`）。 */
   readonly via: InboxVia
-  /** 发送一条消息，返回渠道内的消息引用（之后 `update` 用它）。 */
-  send(message: ChannelMessage): Promise<string>
-  /** 更新已发送的消息，例如把已关闭的条目标记为已处理。 */
-  update(ref: string, message: ChannelMessage): Promise<void>
-  /** 启动入站（例如 Telegram 的长轮询）；用户的操作交给 `onAction`。 */
+  /**
+   * 发送一条消息，返回渠道内的消息引用（之后 `update` 用它）。
+   * 超时后管理器不会在这次调用结束前重发同一条；调用最终成功仍会记录。
+   */
+  send(message: ChannelMessage, options: ChannelCallOptions): Promise<string>
+  /** 更新已发送的消息，例如把已关闭的条目标记为已处理。内容没有变化时按成功返回。 */
+  update(ref: string, message: ChannelMessage, options: ChannelCallOptions): Promise<void>
+  /**
+   * 启动入站（例如 Telegram 的长轮询）；用户的操作交给 `onAction`，以 user 身份执行。
+   * 因此插件必须自己确认操作来自用户本人：**Telegram 插件必须校验 chat id，只接受已绑定的 chat**
+   * （telegram-channel spec 的 chat 白名单），陌生 chat 的消息与按钮一律忽略，不交给 `onAction`。
+   */
   start(onAction: InboundHandler): Promise<void>
   stop(): Promise<void>
 }
@@ -109,4 +147,6 @@ export interface ChannelStatus {
   failures: number
   next_retry_at: string | null
   last_error: string | null
+  /** 记为推送失败（op=failed）的条目数。 */
+  failed_items: number
 }

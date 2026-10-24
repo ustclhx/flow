@@ -64,7 +64,8 @@ function channelSummary(channels: NonNullable<HubStatus['channels']>): string {
           : c.state === 'backoff'
             ? `，已连续失败 ${c.failures} 次，${c.next_retry_at ?? ''} 重试`
             : ''
-      return `${c.id}：${CHANNEL_STATE[c.state] ?? c.state}${extra}`
+      const failed = c.failed_items > 0 ? `，推送失败 ${c.failed_items} 条` : ''
+      return `${c.id}：${CHANNEL_STATE[c.state] ?? c.state}${extra}${failed}`
     })
     .join('；')
 }
