@@ -39,6 +39,8 @@ export interface FlowPaths {
   hubConfig: string
   nodeConfig: string
   schedulesConfig: string
+  /** `config/policies.yaml`：策略规则。 */
+  policiesConfig: string
   /** 任务账本 `state/flow.db`，只由中枢打开（design D1）。 */
   ledgerDb: string
   /** 中枢 token（0600）与单实例锁。 */
@@ -77,6 +79,7 @@ export function flowPaths(home: string): FlowPaths {
     hubConfig: join(config, 'hub.yaml'),
     nodeConfig: join(config, 'node.yaml'),
     schedulesConfig: join(config, 'schedules.yaml'),
+    policiesConfig: join(config, 'policies.yaml'),
     ledgerDb: join(state, 'flow.db'),
     hubToken: join(state, 'hub.token'),
     hubPid: join(state, 'hub.pid'),
