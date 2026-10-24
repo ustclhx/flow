@@ -13,6 +13,7 @@ import {
   type DeliveredReply,
   fail,
   flowPaths,
+  HUB_TOKEN_ENV,
   LEDGER_ID_RE,
   type LeaseGrant,
   loadHubConfig,
@@ -28,6 +29,7 @@ import {
 } from '@flow/core'
 import { createNodeHubClient, type FetchLike, type NodeHubClient } from './client.ts'
 import { type NodeClock, sleep, systemClock } from './clock.ts'
+import { executorEnv } from './env.ts'
 import {
   createExecutorRegistry,
   type DeliverResult,
@@ -589,6 +591,7 @@ class LeaseRunner {
           attempt: grant.attempt,
           cwd: grant.contract.cwd ?? env.defaultCwd,
           nodeId: env.nodeId,
+          env: executorEnv(),
           signal: this.abort.signal,
           ...(grant.resume ? { resume: grant.resume } : {}),
         })
@@ -762,7 +765,12 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
   const nodeConfig = await loadNodeConfig(home)
   if (!nodeConfig.ok) return nodeConfig
 
-  let token = options.token
+  // 本机节点用 user token（options.token 或 state/hub.token），不声明身份：中枢在注册与租约流程中
+  // 按 node_id 记为 node:<id>（user token 不能声明 node:*）。设置了 FLOW_HUB_TOKEN 时它是签发给
+  // node:<id> 的绑定 token，此时声明同一身份（design D9）。
+  const envToken =
+    options.token === undefined ? process.env[HUB_TOKEN_ENV]?.trim() || undefined : undefined
+  let token = options.token ?? envToken
   if (token === undefined) {
     const path = flowPaths(home).hubToken
     if (!existsSync(path)) {
@@ -794,7 +802,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
   const client = createNodeHubClient({
     url: hubUrl,
     token,
-    actor: `node:${nodeId}`,
+    ...(envToken ? { actor: `node:${nodeId}` } : {}),
     ...(options.fetch ? { fetch: options.fetch } : {}),
   })
   const retryMs = options.retryMs ?? 1_000

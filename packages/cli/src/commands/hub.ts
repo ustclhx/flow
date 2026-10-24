@@ -1,5 +1,14 @@
 import { join } from 'node:path'
-import { fail, flowPaths, HubClient, ok, renderTable, resolveFlowHome, rotateLog } from '@flow/core'
+import {
+  fail,
+  flowPaths,
+  HubClient,
+  type HubTokenView,
+  ok,
+  renderTable,
+  resolveFlowHome,
+  rotateLog,
+} from '@flow/core'
 import { runHub } from '@flow/hub'
 import { defineCommand } from '../command.ts'
 
@@ -56,6 +65,13 @@ export const hubStatusCommand = defineCommand({
           '最近一次备份',
           status.last_backup ? `${status.last_backup.at} ${status.last_backup.path}` : '（无）',
         ],
+        ['已解析的密钥', String(status.secrets?.loaded ?? 0)],
+        [
+          '缺少的密钥',
+          status.secrets?.missing.map((m) => `secret://${m.path}（${m.file}）`).join('；') ||
+            '（无）',
+        ],
+        ...(status.secrets?.error ? [['密钥解析错误', status.secrets.error]] : []),
       ],
       [
         { header: '项目', value: (row) => row[0] ?? '' },
@@ -70,4 +86,65 @@ export const hubRebuildCommand = defineCommand({
   run: ({ actor }) => new HubClient({ home: resolveFlowHome(process.env), actor }).rebuild(),
   human: (data) =>
     `已重放 ${data.events_replayed} 条事件，耗时 ${data.duration_ms} 毫秒（账本序号 ${data.ledger_seq}）`,
+})
+
+// FLOW_ACTOR 的降级规则已在 runCli 中统一处理（resolveActor）。
+const hubClient = (actor: string) => new HubClient({ home: resolveFlowHome(process.env), actor })
+
+const tokenRows = (tokens: HubTokenView[]) =>
+  renderTable(tokens, [
+    { header: 'ID', value: (t) => t.id },
+    { header: '身份', value: (t) => t.actor },
+    { header: '状态', value: (t) => (t.revoked_at ? `已撤销 ${t.revoked_at}` : '有效') },
+    { header: '签发时间', value: (t) => t.issued_at },
+    { header: '最近使用', value: (t) => t.last_used_at ?? '（从未）' },
+    { header: '备注', value: (t) => `${t.note ?? ''}${t.remote ? '（远程）' : ''}`, max: 40 },
+  ])
+
+export const hubTokenIssueCommand = defineCommand({
+  name: 'hub token issue',
+  usage: 'hub token issue <actor> [--note <备注>] [--remote]',
+  summary: '签发绑定身份的中枢 token（仅 user；token 只输出这一次）',
+  options: {
+    note: { type: 'string', description: '备注，例如用途' },
+    remote: { type: 'boolean', description: '标注为远程调用方使用（远程入口见变更 ⑤）' },
+  },
+  run: ({ args, options, actor }) => {
+    if (args.length !== 1)
+      return Promise.resolve(
+        fail('usage', 'invalid_arguments', '用法：flow hub token issue <actor> [--note <备注>]'),
+      )
+    return hubClient(actor).issueToken({
+      actor: args[0] as string,
+      ...(typeof options.note === 'string' ? { note: options.note } : {}),
+      ...(options.remote === true ? { remote: true } : {}),
+    })
+  },
+  human: ({ token, secret }) =>
+    [
+      `已签发 ${token.id}（身份 ${token.actor}）。token 只显示这一次，请立即妥善保存：`,
+      secret,
+      '使用方式：设置环境变量 FLOW_HUB_TOKEN，或作为 Authorization: Bearer 头。',
+    ].join('\n'),
+})
+
+export const hubTokenListCommand = defineCommand({
+  name: 'hub token list',
+  summary: '列出绑定 token（不显示 token 本身；仅 user）',
+  run: ({ args, actor }) =>
+    args.length
+      ? Promise.resolve(fail('usage', 'invalid_arguments', 'hub token list 不接受位置参数'))
+      : hubClient(actor).listTokens(),
+  human: ({ tokens }) => tokenRows(tokens),
+})
+
+export const hubTokenRevokeCommand = defineCommand({
+  name: 'hub token revoke',
+  usage: 'hub token revoke <id>',
+  summary: '撤销一个绑定 token，立即生效（仅 user）',
+  run: ({ args, actor }) =>
+    args.length !== 1
+      ? Promise.resolve(fail('usage', 'invalid_arguments', '用法：flow hub token revoke <id>'))
+      : hubClient(actor).revokeToken(args[0] as string),
+  human: ({ token }) => `已撤销 ${token.id}（身份 ${token.actor}）`,
 })

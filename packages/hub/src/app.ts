@@ -4,6 +4,7 @@ import {
   type HealthData,
   PROTOCOL_ERRORS,
   type ProtocolErrorCode,
+  redactSecrets,
   toJsonDocument,
   VERSION,
 } from '@flow/core'
@@ -14,6 +15,8 @@ import type { LedgerReader } from './ledger/port.ts'
 import { hubAuth } from './server/auth.ts'
 import type { HubClock } from './server/clock.ts'
 import { createEventsApp } from './server/events.ts'
+import { createTokenRoutes } from './server/token-routes.ts'
+import type { HubTokenStore } from './server/tokens.ts'
 
 /**
  * 中枢的 HTTP 应用（design D3）。这里只定义路由，不感知运行时；
@@ -25,8 +28,12 @@ import { createEventsApp } from './server/events.ts'
 export interface HubDeps {
   /** 中枢版本，默认 `@flow/core` 的 VERSION。 */
   version?: string
-  /** 不提供 token 时，受保护路由全部拒绝访问。 */
+  /** user token（`state/hub.token`）。不提供时，只有绑定 token 能访问受保护路由。 */
   token?: string
+  /** 绑定 token 的存储；提供时启用绑定 token 鉴权并挂载 token 管理路由。 */
+  tokens?: HubTokenStore
+  /** 某任务活动租约所属的节点 id；node:* 身份据此只读自己持有租约的任务。 */
+  leaseHolders?: (taskId: string) => readonly string[]
   ledger?: LedgerReader
   mount?: Array<{ path: string; app: Hono }>
   clock?: HubClock
@@ -58,7 +65,15 @@ export function createHubApp(deps: HubDeps = {}): Hono {
   const ledgerSeq = ledger ? () => ledger.seq() : (deps.ledgerSeq ?? (() => 0))
 
   const app = new Hono()
-  app.use('/v1/*', hubAuth(deps.token))
+  app.use(
+    '/v1/*',
+    hubAuth({
+      ...(deps.token === undefined ? {} : { token: deps.token }),
+      ...(deps.tokens ? { tokens: deps.tokens } : {}),
+      ...(deps.leaseHolders ? { leaseHolders: deps.leaseHolders } : {}),
+    }),
+  )
+  if (deps.tokens) app.route('/', createTokenRoutes(deps.tokens))
 
   app.get(ENDPOINTS.health.path, (c) => {
     const data: HealthData = {
@@ -81,7 +96,7 @@ export function createHubApp(deps: HubDeps = {}): Hono {
   for (const { path, app: child } of deps.mount ?? []) app.route(path, child)
 
   app.notFound((c) => errorResponse(c, 'not_found', `没有这个接口：${c.req.method} ${c.req.path}`))
-  app.onError((err, c) => errorResponse(c, 'internal_error', err.message))
+  app.onError((err, c) => errorResponse(c, 'internal_error', redactSecrets(err.message)))
 
   return app
 }

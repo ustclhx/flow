@@ -4,6 +4,8 @@ import {
   type HubStatusData,
   loadHubConfig,
   type Result,
+  redactSecrets,
+  registerKnownSecrets,
   VERSION,
 } from '@flow/core'
 import { Hono } from 'hono'
@@ -12,19 +14,48 @@ import { type LedgerStore, openLedger } from '../ledger/store.ts'
 import { createTaskService, workspaceCheckFromHome } from '../ledger/tasks.ts'
 import { createNodeProtocol, type NodeProtocol } from '../nodes/protocol.ts'
 import { createScheduler, type Scheduler } from '../scheduler/index.ts'
+import { redactingLogger } from '../secrets/logger.ts'
+import { SecretRedactor } from '../secrets/redactor.ts'
+import { createHubSecrets, type HubSecretsOptions } from '../secrets/service.ts'
 import { currentRuntime } from '../serve.ts'
 import { systemClock } from './clock.ts'
+import { consoleLogger } from './maintenance.ts'
 import { type RunningHub, type StartHubOptions, startHub } from './start.ts'
+import { ensureHubToken } from './token.ts'
 
-export type RunHubOptions = Omit<StartHubOptions, 'ledger' | 'openLedger' | 'routes' | 'onStop'>
+export interface RunHubOptions
+  extends Omit<StartHubOptions, 'ledger' | 'openLedger' | 'routes' | 'onStop' | 'leaseHolders'> {
+  /** 密钥解析的注入点（测试用）；默认用 sops 解密 `config/secrets.sops.yaml`。 */
+  secrets?: Pick<HubSecretsOptions, 'load' | 'debounceMs' | 'onChange'> & {
+    /** 是否监听 config/ 的变化，默认 true。 */
+    watch?: boolean
+  }
+}
 
 /**
  * 生产用的中枢组合：取得锁后打开 `state/flow.db`，挂载任务路由与节点协议路由，
  * 启动租约过期扫描、睡眠检测与定时调度，把每日备份写成 `hub.backup_done`，启动成功后写入 `hub.started`。
  * 注入的 clock 同时用于账本的事件时间戳，保证租约到期时间与扫描用同一个时钟。
  */
-export async function runHub(options: RunHubOptions): Promise<Result<RunningHub>> {
-  const clock = options.clock ?? systemClock
+export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> {
+  const clock = input.clock ?? systemClock
+  // 脱敏名单在任何事件写入之前就绪：取得锁后、打开账本时先解析一次密钥。
+  // 名单注册进 core 的 redactSecrets，使正则兜底之前先替换已知值（名单优先）。
+  const redactor = new SecretRedactor()
+  const unregister = registerKnownSecrets(redactor.redact)
+  const logger = redactingLogger(input.logger ?? consoleLogger, redactSecrets)
+  const options: RunHubOptions = { ...input, logger }
+  const secrets = createHubSecrets({
+    home: options.home,
+    redactor,
+    logger,
+    ...(options.secrets?.load ? { load: options.secrets.load } : {}),
+    ...(options.secrets?.debounceMs !== undefined
+      ? { debounceMs: options.secrets.debounceMs }
+      : {}),
+    ...(options.secrets?.onChange ? { onChange: options.secrets.onChange } : {}),
+  })
+  let stopWatch: (() => void) | undefined
   const startedAt = clock.now()
   let scheduler: Scheduler | undefined
   let ledger: LedgerStore | undefined
@@ -32,12 +63,23 @@ export async function runHub(options: RunHubOptions): Promise<Result<RunningHub>
   let protocol: NodeProtocol | undefined
   const started = await startHub({
     ...options,
+    leaseHolders: (taskId) =>
+      ledger
+        ?.activeLeases()
+        .filter((l) => l.task_id === taskId)
+        .map((l) => l.node_id) ?? [],
     openLedger: async () => {
       // startHub 在打开账本之前已校验过 hub.yaml，这里再读一次取租约参数。
       const loaded = await loadHubConfig(options.home)
       if (!loaded.ok) throw new Error(loaded.error.message)
       config = loaded.data
-      ledger = await openLedger(flowPaths(options.home).ledgerDb, { now: () => clock.now() })
+      const token = await ensureHubToken(options.home)
+      if (token.ok) redactor.add('state/hub.token', token.data)
+      await secrets.reload()
+      ledger = await openLedger(flowPaths(options.home).ledgerDb, {
+        now: () => clock.now(),
+        redact: redactor.redact,
+      })
       // 中枢停机期间节点无法续约：重启后给每个活动租约至少一个 TTL 的宽限，
       // 让仍在运行的节点有机会续上，而不是在第一次扫描时被误判为 node_lost（hub-daemon "崩溃后自动恢复"）。
       const graceUntil = new Date(clock.now() + config.lease_ttl_s * 1000).toISOString()
@@ -78,6 +120,7 @@ export async function runHub(options: RunHubOptions): Promise<Result<RunningHub>
             backup?.type === 'hub.backup_done'
               ? { path: backup.payload.path, at: backup.ts }
               : null,
+          secrets: secrets.status(),
         }
         return c.json({ ok: true as const, data })
       })
@@ -90,6 +133,10 @@ export async function runHub(options: RunHubOptions): Promise<Result<RunningHub>
     onStop: () => {
       scheduler?.stop()
       protocol?.stop()
+      stopWatch?.()
+      secrets.close()
+      // 账本写入端的 redact 仍直接持有名单；这里只撤下 core 正则之前的全局名单。
+      unregister()
     },
     onBackupDone: (info) => {
       options.onBackupDone?.(info)
@@ -107,7 +154,11 @@ export async function runHub(options: RunHubOptions): Promise<Result<RunningHub>
       )
     },
   })
-  if (!started.ok || !ledger) return started
+  if (!started.ok || !ledger) {
+    secrets.close()
+    unregister()
+    return started
+  }
   const marker = ledger.append(
     {
       type: 'hub.started',
@@ -131,5 +182,6 @@ export async function runHub(options: RunHubOptions): Promise<Result<RunningHub>
     ...(options.logger ? { logger: options.logger } : {}),
   })
   protocol?.start()
+  if (options.secrets?.watch !== false) stopWatch = secrets.watch()
   return started
 }

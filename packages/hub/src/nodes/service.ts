@@ -409,7 +409,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       if (!req.ok) return req
       const written = ledger.append(
         { type: 'node.registered', payload: req.data },
-        { actor: actor === 'unknown' ? `node:${req.data.node_id}` : actor },
+        // 未声明身份（unknown）或用 user token 未降级（user）时，记为该节点。
+        { actor: actor === 'unknown' || actor === 'user' ? `node:${req.data.node_id}` : actor },
       )
       if (!written.ok) return written
       ledger.touchNode(req.data.node_id)

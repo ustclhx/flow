@@ -86,6 +86,7 @@ export {
   taskStateDir,
   writeTaskSpec,
 } from './codex-orca/spec.ts'
+export { CHILD_ENV_DENYLIST, executorEnv } from './env.ts'
 export {
   ActivityQueue,
   createExecutorRegistry,

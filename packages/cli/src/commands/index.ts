@@ -4,7 +4,14 @@ import { commandFromOperation } from '../from-operation.ts'
 import agentsSync from './agents-sync.ts'
 import { daemonCommands } from './daemon.ts'
 import { doctorCommand } from './doctor.ts'
-import { hubRebuildCommand, hubStartCommand, hubStatusCommand } from './hub.ts'
+import {
+  hubRebuildCommand,
+  hubStartCommand,
+  hubStatusCommand,
+  hubTokenIssueCommand,
+  hubTokenListCommand,
+  hubTokenRevokeCommand,
+} from './hub.ts'
 import { initCommand } from './init.ts'
 import { kbValidateCommand } from './kb-validate.ts'
 import { mcpCommand } from './mcp.ts'
@@ -22,6 +29,9 @@ export const commands = [
   hubStartCommand,
   hubStatusCommand,
   hubRebuildCommand,
+  hubTokenIssueCommand,
+  hubTokenListCommand,
+  hubTokenRevokeCommand,
   kbValidateCommand,
   doctorCommand,
   agentsSync,

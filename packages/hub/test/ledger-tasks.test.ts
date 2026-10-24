@@ -13,6 +13,7 @@ import {
   showTaskData,
 } from '@flow/core'
 import {
+  createHubApp,
   createTaskRoutes,
   createTaskService,
   generateTaskId,
@@ -29,6 +30,7 @@ import {
   tempLedger,
   WS,
 } from './ledger-helpers.ts'
+import { authHeaders, testToken } from './server-fixtures.ts'
 
 let cleanups: (() => void)[] = []
 afterEach(() => {
@@ -45,7 +47,11 @@ async function setup() {
     workspaceExists: (ref) => ref === WS || ref === 'ws/global',
     newTaskId: () => `t-test-${++n}`,
   })
-  const app = createTaskRoutes({ ledger: l.store, tasks })
+  // 经过真实的鉴权中间件：身份由 user token 决定，X-Flow-Actor 只能降级。
+  const app = createHubApp({
+    token: testToken,
+    mount: [{ path: '/', app: createTaskRoutes({ ledger: l.store, tasks }) }],
+  })
   const call = (
     method: string,
     path: string,
@@ -54,7 +60,7 @@ async function setup() {
   ) =>
     app.request(path, {
       method,
-      headers: { 'content-type': 'application/json', ...headers },
+      headers: { 'content-type': 'application/json', ...authHeaders, ...headers },
       ...(body === undefined
         ? {}
         : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
@@ -92,10 +98,10 @@ describe('任务合同（POST /v1/tasks）', () => {
     expect(store.eventsAfter(0)).toMatchObject([{ type: 'task.created', actor: 'agent:claude' }])
   })
 
-  test('缺少 X-Flow-Actor 时操作者为 unknown；格式不合法时 400', async () => {
+  test('user token 不声明 X-Flow-Actor 时操作者为 user；格式不合法时 400', async () => {
     const { call } = await setup()
     const res = await call('POST', '/v1/tasks', contractInput())
-    expect(okBody(createTaskData).parse(await res.json()).data.task.created_by).toBe('unknown')
+    expect(okBody(createTaskData).parse(await res.json()).data.task.created_by).toBe('user')
     const bad = await call('POST', '/v1/tasks', contractInput(), { 'X-Flow-Actor': 'a b' })
     expect(bad.status).toBe(400)
   })

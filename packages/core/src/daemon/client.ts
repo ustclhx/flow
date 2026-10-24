@@ -11,6 +11,7 @@ import {
   type HealthData,
   HUB_UNAVAILABLE,
   type HubStatusData,
+  type IssueTokenRequest,
   type listTasksQuery,
   okBody,
   type ReplyTaskRequest,
@@ -21,7 +22,13 @@ import { loadHubConfig, resolveHubUrl } from './config.ts'
 
 export interface HubClientOptions {
   home: string
+  /** 写入 `X-Flow-Actor`。user token 可以借此降级；绑定 token 必须与绑定身份一致。 */
   actor: string
+  /**
+   * 显式的中枢 token。缺省时依次取环境变量 `FLOW_HUB_TOKEN`（例如签发给某个 AI 的绑定 token），
+   * 最后取 `state/hub.token`（user token）。
+   */
+  token?: string
   /** 默认 5 秒；覆盖整个 HTTP 请求与响应体读取。 */
   timeoutMs?: number
   fetch?: (request: Request) => Promise<Response>
@@ -31,10 +38,14 @@ export type HubStatus = HealthData & {
   pid: number | null
   schedules: HubStatusData['schedules']
   last_backup: HubStatusData['last_backup']
+  secrets?: HubStatusData['secrets']
 }
 
 type JsonEndpoint = Exclude<EndpointName, 'events'>
 type ResponseData<N extends JsonEndpoint> = z.infer<(typeof ENDPOINTS)[N]['response']>
+/** 进程以绑定 token 访问中枢时设置的环境变量（design D9）。 */
+export const HUB_TOKEN_ENV = 'FLOW_HUB_TOKEN'
+
 const unavailable = () =>
   fail('retryable', HUB_UNAVAILABLE, '无法连接中枢，请运行 flow daemon status 检查')
 const invalidResponse = () => fail('failure', 'invalid_hub_response', '中枢响应不符合协议')
@@ -54,11 +65,14 @@ export class HubClient {
     const endpoint = ENDPOINTS[name]
     let token: string | undefined
     if (endpoint.auth) {
-      try {
-        token = (await readFile(flowPaths(this.options.home).hubToken, 'utf8')).trim()
-      } catch (err) {
-        if (isMissing(err)) return unavailable()
-        return fail('failure', 'read_failed', '无法读取中枢 token 文件')
+      token = (this.options.token ?? process.env[HUB_TOKEN_ENV])?.trim() || undefined
+      if (token === undefined) {
+        try {
+          token = (await readFile(flowPaths(this.options.home).hubToken, 'utf8')).trim()
+        } catch (err) {
+          if (isMissing(err)) return unavailable()
+          return fail('failure', 'read_failed', '无法读取中枢 token 文件')
+        }
       }
       if (!token) return unavailable()
     }
@@ -126,6 +140,15 @@ export class HubClient {
   }
   rebuild() {
     return this.request('hub-rebuild')
+  }
+  issueToken(input: IssueTokenRequest) {
+    return this.request('hub-tokens-issue', input)
+  }
+  listTokens() {
+    return this.request('hub-tokens-list')
+  }
+  revokeToken(id: string) {
+    return this.request('hub-tokens-revoke', {}, id)
   }
 
   /** 旧中枢没有 status 路由时，用 health 加本地文件补足可观测信息。 */

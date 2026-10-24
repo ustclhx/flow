@@ -18,6 +18,7 @@ import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
 import { questionMessage } from './codex-orca/classify.ts'
 import { resolveContext } from './codex-orca/spec.ts'
+import { executorEnv } from './env.ts'
 import {
   ActivityQueue,
   type ExecutorOutcome,
@@ -236,12 +237,9 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
         args.push('-s', perms.data.sandbox)
         if (ctx.resume?.session) args.push('resume', ctx.resume.session)
         args.push('--', prompt)
-        // main 尚无 executorEnv()；使用上下文环境，并始终去掉中枢认证 token。
-        const env = { ...(ctx.env ?? process.env) }
-        delete env.FLOW_HUB_TOKEN
         child = spawn(command[0] ?? 'codex', args, {
           cwd: ctx.cwd,
-          env,
+          env: executorEnv(ctx.env),
           shell: false,
           detached: true,
           stdio: ['ignore', 'pipe', 'pipe'],

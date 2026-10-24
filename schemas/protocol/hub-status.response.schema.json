@@ -141,6 +141,55 @@
               "type": "null"
             }
           ]
+        },
+        "secrets": {
+          "default": {
+            "loaded": 0,
+            "missing": [],
+            "error": null
+          },
+          "type": "object",
+          "properties": {
+            "loaded": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "已解析的密钥个数"
+            },
+            "missing": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "file"
+                ],
+                "additionalProperties": false
+              },
+              "description": "配置中引用了但尚未设置的密钥路径；依赖它们的功能不启动"
+            },
+            "error": {
+              "description": "最近一次解密失败的错误码",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "loaded",
+            "missing",
+            "error"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -152,7 +201,8 @@
         "runtime",
         "schedules",
         "schedule_errors",
-        "last_backup"
+        "last_backup",
+        "secrets"
       ],
       "additionalProperties": false,
       "title": "GET /v1/hub/status"

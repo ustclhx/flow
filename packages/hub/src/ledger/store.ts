@@ -1,4 +1,5 @@
 import {
+  ACTIVITY_TEXT_MAX,
   type Activity,
   checkTaskEvent,
   type Database,
@@ -15,12 +16,15 @@ import {
   type RebuildData,
   type ReplyView,
   type Result,
+  redactKnownSecrets,
   type SqlValue,
+  sanitizeText,
   type TaskResume,
   type TaskStatus,
   type TaskView,
 } from '@flow/core'
 import type { z } from 'zod'
+import { redactDeep } from '../secrets/redactor.ts'
 import { type Applier, createApplier } from './apply.ts'
 import type { EventFilter, LedgerMaintenance, LedgerReader } from './port.ts'
 import {
@@ -31,6 +35,7 @@ import {
   type ProjectionTable,
   SOFT_COLUMNS,
 } from './schema.ts'
+import { scrubPayload } from './scrub.ts'
 
 /**
  * 账本 store（design D1、D2；tasks.md 2.1、2.2）。
@@ -82,6 +87,11 @@ export interface OpenLedgerOptions {
   now?: () => number
   /** 每个任务保留的最近活动条数，默认 50。 */
   activityKeep?: number
+  /**
+   * 写入前对事件载荷与活动片段中所有字符串做的替换（secret-hygiene "已知密钥值的脱敏"）。
+   * 中枢传入脱敏名单；重建只重放已写入（已脱敏）的事件，不再替换。
+   */
+  redact?: (text: string) => string
 }
 
 /** 每张投影表按主键排序后的行（JSON 字段保持原文）。 */
@@ -288,6 +298,9 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
   const nowMs = opts.now ?? Date.now
   const iso = (ms = nowMs()) => new Date(ms).toISOString()
   const activityKeep = opts.activityKeep ?? 50
+  const redact = opts.redact
+  /** 活动 data 等结构化字段只做名单替换（见 scrub.ts）。 */
+  const knownOnly = (text: string) => redactKnownSecrets(redact ? redact(text) : text)
   const apply: Applier = createApplier(db)
   const listeners = new Set<(event: LedgerEvent) => void>()
 
@@ -440,7 +453,19 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
 
   /** 事务内：校验 → 插入 → apply。不合法时抛出 Abort 让事务回滚。 */
   function writeOne(raw: unknown, ts: string): LedgerEvent {
-    const parsed = parseLedgerEventDraft(raw)
+    // 先脱敏再校验：脱敏后的载荷仍须符合 schema。
+    const parsed = parseLedgerEventDraft(
+      raw !== null && typeof raw === 'object' && 'payload' in raw
+        ? {
+            ...raw,
+            payload: scrubPayload(
+              String((raw as { type?: unknown }).type),
+              (raw as { payload: unknown }).payload,
+              redact,
+            ),
+          }
+        : raw,
+    )
     if (!parsed.ok) throw new Abort(parsed)
     const draft = parsed.data
     const valid = validate(draft)
@@ -713,7 +738,14 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       )
       if (!row) return false
       if (activities.length === 0) return true
-      const kept = [...(JSON.parse(row.activity_json) as Activity[]), ...activities].slice(
+      // 活动文本是自由文本：限长并脱敏（sanitizeText：名单 → 截断 → 正则）；data 只做名单替换。
+      const incoming = activities.map((a) => ({
+        ...redactDeep(a, knownOnly),
+        ...(a.text === undefined
+          ? {}
+          : { text: sanitizeText(redact ? redact(a.text) : a.text, ACTIVITY_TEXT_MAX) }),
+      }))
+      const kept = [...(JSON.parse(row.activity_json) as Activity[]), ...incoming].slice(
         -activityKeep,
       )
       let last = activities[0]?.ts ?? iso()
