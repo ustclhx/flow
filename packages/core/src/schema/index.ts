@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { ledgerSchemaEntries } from '../ledger/index.ts'
 import { proposalSchema } from '../proposals/schema.ts'
+import { roleSchema } from '../roles.ts'
 import { baseShape, ENTRY_TYPES, entrySchema, entrySchemas } from './entries.ts'
 import { searchSchemas } from './search.ts'
 import { workspaceSchema } from './workspace.ts'
@@ -29,6 +30,7 @@ export function jsonSchemas(): Record<string, JsonSchema> {
     'entry.schema.json': toJson(entrySchema, 'entry.schema.json'),
     'workspace.schema.json': toJson(workspaceSchema, 'workspace.schema.json'),
     'proposal.schema.json': toJson(proposalSchema, 'proposal.schema.json'),
+    'config/role.schema.json': toJson(roleSchema, 'config/role.schema.json', 'input'),
   }
   for (const type of ENTRY_TYPES) {
     const file = `entries/${type}.schema.json`

@@ -4,6 +4,8 @@ import { renderTable } from '../format/table.ts'
 import { taskId } from '../ledger/common.ts'
 import { cancelTaskRequest, listTasksQuery } from '../ledger/protocol.ts'
 import { type TaskContractInput, type TaskView, taskContract } from '../ledger/task.ts'
+import { fail } from '../result.ts'
+import { loadRoles } from '../roles.ts'
 import { defineOperation, type OpContext } from './operation.ts'
 
 const client = (ctx: OpContext) => new HubClient(ctx)
@@ -16,7 +18,19 @@ export const taskCreateOp = defineOperation({
   summary: '向中枢提交任务合同',
   input: taskContract,
   fileInput: true,
-  run: (input: TaskContractInput, ctx) => client(ctx).createTask(input),
+  run: async (input: TaskContractInput, ctx) => {
+    const loaded = await loadRoles(ctx.home)
+    if (!loaded.ok) return loaded
+    if (!loaded.data.roles.some((role) => role.name === input.role)) {
+      return fail('failure', 'unknown_role', `角色 ${input.role} 未定义`, {
+        field: 'role',
+        role: input.role,
+        errors: loaded.data.errors,
+      })
+    }
+    // 合同中的 executor 优先于角色配置，允许不一致；覆盖记录留待启动执行器时写入 task.started。
+    return client(ctx).createTask(input)
+  },
   human: ({ task, created }) => `${created ? '已创建' : '已有任务'}：${taskSummary(task)}`,
 })
 

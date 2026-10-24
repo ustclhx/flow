@@ -1,0 +1,51 @@
+{
+  "$id": "https://flow.local/schemas/config/role.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "角色名，与 YAML 文件名（不含扩展名）一致"
+    },
+    "executor": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "description": "执行器类型，例如 fake、codex-orca、claude-sdk、codex-exec"
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1,
+      "description": "内联提示词；同目录的 .md 文件名视为文件引用，文件必须存在"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "effort": {
+      "type": "string",
+      "minLength": 1
+    },
+    "permissions": {
+      "description": "执行器专用权限设置；内核只校验它是对象",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "no_progress_minutes": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "name",
+    "executor",
+    "prompt"
+  ],
+  "additionalProperties": false,
+  "title": "Flow role config",
+  "description": "config/roles/<name>.yaml"
+}

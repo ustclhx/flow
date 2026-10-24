@@ -23,7 +23,7 @@ const SAMPLE_INPUTS: Record<string, Json> = {
   task_create: {
     goal: '一致性任务',
     workspace: 'ws/product-res',
-    role: 'developer',
+    role: 'dev',
     executor: 'fake',
   },
   kb_journal: { text: '一致性测试日志', workspace: 'ws/product-res' },

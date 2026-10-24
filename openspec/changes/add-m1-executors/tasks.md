@@ -5,7 +5,7 @@
 
 ## 1. 共享基础
 
-- [ ] 1.1 角色 schema（`config/roles/*.yaml`，提示词可以内联或引用 `.md`）、加载与校验；`flow init` 补齐 `dev`、`reviewer`、`triage` 三个默认角色；`task_create` 校验角色是否存在（`unknown_role`）；导出 JSON Schema；验证 role-config spec 的全部场景
+- [x] 1.1 角色 schema（`config/roles/*.yaml`，提示词可以内联或引用 `.md`）、加载与校验；`flow init` 补齐 `dev`、`reviewer`、`triage` 三个默认角色；`task_create` 校验角色是否存在（`unknown_role`）；导出 JSON Schema；验证 role-config spec 的全部场景
 - [ ] 1.2 扩展执行器接口（`deliver`、`classify`），实现节点通用循环：活动上报、无进展计时、崩溃识别、超时停止；验证用 fake 执行器的扩展指令覆盖 stuck-detection spec 的全部场景
 - [ ] 1.3 中枢侧的回复：`task.replied`、`task.requeued_with_reply` 事件，`replies` 投影表，`POST /v1/tasks/:id/reply`，续约响应携带待送达的回复，`ack-reply` 接口（同事务写入 `task.unblocked`）；`task_reply` 操作（`--approve`、`--deny`、文字）；验证 task-interaction spec 和 node-protocol 增量的全部场景（用 fake 执行器）
 
