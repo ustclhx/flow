@@ -39,6 +39,15 @@ async function setupHome(): Promise<string> {
     join(home, 'config', 'workspaces', 'demo.yaml'),
     'id: demo\nkind: product\nname: Demo\ndescription: 测试\nrepos: []\n',
   )
+  // 预置今天（及明天，防跨午夜）的备份文件：启动时不补做备份，hub.backup_done 不会打乱"不产生事件"的计数。
+  const backups = flowPaths(home).backups
+  mkdirSync(backups, { recursive: true })
+  for (const offset of [0, 1]) {
+    const d = new Date(Date.now() + offset * 86_400_000)
+    const p2 = (n: number) => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`
+    writeFileSync(join(backups, `flow-${stamp}-000000.db`), '')
+  }
   return home
 }
 
