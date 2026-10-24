@@ -116,8 +116,15 @@ describe('分级覆盖', () => {
   test('导出 JSON Schema', () => {
     const all = jsonSchemas()
     const schema = all['config/inbox.schema.json'] as { properties: Record<string, unknown> }
-    expect(Object.keys(schema.properties)).toEqual(['levels'])
+    expect(Object.keys(schema.properties)).toEqual([
+      'levels',
+      'quiet_hours',
+      'decide',
+      'digest',
+      'snippet_max_chars',
+    ])
     expect(all['inbox/item.schema.json']).toBeDefined()
     expect(all['events/inbox.item_created.schema.json']).toBeDefined()
+    expect(all['events/inbox.pushed.schema.json']).toBeDefined()
   })
 })

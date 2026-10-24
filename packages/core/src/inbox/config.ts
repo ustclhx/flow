@@ -6,7 +6,13 @@ import { BLOCKED_REASONS } from '../ledger/task.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { formatZodIssues, type ValidationIssue } from '../validation-issue.ts'
-import { INBOX_LEVELS, type InboxLevel, type InboxSource, inboxSource } from './schema.ts'
+import {
+  INBOX_BODY_MAX,
+  INBOX_LEVELS,
+  type InboxLevel,
+  type InboxSource,
+  inboxSource,
+} from './schema.ts'
 
 /**
  * `config/inbox.yaml`（inbox spec "默认分级"：用户可以覆盖默认级别）。
@@ -24,7 +30,17 @@ import { INBOX_LEVELS, type InboxLevel, type InboxSource, inboxSource } from './
  * 匹配：规则中写出的条件（source、workspace、reason）都要满足；多条命中时，条件更多的规则优先，
  * 条件数相同时文件中靠后的规则优先（后写的覆盖先写的）。都不命中时用默认级别（`defaultInboxLevel`）。
  * 单条规则写错只排除该条，并报告错误，其他规则照常生效。
- * 推送节奏（静默时段、Decide 时间点等）的字段由 3.3 加入。
+ *
+ * 推送节奏（inbox spec "推送节奏"，3.3；时间都按中枢所在系统的本地时区）：
+ *
+ * ```yaml
+ * quiet_hours: { start: "23:00", end: "08:00" }   # 写 false 关闭静默时段
+ * decide: { times: ["09:00", "18:00"], threshold: 5 }
+ * digest: { time: "08:30" }
+ * snippet_max_chars: 1500                          # 外发的终端片段最多保留末尾多少字符，0 表示不发
+ * ```
+ *
+ * 节奏字段写错时该字段取默认值并报告错误，不影响分级规则。
  */
 
 /** 级别写法不区分首字母大小写：spec 中写作 Interrupt / Decide / Digest。 */
@@ -46,12 +62,56 @@ export const inboxLevelRuleSchema = z
   })
   .meta({ title: 'Inbox level rule', description: '一条分级覆盖规则' })
 
+/** 本地时间 `HH:MM`（24 小时制）。 */
+const clockTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, '时间应写成 HH:MM，例如 08:30')
+  .meta({ description: '本地时间 HH:MM（24 小时制）' })
+
+const quietHoursSchema = z
+  .union([z.strictObject({ start: clockTime, end: clockTime }), z.literal(false)])
+  .meta({ description: '静默时段（默认 23:00–08:00）；Interrupt 顺延到时段结束；false 关闭' })
+
+const decideSchema = z
+  .strictObject({
+    times: z
+      .array(clockTime)
+      .max(24)
+      .optional()
+      .meta({ description: 'Decide 条目合并推送的时间点，默认 09:00 与 18:00' }),
+    threshold: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .meta({ description: '尚未推送的 Decide 条目达到这个数量时提前推送，默认 5' }),
+  })
+  .meta({ description: 'Decide 条目的合并推送' })
+
+const digestSchema = z
+  .strictObject({
+    time: clockTime.optional().meta({ description: '每日摘要的推送时间，默认 08:30' }),
+  })
+  .meta({ description: '每日摘要' })
+
+const snippetMaxSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(INBOX_BODY_MAX)
+  .meta({ description: '外发的终端输出片段保留末尾的字符数，默认 1500；0 表示不发送片段' })
+
 export const inboxConfigSchema = z
   .strictObject({
     levels: z
       .array(inboxLevelRuleSchema)
       .default([])
       .meta({ description: '分级覆盖规则，按条件多少与先后决定优先级' }),
+    quiet_hours: quietHoursSchema.optional(),
+    decide: decideSchema.optional(),
+    digest: digestSchema.optional(),
+    snippet_max_chars: snippetMaxSchema.optional(),
   })
   .meta({ title: 'Flow inbox config', description: 'config/inbox.yaml：收件箱配置' })
 
@@ -64,12 +124,36 @@ export interface InboxLevelRule {
   level: InboxLevel
 }
 
+/** 推送节奏（解析后、已填默认值）。 */
+export interface InboxCadence {
+  /** 静默时段；null 表示不设。start 晚于 end 时跨越午夜。 */
+  quiet: { start: string; end: string } | null
+  decide_times: string[]
+  decide_threshold: number
+  digest_time: string
+  snippet_max_chars: number
+}
+
+export const DEFAULT_INBOX_CADENCE: Readonly<InboxCadence> = Object.freeze({
+  quiet: { start: '23:00', end: '08:00' },
+  decide_times: ['09:00', '18:00'],
+  decide_threshold: 5,
+  digest_time: '08:30',
+  snippet_max_chars: 1500,
+})
+
 export interface InboxConfig {
   levels: InboxLevelRule[]
+  /** 推送节奏；缺省为 `DEFAULT_INBOX_CADENCE`。 */
+  cadence?: InboxCadence
   errors: (ValidationIssue & { rule_index?: number })[]
 }
 
 export const EMPTY_INBOX_CONFIG: InboxConfig = { levels: [], errors: [] }
+
+/** 配置中的推送节奏，没有时取默认值。 */
+export const inboxCadence = (config: Pick<InboxConfig, 'cadence'>): InboxCadence =>
+  config.cadence ?? { ...DEFAULT_INBOX_CADENCE }
 
 const FILE = 'config/inbox.yaml'
 
@@ -92,10 +176,11 @@ export function parseInboxConfig(input: unknown): Result<InboxConfig> {
   const obj = input as Record<string, unknown>
   const errors: InboxConfig['errors'] = []
   for (const key of Object.keys(obj)) {
-    if (key !== 'levels') {
+    if (!TOP_LEVEL_KEYS.has(key)) {
       errors.push({ file: FILE, field: key, code: 'unknown_field', message: `未知字段 ${key}` })
     }
   }
+  const cadence = parseCadence(obj, errors)
   const rawLevels = obj.levels ?? []
   if (!Array.isArray(rawLevels)) {
     return fail('failure', 'invalid_config', `${FILE} 的 levels 必须是规则数组`)
@@ -123,7 +208,46 @@ export function parseInboxConfig(input: unknown): Result<InboxConfig> {
       level: r.level.toLowerCase() as InboxLevel,
     })
   })
-  return ok({ levels, errors })
+  return ok({ levels, cadence, errors })
+}
+
+const TOP_LEVEL_KEYS = new Set(['levels', 'quiet_hours', 'decide', 'digest', 'snippet_max_chars'])
+
+/** 解析节奏字段：写错的字段取默认值并记录错误。 */
+function parseCadence(obj: Record<string, unknown>, errors: InboxConfig['errors']): InboxCadence {
+  const out: InboxCadence = {
+    ...DEFAULT_INBOX_CADENCE,
+    decide_times: [...DEFAULT_INBOX_CADENCE.decide_times],
+  }
+  const field = <T>(key: string, schema: z.ZodType<T>, use: (v: T) => void) => {
+    if (obj[key] === undefined || obj[key] === null) return
+    const parsed = schema.safeParse(obj[key])
+    if (parsed.success) {
+      use(parsed.data)
+      return
+    }
+    errors.push(
+      ...issuesOf(parsed.error, obj[key]).map((issue) => ({
+        ...issue,
+        field: `${key}${issue.field ? `.${issue.field}` : ''}`,
+        message: `${key}：${issue.message}（使用默认值）`,
+      })),
+    )
+  }
+  field('quiet_hours', quietHoursSchema, (v) => {
+    out.quiet = v === false || v.start === v.end ? null : v
+  })
+  field('decide', decideSchema, (v) => {
+    if (v.times) out.decide_times = [...new Set(v.times)].sort()
+    if (v.threshold !== undefined) out.decide_threshold = v.threshold
+  })
+  field('digest', digestSchema, (v) => {
+    if (v.time) out.digest_time = v.time
+  })
+  field('snippet_max_chars', snippetMaxSchema, (v) => {
+    out.snippet_max_chars = v
+  })
+  return out
 }
 
 /** 读取 `config/inbox.yaml`；文件不存在等同空配置。 */

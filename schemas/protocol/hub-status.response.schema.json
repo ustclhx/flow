@@ -240,6 +240,79 @@
             "errors"
           ],
           "additionalProperties": false
+        },
+        "channels": {
+          "default": [],
+          "description": "推送渠道的状态",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "running",
+                  "backoff",
+                  "disabled",
+                  "stopped"
+                ],
+                "description": "running 正常；backoff 失败后等待重试；disabled 缺少密钥等原因未启动；stopped 正在停止"
+              },
+              "missing_secrets": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "该渠道缺少的密钥路径"
+              },
+              "failures": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "连续失败次数"
+              },
+              "next_retry_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "last_error": {
+                "description": "最近一次失败的说明（已脱敏）",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "failed_items": {
+                "default": 0,
+                "description": "记为推送失败（放弃推送或同步）的条目数",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "state",
+              "missing_secrets",
+              "failures",
+              "next_retry_at",
+              "last_error",
+              "failed_items"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
@@ -253,7 +326,8 @@
         "schedule_errors",
         "last_backup",
         "secrets",
-        "policies"
+        "policies",
+        "channels"
       ],
       "additionalProperties": false,
       "title": "GET /v1/hub/status"

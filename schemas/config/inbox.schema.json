@@ -67,6 +67,76 @@
         "title": "Inbox level rule",
         "description": "一条分级覆盖规则"
       }
+    },
+    "quiet_hours": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "string",
+              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+              "description": "本地时间 HH:MM（24 小时制）"
+            },
+            "end": {
+              "type": "string",
+              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+              "description": "本地时间 HH:MM（24 小时制）"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "boolean",
+          "const": false
+        }
+      ],
+      "description": "静默时段（默认 23:00–08:00）；Interrupt 顺延到时段结束；false 关闭"
+    },
+    "decide": {
+      "type": "object",
+      "properties": {
+        "times": {
+          "description": "Decide 条目合并推送的时间点，默认 09:00 与 18:00",
+          "maxItems": 24,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "description": "本地时间 HH:MM（24 小时制）"
+          }
+        },
+        "threshold": {
+          "description": "尚未推送的 Decide 条目达到这个数量时提前推送，默认 5",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "additionalProperties": false,
+      "description": "Decide 条目的合并推送"
+    },
+    "digest": {
+      "type": "object",
+      "properties": {
+        "time": {
+          "description": "每日摘要的推送时间，默认 08:30",
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+        }
+      },
+      "additionalProperties": false,
+      "description": "每日摘要"
+    },
+    "snippet_max_chars": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4000,
+      "description": "外发的终端输出片段保留末尾的字符数，默认 1500；0 表示不发送片段"
     }
   },
   "additionalProperties": false,

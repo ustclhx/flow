@@ -56,7 +56,8 @@
             "proposal_removed",
             "answered",
             "dismissed",
-            "acted"
+            "acted",
+            "digested"
           ],
           "description": "条目关闭原因"
         },

@@ -3,6 +3,7 @@ import {
   type EventType,
   INBOX_BODY_MAX,
   INBOX_NOTE_MAX,
+  INBOX_PUSH_REASON_MAX,
   INBOX_TITLE_MAX,
   PROTOCOL_MESSAGE_MAX,
   redactKnownSecrets,
@@ -53,6 +54,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'inbox.item_created': [['title'], ['body']],
   'inbox.item_updated': [['title'], ['body']],
   'inbox.item_closed': [['note']],
+  'inbox.pushed': [['reason']],
 }
 
 /**
@@ -63,6 +65,7 @@ export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string,
   'inbox.item_created': { title: INBOX_TITLE_MAX, body: INBOX_BODY_MAX },
   'inbox.item_updated': { title: INBOX_TITLE_MAX, body: INBOX_BODY_MAX },
   'inbox.item_closed': { note: INBOX_NOTE_MAX },
+  'inbox.pushed': { reason: INBOX_PUSH_REASON_MAX },
 }
 
 function mapPath(value: unknown, path: FieldPath, fn: (s: string) => string): unknown {

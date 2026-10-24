@@ -147,6 +147,14 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   taskResume(taskId: string): TaskResume | null
 
   getInboxItem(itemId: string): InboxItemView | null
+  /** 按短 id（创建事件 seq 的 base36）找条目，渠道按钮用。 */
+  getInboxItemByShortId(shortId: string): InboxItemView | null
+  /** 某渠道的一条消息里包含的条目 id（按条目创建先后）。 */
+  channelMessageItems(channel: string, ref: string): string[]
+  /** 某渠道上条目已关闭、但消息还没改为"已处理"的消息，按发送先后。 */
+  pendingChannelUpdates(channel: string): { ref: string; item_ids: string[] }[]
+  /** 某渠道上记为推送失败（op=failed）的条目数。 */
+  channelFailedCount(channel: string): number
   /** 按级别（interrupt → digest）再按创建先后排序。 */
   listInboxItems(filter?: InboxItemFilter): InboxItemView[]
   /**
@@ -274,6 +282,7 @@ interface InboxRow {
   updated_at: string
   deferred_until: string | null
   pushed_at: string | null
+  channel_refs_json: string
   close_reason: string | null
   close_note: string | null
   closed_at: string | null
@@ -301,6 +310,7 @@ function rowToInbox(r: InboxRow): InboxItemView {
     updated_at: r.updated_at,
     deferred_until: r.deferred_until,
     pushed_at: r.pushed_at,
+    channels: JSON.parse(r.channel_refs_json),
     closed:
       r.state === 'closed' && r.closed_at !== null && r.closed_by !== null
         ? {
@@ -529,6 +539,27 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           return fail('failure', 'duplicate_item', `收件箱条目 ${draft.payload.item_id} 已存在`, {
             item_id: draft.payload.item_id,
           })
+        }
+        return ok(null)
+      }
+      case 'inbox.pushed': {
+        // 推送记录不检查条目状态：消息发出与条目关闭可能交错，已发出的消息必须如实入账。
+        for (const itemId of draft.payload.item_ids) {
+          if (!get('SELECT 1 FROM inbox_items WHERE id = ?', itemId)) {
+            return fail('failure', 'not_found', `收件箱条目 ${itemId} 不存在`)
+          }
+          if (
+            draft.payload.ref !== undefined &&
+            draft.payload.op !== 'send' &&
+            !get(
+              'SELECT 1 FROM channel_messages WHERE channel = ? AND ref = ? AND item_id = ?',
+              draft.payload.channel,
+              draft.payload.ref,
+              itemId,
+            )
+          ) {
+            return invalidEvent(`条目 ${itemId} 不在渠道 ${draft.payload.channel} 的该消息中`)
+          }
         }
         return ok(null)
       }
@@ -830,6 +861,40 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           )
         : get<InboxRow>('SELECT * FROM inbox_items WHERE id = ?', itemId)
       return r ? rowToInbox(r) : null
+    },
+    getInboxItemByShortId(shortId) {
+      if (!/^[0-9a-z]{1,12}$/.test(shortId)) return null
+      const seq = Number.parseInt(shortId, 36)
+      if (!Number.isSafeInteger(seq)) return null
+      const r = get<InboxRow>('SELECT * FROM inbox_items WHERE created_seq = ?', seq)
+      return r ? rowToInbox(r) : null
+    },
+    channelMessageItems(channel, ref) {
+      return all<{ item_id: string }>(
+        `SELECT m.item_id FROM channel_messages m JOIN inbox_items i ON i.id = m.item_id
+         WHERE m.channel = ? AND m.ref = ? AND m.ref != '' ORDER BY i.created_seq`,
+        channel,
+        ref,
+      ).map((r) => r.item_id)
+    },
+    pendingChannelUpdates(channel) {
+      const rows = all<{ ref: string; item_id: string }>(
+        `SELECT m.ref, m.item_id FROM channel_messages m JOIN inbox_items i ON i.id = m.item_id
+         WHERE m.channel = ? AND m.synced_at IS NULL AND m.ref != '' AND i.state = 'closed'
+         ORDER BY m.sent_seq, i.created_seq`,
+        channel,
+      )
+      const out = new Map<string, string[]>()
+      for (const r of rows) out.set(r.ref, [...(out.get(r.ref) ?? []), r.item_id])
+      return [...out].map(([ref, item_ids]) => ({ ref, item_ids }))
+    },
+    channelFailedCount(channel) {
+      return (
+        get<{ n: number }>(
+          'SELECT COUNT(*) AS n FROM channel_messages WHERE channel = ? AND failed_at IS NOT NULL',
+          channel,
+        )?.n ?? 0
+      )
     },
     listInboxItems(filter = {}) {
       const where: string[] = []

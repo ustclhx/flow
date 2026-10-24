@@ -151,6 +151,94 @@
                 ],
                 "description": "首次推送到渠道的时间（4.1 维护）"
               },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "channel": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,31}$",
+                      "description": "推送渠道 id，例如 telegram"
+                    },
+                    "ref": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256,
+                          "description": "渠道内的消息引用，由渠道生成"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "item",
+                        "batch"
+                      ]
+                    },
+                    "sent_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                    },
+                    "synced_at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "failed": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "reason": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                            }
+                          },
+                          "required": [
+                            "reason",
+                            "at"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "channel",
+                    "ref",
+                    "kind",
+                    "sent_at",
+                    "synced_at",
+                    "failed"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "条目在各渠道上的消息（推送与\"已处理\"同步记录）"
+              },
               "closed": {
                 "anyOf": [
                   {
@@ -170,7 +258,8 @@
                           "proposal_removed",
                           "answered",
                           "dismissed",
-                          "acted"
+                          "acted",
+                          "digested"
                         ],
                         "description": "条目关闭原因"
                       },
@@ -255,6 +344,7 @@
               "updated_at",
               "deferred_until",
               "pushed_at",
+              "channels",
               "closed"
             ],
             "additionalProperties": false,

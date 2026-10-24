@@ -148,8 +148,8 @@ export function createProposalWatcher(o: ProposalWatcherOptions): ProposalWatche
     for (const [id, p] of found) {
       if (ledger.getInboxItem(proposalItemId(id))) continue
       // 读完目录到写入之间提案可能刚被接受或拒绝：开条目前再确认文件仍在待处理目录。
-      // 仍有极小的窗口（确认之后才被处理），由下一次扫描关闭条目；
-      // TODO(add-m1-inbox 4.1)：渠道推送前要确认条目仍是 open，避免推送已处理的提案。
+      // 仍有极小的窗口（确认之后才被处理），由下一次扫描关闭条目；渠道管理器推送前会再确认条目仍是 open，
+      // 已推送的消息在条目关闭后改为已处理（add-m1-inbox 4.1）。
       if (!existsSync(pendingPath(id))) continue
       report(
         ledger.append(
