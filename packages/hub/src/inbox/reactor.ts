@@ -33,8 +33,9 @@ import type { HubLogger } from '../server/maintenance.ts'
  *
  * **重建不重复**：反应器写的是普通事件，投影重建只重放事件，不重跑反应器。
  *
- * **续跑**：启动时从 `max(游标文件, ledger.inboxCursor())` 之后补处理，然后对未关闭的任务条目
- * 做一次核对（任务已不再因该事件卡住的，按当前状态关闭）。游标文件只是加速，丢失时退回账本推导。
+ * **续跑**：启动时从 `max(游标文件, ledger.inboxCursor())` 之后补处理，然后核对一次：任务已不再
+ * 因该事件卡住的条目按当前状态关闭；仍卡住却没有对应条目的补开。写入失败后的 drain 也会核对。
+ * 游标文件只是加速，丢失时退回账本推导。
  *
  * **异步**：订阅回调只入队，处理放到微任务中：在账本通知订阅者的循环里同步追加事件，
  * 会让 SSE 等其他订阅者先看到更大的 seq，再看到更小的 seq（SSE 按游标丢弃）。
@@ -61,6 +62,8 @@ export interface InboxReactor {
   processed(): number
   /** 直接处理一条事件（测试用；正常路径经由订阅）。 */
   handle(event: LedgerEvent): void
+  /** 立即做一次兜底核对（启动时与写入失败后的 drain 会自动做）。 */
+  reconcile(): void
 }
 
 const REASON_LABEL: Readonly<Record<BlockedReason, string>> = {
@@ -129,36 +132,45 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
   let unsubscribe: (() => void) | undefined
   let stopped = false
 
-  const write = (draft: EventInput) => {
-    const r = ledger.append(draft, { actor })
+  /** 本轮处理中有写入失败：drain 结束时再核对一次（补开漏掉的条目、关闭过时的条目）。 */
+  let needsReconcile = false
+
+  /** 在一个事务里写入多条收件箱事件：任一条被拒绝则全部不写。 */
+  const write = (...drafts: EventInput[]) => {
+    if (drafts.length === 0) return true
+    const r = ledger.appendMany(drafts, { actor })
     if (!r.ok && r.error.code !== 'duplicate_item' && r.error.code !== 'item_closed') {
-      o.logger?.warn('收件箱事件写入失败', { type: draft.type, error: r.error })
+      needsReconcile = true
+      o.logger?.warn('收件箱事件写入失败', { types: drafts.map((d) => d.type), error: r.error })
     }
     return r.ok
   }
 
-  const latestBlockedSeq = (taskId: string): number | null => {
+  const latestBlocked = (taskId: string): EventOf<'task.blocked'> | null => {
     const events = ledger.taskEvents(taskId)
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i]?.type === 'task.blocked') return events[i]?.seq ?? null
+      const e = events[i]
+      if (e?.type === 'task.blocked') return e
     }
     return null
   }
+  const latestBlockedSeq = (taskId: string): number | null => latestBlocked(taskId)?.seq ?? null
 
   /** 任务卡住开出的未关闭条目（策略记录等同一任务上的其他来源不随任务状态关闭）。 */
   const openTaskItems = (taskId: string) =>
     ledger.listInboxItems({ task_id: taskId, source: 'task', state: 'open', limit: 1000 })
 
-  /** 关闭任务上源事件早于 cause 的未关闭条目。 */
-  function closeTaskItems(
+  /** 关闭任务上源事件早于 cause 的未关闭条目的草稿。 */
+  function closeTaskDrafts(
     task: { id: string; workspace: string },
     reason: InboxCloseReason,
     cause: { seq?: number; actor?: string },
-  ) {
+  ): EventInput[] {
+    const out: EventInput[] = []
     for (const item of openTaskItems(task.id)) {
       const sourceSeq = Number(item.id.startsWith('blk.') ? item.id.slice(4) : Number.NaN)
       if (cause.seq !== undefined && Number.isFinite(sourceSeq) && sourceSeq >= cause.seq) continue
-      write({
+      out.push({
         type: 'inbox.item_closed',
         task_id: task.id,
         workspace: task.workspace,
@@ -170,15 +182,28 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         },
       })
     }
+    return out
+  }
+
+  /**
+   * 为任务最近一次卡住开条目：关闭被取代的旧条目与开新条目在同一个事务里写入。
+   * 若分两次写入、中间崩溃，关闭事件的 cause_seq 会把 inboxCursor 推过这次卡住，重启后不再补开。
+   */
+  function openBlocked(task: TaskView, e: EventOf<'task.blocked'>) {
+    // 同一任务再次卡住（例如等待授权期间节点掉线）：旧条目由新条目取代。
+    const closes = closeTaskDrafts(task, 'superseded', { seq: e.seq, actor: e.actor })
+    write(...closes, blockedDraft(task, e))
   }
 
   function onBlocked(e: EventOf<'task.blocked'>) {
     const task = ledger.getTask(e.task_id ?? '')
     if (task?.status !== 'blocked' || latestBlockedSeq(task.id) !== e.seq) return
-    // 同一任务再次卡住（例如等待授权期间节点掉线）：旧条目由新条目取代。
-    closeTaskItems(task, 'superseded', { seq: e.seq, actor: e.actor })
+    openBlocked(task, e)
+  }
+
+  function blockedDraft(task: TaskView, e: EventOf<'task.blocked'>): EventInput {
     const p = e.payload
-    write({
+    return {
       type: 'inbox.item_created',
       task_id: task.id,
       workspace: task.workspace,
@@ -197,7 +222,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         actions: blockedActions(p.reason, p.prior_reason),
         source_seq: e.seq,
       },
-    })
+    }
   }
 
   function onTaskLeft(e: LedgerEvent, reason: InboxCloseReason) {
@@ -209,7 +234,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         ? e.payload.reply_id
         : undefined
     const by = replyId === undefined ? undefined : ledger.getReply(replyId)?.by
-    closeTaskItems(task, reason, { seq: e.seq, actor: by ?? e.actor })
+    write(...closeTaskDrafts(task, reason, { seq: e.seq, actor: by ?? e.actor }))
   }
 
   /**
@@ -280,6 +305,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
       const e = queue.shift() as LedgerEvent
       handle(e)
     }
+    if (needsReconcile && !stopped) reconcile()
     saveCursor()
   }
 
@@ -302,15 +328,29 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     }
   }
 
-  /** 未关闭的任务条目，若任务已不再因该事件卡住，按任务当前状态关闭（续跑的兜底）。 */
+  /**
+   * 续跑与写入失败后的兜底核对：
+   * - 未关闭的任务条目，若任务已不再因该事件卡住，按任务当前状态关闭；
+   * - 仍处于 blocked、最近一次卡住还没有对应条目的任务，补开条目。条目已存在（包括已被用户
+   *   忽略而关闭的）就不动：同一次卡住只开一次。
+   */
   function reconcile() {
+    needsReconcile = false
+    for (const task of ledger.listTasks({ status: 'blocked', limit: 100_000 })) {
+      const e = latestBlocked(task.id)
+      if (e === null || ledger.getInboxItem(blockedItemId(e.seq))) continue
+      openBlocked(task, e)
+    }
     for (const item of ledger.listInboxItems({ source: 'task', state: 'open', limit: 10_000 })) {
       if (item.task_id === null) continue
       const task = ledger.getTask(item.task_id)
       if (!task) continue
-      const current =
-        task.status === 'blocked' && item.id === blockedItemId(latestBlockedSeq(task.id) ?? 0)
-      if (current) continue
+      const latest = latestBlockedSeq(task.id)
+      if (task.status === 'blocked' && latest !== null) {
+        if (item.id === blockedItemId(latest)) continue
+        // 最近一次卡住的条目还没开：由上面的补开与关闭一起原子写入，这里不单独关闭。
+        if (!ledger.getInboxItem(blockedItemId(latest))) continue
+      }
       write({
         type: 'inbox.item_closed',
         task_id: task.id,
@@ -318,6 +358,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         payload: { item_id: item.id, reason: STATUS_CLOSE[task.status] },
       })
     }
+    // 这里的写入再失败时 needsReconcile 重新置位：下一轮 drain（有新事件时）或下次启动再试，不在此循环重试。
   }
 
   return {
@@ -352,6 +393,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     },
     processed: () => done,
     handle,
+    reconcile,
   }
 }
 

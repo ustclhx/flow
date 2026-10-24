@@ -25,7 +25,8 @@ import type { HubLogger } from '../server/maintenance.ts'
  * - 未关闭的提案条目，其提案已不在待处理目录 → `inbox.item_closed`，按归档位置注明
  *   proposal_accepted / proposal_rejected，都找不到时为 proposal_removed。
  * 条目 id 固定为 `prop.<id>`：已关闭（例如被用户忽略）的提案不会因为再次扫描而重新打开。
- * 扫描不取写锁，只读目录；内容不合法的提案文件跳过并告警。
+ * 扫描不取写锁，只读目录。读取或解析失败的提案文件保持现状（不开也不关条目），告警一次；
+ * 只有确认文件已不在待处理目录（在 accepted/、rejected/ 中或已不存在）才关闭条目。
  */
 
 export interface ProposalWatcherOptions {
@@ -63,41 +64,69 @@ export function createProposalWatcher(o: ProposalWatcherOptions): ProposalWatche
   let stopped = false
   const warned = new Set<string>()
 
-  async function pending(): Promise<Map<string, Proposal>> {
-    const out = new Map<string, Proposal>()
+  const warnOnce = (id: string, message: string, details: Record<string, unknown> = {}) => {
+    if (warned.has(id)) return
+    warned.add(id)
+    o.logger?.warn(message, { id, ...details })
+  }
+
+  /**
+   * 待处理目录中的提案。`unreadable`：文件还在但读取或解析失败的 id。它们的状态不确定：
+   * 不开条目，也不关已有条目（条目 id 固定，关了就再也不会重开），等文件恢复正常。
+   */
+  async function pending(): Promise<{ found: Map<string, Proposal>; unreadable: Set<string> }> {
+    const found = new Map<string, Proposal>()
+    const unreadable = new Set<string>()
     let names: string[]
     try {
       names = (await readdir(dir)).filter((n) => n.endsWith('.json'))
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return out
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { found, unreadable }
       throw err
     }
     for (const name of names.sort()) {
       const id = name.slice(0, -5)
+      let text: string
       try {
-        const parsed = proposalSchema.safeParse(JSON.parse(await readFile(join(dir, name), 'utf8')))
-        if (parsed.success && parsed.data.id === id) out.set(id, parsed.data)
-        else if (!warned.has(id)) {
-          warned.add(id)
-          o.logger?.warn('提案文件不合法，已跳过', { id })
-        }
+        text = await readFile(join(dir, name), 'utf8')
       } catch (err) {
-        // 扫描期间提案被接受或拒绝（文件被移走）：下次扫描再处理。
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !warned.has(id)) {
-          warned.add(id)
-          o.logger?.warn('提案文件读取失败，已跳过', { id, error: String(err) })
-        }
+        // 扫描期间提案被接受或拒绝（文件被移走）：按"不在待处理目录"处理。
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue
+        unreadable.add(id)
+        warnOnce(id, '提案文件读取失败，暂不处理', { error: String(err) })
+        continue
+      }
+      let data: unknown
+      try {
+        data = JSON.parse(text)
+      } catch {
+        unreadable.add(id)
+        warnOnce(id, '提案文件不是合法的 JSON，暂不处理')
+        continue
+      }
+      const parsed = proposalSchema.safeParse(data)
+      if (parsed.success && parsed.data.id === id) {
+        found.set(id, parsed.data)
+        warned.delete(id)
+      } else {
+        unreadable.add(id)
+        warnOnce(id, '提案文件不合法，暂不处理')
       }
     }
-    return out
+    return { found, unreadable }
   }
 
-  const closeReason = (id: string): InboxCloseReason =>
+  const pendingPath = (id: string) => join(dir, `${id}.json`)
+
+  /** 只有确认提案已离开待处理目录时才给出关闭原因；文件仍在时返回 null（保持现状）。 */
+  const closeReason = (id: string): InboxCloseReason | null =>
     existsSync(join(dir, 'accepted', `${id}.json`))
       ? 'proposal_accepted'
       : existsSync(join(dir, 'rejected', `${id}.json`))
         ? 'proposal_rejected'
-        : 'proposal_removed'
+        : existsSync(pendingPath(id))
+          ? null
+          : 'proposal_removed'
 
   const report = (r: ReturnType<LedgerStore['append']>) => {
     if (!r.ok && r.error.code !== 'duplicate_item' && r.error.code !== 'item_closed') {
@@ -108,8 +137,9 @@ export function createProposalWatcher(o: ProposalWatcherOptions): ProposalWatche
   async function doScan() {
     if (stopped) return
     let found: Map<string, Proposal>
+    let unreadable: Set<string>
     try {
-      found = await pending()
+      ;({ found, unreadable } = await pending())
     } catch (err) {
       o.logger?.warn('扫描提案目录失败', String(err))
       return
@@ -117,6 +147,10 @@ export function createProposalWatcher(o: ProposalWatcherOptions): ProposalWatche
     if (stopped) return
     for (const [id, p] of found) {
       if (ledger.getInboxItem(proposalItemId(id))) continue
+      // 读完目录到写入之间提案可能刚被接受或拒绝：开条目前再确认文件仍在待处理目录。
+      // 仍有极小的窗口（确认之后才被处理），由下一次扫描关闭条目；
+      // TODO(add-m1-inbox 4.1)：渠道推送前要确认条目仍是 open，避免推送已处理的提案。
+      if (!existsSync(pendingPath(id))) continue
       report(
         ledger.append(
           {
@@ -143,12 +177,14 @@ export function createProposalWatcher(o: ProposalWatcherOptions): ProposalWatche
       state: 'open',
       limit: 10_000,
     })) {
-      if (found.has(item.source_ref)) continue
+      if (found.has(item.source_ref) || unreadable.has(item.source_ref)) continue
+      const reason = closeReason(item.source_ref)
+      if (reason === null) continue
       report(
         ledger.append(
           {
             type: 'inbox.item_closed',
-            payload: { item_id: item.id, reason: closeReason(item.source_ref) },
+            payload: { item_id: item.id, reason },
           },
           { actor },
         ),

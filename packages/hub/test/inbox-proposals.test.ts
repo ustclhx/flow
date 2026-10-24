@@ -120,6 +120,61 @@ describe('提案 → 收件箱条目', () => {
     expect(warnings).toHaveLength(1)
   })
 
+  test('提案文件读取或解析失败：已有条目保持 open，告警一次；文件恢复后照常，确认移走后才关闭（审查第 2 条）', async () => {
+    const { store, put, watcher, dir, warnings } = await setup()
+    put(ID_A)
+    put(ID_B)
+    await watcher.scan()
+    expect(store.listInboxItems({ state: 'open' })).toHaveLength(2)
+    const seq = store.seq()
+    // A：JSON 损坏；B：JSON 合法但不符合 schema
+    writeFileSync(join(dir, `${ID_A}.json`), '{"id": ')
+    writeFileSync(join(dir, `${ID_B}.json`), JSON.stringify({ id: ID_B }))
+    await watcher.scan()
+    await watcher.scan()
+    expect(store.seq()).toBe(seq)
+    expect(store.listInboxItems({ state: 'open' }).map((i) => i.source_ref)).toEqual([ID_A, ID_B])
+    expect(warnings).toHaveLength(2)
+    // 恢复正常：不重复开条目
+    put(ID_A)
+    await watcher.scan()
+    expect(store.seq()).toBe(seq)
+    // 确认已不在待处理目录后才关闭
+    rmSync(join(dir, `${ID_A}.json`))
+    rmSync(join(dir, `${ID_B}.json`))
+    await watcher.scan()
+    expect(store.listInboxItems({ state: 'open' })).toEqual([])
+    expect(store.listInboxItems({ state: 'closed' }).map((i) => i.closed?.reason)).toEqual([
+      'proposal_removed',
+      'proposal_removed',
+    ])
+  })
+
+  test('扫描读完目录后提案才被接受：开条目前再确认文件仍在，不为已处理的提案开条目（审查第 3 条）', async () => {
+    const { store, put, archive, home } = await setup()
+    put(ID_A)
+    put(ID_B)
+    // 在"读完目录"与"写入条目"之间接受 A：getInboxItem 是写入前的最后一次查询
+    let moved = false
+    const racing = {
+      ...store,
+      getInboxItem(id: string) {
+        if (!moved && id === `prop.${ID_A}`) {
+          moved = true
+          archive(ID_A, 'accepted')
+        }
+        return store.getInboxItem(id)
+      },
+    } as typeof store
+    const w = createProposalWatcher({ ledger: racing, home, clock })
+    cleanups.push(() => w.stop())
+    await w.scan()
+    expect(moved).toBe(true)
+    expect(store.listInboxItems().map((i) => i.source_ref)).toEqual([ID_B])
+    await w.scan()
+    expect(store.listInboxItems().map((i) => i.source_ref)).toEqual([ID_B])
+  })
+
   test('监听目录：新提案出现后自动生成条目', async () => {
     const { store, put, watcher } = await setup()
     await watcher.start()

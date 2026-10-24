@@ -555,6 +555,175 @@ describe('幂等、续跑与重建', () => {
   }, 60_000)
 })
 
+describe('崩溃与写入失败后的兜底（PR #28 审查第 1 条）', () => {
+  /** 包一层账本：fail(drafts) 为 true 时 appendMany 整体失败，模拟写入失败。 */
+  function flaky(store: LedgerStore, fail: (drafts: readonly EventInput[]) => boolean) {
+    return {
+      ...store,
+      appendMany(drafts: readonly EventInput[], opts: { actor: string }) {
+        if (fail(drafts)) {
+          return {
+            ok: false as const,
+            error: { kind: 'failure' as const, code: 'internal_error', message: '模拟写入失败' },
+          }
+        }
+        return store.appendMany(drafts, opts)
+      },
+    } as LedgerStore
+  }
+  const hasCreate = (drafts: readonly EventInput[]) =>
+    drafts.some((d) => d.type === 'inbox.item_created')
+
+  /** 让 t1 处于卡住 A（已开条目 blk.A），返回卡住 A 的事件。 */
+  async function blockedOnce() {
+    const env = await setup()
+    running(env.store, 't1')
+    const a = block(env.store, 't1', 'awaiting_approval')
+    await env.reactor.idle()
+    expect(env.store.getInboxItem(`blk.${a.seq}`)?.state).toBe('open')
+    return { ...env, a }
+  }
+
+  /** 卡住期间节点掉线：再次卡住 B（blocked → blocked）。 */
+  function blockAgain(store: LedgerStore) {
+    const lease = store.activeLease('t1')
+    if (!lease) throw new Error('应有活动租约')
+    const r = must(
+      store.appendMany(
+        [
+          {
+            task_id: 't1',
+            workspace: WS,
+            type: 'task.lease_expired',
+            payload: {
+              lease_id: lease.lease_id,
+              node_id: 'n1',
+              expired_at: '2026-10-24T01:00:00.000Z',
+              attempt: 1,
+            },
+          },
+          {
+            task_id: 't1',
+            workspace: WS,
+            type: 'task.blocked',
+            payload: {
+              reason: 'node_lost',
+              message: '节点掉线',
+              prior_reason: 'awaiting_approval',
+            },
+          },
+        ],
+        { actor: 'hub' },
+      ),
+    )
+    return r[1] as LedgerEvent
+  }
+
+  test('旧版本在"关闭旧条目"与"开新条目"之间崩溃：重启后核对补开 blk.B', async () => {
+    const { store, reactor, newReactor, a } = await blockedOnce()
+    reactor.stop()
+    const b = blockAgain(store)
+    // 崩溃前只写出了关闭事件（cause_seq=B 把 inboxCursor 推过了 B）
+    must(
+      store.append(
+        {
+          task_id: 't1',
+          workspace: WS,
+          type: 'inbox.item_closed',
+          payload: { item_id: `blk.${a.seq}`, reason: 'superseded', cause_seq: b.seq },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    expect(store.inboxCursor()).toBe(b.seq)
+    const r2 = newReactor()
+    await r2.idle()
+    expect(store.listInboxItems({ state: 'open' }).map((i) => i.id)).toEqual([`blk.${b.seq}`])
+  })
+
+  test('关闭旧条目与开新条目原子写入：写入失败时两者都不写，随后的核对一起补上', async () => {
+    const { store, newReactor, reactor, a, cursorPath } = await blockedOnce()
+    reactor.stop()
+    let failing = true
+    const r = createInboxReactor({
+      ledger: flaky(store, (d) => failing && hasCreate(d)),
+      cursorPath,
+    })
+    r.start()
+    cleanups.push(() => r.stop())
+    const b = blockAgain(store)
+    await r.idle()
+    // 两条都没写：旧条目仍然 open，blk.B 不存在
+    expect(store.getInboxItem(`blk.${a.seq}`)?.state).toBe('open')
+    expect(store.getInboxItem(`blk.${b.seq}`)).toBeNull()
+    expect(store.inboxCursor()).toBeLessThan(b.seq)
+    failing = false
+    r.reconcile()
+    expect(store.getInboxItem(`blk.${a.seq}`)?.closed?.reason).toBe('superseded')
+    expect(store.getInboxItem(`blk.${b.seq}`)?.state).toBe('open')
+    // 重启不重复
+    r.stop()
+    const seq = store.seq()
+    await newReactor().idle()
+    expect(store.seq()).toBe(seq)
+  })
+
+  test('item_created 写入失败：同一轮 drain 的核对补开；一直失败时重启后补开', async () => {
+    const { store, cursorPath, reactor } = await setup()
+    reactor.stop()
+    running(store, 't1')
+    running(store, 't2')
+    let failures = 1
+    const r = createInboxReactor({
+      ledger: flaky(store, (d) => hasCreate(d) && failures-- > 0),
+      cursorPath,
+    })
+    r.start()
+    const b1 = block(store, 't1', 'question')
+    await r.idle()
+    expect(store.getInboxItem(`blk.${b1.seq}`)?.state).toBe('open')
+    r.stop()
+
+    // 一直失败：游标照样推进，但重启后的核对会补开
+    const broken = createInboxReactor({ ledger: flaky(store, hasCreate), cursorPath })
+    broken.start()
+    const b2 = block(store, 't2', 'question')
+    await broken.idle()
+    broken.stop()
+    expect(store.getInboxItem(`blk.${b2.seq}`)).toBeNull()
+    const healed = createInboxReactor({ ledger: store, cursorPath })
+    healed.start()
+    cleanups.push(() => healed.stop())
+    await healed.idle()
+    expect(store.getInboxItem(`blk.${b2.seq}`)?.state).toBe('open')
+  })
+
+  test('用户已忽略的卡住条目，核对不会重新打开', async () => {
+    const { store, reactor, newReactor } = await setup()
+    running(store, 't1')
+    const b = block(store, 't1', 'question')
+    await reactor.idle()
+    must(
+      store.append(
+        {
+          task_id: 't1',
+          workspace: WS,
+          type: 'inbox.item_closed',
+          payload: { item_id: `blk.${b.seq}`, reason: 'dismissed', via: 'web' },
+        },
+        { actor: 'user' },
+      ),
+    )
+    reactor.stop()
+    const seq = store.seq()
+    const r2 = newReactor()
+    await r2.idle()
+    r2.reconcile()
+    expect(store.seq()).toBe(seq)
+    expect(store.listInboxItems({ state: 'open' })).toEqual([])
+  })
+})
+
 describe('账本层的约束与脱敏', () => {
   test('重复创建、关闭不存在或已关闭的条目被拒绝；标题超长被截断，疑似密钥被脱敏', async () => {
     const { store } = await setup()
