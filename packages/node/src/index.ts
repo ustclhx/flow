@@ -37,7 +37,6 @@ export {
   type RegisterRequest,
 } from './client.ts'
 export { type NodeClock, sleep, systemClock } from './clock.ts'
-export { CHILD_ENV_DENYLIST, executorEnv } from './env.ts'
 export {
   analyzeTail,
   BUSY_RE,
@@ -86,6 +85,7 @@ export {
   taskStateDir,
   writeTaskSpec,
 } from './codex-orca/spec.ts'
+export { CHILD_ENV_DENYLIST, executorEnv } from './env.ts'
 export {
   ActivityQueue,
   createExecutorRegistry,

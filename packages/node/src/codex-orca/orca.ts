@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { fail, ok, type Result } from '@flow/core'
 import { z } from 'zod'
+import { executorEnv } from '../env.ts'
 
 /**
  * Orca CLI 与 gh CLI 的封装（add-m1-executors 2.1；design D2）。
@@ -39,7 +40,8 @@ export const execRunner: CommandRunner = (bin, args, options) =>
       [...args],
       {
         ...(options.cwd ? { cwd: options.cwd } : {}),
-        ...(options.env ? { env: options.env } : {}),
+        // orca / gh 子进程不继承中枢凭证（FLOW_HUB_TOKEN，design D9）。
+        env: executorEnv(options.env ?? process.env),
         timeout: options.timeoutMs,
         maxBuffer: 16 * 1024 * 1024,
         encoding: 'utf8',

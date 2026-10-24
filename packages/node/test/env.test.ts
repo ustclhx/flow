@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { tmpdir } from 'node:os'
 import { HUB_TOKEN_ENV } from '@flow/core'
+import { execRunner } from '../src/codex-orca/orca.ts'
 import { createFakeExecutor, type ExecutorContext, executorEnv, systemClock } from '../src/index.ts'
 import { verifyTask } from '../src/verify.ts'
 import { bench, fake } from './harness.ts'
@@ -57,5 +58,16 @@ test('节点交给执行器的 ctx.env 不含 FLOW_HUB_TOKEN', async () => {
     expect(seen?.PATH).toBe(process.env.PATH)
   } finally {
     await b.close()
+  }
+})
+
+test('codex-orca 的命令执行（orca、gh）不继承 FLOW_HUB_TOKEN', async () => {
+  process.env[HUB_TOKEN_ENV] = fakeToken()
+  for (const env of [undefined, { ...process.env }]) {
+    const out = await execRunner('sh', ['-c', `echo "token=\${${HUB_TOKEN_ENV}:-absent}"`], {
+      timeoutMs: 5000,
+      ...(env ? { env } : {}),
+    })
+    expect(out.stdout.trim()).toBe('token=absent')
   }
 })
