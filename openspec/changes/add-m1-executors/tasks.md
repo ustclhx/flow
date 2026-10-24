@@ -11,9 +11,9 @@
 
 ## 2. codex-orca 执行器
 
-- [ ] 2.1 Orca CLI 封装：worktree create、terminal create、read、send、close，JSON 输出用 zod 校验；仓库必须属于已定义的 workspace；验证注入假 `orca` 二进制的单元测试
-- [ ] 2.2 任务说明渲染（目标、角色提示词、上下文摘要、范围、验收命令、完成标准、停下提问的约定），写入 `state/tasks/<id>/spec.md`；验证快照测试
-- [ ] 2.3 监控循环与 `classify.ts`（信任提示、PR 已开、授权请求、提问、其他），以及 `deliver`（终端发送）和 `cancel`（关闭终端）；验证 `test/fixtures/codex-tui/` 下的真实终端片段 fixture 测试，至少包括：信任提示、Working、提问、授权请求、开完 PR、无输出
+- [x] 2.1 Orca CLI 封装：worktree create、terminal create、read、send、close，JSON 输出用 zod 校验；仓库必须属于已定义的 workspace；验证注入假 `orca` 二进制的单元测试
+- [x] 2.2 任务说明渲染（目标、角色提示词、上下文摘要、范围、验收命令、完成标准、停下提问的约定），写入 `state/tasks/<id>/spec.md`；验证快照测试
+- [x] 2.3 监控循环与 `classify.ts`（信任提示、PR 已开、授权请求、提问、其他），以及 `deliver`（终端发送）和 `cancel`（关闭终端）；验证 `test/fixtures/codex-tui/` 下的真实终端片段 fixture 测试，至少包括：信任提示、Working、提问、授权请求、开完 PR、无输出
 
 ## 3. claude-sdk 执行器
 

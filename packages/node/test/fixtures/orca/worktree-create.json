@@ -1,0 +1,19 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "ok": true,
+  "result": {
+    "worktree": {
+      "id": "00000000-0000-4000-8000-000000000002::/Users/user/orca/workspaces/flow/tmp-tui-capture",
+      "repoId": "00000000-0000-4000-8000-000000000002",
+      "path": "/Users/user/orca/workspaces/flow/tmp-tui-capture",
+      "head": "0000000000000000000000000000000000000000",
+      "branch": "refs/heads/example-user/tmp-tui-capture",
+      "displayName": "tmp-tui-capture",
+      "baseRef": "refs/remotes/origin/main",
+      "isMainWorktree": false
+    }
+  },
+  "_meta": {
+    "runtimeId": "00000000-0000-4000-8000-000000000004"
+  }
+}

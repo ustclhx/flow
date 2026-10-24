@@ -10,6 +10,7 @@ import {
 } from '@flow/core'
 import {
   createClaudeSdkExecutor,
+  createCodexOrcaExecutor,
   createFakeExecutor,
   nodeHubClientFromHome,
   startNode,
@@ -31,9 +32,14 @@ export const nodeStartCommand = defineCommand({
     if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.flow.node') {
       return fail('retryable', 'log_rotated', '日志已轮转，等待 launchd 重新启动节点')
     }
+    // fake 用于端到端测试；codex-orca、claude-sdk 调用本机的 orca / codex 与 Claude Agent SDK。
     const started = await startNode({
       home,
-      executors: [createFakeExecutor(), createClaudeSdkExecutor({ home })],
+      executors: [
+        createFakeExecutor(),
+        createCodexOrcaExecutor({ home }),
+        createClaudeSdkExecutor({ home }),
+      ],
     })
     if (!started.ok) return started
     const node = started.data

@@ -1,0 +1,30 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_00000000-0000-4000-8000-000000000002",
+      "status": "running",
+      "tail": [
+        "  Folder access",
+        "  /tmp/scratch",
+        "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings",
+        "  can run code automatically, even without a model request. Continue only if you trust these files. Your trust",
+        "  decision will be saved.",
+        "› 1. Trust and continue",
+        "  2. Quit",
+        "  enter continue · esc quit"
+      ],
+      "truncated": false,
+      "limited": false,
+      "oldestCursor": "0",
+      "nextCursor": "6",
+      "latestCursor": "6",
+      "returnedLineCount": 8,
+      "source": "screen"
+    }
+  },
+  "_meta": {
+    "runtimeId": "00000000-0000-4000-8000-000000000004"
+  }
+}

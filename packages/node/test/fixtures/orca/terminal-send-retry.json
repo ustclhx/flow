@@ -1,0 +1,29 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "ok": true,
+  "result": {
+    "send": {
+      "handle": "term_00000000-0000-4000-8000-000000000002",
+      "accepted": true,
+      "bytesWritten": 109,
+      "prompt": {
+        "requestId": "00000000-0000-4000-8000-000000000003",
+        "stages": ["input_accepted", "turn_started"],
+        "provider": "codex",
+        "observation": "supported",
+        "processIncarnation": "00000000-0000-4000-8000-000000000004",
+        "generation": 734,
+        "baselineWorkingSequence": 1,
+        "baselineExplicitWorkingStartedAt": null,
+        "baselinePermissionSequence": 0
+      }
+    },
+    "mutation": {
+      "requestId": "00000000-0000-4000-8000-000000000003",
+      "replayed": true
+    }
+  },
+  "_meta": {
+    "runtimeId": "00000000-0000-4000-8000-000000000005"
+  }
+}

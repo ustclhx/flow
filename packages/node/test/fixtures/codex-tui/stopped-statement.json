@@ -1,0 +1,41 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_00000000-0000-4000-8000-000000000002",
+      "status": "running",
+      "tail": [
+        "  >_ OpenAI Codex (v0.164.0)",
+        "     ~/orca/workspaces/flow/tmp-tui-capture",
+        "› 请只读回答：这个仓库的 package.json 里 name 字段是什么？读完后不要做任何修改，然后问我一个关于下一步的问题并",
+        "  停下等待回答。",
+        "• 我会只读查看仓库根目录的 package.json。",
+        "• Ran node -p 'JSON.parse(require(\"fs\").readFileSync(\"package.json\", \"utf8\")).name'",
+        "  └ flow",
+        "• 根目录 package.json 的 name 字段是 flow。未做任何修改。",
+        "  下一步你希望我查看什么？",
+        "  Worked for 7s • 01:54",
+        "› 请执行命令 mkdir -p /tmp/flow-tui-probe-dir，沙箱是只读的，需要的话申请授权",
+        "• 我会申请沙箱授权，执行创建目录的命令。",
+        "• Ran mkdir -p /tmp/flow-tui-probe-dir",
+        "  └ (no output)",
+        "• 已执行 mkdir -p /tmp/flow-tui-probe-dir，命令成功，退出码为 0。",
+        "  Worked for 6s • 01:54",
+        "› Ask Codex to do anything",
+        "  GPT-6-Astra high fast · ~/orca/workspaces/flow/tmp-tui-capture · 读取 package.json 名称",
+        "  ? for shortcuts"
+      ],
+      "truncated": false,
+      "limited": false,
+      "oldestCursor": "0",
+      "nextCursor": "1",
+      "latestCursor": "1",
+      "returnedLineCount": 19,
+      "source": "screen"
+    }
+  },
+  "_meta": {
+    "runtimeId": "00000000-0000-4000-8000-000000000003"
+  }
+}
