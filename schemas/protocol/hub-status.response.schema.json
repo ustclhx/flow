@@ -300,6 +300,13 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "ignored_inbound": {
+                "default": 0,
+                "description": "被忽略的入站消息与按钮数（例如陌生 chat 发来的），自中枢启动起计",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             },
             "required": [
@@ -309,7 +316,8 @@
               "failures",
               "next_retry_at",
               "last_error",
-              "failed_items"
+              "failed_items",
+              "ignored_inbound"
             ],
             "additionalProperties": false
           }

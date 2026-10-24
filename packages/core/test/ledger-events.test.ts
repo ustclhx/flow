@@ -180,6 +180,10 @@ const samples: Record<
     valid: { payload: { channel: 'telegram', ref: '42:7', item_ids: ['blk.12'] } },
     invalid: { payload: { channel: 'Tele Gram', ref: '42:7', item_ids: [] } },
   },
+  'user.instruction': {
+    valid: { workspace: 'ws/global', payload: { text: '看看昨天的部署', via: 'telegram' } },
+    invalid: { payload: { text: '缺少 workspace', via: 'telegram' } },
+  },
 }
 
 const envelope = (type: EventType, body: Record<string, unknown>) => ({

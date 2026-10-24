@@ -166,6 +166,9 @@ export class HubClient {
   uiLoginCode() {
     return this.request('ui-login-code', {})
   }
+  telegramLinkCode() {
+    return this.request('telegram-link-code', {})
+  }
 
   /** 旧中枢没有 status 路由时，用 health 加本地文件补足可观测信息。 */
   async status(): Promise<Result<HubStatus>> {

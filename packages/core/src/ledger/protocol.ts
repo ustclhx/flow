@@ -157,6 +157,12 @@ export const channelStatus = z.object({
     .min(0)
     .default(0)
     .meta({ description: '记为推送失败（放弃推送或同步）的条目数' }),
+  ignored_inbound: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .meta({ description: '被忽略的入站消息与按钮数（例如陌生 chat 发来的），自中枢启动起计' }),
 })
 export type ChannelStatusData = z.infer<typeof channelStatus>
 
@@ -279,6 +285,23 @@ export const uiLoginCodeData = z
   })
   .meta({ title: 'POST /v1/ui/login-code 响应' })
 export type UiLoginCodeData = z.infer<typeof uiLoginCodeData>
+
+/**
+ * Telegram 绑定码（add-m1-inbox 5.1，telegram-channel "绑定用户本人"）：`flow telegram link` 申请，
+ * 用户在 Telegram 中给 bot 发送 `/link <绑定码>`（或打开 `link_url`）。绑定码至少 64 位随机，
+ * 只在中枢内存中以摘要保存，10 分钟内有效，只能使用一次；仅 user。
+ */
+export const telegramLinkCodeData = z
+  .object({
+    code: z.string().meta({ description: '一次性绑定码明文，只在申请时返回这一次' }),
+    command: z.string().meta({ description: '要发给 bot 的完整命令，例如 /link <绑定码>' }),
+    link_url: z.string().nullable().meta({
+      description: 't.me 深链接（打开后点"开始"即发送绑定码）；不知道 bot 用户名时为 null',
+    }),
+    expires_at: timestamp,
+  })
+  .meta({ title: 'POST /v1/telegram/link-code 响应' })
+export type TelegramLinkCodeData = z.infer<typeof telegramLinkCodeData>
 
 export const rebuildData = z
   .object({
@@ -650,6 +673,12 @@ export const ENDPOINTS = {
     path: '/v1/ui/login-code',
     auth: true,
     response: uiLoginCodeData,
+  },
+  'telegram-link-code': {
+    method: 'POST',
+    path: '/v1/telegram/link-code',
+    auth: true,
+    response: telegramLinkCodeData,
   },
   'tasks-create': {
     method: 'POST',

@@ -81,8 +81,10 @@ export interface ChannelManager {
   start(): Promise<void>
   /** 推送到期的条目、同步已关闭条目的消息（各渠道并行，同一渠道串行）。 */
   flush(): Promise<void>
-  /** 密钥变化后重试未启动的渠道。 */
+  /** 密钥变化后重试未启动的渠道（含插件自己报告停用的，例如 token 无效）。 */
   refresh(): Promise<void>
+  /** 立即重试某个渠道：取消退避等待并 flush（例如 Telegram 刚完成绑定）。 */
+  wake(id: string): Promise<void>
   status(): ChannelStatus[]
   stop(): Promise<void>
 }
@@ -233,6 +235,23 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
     } catch (err) {
       slot.lastError = errorText(err)
       o.logger?.warn('渠道创建失败，不启动', { channel: slot.id, error: slot.lastError })
+    }
+  }
+
+  /** 插件自己报告的停用原因（例如 token 无效）；没有或读取失败时为 null。 */
+  function selfDisabled(slot: Slot): string | null {
+    try {
+      return slot.plugin?.health?.().disabled ?? null
+    } catch {
+      return null
+    }
+  }
+
+  function ignoredOf(slot: Slot): number {
+    try {
+      return slot.plugin?.health?.().ignored ?? 0
+    } catch {
+      return 0
     }
   }
 
@@ -425,6 +444,8 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
     prepare(slot)
     const plugin = slot.plugin
     if (!plugin) return
+    // 插件报告停用（例如 token 无效）：不再调用，等 refresh() 重新创建。
+    if (selfDisabled(slot) !== null) return
     if (slot.retryAt !== null && slot.retryAt > clock.now()) return
     if (!slot.started) {
       try {
@@ -435,6 +456,8 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
         return
       }
     }
+    // 启动过程中发现无法使用（例如 token 无效）：不再推送。
+    if (selfDisabled(slot) !== null) return
     // 先推新条目，再同步已关闭的条目；两步各自捕获错误，一步失败不妨碍另一步。
     let transport: unknown
     try {
@@ -449,6 +472,7 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
     }
     if (stopped) return
     if (transport !== undefined) {
+      if (selfDisabled(slot) !== null) return
       onFailure(slot, transport)
       return
     }
@@ -515,25 +539,53 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
     },
     flush,
     async refresh() {
-      for (const slot of slots) if (!slot.plugin) slot.lastError = null
+      for (const slot of slots) {
+        const plugin = slot.plugin
+        if (plugin && selfDisabled(slot) !== null) {
+          // 插件自己停用了（例如 token 无效）：停掉旧实例，按新的密钥重新创建。
+          slot.plugin = null
+          if (slot.started) {
+            slot.started = false
+            try {
+              await call(`${slot.id}.stop`, () => plugin.stop())
+            } catch (err) {
+              o.logger?.warn('渠道停止失败', { channel: slot.id, error: errorText(err) })
+            }
+          }
+        }
+        if (!slot.plugin) slot.lastError = null
+      }
       await flush()
     },
+    async wake(id) {
+      const slot = slots.find((s) => s.id === id)
+      if (!slot || stopped) return
+      slot.cancelRetry?.()
+      slot.cancelRetry = undefined
+      slot.retryAt = null
+      await flushSlot(slot)
+    },
     status() {
-      return slots.map((s) => ({
-        id: s.id,
-        state: stopped
-          ? 'stopped'
-          : !s.plugin
-            ? 'disabled'
-            : s.retryAt !== null
-              ? 'backoff'
-              : 'running',
-        missing_secrets: [...s.missing],
-        failures: s.failures,
-        next_retry_at: s.retryAt === null ? null : new Date(s.retryAt).toISOString(),
-        last_error: s.lastError,
-        failed_items: ledger.channelFailedCount(s.id),
-      }))
+      return slots.map((s) => {
+        const disabled = selfDisabled(s)
+        return {
+          id: s.id,
+          state: stopped
+            ? 'stopped'
+            : !s.plugin || disabled !== null
+              ? 'disabled'
+              : s.retryAt !== null
+                ? 'backoff'
+                : 'running',
+          missing_secrets: [...s.missing],
+          failures: s.failures,
+          next_retry_at:
+            s.retryAt === null || disabled !== null ? null : new Date(s.retryAt).toISOString(),
+          last_error: disabled ?? s.lastError,
+          failed_items: ledger.channelFailedCount(s.id),
+          ignored_inbound: ignoredOf(s),
+        }
+      })
     },
     async stop() {
       if (stopped) return

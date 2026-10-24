@@ -1,0 +1,50 @@
+{
+  "$id": "https://flow.local/schemas/protocol/telegram-link-code.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "一次性绑定码明文，只在申请时返回这一次"
+        },
+        "command": {
+          "type": "string",
+          "description": "要发给 bot 的完整命令，例如 /link <绑定码>"
+        },
+        "link_url": {
+          "description": "t.me 深链接（打开后点\"开始\"即发送绑定码）；不知道 bot 用户名时为 null",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        }
+      },
+      "required": [
+        "code",
+        "command",
+        "link_url",
+        "expires_at"
+      ],
+      "additionalProperties": false,
+      "title": "POST /v1/telegram/link-code 响应"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}

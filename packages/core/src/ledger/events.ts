@@ -283,6 +283,14 @@ export const eventPayloads = {
       message: '只有 op=failed 带 reason，且必须带',
       path: ['reason'],
     }),
+  /**
+   * 用户下达给 supervisor 的指令（telegram-channel "命令"：`/ask <workspace> <内容>`）。
+   * 由变更 ④ 的 supervisor 消费；在它上线之前只入账，不产生任何投影。
+   */
+  'user.instruction': z.strictObject({
+    text: z.string().min(1).max(INBOX_BODY_MAX).meta({ description: '指令原文' }),
+    via: inboxVia.meta({ description: '指令来自哪个渠道' }),
+  }),
 } as const
 
 export type EventType = keyof typeof eventPayloads
@@ -318,6 +326,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'inbox.item_updated': 'none',
   'inbox.item_closed': 'none',
   'inbox.pushed': 'none',
+  'user.instruction': 'workspace',
 }
 
 const scopeShape = (scope: Scope) =>
@@ -404,7 +413,10 @@ export interface TransitionRule {
 /** 每种任务事件的转换规则；`apply(event)` 与写入前的校验都以此为准。 */
 export const TASK_EVENT_RULES: Readonly<
   Record<
-    Exclude<EventType, `node.${string}` | `hub.${string}` | `inbox.${string}` | 'schedule.fired'>,
+    Exclude<
+      EventType,
+      `node.${string}` | `hub.${string}` | `inbox.${string}` | `user.${string}` | 'schedule.fired'
+    >,
     TransitionRule
   >
 > = {

@@ -43,6 +43,10 @@ export interface FlowPaths {
   policiesConfig: string
   /** `config/inbox.yaml`：收件箱分级覆盖与推送节奏。 */
   inboxConfig: string
+  /** `config/channels.yaml`：推送渠道配置（Telegram 的绑定、代理等）。 */
+  channelsConfig: string
+  /** `state/telegram.json`：Telegram 长轮询的处理进度（offset）。 */
+  telegramState: string
   /** 任务账本 `state/flow.db`，只由中枢打开（design D1）。 */
   ledgerDb: string
   /** 中枢 token（0600）。 */
@@ -86,6 +90,8 @@ export function flowPaths(home: string): FlowPaths {
     schedulesConfig: join(config, 'schedules.yaml'),
     policiesConfig: join(config, 'policies.yaml'),
     inboxConfig: join(config, 'inbox.yaml'),
+    channelsConfig: join(config, 'channels.yaml'),
+    telegramState: join(state, 'telegram.json'),
     ledgerDb: join(state, 'flow.db'),
     hubToken: join(state, 'hub.token'),
     hubLock: join(state, 'hub.lock'),

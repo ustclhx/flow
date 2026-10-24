@@ -528,11 +528,70 @@ describe('缺少密钥', () => {
         next_retry_at: null,
         last_error: null,
         failed_items: 0,
+        ignored_inbound: 0,
       },
     ])
     expect(created).toHaveLength(0)
     expect(ch.started).toBe(0)
     secrets.close()
+  })
+})
+
+describe('插件自己报告停用（例如 Telegram token 无效）', () => {
+  test('状态为 disabled 并附原因，不再调用；refresh() 后按新密钥重新创建；wake() 立即重试退避中的渠道', async () => {
+    const instances: MemoryChannel[] = []
+    let disabled: string | null = 'token 无效（401）'
+    const r = await inboxRig({
+      start: local(26, 10),
+      backoff: { baseMs: 60_000 },
+      channels: [
+        {
+          id: 'tg',
+          create: () => {
+            const ch = new MemoryChannel('tg')
+            const reason = disabled
+            // 与 Telegram 一样：启动时（getMe 401）才发现 token 无效
+            ch.health = () => ({ disabled: ch.started > 0 ? reason : null, ignored: 3 })
+            instances.push(ch)
+            return ch
+          },
+        },
+      ],
+    })
+    cleanups.push(r.cleanup)
+    await r.settle()
+    createItem(r.ledger, 'sup.1', 'interrupt')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.inbox.channels.status()[0]).toMatchObject({
+      id: 'tg',
+      state: 'disabled',
+      last_error: 'token 无效（401）',
+      next_retry_at: null,
+      ignored_inbound: 3,
+    })
+    expect(instances[0]?.sendCalls).toBe(0)
+
+    disabled = null
+    await r.inbox.channels.refresh()
+    await r.settle()
+    expect(instances).toHaveLength(2)
+    expect(instances[0]?.stopped).toBe(1)
+    expect(instances[1]?.sentIds()).toEqual([['sup.1']])
+    expect(r.inbox.channels.status()[0]).toMatchObject({ state: 'running' })
+
+    // 退避中：wake 立即重试，不等退避时间
+    const ch = instances[1]
+    if (!ch) throw new Error('渠道未创建')
+    ch.down = true
+    createItem(r.ledger, 'sup.2', 'interrupt')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.inbox.channels.status()[0]?.state).toBe('backoff')
+    ch.down = false
+    await r.inbox.channels.wake('tg')
+    expect(ch.sentIds()).toEqual([['sup.1'], ['sup.2']])
+    expect(r.inbox.channels.status()[0]?.state).toBe('running')
   })
 })
 

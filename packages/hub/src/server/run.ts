@@ -1,17 +1,31 @@
 import {
+  appendCapture,
   fail,
   flowPaths,
   type HubConfig,
   type HubStatusData,
   inboxActRequest,
+  loadChannelsConfig,
   loadHubConfig,
   loadPoliciesConfig,
+  ok,
   type Result,
   redactSecrets,
   registerKnownSecrets,
+  saveTelegramBinding,
+  type TelegramChannelConfig,
+  telegramChannelConfigSchema,
   VERSION,
 } from '@flow/core'
 import { Hono } from 'hono'
+import { buildStatusSnapshot } from '../channels/telegram/commands.ts'
+import { createTelegramLinks, type TelegramLinks } from '../channels/telegram/link.ts'
+import {
+  TELEGRAM_CHANNEL_ID,
+  type TelegramDeps,
+  telegramChannelSpec,
+} from '../channels/telegram/plugin.ts'
+import { createTelegramRoutes } from '../channels/telegram/routes.ts'
 import type { ChannelSpec } from '../channels/types.ts'
 import {
   actOnInbox,
@@ -49,8 +63,15 @@ export interface RunHubOptions
     /** 是否监听 config/inbox.yaml 与提案目录，默认 true。 */
     watch?: boolean
     proposalIntervalMs?: number
-    /** 推送渠道（Telegram 由 5.x 注册；测试注入假渠道）。 */
+    /**
+     * 推送渠道；缺省时按 `config/channels.yaml` 注册 Telegram 渠道（`telegram.enabled: false` 时不注册）。
+     * 测试可以注入假渠道。
+     */
     channels?: readonly ChannelSpec[]
+    /** Telegram 插件的测试注入点（假的 Telegram 服务、fetch、等待函数等）。 */
+    telegram?: Partial<
+      Pick<TelegramDeps, 'fetch' | 'apiBase' | 'env' | 'pollTimeoutS' | 'sleep' | 'now'>
+    >
     backoff?: { baseMs?: number; maxMs?: number }
   }
 }
@@ -94,6 +115,8 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let protocol: NodeProtocol | undefined
   // Web 页面（6.1）：会话只在内存中；Host 校验需要实际监听的端口，启动成功后才填入。
   const uiSessions = createUiSessions({ now: () => clock.now() })
+  // Telegram 绑定码（5.1）：只在内存中，HTTP 路由申请、插件兑换。
+  const telegramLinks = createTelegramLinks({ now: () => clock.now() })
   let uiPort: number | undefined
   const leaseHolders = (taskId: string) => {
     const lease = ledger?.activeLease(taskId)
@@ -189,6 +212,13 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         { path: '/', app: createUiLoginCodeRoutes(uiSessions) },
         {
           path: '/',
+          app: createTelegramRoutes({
+            links: telegramLinks,
+            unavailable: () => telegramUnavailable(inbox?.channels.status() ?? []),
+          }),
+        },
+        {
+          path: '/',
           app: createUiApp({
             sessions: uiSessions,
             inbox: inboxDeps,
@@ -256,6 +286,39 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     home: options.home,
     ...(options.logger ? { logger: options.logger } : {}),
   })
+  const activeLedger = ledger
+  const channels =
+    options.inbox?.channels ??
+    (await defaultChannels({
+      home: options.home,
+      logger,
+      links: telegramLinks,
+      overrides: options.inbox?.telegram ?? {},
+      deps: {
+        ledger: activeLedger,
+        onBound: () => {
+          void inbox?.channels.wake(TELEGRAM_CHANNEL_ID)
+        },
+        status: () =>
+          buildStatusSnapshot({
+            ledger: activeLedger,
+            now: clock.now(),
+            startedAt,
+            version: options.version ?? VERSION,
+            channels: inbox?.channels.status() ?? [],
+          }),
+        ask: async (workspace, text) => {
+          if (!(await workspaceCheckFromHome(options.home)(workspace))) {
+            return fail('failure', 'workspace_not_found', `workspace ${workspace} 不存在`)
+          }
+          const r = activeLedger.append(
+            { type: 'user.instruction', workspace, payload: { text, via: 'telegram' } },
+            { actor: 'user' },
+          )
+          return r.ok ? ok({ seq: r.data.seq }) : r
+        },
+      },
+    }))
   // 收件箱（add-m1-inbox 3.1）：hub.started 之后补处理停机期间的事件，再开始监听。
   inbox = await startInbox({
     ledger,
@@ -264,7 +327,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     logger,
     scheduler,
     resolve: (value) => secrets.resolve(value),
-    ...(options.inbox?.channels ? { channels: options.inbox.channels } : {}),
+    channels,
     // 渠道在中枢进程内运行，不经过 HTTP 鉴权，直接以 user 身份执行并记录 via（design D9）。
     act: async (id, action, text, via) => {
       if (!inboxActions) return fail('retryable', 'hub_starting', '中枢尚未就绪')
@@ -281,4 +344,70 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   protocol?.start()
   if (options.secrets?.watch !== false) stopWatch = secrets.watch()
   return started
+}
+
+/** 绑定码路由用：Telegram 渠道不能接收绑定码时的原因。 */
+function telegramUnavailable(
+  statuses: readonly {
+    id: string
+    state: string
+    missing_secrets: string[]
+    last_error: string | null
+  }[],
+): string | null {
+  const s = statuses.find((c) => c.id === TELEGRAM_CHANNEL_ID)
+  if (!s) return 'Telegram 渠道未启用（config/channels.yaml 中 telegram.enabled 为 false）'
+  if (s.state === 'stopped') return '中枢正在停止'
+  if (s.state !== 'disabled') return null
+  if (s.missing_secrets.length > 0) {
+    return `Telegram 渠道未启动：缺少 ${s.missing_secrets.map((p) => `secret://${p}`).join('、')}，先运行 flow secrets set telegram/bot-token`
+  }
+  return s.last_error ?? 'Telegram 渠道未启动'
+}
+
+/**
+ * 默认的推送渠道：按 `config/channels.yaml` 注册 Telegram（add-m1-inbox 5.1）。
+ * - 文件不存在或没有 telegram 段时也注册（token 引用默认为 `secret://telegram/bot-token`）：
+ *   没有设置 token 时渠道为 disabled，`flow hub status` 报告缺少的密钥路径；
+ * - `telegram.enabled: false` 时不注册；
+ * - 配置写错时注册一个创建即失败的渠道，状态中报告错误，中枢其他功能照常。
+ */
+async function defaultChannels(o: {
+  home: string
+  logger: TelegramDeps['logger']
+  links: TelegramLinks
+  overrides: Partial<TelegramDeps>
+  deps: Pick<TelegramDeps, 'ledger' | 'onBound' | 'status' | 'ask'>
+}): Promise<ChannelSpec[]> {
+  const loaded = await loadChannelsConfig(o.home)
+  if (!loaded.ok) {
+    o.logger?.warn('config/channels.yaml 无法加载，Telegram 渠道不启动', loaded.error.message)
+    const message = loaded.error.message
+    return [
+      {
+        id: TELEGRAM_CHANNEL_ID,
+        create: () => {
+          throw new Error(message)
+        },
+      },
+    ]
+  }
+  const config: TelegramChannelConfig =
+    loaded.data.telegram ?? telegramChannelConfigSchema.parse({})
+  if (!config.enabled) return []
+  const deps: TelegramDeps = {
+    links: o.links,
+    ...(o.logger ? { logger: o.logger } : {}),
+    redact: redactSecrets,
+    statePath: flowPaths(o.home).telegramState,
+    loadConfig: () => loadChannelsConfig(o.home),
+    saveBinding: (binding) => saveTelegramBinding(o.home, binding),
+    capture: async (text) => {
+      const r = await appendCapture(o.home, { text, source: 'telegram' }, { actor: 'user' })
+      return r.ok ? ok({ file: r.data.file }) : r
+    },
+    ...o.deps,
+    ...o.overrides,
+  }
+  return [telegramChannelSpec(config, deps) as ChannelSpec]
 }
