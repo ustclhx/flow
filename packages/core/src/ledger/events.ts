@@ -119,6 +119,7 @@ export const eventPayloads = {
     .strictObject({
       reply_id: replyId,
       kind: replyKind,
+      via: inboxVia.optional(),
       text: z.string().min(1).max(16_384).optional().meta({ description: '回复文字或拒绝理由' }),
     })
     .refine((p) => p.kind !== 'text' || p.text !== undefined, {

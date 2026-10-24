@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { flowPaths } from '../home.ts'
+import type { InboxActRequest, inboxListQuery } from '../inbox/schema.ts'
 import {
   type CancelTaskRequest,
   ENDPOINTS,
@@ -136,6 +137,12 @@ export class HubClient {
   }
   replyTask(id: string, input: ReplyTaskRequest) {
     return this.request('tasks-reply', input, id)
+  }
+  listInbox(input: z.input<typeof inboxListQuery> = {}) {
+    return this.request('inbox-list', input)
+  }
+  actInbox(id: string, input: InboxActRequest) {
+    return this.request('inbox-act', input, id)
   }
   checkPolicy(input: PolicyCheckRequest) {
     return this.request('policy-check', input)

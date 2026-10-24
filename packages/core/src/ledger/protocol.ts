@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { scheduleErrorSchema } from '../daemon/schedules.ts'
+import { inboxActData, inboxActRequest, inboxListData, inboxListQuery } from '../inbox/schema.ts'
 import { policyDecisionSchema } from '../policy/decide.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { actor, capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
@@ -68,6 +69,8 @@ export const PROTOCOL_ERRORS = {
   reply_kind_mismatch: { status: 409, kind: 'failure' },
   reply_pending: { status: 409, kind: 'failure' },
   reply_not_found: { status: 404, kind: 'failure' },
+  action_not_available: { status: 409, kind: 'failure' },
+  item_closed: { status: 409, kind: 'failure' },
   user_only: { status: 403, kind: 'failure' },
   actor_mismatch: { status: 403, kind: 'failure' },
   reserved_actor: { status: 403, kind: 'failure' },
@@ -565,6 +568,20 @@ export interface EndpointDef {
 }
 
 export const ENDPOINTS = {
+  'inbox-list': {
+    method: 'GET',
+    path: '/v1/inbox',
+    auth: true,
+    request: inboxListQuery,
+    response: inboxListData,
+  },
+  'inbox-act': {
+    method: 'POST',
+    path: '/v1/inbox/:id/act',
+    auth: true,
+    request: inboxActRequest,
+    response: inboxActData,
+  },
   'policy-check': {
     method: 'POST',
     path: '/v1/policy/check',

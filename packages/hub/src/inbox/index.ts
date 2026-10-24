@@ -7,8 +7,10 @@ import type { HubLogger } from '../server/maintenance.ts'
 import { createProposalWatcher, type ProposalWatcher } from './proposals.ts'
 import { createInboxReactor, type InboxReactor } from './reactor.ts'
 
+export * from './actions.ts'
 export * from './proposals.ts'
 export * from './reactor.ts'
+export * from './routes.ts'
 
 /**
  * 中枢内的收件箱组件（add-m1-inbox 3.1）：分级配置（含热加载）、反应器、提案目录监听。

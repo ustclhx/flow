@@ -44,6 +44,20 @@
         "minLength": 1
       }
     },
+    "decided_by": {
+      "description": "接受或拒绝提案的操作者",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$"
+    },
+    "via": {
+      "type": "string",
+      "enum": [
+        "telegram",
+        "web",
+        "cli"
+      ],
+      "description": "操作发起的渠道"
+    },
     "accepted_at": {
       "type": "string",
       "format": "date-time",

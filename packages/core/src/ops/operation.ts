@@ -19,6 +19,8 @@ export interface Operation<I = Record<string, unknown>, O = unknown> {
   name: string
   /** CLI 命令路径，例如 `kb journal`。 */
   cli: string
+  /** CLI 的等价入口，由相同操作生成命令。 */
+  cliAliases?: readonly string[]
   summary: string
   /** 输入 schema，必须是 z.object；字段名即 MCP 参数名，CLI 选项名为其 kebab-case。 */
   input: z.ZodObject

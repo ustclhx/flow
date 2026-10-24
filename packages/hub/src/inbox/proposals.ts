@@ -180,11 +180,30 @@ export function createProposalWatcher(o: ProposalWatcherOptions): ProposalWatche
       if (found.has(item.source_ref) || unreadable.has(item.source_ref)) continue
       const reason = closeReason(item.source_ref)
       if (reason === null) continue
+      // 处理来源跟随归档持久保存；扫描器重启后仍能恢复关闭的操作者和渠道。
+      let decision: Pick<Proposal, 'decided_by' | 'via'> = {}
+      if (reason === 'proposal_accepted' || reason === 'proposal_rejected') {
+        try {
+          const kind = reason === 'proposal_accepted' ? 'accepted' : 'rejected'
+          const parsed = proposalSchema.safeParse(
+            JSON.parse(await readFile(join(dir, kind, `${item.source_ref}.json`), 'utf8')),
+          )
+          if (parsed.success) decision = parsed.data
+        } catch (err) {
+          o.logger?.warn('读取提案处理来源失败', { id: item.source_ref, error: String(err) })
+          continue
+        }
+      }
       report(
         ledger.append(
           {
             type: 'inbox.item_closed',
-            payload: { item_id: item.id, reason },
+            payload: {
+              item_id: item.id,
+              reason,
+              ...(decision.decided_by ? { cause_actor: decision.decided_by } : {}),
+              ...(decision.via ? { via: decision.via } : {}),
+            },
           },
           { actor },
         ),

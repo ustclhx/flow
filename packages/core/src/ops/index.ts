@@ -1,3 +1,4 @@
+import { inboxActOp, inboxListOp } from './inbox.ts'
 import { captureOp, kbJournalOp } from './journal.ts'
 import type { Operation } from './operation.ts'
 import {
@@ -11,6 +12,7 @@ import { kbGetOp, kbQueryOp, kbSearchOp } from './search.ts'
 import { taskCancelOp, taskCreateOp, taskListOp, taskReplyOp, taskShowOp } from './tasks.ts'
 import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './workspace.ts'
 
+export * from './inbox.ts'
 export * from './journal.ts'
 export * from './operation.ts'
 export * from './proposals.ts'
@@ -23,6 +25,8 @@ export * from './workspace.ts'
  * 新增操作时在 `ops/` 下新建文件并在此追加。
  */
 export const operations = [
+  inboxListOp,
+  inboxActOp,
   taskCreateOp,
   taskListOp,
   taskShowOp,

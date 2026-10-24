@@ -9,6 +9,7 @@ import {
   type InboxCloseReason,
   type InboxConfig,
   type InboxItemAction,
+  type InboxVia,
   type LedgerEvent,
   resolveInboxLevel,
   type TaskStatus,
@@ -164,7 +165,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
   function closeTaskDrafts(
     task: { id: string; workspace: string },
     reason: InboxCloseReason,
-    cause: { seq?: number; actor?: string },
+    cause: { seq?: number; actor?: string; via?: InboxVia },
   ): EventInput[] {
     const out: EventInput[] = []
     for (const item of openTaskItems(task.id)) {
@@ -179,6 +180,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
           reason,
           ...(cause.seq === undefined ? {} : { cause_seq: cause.seq }),
           ...(cause.actor === undefined ? {} : { cause_actor: cause.actor }),
+          ...(cause.via === undefined ? {} : { via: cause.via }),
         },
       })
     }
@@ -234,7 +236,20 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         ? e.payload.reply_id
         : undefined
     const by = replyId === undefined ? undefined : ledger.getReply(replyId)?.by
-    write(...closeTaskDrafts(task, reason, { seq: e.seq, actor: by ?? e.actor }))
+    const reply =
+      replyId === undefined
+        ? undefined
+        : ledger
+            .taskEvents(task.id)
+            .find((event) => event.type === 'task.replied' && event.payload.reply_id === replyId)
+    const via = reply?.type === 'task.replied' ? reply.payload.via : undefined
+    write(
+      ...closeTaskDrafts(task, reason, {
+        seq: e.seq,
+        actor: by ?? e.actor,
+        ...(via ? { via } : {}),
+      }),
+    )
   }
 
   /**

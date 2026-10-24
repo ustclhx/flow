@@ -65,12 +65,15 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | `GET /v1/tasks/:id` | ✓ | ✓ | 仅自己持有活动租约的任务 | 403 |
 | `POST /v1/policy/check` | ✓（人工调试） | 403 `scope_denied` | 仅自己持有未过期活动租约的任务 | 403 |
 | `GET/POST /v1/tasks`、`POST /v1/tasks/:id/cancel`、`GET /v1/events`、`GET /v1/nodes`、`GET /v1/hub/status` | ✓ | ✓ | 403 `scope_denied` | 403 |
+| `GET /v1/inbox` | ✓ | ✓ | 403 `scope_denied` | 403 |
+| `POST /v1/inbox/:id/act` | 全部操作 | 仅 dismiss 且条目 `created_by` 为自己；其余 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/tasks/:id/reply` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/hub/rebuild` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `/v1/hub/tokens`（签发、列出、撤销） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 
-remote token 一列的 403 都是 `remote_not_allowed`。以后的 `inbox_act`（除"忽略自己发起的条目"）
-与读取密钥接口也使用 `userOnly` 中间件。只有用户能做的接口在读取请求体、调用服务之前拒绝；
+remote token 一列的 403 都是 `remote_not_allowed`。`inbox_act` 先校验 action，再检查身份与条目的
+`created_by`；拒绝时不调用底层操作、不产生事件。via 只接受 cli、web、telegram，省略时为 cli；
+CLI 固定传 cli。读取密钥等只有用户能做的接口使用 `userOnly`，在读取请求体、调用服务之前拒绝；
 策略检查的节点 scope 需要读取请求体中的 `task_id`，加载策略后在入账前再次校验租约。
 策略检查的 `dry_run` 默认 false；user 可传 true 只判定不入账。节点只能省略或传 false，
 传 true 返回 400 `invalid_arguments`，不产生事件。CLI 默认 dry run，只有 `--record` 才入账。

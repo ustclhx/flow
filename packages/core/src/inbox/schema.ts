@@ -137,3 +137,23 @@ export type InboxItemView = z.infer<typeof inboxItemView>
 
 /** 条目的短 id：创建事件 seq 的 base36。 */
 export const inboxShortId = (createdSeq: number): string => createdSeq.toString(36)
+
+/** 操作入口接受完整 id 或表格中的 base36 短 id。 */
+export const inboxItemRef = z.union([inboxItemId, z.string().regex(/^[0-9a-z]{1,11}$/)])
+
+export const inboxListQuery = z.strictObject({
+  state: z.enum(['open', 'closed']).default('open'),
+  level: inboxLevel.optional(),
+  workspace: workspaceRef.optional(),
+})
+export type InboxListQuery = z.infer<typeof inboxListQuery>
+export const inboxListData = z.object({ items: z.array(inboxItemView) })
+
+export const inboxActRequest = z.strictObject({
+  action: z.enum([...INBOX_ACTIONS, 'dismiss']),
+  text: z.string().trim().min(1).max(16_384).optional(),
+  via: inboxVia.optional(),
+})
+export type InboxActRequest = z.infer<typeof inboxActRequest>
+/** 非 dismiss 操作成功时条目可能仍在等待底层状态变化。 */
+export const inboxActData = z.object({ item: inboxItemView })

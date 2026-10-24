@@ -823,7 +823,12 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     },
 
     getInboxItem(itemId) {
-      const r = get<InboxRow>('SELECT * FROM inbox_items WHERE id = ?', itemId)
+      const r = /^[0-9a-z]{1,11}$/.test(itemId)
+        ? get<InboxRow>(
+            'SELECT * FROM inbox_items WHERE created_seq = ?',
+            Number.parseInt(itemId, 36),
+          )
+        : get<InboxRow>('SELECT * FROM inbox_items WHERE id = ?', itemId)
       return r ? rowToInbox(r) : null
     },
     listInboxItems(filter = {}) {
