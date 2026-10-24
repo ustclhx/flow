@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { scheduleErrorSchema } from '../daemon/schedules.ts'
+import { policyDecisionSchema } from '../policy/decide.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { actor, capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import { executorInfo, ledgerEvent } from './events.ts'
@@ -123,6 +124,19 @@ export const secretsStatus = z.object({
 })
 export type SecretsStatusData = z.infer<typeof secretsStatus>
 
+export const policiesStatus = z.object({
+  loaded: z.number().int().min(0),
+  errors: z.array(
+    z.object({
+      file: z.string(),
+      rule_index: z.number().int().min(0).optional(),
+      field: z.string().optional(),
+      code: z.string(),
+      message: z.string(),
+    }),
+  ),
+})
+
 export const hubStatusData = healthData
   .extend({
     pid: z.number().int().positive(),
@@ -135,6 +149,7 @@ export const hubStatusData = healthData
     schedule_errors: z.array(scheduleErrorSchema).default([]),
     last_backup: z.object({ path: z.string(), at: timestamp }).nullable(),
     secrets: secretsStatus.default({ loaded: 0, missing: [], error: null }),
+    policies: policiesStatus.default({ loaded: 0, errors: [] }),
   })
   .meta({ title: 'GET /v1/hub/status' })
 export type HubStatusData = z.infer<typeof hubStatusData>
@@ -250,6 +265,22 @@ export const createTaskData = z
   })
   .meta({ title: 'POST /v1/tasks' })
 export type CreateTaskData = z.infer<typeof createTaskData>
+
+/** scope 只能来自任务合同，不能由请求方覆盖。超长输入拒绝，不能截断后参与判定。 */
+export const policyCheckRequest = z
+  .strictObject({
+    task_id: taskId,
+    tool: z.string().trim().min(1).max(128),
+    command: z.string().max(PROTOCOL_MESSAGE_MAX).optional(),
+    paths: z.array(z.string().min(1).max(TAIL_LINE_MAX)).max(200).optional(),
+    dry_run: z.boolean().optional().meta({
+      description: '默认 false；user 可设为 true 只判定不入账，节点传 true 返回 400',
+    }),
+  })
+  .meta({ title: 'POST /v1/policy/check' })
+export type PolicyCheckRequest = z.infer<typeof policyCheckRequest>
+export const policyCheckData = policyDecisionSchema.meta({ title: 'POST /v1/policy/check 响应' })
+export type PolicyCheckData = z.infer<typeof policyCheckData>
 
 export const listTasksQuery = z
   .strictObject({
@@ -534,6 +565,13 @@ export interface EndpointDef {
 }
 
 export const ENDPOINTS = {
+  'policy-check': {
+    method: 'POST',
+    path: '/v1/policy/check',
+    auth: true,
+    request: policyCheckRequest,
+    response: policyCheckData,
+  },
   health: { method: 'GET', path: '/v1/health', auth: false, response: healthData },
   'hub-status': { method: 'GET', path: '/v1/hub/status', auth: true, response: hubStatusData },
   'hub-rebuild': { method: 'POST', path: '/v1/hub/rebuild', auth: true, response: rebuildData },

@@ -3,6 +3,7 @@ import {
   type HubConfig,
   type HubStatusData,
   loadHubConfig,
+  loadPoliciesConfig,
   type Result,
   redactSecrets,
   registerKnownSecrets,
@@ -13,6 +14,7 @@ import { createTaskRoutes } from '../ledger/routes.ts'
 import { type LedgerStore, openLedger } from '../ledger/store.ts'
 import { createTaskService, workspaceCheckFromHome } from '../ledger/tasks.ts'
 import { createNodeProtocol, type NodeProtocol } from '../nodes/protocol.ts'
+import { createPolicyRoutes } from '../policy/routes.ts'
 import { createScheduler, type Scheduler } from '../scheduler/index.ts'
 import { redactingLogger } from '../secrets/logger.ts'
 import { SecretRedactor } from '../secrets/redactor.ts'
@@ -61,13 +63,13 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let ledger: LedgerStore | undefined
   let config: HubConfig | undefined
   let protocol: NodeProtocol | undefined
+  const leaseHolders = (taskId: string) => {
+    const lease = ledger?.activeLease(taskId)
+    return lease && Date.parse(lease.expires_at) > clock.now() ? [lease.node_id] : []
+  }
   const started = await startHub({
     ...options,
-    leaseHolders: (taskId) =>
-      ledger
-        ?.activeLeases()
-        .filter((l) => l.task_id === taskId)
-        .map((l) => l.node_id) ?? [],
+    leaseHolders,
     openLedger: async () => {
       // startHub 在打开账本之前已校验过 hub.yaml，这里再读一次取租约参数。
       const loaded = await loadHubConfig(options.home)
@@ -104,7 +106,8 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         ...(options.logger ? { logger: options.logger } : {}),
       })
       const status = new Hono()
-      status.get('/v1/hub/status', (c) => {
+      status.get('/v1/hub/status', async (c) => {
+        const policies = await loadPoliciesConfig(options.home)
         const backup = ledger?.latestEvent(undefined, 'hub.backup_done')
         const scheduleErrors = scheduler?.errors() ?? []
         const data: HubStatusData = {
@@ -121,12 +124,25 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
               ? { path: backup.payload.path, at: backup.ts }
               : null,
           secrets: secrets.status(),
+          policies: policies.ok
+            ? { loaded: policies.data.rules.length, errors: policies.data.errors }
+            : {
+                loaded: 0,
+                errors: [
+                  {
+                    file: 'config/policies.yaml',
+                    code: policies.error.code,
+                    message: redactSecrets(policies.error.message),
+                  },
+                ],
+              },
         }
         return c.json({ ok: true as const, data })
       })
       return [
         { path: '/', app: status },
         { path: '/', app: createTaskRoutes({ ledger, tasks }) },
+        { path: '/', app: createPolicyRoutes({ home: options.home, ledger, leaseHolders }) },
         { path: '/', app: protocol.routes },
       ]
     },

@@ -342,6 +342,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return invalidEvent(`事件的 workspace ${draft.workspace} 与任务的 ${task.workspace} 不一致`)
     }
     switch (draft.type) {
+      case 'policy.decided':
+        return draft.payload.task_id === draft.task_id
+          ? ok(null)
+          : invalidEvent('policy.decided 的 task_id 必须与信封一致')
       case 'task.created': {
         const c = draft.payload.contract
         if (c.workspace !== draft.workspace) {

@@ -1,0 +1,40 @@
+{
+  "$id": "https://flow.local/schemas/protocol/policy-check.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "任务 id，由中枢在创建时分配"
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "command": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "paths": {
+      "maxItems": 200,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "dry_run": {
+      "description": "默认 false；user 可设为 true 只判定不入账，节点传 true 返回 400",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "task_id",
+    "tool"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/policy/check"
+}

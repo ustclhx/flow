@@ -194,6 +194,7 @@ describe('端点清单与 JSON Schema 导出', () => {
   test('端点', () => {
     const list = Object.entries(ENDPOINTS).map(([, d]) => `${d.method} ${d.path}`)
     expect(list).toEqual([
+      'POST /v1/policy/check',
       'GET /v1/health',
       'GET /v1/hub/status',
       'POST /v1/hub/rebuild',

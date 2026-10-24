@@ -61,6 +61,7 @@ export const hubStatusCommand = defineCommand({
           status.schedules.errors.map((e) => `${e.rule_id ?? ''} ${e.message}`.trim()).join('；') ||
             '（无）',
         ],
+        ['策略规则错误', status.policies?.errors.map((e) => e.message).join('；') || '（无）'],
         [
           '最近一次备份',
           status.last_backup ? `${status.last_backup.at} ${status.last_backup.path}` : '（无）',

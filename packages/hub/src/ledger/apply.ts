@@ -87,6 +87,9 @@ export function createApplier(db: Database): Applier {
 
   function applyEvent(e: LedgerEvent) {
     switch (e.type) {
+      case 'policy.decided':
+        // 策略判定只供审计，不修改任务或租约投影。
+        return
       case 'task.created': {
         const c = e.payload.contract
         stmt(
