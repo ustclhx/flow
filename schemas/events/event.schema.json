@@ -1852,6 +1852,15 @@
               ],
               "description": "text 文字回复；approve 批准；deny 拒绝（可以附带理由）"
             },
+            "via": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "web",
+                "cli"
+              ],
+              "description": "操作发起的渠道"
+            },
             "text": {
               "description": "回复文字或拒绝理由",
               "type": "string",

@@ -20,6 +20,7 @@ type Json = Record<string, unknown>
  * kb_journal 给出样例是为了同时覆盖可选的 workspace 选项；capture 走自动构造。
  */
 const SAMPLE_INPUTS: Record<string, Json> = {
+  inbox_act: { id: 'blk.42', action: 'dismiss' },
   task_create: {
     goal: '一致性任务',
     workspace: 'ws/product-res',

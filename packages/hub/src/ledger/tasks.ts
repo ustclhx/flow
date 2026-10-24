@@ -5,6 +5,7 @@ import {
   checkContractSecrets,
   fail,
   formatZodIssues,
+  type InboxVia,
   type ListTasksData,
   listTasksQuery,
   loadWorkspaces,
@@ -85,6 +86,7 @@ export interface CancelTaskOptions {
 
 export interface ReplyTaskOptions {
   actor: string
+  via?: InboxVia
 }
 
 export interface TaskService {
@@ -276,7 +278,12 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           {
             ...base,
             type: 'task.replied',
-            payload: { reply_id: replyId, kind, ...(text === undefined ? {} : { text }) },
+            payload: {
+              reply_id: replyId,
+              kind,
+              via: opts.via ?? 'cli',
+              ...(text === undefined ? {} : { text }),
+            },
           },
           ...(requeue
             ? [

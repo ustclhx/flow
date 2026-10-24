@@ -587,6 +587,8 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
   })
 
   test('其他会扩大权限的 flow 工具同样识别为具体动作', () => {
+    expect(classifyAction({ tool: 'mcp__flow__inbox_act' })).toContain('inbox.act')
+    expect(judge([rule('*', '*')], { tool: 'mcp__flow__inbox_act' }).level).not.toMatch(/^auto/)
     expect(classifyAction({ tool: 'mcp__flow__task_cancel' })).toContain('task.cancel')
     expect(classifyAction({ tool: 'mcp__flow__kb_proposals_accept' })).toContain('proposal.decide')
     expect(classifyAction({ tool: 'mcp__flow__kb_proposals_reject' })).toContain('proposal.decide')
@@ -707,6 +709,7 @@ describe('Bash 调 flow CLI、直接访问中枢与 config.edit 词法变体（P
     ['flow task create --role admin --goal x', 'task.create'],
     ['flow task reply t-1 --approve', 'task.reply'],
     ['flow task cancel t-1', 'task.cancel'],
+    ['flow inbox act blk.42 approve', 'inbox.act'],
     ['flow kb proposals accept p-1', 'proposal.decide'],
     ['flow kb proposals reject p-1', 'proposal.decide'],
     ['flow resource transfer r-1 --to ws/b', 'resource.transfer'],

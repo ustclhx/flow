@@ -1,0 +1,30 @@
+{
+  "$id": "https://flow.local/schemas/protocol/inbox-list.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "state": {
+      "default": "open",
+      "type": "string",
+      "enum": [
+        "open",
+        "closed"
+      ]
+    },
+    "level": {
+      "type": "string",
+      "enum": [
+        "interrupt",
+        "decide",
+        "digest"
+      ],
+      "description": "条目级别：interrupt 立即推送，decide 成批推送，digest 写进每日摘要"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    }
+  },
+  "additionalProperties": false
+}

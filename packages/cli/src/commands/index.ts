@@ -40,5 +40,7 @@ export const commands = [
   nodeStartCommand,
   nodeListCommand,
   policyCheckCommand,
-  ...operations.map(commandFromOperation),
+  ...operations.flatMap((op) =>
+    [op.cli, ...(op.cliAliases ?? [])].map((cli) => commandFromOperation({ ...op, cli })),
+  ),
 ] as Command<unknown>[]

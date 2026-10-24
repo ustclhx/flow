@@ -10,7 +10,7 @@ import {
   VERSION,
 } from '@flow/core'
 import { Hono } from 'hono'
-import { type InboxService, startInbox } from '../inbox/index.ts'
+import { createInboxRoutes, type InboxService, startInbox } from '../inbox/index.ts'
 import { createTaskRoutes } from '../ledger/routes.ts'
 import { type LedgerStore, openLedger } from '../ledger/store.ts'
 import { createTaskService, workspaceCheckFromHome } from '../ledger/tasks.ts'
@@ -151,6 +151,17 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       return [
         { path: '/', app: status },
         { path: '/', app: createTaskRoutes({ ledger, tasks }) },
+        {
+          path: '/',
+          app: createInboxRoutes({
+            ledger,
+            tasks,
+            home: options.home,
+            scanProposals: async () => {
+              await inbox?.proposals.scan()
+            },
+          }),
+        },
         { path: '/', app: createPolicyRoutes({ home: options.home, ledger, leaseHolders }) },
         { path: '/', app: protocol.routes },
       ]

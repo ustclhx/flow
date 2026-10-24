@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { parseFrontmatter } from '../frontmatter.ts'
 import { execCommand } from '../git.ts'
 import { flowPaths } from '../home.ts'
+import type { InboxVia } from '../inbox/schema.ts'
 import { type FlowError, fail, ok, type Result } from '../result.ts'
 import { isFactType } from '../schema/entries.ts'
 import { checkEntryFrontmatter } from '../validate.ts'
@@ -258,10 +259,14 @@ async function archive(
   await rename(pendingPath(home, proposal.id), join(dir, `${proposal.id}.json`))
 }
 
+export interface ProposalDecisionContext extends WriteContext {
+  via?: InboxVia
+}
+
 export async function acceptProposals(
   home: string,
   input: ProposalSelection,
-  ctx: WriteContext,
+  ctx: ProposalDecisionContext,
 ): Promise<Result<{ results: ProposalOutcome[] }>> {
   if (isAiActor(ctx.actor)) return fail('failure', 'user_only', '只有用户能接受提案')
   return withWriteLock(home, async (lock) => {
@@ -301,7 +306,12 @@ export async function acceptProposals(
         }
         await archive(
           home,
-          { ...p.data, accepted_at: (ctx.now ?? new Date()).toISOString() },
+          {
+            ...p.data,
+            accepted_at: (ctx.now ?? new Date()).toISOString(),
+            decided_by: ctx.actor,
+            via: ctx.via ?? 'cli',
+          },
           'accepted',
         )
         results.push({ id, status: 'accepted' })
@@ -324,7 +334,7 @@ export async function acceptProposals(
 export async function rejectProposals(
   home: string,
   input: ProposalSelection & { reason?: string | undefined },
-  ctx: WriteContext,
+  ctx: ProposalDecisionContext,
 ): Promise<Result<{ results: ProposalOutcome[] }>> {
   if (isAiActor(ctx.actor)) return fail('failure', 'user_only', '只有用户能拒绝提案')
   return withWriteLock(home, async (lock) => {
@@ -343,6 +353,8 @@ export async function rejectProposals(
           proposal_reason: p.data.reason,
           reason: input.reason ?? '',
           rejected_at: (ctx.now ?? new Date()).toISOString(),
+          decided_by: ctx.actor,
+          via: ctx.via ?? 'cli',
         }
         const scan = await scanProposal(home, rejected, ctx)
         if (!scan.ok) {

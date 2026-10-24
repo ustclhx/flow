@@ -1,0 +1,36 @@
+{
+  "$id": "https://flow.local/schemas/protocol/inbox-act.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "deny",
+        "reply",
+        "accept",
+        "reject",
+        "dismiss"
+      ]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384
+    },
+    "via": {
+      "type": "string",
+      "enum": [
+        "telegram",
+        "web",
+        "cli"
+      ],
+      "description": "操作发起的渠道"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "additionalProperties": false
+}
