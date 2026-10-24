@@ -131,6 +131,25 @@ describe('flow hub token', () => {
     expect((await cli('hub', 'rebuild')).doc).toMatchObject({ ok: true })
   })
 
+  test('task create：合同含高置信度疑似密钥时拒绝（secret_suspected，退出码 2）', async () => {
+    const leaked = `ghp_${'Zz9'.repeat(12)}`
+    const r = await cli(
+      'task',
+      'create',
+      '--goal',
+      `推送 ${leaked}`,
+      '--workspace',
+      'ws/product-res',
+      '--role',
+      'dev',
+      '--executor',
+      'fake',
+    )
+    expect(r.code).toBe(2)
+    expect(r.doc).toMatchObject({ ok: false, error: { code: 'secret_suspected' } })
+    expect(JSON.stringify(r.doc)).not.toContain(leaked)
+  })
+
   test('hub status 的人类可读输出报告缺少的密钥', async () => {
     const r = await runCli(['hub', 'status'], commands)
     expect(r.exitCode).toBe(0)

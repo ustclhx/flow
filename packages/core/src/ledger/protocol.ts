@@ -72,6 +72,7 @@ export const PROTOCOL_ERRORS = {
   reserved_actor: { status: 403, kind: 'failure' },
   remote_not_allowed: { status: 403, kind: 'failure' },
   scope_denied: { status: 403, kind: 'failure' },
+  secret_suspected: { status: 400, kind: 'usage' },
   hub_busy: { status: 503, kind: 'retryable' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>

@@ -263,12 +263,26 @@ describe('中枢集成', () => {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       })
-      return (await res.json()) as { ok: boolean; data: Record<string, never> }
+      return (await res.json()) as {
+        ok: boolean
+        data: Record<string, never>
+        error?: { code: string; message: string }
+      }
+    }
+    // 合同中出现高置信度的疑似密钥：拒绝创建（secret_suspected），不悄悄改写，信息里不带值。
+    for (const leaked of [ghToken, flowToken]) {
+      const rejected = await call(
+        '/v1/tasks',
+        { goal: `推送 ${leaked}`, workspace: 'ws/demo', role: 'dev', executor: 'fake' },
+        'user',
+      )
+      expect(rejected).toMatchObject({ ok: false, error: { code: 'secret_suspected' } })
+      expect(JSON.stringify(rejected)).not.toContain(leaked)
     }
     const created = await call(
       '/v1/tasks',
       {
-        goal: `目标里也有 ${value} ${flowToken} ${ghToken}`,
+        goal: `目标里也有 ${value} tokenizer: bert-base-uncased`,
         workspace: 'ws/demo',
         role: 'dev',
         executor: 'fake',
@@ -306,6 +320,13 @@ describe('中枢集成', () => {
       tail: ['启动中', value, `TELEGRAM_BOT_TOKEN=${value}`],
     })
     expect(done.ok).toBe(true)
+    const taskId = (created.data as unknown as { task: { id: string } }).task.id
+    const replied = await call(
+      `/v1/tasks/${taskId}/reply`,
+      { kind: 'text', text: `用这个 ${ghToken} 推送` },
+      'user',
+    )
+    expect(replied.ok).toBe(true)
     await hub.stop()
     hub = undefined
 
@@ -322,10 +343,15 @@ describe('中枢集成', () => {
         tail: ['启动中', LABEL, `TELEGRAM_BOT_TOKEN=${LABEL}`],
       })
       const task = events.find((e) => e.type === 'task.created')
-      // 账本写入端：名单替换（[secret:路径]）+ 正则兜底（fht_、ghp_）。
+      // 合同只做名单替换：已知值被替换，低置信度规则会误伤的写法原样保留。
       expect(JSON.stringify(task?.payload)).toContain(
-        `目标里也有 ${LABEL} [REDACTED:flow-hub-token] [REDACTED:github-token]`,
+        `目标里也有 ${LABEL} tokenizer: bert-base-uncased`,
       )
+      expect(events.filter((e) => e.type === 'task.created')).toHaveLength(1)
+      // 回复文字是自由文本：正则兜底仍然生效。
+      expect(events.find((e) => e.type === 'task.replied')?.payload).toMatchObject({
+        text: '用这个 [REDACTED:github-token] 推送',
+      })
       const activity = ledger.taskActivity(task?.task_id as string)
       expect(activity.map((a) => a.text).slice(0, 2)).toEqual([
         `bot token: ${LABEL}`,

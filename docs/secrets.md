@@ -57,11 +57,19 @@ CI 设置 `FLOW_REQUIRE_SOPS_TESTS=1`，未安装 sops 时直接失败，防止�
 - **脱敏名单**：每个解析出的值（以及多行值的每一行、`state/hub.token`）加入"值 → 路径"名单，
   长度小于 8 的值不入名单；密钥轮换后旧值仍保留在名单中直到中枢退出。替换为 `[secret:<路径>]`。
 - **挂载点**：
-  1. 账本写入前：`openLedger({ redact })` 对每条事件载荷中的所有字符串、以及活动片段做替换；
-  2. core 的 `redactSecrets`（卡住说明、末尾输出等的正则兜底）先套名单再跑正则（名单优先），
-     且名单在截断之前套用，避免截断把密钥切成两半留下前缀；
+  1. 账本写入前（`packages/hub/src/ledger/scrub.ts`）：名单替换作用于事件载荷的**所有**字符串；
+     正则兜底只作用于**自由文本**字段（卡住说明与末尾输出、结果摘要、验收输出、失败/取消说明、
+     回复文字、备注）以及活动文本（先限长到 4096 再脱敏）。合同、验收命令 argv、会话 id、
+     schedule 载荷、活动 data 等结构化字段只做名单替换，避免正则误报悄悄改掉要执行的内容；
+  2. core `redactSecrets` 先套名单再跑正则（名单优先），且名单在截断之前套用；
   3. 中枢日志：`redactingLogger` 包装所有 logger（消息、details、Error）；
   4. HTTP 500 错误信息；
   5. 渠道外发（任务 4.1）：调用 `redactSecrets` 即同时得到名单与正则脱敏。
+- **创建任务时的检查**：中枢 `POST /v1/tasks` 与 `task_create` 操作都用 `checkContractSecrets`
+  检查合同，命中**高置信度**规则（ghp_/gho_/github_pat_、sk-ant-、AKIA、xoxb-/xoxp-、glpat-、
+  npm_、hf_、fht_、JWT、完整的 PEM 私钥块）时拒绝创建，返回 `secret_suspected`（400），提示改用
+  `secret://` 引用；错误信息只含字段路径与规则 id。assignment、cli-flag、url-credentials、bearer
+  等低置信度规则不参与拒绝。规则分档见 `packages/core/src/ledger/redact.ts` 的
+  `HIGH_CONFIDENCE_RULES` / `LOW_CONFIDENCE_RULES`。
 - **已知局限**：节点进程不持有密钥，它在上报前用正则脱敏；正则若先命中了已知密钥的一部分，
   到中枢时剩余部分可能已认不出来。节点逐行截断到 2000 字符也发生在中枢之前。

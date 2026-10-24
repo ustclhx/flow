@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import {
   type CancelTaskData,
   type CreateTaskData,
+  checkContractSecrets,
   fail,
   formatZodIssues,
   type ListTasksData,
@@ -126,6 +127,9 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       const parsed = taskContract.safeParse(contractInput)
       if (!parsed.success) return invalidArguments('任务合同', parsed.error.issues, contractInput)
       const contract = parsed.data
+      // 合同入账时只做已知值的名单替换，不跑正则；高置信度的疑似密钥在这里直接拒绝。
+      const suspected = checkContractSecrets(contract)
+      if (!suspected.ok) return suspected
       if (
         opts.idempotency_key !== undefined &&
         contract.idempotency_key !== undefined &&

@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { randomBytes } from 'node:crypto'
 import {
+  checkContractSecrets,
+  findHighConfidenceSecrets,
+  HIGH_CONFIDENCE_RULES,
+  LOW_CONFIDENCE_RULES,
   redactLines,
   redactSecrets,
   sanitizeMessage,
@@ -8,6 +12,65 @@ import {
   TAIL_LINE_MAX,
   TAIL_TOTAL_MAX_BYTES,
 } from '../src/index.ts'
+
+describe('高 / 低置信度规则与合同检查', () => {
+  // 运行时拼接，不写像真密钥的字面量。
+  const a = (n: number) => 'A1b2'.repeat(n)
+  const pem = () => {
+    const label = ['PRIVATE', 'KEY'].join(' ')
+    return `-----BEGIN ${label}-----\n${a(10)}\n-----END ${label}-----`
+  }
+  const high: Record<string, string> = {
+    ghp: `ghp_${a(9)}`,
+    gho: `gho_${a(9)}`,
+    pat: `github_pat_${a(9)}`,
+    ant: `sk-ant-${a(6)}`,
+    aws: `AKIA${'Q'.repeat(16)}`,
+    slackB: `xoxb-${a(4)}`,
+    slackP: `xoxp-${a(4)}`,
+    glpat: `glpat-${a(6)}`,
+    npm: `npm_${a(9)}`,
+    hf: `hf_${a(9)}`,
+    fht: `fht_${'z'.repeat(43)}`,
+    jwt: `eyJ${a(3)}.eyJ${a(3)}.${a(3)}`,
+    pem: pem(),
+  }
+
+  test('高置信度规则逐条命中；低置信度写法不命中', () => {
+    for (const [name, value] of Object.entries(high)) {
+      expect([name, findHighConfidenceSecrets(`x ${value} y`).length]).toEqual([name, 1])
+    }
+    for (const benign of [
+      'tokenizer: bert-base-uncased',
+      'sk-learn-classifier-pipeline-v2',
+      '--token=localtest123',
+      'Authorization: Bearer abcdefghijklmnopqrstuvwxyz',
+      'https://user:pass@example.com',
+      `-----BEGIN ${['PRIVATE', 'KEY'].join(' ')}-----`,
+    ]) {
+      expect([benign, findHighConfidenceSecrets(benign)]).toEqual([benign, []])
+    }
+    expect(HIGH_CONFIDENCE_RULES).toContain('github-token')
+    expect(LOW_CONFIDENCE_RULES).toEqual(
+      expect.arrayContaining(['assignment', 'cli-flag', 'url-credentials', 'bearer']),
+    )
+    expect(HIGH_CONFIDENCE_RULES).not.toContain('assignment')
+  })
+
+  test('checkContractSecrets：命中时 secret_suspected，details 指出字段，不含值', () => {
+    const r = checkContractSecrets({ goal: 'ok', inputs: { env: [`X=${high.ghp}`] } })
+    expect(r).toMatchObject({
+      ok: false,
+      error: {
+        kind: 'usage',
+        code: 'secret_suspected',
+        details: [{ field: 'inputs.env.0', rule: 'github-token' }],
+      },
+    })
+    expect(JSON.stringify(r)).not.toContain(high.ghp)
+    expect(checkContractSecrets({ goal: 'tokenizer: bert-base-uncased' }).ok).toBe(true)
+  })
+})
 
 describe('中枢绑定 token 与名单标签', () => {
   test('fht_ 前缀的绑定 token 被替换；[secret:<路径>] 标签不被正则再次改写', () => {
