@@ -33,6 +33,8 @@ export class ManualClock {
   private nextId = 0
   constructor(public time = Date.parse('2026-10-25T08:00:00.000Z')) {}
   now = () => this.time
+  /** 尚未触发的定时器个数（测试据此等被测代码先挂上定时器，再拨动时钟）。 */
+  pendingTimers = () => this.timers.size
   monotonic = () => this.time
   setTimeout(cb: () => void | Promise<void>, delayMs: number) {
     const id = ++this.nextId
@@ -98,7 +100,7 @@ export async function bench(
 ): Promise<Bench> {
   const { readRoles, policies, tokens, ...startOptions } = nodeOptions
   const clock = new ManualClock()
-  const home = join(mkdtempSync(join(tmpdir(), 'flow-node-bench-')), 'home')
+  const home = join(mkdtempSync(join(tmpdir(), 'flow-node-bench-')), 'flow-home')
   if (policies) {
     mkdirSync(join(home, 'config'), { recursive: true })
     writeFileSync(join(home, 'config', 'policies.yaml'), JSON.stringify(policies))

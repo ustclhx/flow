@@ -91,6 +91,8 @@ async function start(reads: OrcaTerminalRead[], precheck?: Precheck) {
   const poll = async (n = 1) => {
     for (let i = 0; i < n; i++) {
       const before = orca.ops('terminalRead').length
+      // 等监控循环挂上下一次轮询的定时器（上一轮的预检、重读与发送都是异步的）再拨动时钟。
+      await until(() => clock.pendingTimers() > 0 || outcome !== undefined, '轮询定时器')
       await clock.advance(POLL)
       await until(() => orca.ops('terminalRead').length > before || outcome !== undefined, '读取')
       await realWait(10)

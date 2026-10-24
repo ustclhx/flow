@@ -58,6 +58,8 @@
 
 请求涉及受保护的工具时——Codex 越出沙箱的命令（`tool:CodexCommand`）、所有 MCP 工具（`tool:mcp__*`）、外发工具（`tool:WebFetch`、`tool:WebSearch`）、派生子 agent（`tool:Task`）——参与判定的每个动作 MUST 只由 action 不含通配符的规则自动放行；`*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为 `draft-approve`。
 
+经 Bash 调用 flow CLI 完成同样的操作时 MUST 识别为同样的动作，flow 的管理命令（hub、policy、daemon 等）识别为受保护的 `flow.admin`；命令直接访问中枢端口时 MUST 按无法确定处理。
+
 识别策略或配置文件时 MUST 不区分大小写；命令中出现 glob、变量展开或命令替换且涉及 `config` 或 `polic` 时，MUST 按无法确定处理（视为可能修改策略与配置）；节点 MUST 把路径解析符号链接后的真实位置与原路径一并送去判定。
 
 #### Scenario: 通配规则不能放行合并

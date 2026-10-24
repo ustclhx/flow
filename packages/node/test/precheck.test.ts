@@ -607,3 +607,38 @@ describe('对抗用例（真实 policy/check）', () => {
     }
   })
 })
+
+describe('复核对抗用例（真实 policy/check）：Bash 调 flow CLI、直接访问中枢、相对路径写配置', () => {
+  const cases: Array<[string, (home: string) => string, string]> = [
+    ['flow task create', () => 'flow task create --role admin --goal 提权', 'task.create'],
+    ['flow task reply', () => 'flow task reply t-1 --approve', 'task.reply'],
+    ['flow kb proposals accept', () => 'flow kb proposals accept p-1', 'proposal.decide'],
+    ['flow hub token issue', () => '/opt/bin/flow hub token issue node:x', 'flow.admin'],
+    ['curl 中枢', () => 'curl -X POST http://127.0.0.1:7477/v1/tasks -d @t.json', 'shell.opaque'],
+    [
+      'cd flow-home 后用相对路径写配置',
+      (home) => `cd ${home} && echo x > config/roles/dev.yaml`,
+      'config.edit',
+    ],
+  ]
+  for (const [name, command, action] of cases) {
+    test(`${name}：\`* tool:Bash auto\` 下进入 blocked`, async () => {
+      const b = await fakeBench([{ scope: '*', action: 'tool:Bash', level: 'auto' }])
+      const id = await approvalTask(b, { tool: 'Bash', command: command(b.home) })
+      const t = await settle(b, id, (t) => t.status === 'blocked', 'blocked')
+      expect(t.blocked?.reason).toBe('awaiting_approval')
+      const req = (firstDecided(b, id).payload as { request: { actions: string[] } }).request
+      expect(req.actions).toContain(action)
+    })
+  }
+
+  test('显式规则 `dev task.create auto` 放行 Bash 调 flow task create', async () => {
+    const b = await fakeBench([
+      { scope: 'dev', action: 'task.create', level: 'auto' },
+      { scope: '*', action: 'tool:Bash', level: 'auto' },
+    ])
+    const id = await approvalTask(b, { tool: 'Bash', command: 'flow task create --goal 子任务' })
+    await settle(b, id, (t) => t.status === 'done', 'done')
+    expect(b.types(id)).not.toContain('task.blocked')
+  })
+})

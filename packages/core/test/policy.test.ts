@@ -692,3 +692,111 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
     expect(classifyAction({ tool: 'Bash', command: 'ls\n\tpwd' })).not.toContain('shell.opaque')
   })
 })
+
+describe('Bash 调 flow CLI、直接访问中枢与 config.edit 词法变体（PR #29 复核）', () => {
+  const HOME = '/Users/u'
+  const FLOW_HOME = '/Users/u/flow-home'
+  const opts = { flowHomes: [FLOW_HOME], userHome: HOME }
+  const judge = (rules: PolicyRule[], command: string, o: Record<string, unknown> = opts) => {
+    const actions = classifyAction({ tool: 'Bash', command }, undefined, o)
+    return { ...decide(indexed(...rules), { ...request, command, actions }), ids: actions }
+  }
+  const BASH_AUTO = [rule('*', 'tool:Bash'), rule('dev', 'tool:*'), rule('*', '*')]
+
+  test.each([
+    ['flow task create --role admin --goal x', 'task.create'],
+    ['flow task reply t-1 --approve', 'task.reply'],
+    ['flow task cancel t-1', 'task.cancel'],
+    ['flow kb proposals accept p-1', 'proposal.decide'],
+    ['flow kb proposals reject p-1', 'proposal.decide'],
+    ['flow resource transfer r-1 --to ws/b', 'resource.transfer'],
+    ['flow hub token issue node:x', 'flow.admin'],
+    ['flow policy check --task t-1 --tool Bash', 'flow.admin'],
+    ['flow daemon install', 'flow.admin'],
+    ['flow --json --actor user task create --role admin', 'task.create'],
+    ['/Users/x/.bun/bin/flow task create --role admin', 'task.create'],
+    ['bunx flow task reply t-1 --approve', 'task.reply'],
+    ['npx flow kb proposals accept p-1', 'proposal.decide'],
+    ['bun /Users/x/flow/packages/cli/src/main.ts task create --role admin', 'task.create'],
+    ['bun run packages/cli/src/main.ts hub token issue node:x', 'flow.admin'],
+    ['bun x flow hub token issue node:x', 'flow.admin'],
+    ['cd /repo && FLOW_ACTOR=user flow task create --role admin', 'task.create'],
+  ])('flow CLI：%s → %s，tool:Bash 的 auto 不能放行', (command, action) => {
+    const r = judge([], command)
+    expect(r.ids).toContain(action)
+    for (const rules of [...BASH_AUTO.map((x) => [x])]) {
+      expect(judge(rules, command).level).not.toMatch(/^auto/)
+    }
+    // 显式规则仍可放行（flow.admin 与 flow 工具动作一样需要具体 scope 加精确 action）。
+    const explicit = judge([rule('dev', action), rule('dev', 'tool:Bash')], command)
+    expect(explicit.ids.filter((a) => a !== 'tool:Bash' && a !== action)).toEqual([])
+    expect(explicit.level).toBe('auto')
+  })
+
+  test('bun -e / --eval 执行任意代码：按不透明处理', () => {
+    expect(judge([], 'bun -e "fetch(1)"').ids).toContain('shell.opaque')
+    expect(judge([], 'bun --print 1').ids).toContain('shell.opaque')
+    // 普通的 bun 子命令不受影响。
+    expect(judge([rule('dev', 'tool:Bash')], 'bun test packages/node').level).toBe('auto')
+  })
+
+  test.each([
+    'curl -X POST http://127.0.0.1:7477/v1/tasks -d @t.json',
+    'curl http://localhost:7478/v1/tasks/t-1/reply',
+    'curl -s "http://[::1]:7477/health"',
+    'wget -qO- http://mac.local:7477/v1/tasks',
+    'curl http://127.0.0.1:9123/x',
+  ])('直接访问中枢：%s → 不透明', (command) => {
+    const r = judge([], command, { ...opts, hubPorts: [9123] })
+    expect(r.ids).toContain('shell.opaque')
+    for (const x of BASH_AUTO) {
+      expect(judge([x], command, { ...opts, hubPorts: [9123] }).level).not.toMatch(/^auto/)
+    }
+  })
+
+  test('访问其他本机端口不受影响', () => {
+    expect(judge([rule('dev', 'tool:Bash')], 'curl http://127.0.0.1:3000/api').level).toBe('auto')
+  })
+
+  test.each([
+    'cd ~/flow-home && echo x > config/roles/dev.yaml',
+    "echo x > ~/flow-home/'config'/roles/dev.yaml",
+    'echo x > "/Users/u/flow-home"/config/remote.yaml',
+    'echo x > /Users/u//flow-home/./config/remote.yaml',
+    'echo x > $HOME/flow-home/config/remote.yaml',
+    'echo x > $' + '{HOME}/flow-home/config/remote.yaml',
+    'cp x /Users/u/Flow-Home/config/roles/dev.yaml',
+  ])('config.edit 的相对路径与词法变体：%s', (command) => {
+    const r = judge([], command)
+    expect(r.ids).toContain('config.edit')
+    for (const x of BASH_AUTO) expect(judge([x], command).level).not.toMatch(/^auto/)
+  })
+
+  test('非默认 flow-home 的 ~ 写法与 basename 路径段', () => {
+    const o = { flowHomes: ['/Users/u/work/fh-prod'], userHome: HOME }
+    for (const command of [
+      'echo x > ~/work/fh-prod/config/roles/dev.yaml',
+      'cd ~/work/fh-prod && echo x > config/remote.yaml',
+      'cd work/fh-prod; echo x > config/remote.yaml',
+    ]) {
+      expect(judge([], command, o).ids).toContain('config.edit')
+    }
+    // basename 只在作为完整路径段时命中。
+    expect(judge([], 'echo fh-production > notes.txt', o).ids).not.toContain('config.edit')
+  })
+
+  test('收窄误判：tsconfig、vite.config 与 glob 同时出现不再视为不透明', () => {
+    for (const command of [
+      'git diff -- "*.ts" tsconfig.json',
+      'ls vite.config.*',
+      'cat src/config.ts | grep -n "$x"',
+    ]) {
+      const r = judge([rule('dev', 'tool:Bash')], command)
+      expect(r.ids).not.toContain('shell.opaque')
+      expect(r.level).toBe('auto')
+    }
+    // 但 glob 加 /config/ 或 flow-home 仍按不透明处理。
+    expect(judge([], 'sed -i x /repo/config/*.yaml').ids).toContain('shell.opaque')
+    expect(judge([], 'rm ~/flow-home/*').ids).toContain('shell.opaque')
+  })
+})

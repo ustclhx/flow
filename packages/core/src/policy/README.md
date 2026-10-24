@@ -41,21 +41,48 @@ shell 解释器、`eval`、`source`、点号命令与 Python/Node/Ruby/Perl 解�
 输出文字或备份文件名等可能的误报。路径与命令文本的这些比较都**不区分大小写**
 （APFS 默认不区分大小写，`CONFIG/Policies.yaml` 指向同一个文件）。
 命令或路径中出现 glob 字符（`*` `?` `[`）、变量展开（`$x`、`${…}`）或命令替换，并且同时
-出现 `config` 或 `polic`（不区分大小写）时，实际作用的文件无法静态确定（`polic*.yaml`、
-`${p}ies.yaml`、`policies.yam?`），按 `shell.opaque` 处理，因而包含 `policy.edit`。
+出现 `polic`、`/config/` 路径段、`flow-home` 或实际 flow-home 的 basename（不区分大小写）时，
+实际作用的文件无法静态确定（`polic*.yaml`、`${p}ies.yaml`、`policies.yam?`），按
+`shell.opaque` 处理，因而包含 `policy.edit`。不再用宽泛的 `config` 子串，`tsconfig.json`、
+`vite.config.*` 与 glob 同时出现不算不透明。
 命令或路径含非打印字符（换行、回车、制表符之外的控制字符、零宽与双向覆盖等格式字符）时
 同样按不透明处理。
 
-第三个参数 `{ flowHomes }` 给出 flow-home 的路径（中枢传入自身 home 及其 realpath）：
-落在其 `config/` 目录下的任何路径，以及命令文本中出现该目录或 `flow-home/config` 时，
-增加 `config.edit`。roles、remote.yaml 等与策略文件一样是提权面，不只 policies.yaml。
+第三个参数 `{ flowHomes, userHome, hubPorts }`（中枢传入自身 home 及其 realpath、
+`os.homedir()` 与配置的端口）：
+- 路径：落在 flow-home 的 `config/` 目录下的任何路径增加 `config.edit`；
+- 命令：先做词法归一（`normalizeCommandText`：去掉引号与反斜杠，展开 `~`、`$HOME`、
+  `${HOME}`，合并 `//` 与 `/./`，转小写），之后只要出现 flow-home 的绝对路径、它的 `~`
+  写法，或 flow-home 的 basename（包括默认的 `flow-home`）作为一个路径段出现，就增加
+  `config.edit`。这是保守的：`cd ~/flow-home && echo > config/roles/dev.yaml` 这类相对路径
+  写法无法静态解析 cwd，所以只要提到 flow-home 就算；
+- 命令文本中出现 `127.0.0.1` / `localhost` / `0.0.0.0` / `[::1]` 加中枢端口，或 `/v1/`
+  加中枢端口（总是包含 7477 与 7478）时，视为直接访问中枢，按 `shell.opaque` 处理。
+
+roles、remote.yaml 等与策略文件一样是提权面，不只 policies.yaml。
 core 不访问文件系统或解析符号链接；节点在预检前对每个路径做 realpath（文件不存在时对
 最近的已存在祖先目录做 realpath 再拼回其余部分），原路径与解析后的路径都送去判定。
 
 flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做决定的操作额外识别为具体
 动作（`FLOW_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、
 `task_reply` → `task.reply`、`kb_proposals_accept` / `kb_proposals_reject` → `proposal.decide`、
-`resource_transfer` → `resource.transfer`。
+`resource_transfer` → `resource.transfer`。Bash 调 flow CLI 时识别为同样的动作
+（`flow task create|cancel|reply`、`flow kb proposals accept|reject`、`flow resource transfer`）；
+`flow hub`、`flow policy`、`flow daemon`、`flow mcp`、`flow node`、`flow init` 识别为
+`flow.admin`，`flow secrets` 识别为 `secrets`。flow 可执行文件按 basename 识别
+（`/Users/x/.bun/bin/flow`），`bunx|npx|pnpx flow`、`bun x flow`、`bun [run] <脚本>.ts`、
+`npm|pnpm|yarn exec|run|dlx flow` 同样识别；选项（以及 `--actor` 的值）不影响匹配，
+与 CLI 的命令匹配方式一致。`bun -e` / `--eval` / `-p` / `--print` 按不透明处理。
+
+### 信任边界与局限
+
+- **策略执行点在节点**：判定在中枢，放行（allow / 回车）由节点上的执行器完成，节点属于
+  可信计算基。节点被攻破或节点代码有误，策略就不再成立。
+- **对 Bash 和 CodexCommand 的识别是尽力而为的静态分析**。`tool:Bash` 的 `auto` 实质上等于
+  允许执行任意代码：worker 一旦有 shell，就能用识别不到的方式（脚本文件、编译后的程序、
+  别名、网络请求、写入后再执行……）做任何事，上面的映射只能挡住常见写法与误操作。
+  因此对能写代码的角色，不建议配置宽泛的 Bash auto；安全边界应当放在沙箱和角色权限
+  （允许的工具、文件系统与网络范围）上，策略只用来减少打扰。
 
 `decide(config.rules, request)` 是纯函数。workspace 使用完整的 `ws/<id>`。
 `tool:<名称>` 只作为兜底：请求中存在任何非 `tool:` 开头的具体动作（包括 `shell.opaque`）
@@ -74,7 +101,7 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 合并次序为 `notify > user > draft-approve > auto-report > auto`，空动作也返回 `user`。
 **安全底线是：敏感动作只能由显式规则放行，识别不确定时按敏感处理。**
 **受保护的动作**（`GUARDED_ACTIONS`）：`shell.opaque`、`pr.merge`、`deploy`、`secrets`、
-`policy.edit`、`config.edit`，以及上述 flow 工具的具体动作，均只有具体 workspace 或角色
+`policy.edit`、`config.edit`、`flow.admin`，以及上述 flow 工具的具体动作，均只有具体 workspace 或角色
 scope 加精确 action（不含通配符）的规则才能自动放行；不透明请求必须逐一满足全部动作的
 显式授权。
 
