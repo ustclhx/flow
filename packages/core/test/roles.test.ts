@@ -27,21 +27,31 @@ describe('角色配置', () => {
     expect(data(await loadRoles(home))).toEqual({ roles: [configured], errors: [] })
   })
 
-  test('引用 Markdown 提示词：读取同目录文件，不存在时保留内联文本', async () => {
+  test('引用 Markdown 提示词：读取同目录文件', async () => {
     const home = tempHome('flow-roles-')
     const prompt = '# 开发角色\n完成任务并运行验收。\n'
     writeText(join(home, 'config/roles/dev.yaml'), stringify({ ...role, prompt: 'dev.md' }))
     writeText(join(home, 'config/roles/dev.md'), prompt)
-    writeText(
-      join(home, 'config/roles/triage.yaml'),
-      stringify({ ...role, name: 'triage', prompt: 'missing.md' }),
-    )
     expect(data(await loadRoles(home))).toEqual({
-      roles: [
-        { ...role, prompt },
-        { ...role, name: 'triage', prompt: 'missing.md' },
-      ],
+      roles: [{ ...role, prompt }],
       errors: [],
+    })
+  })
+
+  test('提示词文件缺失时报 prompt_file_missing，不加载该角色且不影响其他角色', async () => {
+    const home = tempHome('flow-roles-')
+    writeText(join(home, 'config/roles/dev.yaml'), stringify({ ...role, prompt: 'dev.md' }))
+    writeText(join(home, 'config/roles/triage.yaml'), stringify({ ...role, name: 'triage' }))
+    expect(data(await loadRoles(home))).toEqual({
+      roles: [{ ...role, name: 'triage' }],
+      errors: [
+        {
+          file: 'config/roles/dev.yaml',
+          field: 'prompt',
+          code: 'prompt_file_missing',
+          message: '提示词文件 dev.md 不存在',
+        },
+      ],
     })
   })
 

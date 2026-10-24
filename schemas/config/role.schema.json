@@ -16,7 +16,7 @@
     "prompt": {
       "type": "string",
       "minLength": 1,
-      "description": "内联提示词；若为同目录下存在的 .md 文件名，则读取其内容"
+      "description": "内联提示词；同目录的 .md 文件名视为文件引用，文件必须存在"
     },
     "model": {
       "type": "string",

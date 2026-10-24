@@ -15,7 +15,7 @@ export const roleSchema = z
     name: z.string().min(1).meta({ description: '角色名，与 YAML 文件名（不含扩展名）一致' }),
     executor: executorType,
     prompt: z.string().min(1).meta({
-      description: '内联提示词；若为同目录下存在的 .md 文件名，则读取其内容',
+      description: '内联提示词；同目录的 .md 文件名视为文件引用，文件必须存在',
     }),
     model: z.string().min(1).optional(),
     effort: z.string().min(1).optional(),
@@ -83,11 +83,14 @@ export async function loadRoles(home: string): Promise<Result<RoleSet>> {
       try {
         role.prompt = await readFile(join(dir, role.prompt), 'utf8')
       } catch (err) {
-        // 不存在的 .md 文件名仍是内联文本；其他读取错误必须报告，不能静默降级。
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          errors.push({ file, field: 'prompt', code: 'read_failed', message: String(err) })
-          continue
-        }
+        const missing = (err as NodeJS.ErrnoException).code === 'ENOENT'
+        errors.push({
+          file,
+          field: 'prompt',
+          code: missing ? 'prompt_file_missing' : 'read_failed',
+          message: missing ? `提示词文件 ${role.prompt} 不存在` : String(err),
+        })
+        continue
       }
     }
     roles.push(role)
