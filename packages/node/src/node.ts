@@ -15,6 +15,7 @@ import {
   type LeaseGrant,
   loadHubConfig,
   loadNodeConfig,
+  loadRoles,
   ok,
   type Result,
   resolveHubUrl,
@@ -85,7 +86,7 @@ export interface StartNodeOptions {
   defaultCwd?: string
   /**
    * 角色设定的无进展阈值（分钟）。合同的 `no_progress_minutes` 优先，缺省为 15 分钟。
-   * 角色配置（add-m1-executors 1.1）在这里接入。
+   * 不传时按合同的角色读取 `config/roles/<role>.yaml` 的 `no_progress_minutes`。
    */
   noProgressMinutes?: NoProgressResolver
   /** 超时后等待执行器响应取消的毫秒数，默认 10 秒。 */
@@ -144,7 +145,7 @@ interface Env {
   logger: NodeLogger
   retryMs: number
   defaultCwd: string
-  /** 角色设定的无进展阈值（分钟）；1.1 的角色配置接入这里。 */
+  /** 角色设定的无进展阈值（分钟），来自 `config/roles/`。 */
   roleNoProgressMinutes: NoProgressResolver | undefined
   timeoutGraceMs: number
 }
@@ -669,8 +670,23 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
   let acquireAbort: AbortController | undefined
   let cancelJump = () => {}
 
-  const startRunner = (grant: LeaseGrant) => {
-    const runner = new LeaseRunner(env, grant)
+  /**
+   * 角色设定的无进展阈值：显式传入的 resolver 优先；否则每次领到租约时重新读取
+   * `config/roles/`（改了角色无需重启节点），读取失败时用默认值。
+   */
+  const roleResolver = async (): Promise<NoProgressResolver | undefined> => {
+    if (options.noProgressMinutes) return options.noProgressMinutes
+    const loaded = await loadRoles(home)
+    if (!loaded.ok) return undefined
+    const minutes = new Map(loaded.data.roles.map((r) => [r.name, r.no_progress_minutes]))
+    return (contract) => minutes.get(contract.role)
+  }
+
+  const startRunner = async (grant: LeaseGrant) => {
+    const resolver = await roleResolver()
+    // 读取角色期间节点被停止：不再启动，租约到期后由中枢按合同处理（与 stop 的语义一致）。
+    if (stopper.signal.aborted) return
+    const runner = new LeaseRunner({ ...env, roleNoProgressMinutes: resolver }, grant)
     runners.add(runner)
     void runner.finished.finally(() => {
       runners.delete(runner)
@@ -723,7 +739,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
         await sleep(clock, retryMs, stopper.signal)
         continue
       }
-      if (r.data.lease) startRunner(r.data.lease)
+      if (r.data.lease) await startRunner(r.data.lease)
     }
   }
 

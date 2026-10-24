@@ -59,6 +59,7 @@ const quiet = { info() {}, warn() {} }
 const TOKEN = 'k'.repeat(43)
 
 export interface Bench {
+  home: string
   clock: ManualClock
   ledger: LedgerStore
   tasks: TaskService
@@ -112,6 +113,7 @@ export async function bench(
   await clock.advance(0)
 
   const b: Bench = {
+    home,
     clock,
     ledger,
     tasks,

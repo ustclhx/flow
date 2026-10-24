@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { taskContract } from '@flow/core'
 import { classifyFake, noProgressMs, STUCK_TAIL_LINES } from '../src/index.ts'
 import { type Bench, bench, fake } from './harness.ts'
@@ -141,6 +143,23 @@ describe('无进展超时', () => {
     await b.clock.advance(4 * MIN)
     expect(b.task(id).status).toBe('running')
     await b.until(id, (t) => t.blocked?.reason === 'no_progress', 2 * MIN)
+  })
+})
+
+describe('角色设定的无进展阈值', () => {
+  test('按合同的角色读取 config/roles/<role>.yaml 的 no_progress_minutes', async () => {
+    const b = await open()
+    const dir = join(b.home, 'config', 'roles')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'dev.yaml'),
+      'name: dev\nexecutor: fake\nprompt: 测试角色\nno_progress_minutes: 3\n',
+    )
+    const id = await b.create(fake({ script: [{ do: 'hang' }] }))
+    await b.clock.advance(2 * MIN + 30_000)
+    expect(b.task(id).status).toBe('running')
+    const t = await b.until(id, (t) => t.status === 'blocked', 2 * MIN)
+    expect(t.blocked?.message).toContain('3 分钟')
   })
 })
 
