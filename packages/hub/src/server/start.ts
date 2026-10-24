@@ -11,7 +11,7 @@ import { type HubTokenStore, openTokenStore } from './tokens.ts'
 type HubLedger = LedgerReader & LedgerMaintenance
 
 export interface StartHubOptions
-  extends Pick<HubDeps, 'version' | 'mount' | 'clock'>,
+  extends Pick<HubDeps, 'version' | 'mount' | 'clock' | 'leaseHolders'>,
     Pick<MaintenanceOptions, 'fetch' | 'logger' | 'onBackupDone'> {
   home: string
   /** 已打开的账本由调用者确保单实例；优先使用 openLedger，在取得锁后才打开数据库。 */
@@ -102,6 +102,7 @@ export async function startHub(options: StartHubOptions): Promise<Result<Running
       token: token.data,
       tokens,
       clock,
+      ...(options.leaseHolders ? { leaseHolders: options.leaseHolders } : {}),
       signal: shutdown.signal,
       ...(ledger ? { ledger } : {}),
       ...(options.version ? { version: options.version } : {}),

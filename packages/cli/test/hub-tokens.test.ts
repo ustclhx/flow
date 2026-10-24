@@ -47,30 +47,31 @@ describe('flow hub token', () => {
   test('issue 只输出一次明文；list 不含明文；revoke 立即生效', async () => {
     const issued = await cli('hub', 'token', 'issue', 'grok', '--note', 'Grok Bot', '--remote')
     expect(issued.code).toBe(0)
-    const { token, secret } = issued.doc.data as {
+    const remote = issued.doc.data as {
       token: { id: string; actor: string; note: string; remote: boolean }
       secret: string
     }
-    expect(token).toMatchObject({ actor: 'grok', note: 'Grok Bot', remote: true })
+    expect(remote.token).toMatchObject({ actor: 'grok', note: 'Grok Bot', remote: true })
+    // remote token 不能用于本机端口。
+    const viaRemote = await new HubClient({ home, actor: 'grok', token: remote.secret }).listTasks()
+    expect(viaRemote).toMatchObject({ ok: false, error: { code: 'remote_not_allowed' } })
+    // 不带 --remote 时只能签发 node:<id>。
+    const plain = await cli('hub', 'token', 'issue', 'grok')
+    expect(plain.doc).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } })
 
-    // 带绑定 token 的进程（FLOW_HUB_TOKEN）身份固定为 grok。
-    const bound = new HubClient({ home, actor: 'grok', token: secret })
-    const created = data(
-      await bound.createTask({
-        goal: 'x',
-        workspace: 'ws/product-res',
-        role: 'dev',
-        executor: 'fake',
-      }),
-    )
-    expect(created.task.created_by).toBe('grok')
+    const nodeIssued = await cli('hub', 'token', 'issue', 'node:remote-1')
+    expect(nodeIssued.code).toBe(0)
+    const { token, secret } = nodeIssued.doc.data as {
+      token: { id: string; actor: string }
+      secret: string
+    }
+    // 带绑定 token 的进程（FLOW_HUB_TOKEN）身份固定为 node:remote-1，且限于节点协议接口。
     process.env[HUB_TOKEN_ENV] = secret
     try {
       const mismatch = await new HubClient({ home, actor: 'user' }).listTasks()
       expect(mismatch).toMatchObject({ ok: false, error: { code: 'actor_mismatch' } })
-      // 用绑定 token 管理 token：user_only。
-      const self = await cli('hub', 'token', 'list', '--actor', 'grok')
-      expect(self.doc).toMatchObject({ ok: false, error: { code: 'user_only' } })
+      const scoped = await new HubClient({ home, actor: 'node:remote-1' }).listTasks()
+      expect(scoped).toMatchObject({ ok: false, error: { code: 'scope_denied' } })
     } finally {
       delete process.env[HUB_TOKEN_ENV]
     }
@@ -78,11 +79,11 @@ describe('flow hub token', () => {
     const listed = await cli('hub', 'token', 'list')
     expect(listed.code).toBe(0)
     expect(JSON.stringify(listed.doc)).not.toContain(secret)
-    expect(listed.doc.data.tokens).toHaveLength(1)
+    expect(listed.doc.data.tokens).toHaveLength(2)
 
     const revoked = await cli('hub', 'token', 'revoke', token.id)
     expect(revoked.code).toBe(0)
-    const after = await bound.listTasks()
+    const after = await new HubClient({ home, actor: 'node:remote-1', token: secret }).listTasks()
     expect(after).toMatchObject({ ok: false, error: { code: 'unauthorized' } })
   })
 
@@ -98,8 +99,36 @@ describe('flow hub token', () => {
     } finally {
       delete process.env.FLOW_ACTOR
     }
-    const user = await cli('hub', 'token', 'issue', 'user')
-    expect(user.doc).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } })
+    for (const actor of ['user', 'User']) {
+      const r = await cli('hub', 'token', 'issue', actor, '--remote')
+      expect(r.doc).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } })
+    }
+  })
+
+  test('FLOW_ACTOR 对所有走 HubClient 的命令统一生效，--actor user 不能覆盖', async () => {
+    process.env.FLOW_ACTOR = 'claude'
+    try {
+      const created = await cli(
+        'task',
+        'create',
+        '--goal',
+        '经 FLOW_ACTOR',
+        '--workspace',
+        'ws/product-res',
+        '--role',
+        'dev',
+        '--executor',
+        'fake',
+        '--actor',
+        'user',
+      )
+      expect(created.doc).toMatchObject({ ok: true, data: { task: { created_by: 'claude' } } })
+      const rebuilt = await cli('hub', 'rebuild', '--actor', 'user')
+      expect(rebuilt.doc).toMatchObject({ ok: false, error: { code: 'user_only' } })
+    } finally {
+      delete process.env.FLOW_ACTOR
+    }
+    expect((await cli('hub', 'rebuild')).doc).toMatchObject({ ok: true })
   })
 
   test('hub status 的人类可读输出报告缺少的密钥', async () => {

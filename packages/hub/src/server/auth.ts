@@ -1,11 +1,22 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { ACTOR_RE, ENDPOINTS, HEADERS, USER_ACTOR } from '@flow/core'
-import type { MiddlewareHandler } from 'hono'
+import {
+  ACTOR_RE,
+  ENDPOINTS,
+  type EndpointName,
+  HEADERS,
+  isDeclarableActor,
+  isNodeActor,
+  USER_ACTOR,
+} from '@flow/core'
+import type { Context, MiddlewareHandler } from 'hono'
 import { errorResponse } from '../app.ts'
 import type { BoundTokenLookup } from './tokens.ts'
 
 /** 请求的认证方式：user token（`state/hub.token`）或绑定 token。 */
-export type AuthInfo = { kind: 'user' } | { kind: 'bound'; token_id: string } | { kind: 'none' }
+export type AuthInfo =
+  | { kind: 'user' }
+  | { kind: 'bound'; token_id: string; remote: boolean }
+  | { kind: 'none' }
 
 // 子应用无需额外的 Hono 泛型即可读取已校验的审计身份。
 declare module 'hono' {
@@ -17,22 +28,81 @@ declare module 'hono' {
 
 const digest = (value: string) => createHash('sha256').update(value).digest()
 
+export interface HubAuthOptions {
+  /** user token（`state/hub.token`）。 */
+  token?: string
+  tokens?: BoundTokenLookup
+  /** 某任务当前活动租约所属的节点 id；用于 node:* 身份只读自己持有租约的任务。 */
+  leaseHolders?: (taskId: string) => readonly string[]
+}
+
+/** node:* 身份可以访问的接口（节点协议）；tasks-show 另按租约归属判断。 */
+const NODE_ENDPOINTS: readonly EndpointName[] = [
+  'nodes-register',
+  'leases-acquire',
+  'leases-renew',
+  'leases-complete',
+  'leases-ack-reply',
+]
+
+const matcher = (name: EndpointName) => {
+  const { method, path } = ENDPOINTS[name]
+  const re = new RegExp(`^${path.replace(/:id/g, '([^/]+)')}$`)
+  return (c: Context) => (c.req.method === method ? re.exec(c.req.path) : null)
+}
+const nodeMatchers = NODE_ENDPOINTS.map((n) => ({ name: n, match: matcher(n) }))
+const taskShow = matcher('tasks-show')
+
 /**
- * 鉴权中间件（hub-daemon "Token 认证"、design D9）。判定顺序：
+ * node:* 身份的权限范围：只能访问节点协议接口，以及自己持有活动租约的任务详情。
+ * 注册与领取时，请求体中的 node_id 必须与身份一致。
+ */
+async function checkNodeScope(
+  c: Context,
+  actor: string,
+  leaseHolders: HubAuthOptions['leaseHolders'],
+): Promise<Response | null> {
+  const nodeId = actor.slice('node:'.length)
+  const denied = () => errorResponse(c, 'scope_denied', `节点身份 ${actor} 不能访问该接口`)
+  const hit = nodeMatchers.find((m) => m.match(c))
+  if (hit) {
+    if (hit.name === 'nodes-register' || hit.name === 'leases-acquire') {
+      let bodyNode: unknown
+      try {
+        // Hono 缓存请求体，后续路由仍可再次读取。
+        bodyNode = (JSON.parse(await c.req.text()) as { node_id?: unknown } | null)?.node_id
+      } catch {
+        bodyNode = undefined
+      }
+      if (bodyNode !== undefined && bodyNode !== nodeId) {
+        return errorResponse(c, 'scope_denied', `节点身份 ${actor} 不能代表 ${String(bodyNode)}`)
+      }
+    }
+    return null
+  }
+  const show = taskShow(c)
+  if (show?.[1] && leaseHolders?.(decodeURIComponent(show[1])).includes(nodeId)) return null
+  return denied()
+}
+
+/**
+ * 鉴权中间件（hub-daemon "Token 认证"、design D9）。判定表见 `docs/hub-auth.md`：
  *
- * | token                 | X-Flow-Actor          | 结果                         |
- * |-----------------------|-----------------------|------------------------------|
- * | 缺失 / 不认识 / 已撤销 | 任意                  | 401 unauthorized             |
- * | user token            | 缺省或空              | user                         |
- * | user token            | user                  | user                         |
- * | user token            | 其他合法身份           | 该身份（只能降级）             |
- * | 任意有效 token         | 格式不合法             | 400 invalid_arguments        |
- * | 绑定 token            | 缺省、空或等于绑定身份 | 绑定身份                     |
- * | 绑定 token            | 其他（含 user）        | 403 actor_mismatch           |
+ * | token                  | X-Flow-Actor                    | 结果                    |
+ * |------------------------|---------------------------------|-------------------------|
+ * | 缺失 / 不认识 / 已撤销  | 任意                            | 401 unauthorized        |
+ * | 任意有效 token          | 格式不合法                       | 400 invalid_arguments   |
+ * | user token             | 缺省、空或 user                  | user                    |
+ * | user token             | 保留身份（不分大小写）或 node:*  | 403 reserved_actor      |
+ * | user token             | 其他合法身份                     | 该身份（只能降级）        |
+ * | 绑定 token             | 与绑定身份不一致（含 user）       | 403 actor_mismatch      |
+ * | 绑定 token（remote）    | 缺省或一致                       | 403 remote_not_allowed  |
+ * | 绑定 token（node:<id>） | 缺省或一致                       | node:<id>，限节点协议    |
  *
  * 摘要用常数时间比较；错误响应不包含凭证或账本信息。健康检查不鉴权，身份记为 `unknown`。
  */
-export function hubAuth(token?: string, tokens?: BoundTokenLookup): MiddlewareHandler {
+export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
+  const { token, tokens, leaseHolders } = options
   const expected = digest(token ?? '')
   return async (c, next) => {
     if (c.req.method === ENDPOINTS.health.method && c.req.path === ENDPOINTS.health.path) {
@@ -54,8 +124,16 @@ export function hubAuth(token?: string, tokens?: BoundTokenLookup): MiddlewareHa
     if (declared !== '' && !ACTOR_RE.test(declared)) {
       return errorResponse(c, 'invalid_arguments', '操作者标识格式不合法')
     }
+    let actor: string
     if (isUser) {
-      c.set('actor', declared === '' ? USER_ACTOR : declared)
+      if (declared !== '' && !isDeclarableActor(declared)) {
+        return errorResponse(
+          c,
+          'reserved_actor',
+          `不能声明保留身份 ${declared}（user 之外的保留身份与 node:* 由中枢设置）`,
+        )
+      }
+      actor = declared === '' ? USER_ACTOR : declared
       c.set('auth', { kind: 'user' })
     } else if (bound) {
       if (declared !== '' && declared !== bound.actor) {
@@ -65,8 +143,20 @@ export function hubAuth(token?: string, tokens?: BoundTokenLookup): MiddlewareHa
           `该 token 绑定的身份为 ${bound.actor}，不能声明为 ${declared}`,
         )
       }
-      c.set('actor', bound.actor)
-      c.set('auth', { kind: 'bound', token_id: bound.id })
+      if (bound.remote) {
+        return errorResponse(
+          c,
+          'remote_not_allowed',
+          '远程 token 只能用于远程入口，不能访问本机端口',
+        )
+      }
+      actor = bound.actor
+      c.set('auth', { kind: 'bound', token_id: bound.id, remote: bound.remote })
+    } else return errorResponse(c, 'unauthorized', '未授权')
+    c.set('actor', actor)
+    if (isNodeActor(actor)) {
+      const denied = await checkNodeScope(c, actor, leaseHolders)
+      if (denied) return denied
     }
     await next()
   }

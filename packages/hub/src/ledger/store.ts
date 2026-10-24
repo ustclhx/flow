@@ -1,4 +1,5 @@
 import {
+  ACTIVITY_TEXT_MAX,
   type Activity,
   checkTaskEvent,
   type Database,
@@ -15,7 +16,9 @@ import {
   type RebuildData,
   type ReplyView,
   type Result,
+  redactSecrets,
   type SqlValue,
+  sanitizeText,
   type TaskResume,
   type TaskStatus,
   type TaskView,
@@ -295,6 +298,11 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
   const iso = (ms = nowMs()) => new Date(ms).toISOString()
   const activityKeep = opts.activityKeep ?? 50
   const redact = opts.redact
+  /**
+   * 账本写入前的脱敏（secret-hygiene）：先套本账本的名单（opts.redact），再经 core 的
+   * redactSecrets（全局注册的名单 + 疑似密钥正则）。重建只重放已脱敏的事件，不再替换。
+   */
+  const scrub = (text: string) => redactSecrets(redact ? redact(text) : text)
   const apply: Applier = createApplier(db)
   const listeners = new Set<(event: LedgerEvent) => void>()
 
@@ -447,10 +455,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
 
   /** 事务内：校验 → 插入 → apply。不合法时抛出 Abort 让事务回滚。 */
   function writeOne(raw: unknown, ts: string): LedgerEvent {
-    // 先替换再校验：替换后的载荷仍须符合 schema。
+    // 先脱敏再校验：脱敏后的载荷仍须符合 schema。
     const parsed = parseLedgerEventDraft(
-      redact && raw !== null && typeof raw === 'object' && 'payload' in raw
-        ? { ...raw, payload: redactDeep((raw as { payload: unknown }).payload, redact) }
+      raw !== null && typeof raw === 'object' && 'payload' in raw
+        ? { ...raw, payload: redactDeep((raw as { payload: unknown }).payload, scrub) }
         : raw,
     )
     if (!parsed.ok) throw new Abort(parsed)
@@ -725,7 +733,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       )
       if (!row) return false
       if (activities.length === 0) return true
-      const incoming = redact ? activities.map((a) => redactDeep(a, redact)) : activities
+      // 活动文本先限长再脱敏（sanitizeText：名单 → 截断 → 正则）；data 中的字符串同样脱敏。
+      const incoming = activities.map((a) => ({
+        ...redactDeep(a, scrub),
+        ...(a.text === undefined
+          ? {}
+          : { text: sanitizeText(redact ? redact(a.text) : a.text, ACTIVITY_TEXT_MAX) }),
+      }))
       const kept = [...(JSON.parse(row.activity_json) as Activity[]), ...incoming].slice(
         -activityKeep,
       )

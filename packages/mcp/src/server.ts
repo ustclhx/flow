@@ -3,6 +3,7 @@ import {
   type FlowError,
   fail,
   invokeOperation,
+  isDeclarableActor,
   isValidActor,
   type Operation,
   resolveFlowHome,
@@ -57,6 +58,13 @@ export function checkMcpActor(actor: string | undefined): FlowError | null {
       kind: 'usage',
       code: 'invalid_actor',
       message: `不合法的 actor：${JSON.stringify(actor)}（只能包含字母、数字与 . _ : @ -，最长 64 个字符）`,
+    }
+  }
+  if (actor !== USER_ACTOR && !isDeclarableActor(actor)) {
+    return {
+      kind: 'usage',
+      code: 'invalid_actor',
+      message: `flow mcp 的 actor 不能是保留身份 ${actor}（hub、scheduler、policy、unknown、node:*，不区分大小写）`,
     }
   }
   if (actor === USER_ACTOR) {

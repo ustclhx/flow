@@ -11,7 +11,11 @@ const GLOBAL_OPTIONS: Record<string, OptionSpec> = {
 }
 
 /** 解析 argv 并执行匹配的命令。纯函数式入口，便于测试；进程副作用只在 main.ts。 */
-export async function runCli(argv: string[], commands: Command<unknown>[]): Promise<Rendered> {
+export async function runCli(
+  argv: string[],
+  commands: Command<unknown>[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Rendered> {
   const json = argv.includes('--json')
   const positionals = argv.filter((a) => !a.startsWith('-'))
   const command = matchCommand(positionals, commands)
@@ -51,8 +55,7 @@ export async function runCli(argv: string[], commands: Command<unknown>[]): Prom
     result = await command.run({
       args,
       options: options as Record<string, string | boolean | string[] | undefined>,
-      actor: typeof actor === 'string' && actor !== '' ? actor : 'user',
-      actorGiven: typeof actor === 'string' && actor !== '',
+      ...resolveActor(actor, env),
     })
   } catch (err) {
     result = fail('failure', 'internal_error', (err as Error).message)
@@ -62,6 +65,21 @@ export async function runCli(argv: string[], commands: Command<unknown>[]): Prom
     ...(command.human ? { human: command.human } : {}),
     ...(command.humanError ? { humanError: command.humanError } : {}),
   })
+}
+
+/**
+ * 命令的操作者身份。`FLOW_ACTOR` 声明了非 user 身份时只能降级：所有命令（包括经 HubClient
+ * 访问中枢的命令）都以该身份执行，`--actor user` 或其他 `--actor` 都不能覆盖它。
+ * 这是第一道防线；中枢仍按 token 决定身份（docs/hub-auth.md），信任边界不变。
+ */
+export function resolveActor(
+  flag: unknown,
+  env: NodeJS.ProcessEnv,
+): { actor: string; actorGiven: boolean } {
+  const fromEnv = env.FLOW_ACTOR?.trim()
+  if (fromEnv && fromEnv !== 'user') return { actor: fromEnv, actorGiven: true }
+  const given = typeof flag === 'string' && flag !== ''
+  return { actor: given ? flag : 'user', actorGiven: given }
 }
 
 /** 取能匹配的最长命令路径，例如 `kb proposals accept` 优先于 `kb proposals`。 */

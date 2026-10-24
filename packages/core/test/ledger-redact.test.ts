@@ -17,6 +17,16 @@ describe('中枢绑定 token 与名单标签', () => {
       'API_TOKEN=[secret:telegram/bot-token]',
     )
   })
+
+  test('BEGIN/END 行已被上游替换成标记时，标记之前的私钥正文仍被去掉', () => {
+    const body = randomBytes(5 * 48)
+      .toString('base64')
+      .match(/.{1,64}/g) as string[]
+    const marker = '[REDACTED:private-key]'
+    const out = redactSecrets([marker, ...body, marker, '之后'].join('\n'))
+    for (const line of body) expect(out).not.toContain(line)
+    expect(out).toBe([marker, marker, '之后'].join('\n'))
+  })
 })
 
 /**

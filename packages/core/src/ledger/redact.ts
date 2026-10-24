@@ -75,6 +75,7 @@ const RULES: readonly Rule[] = [
 ]
 
 const KEY_END_RE = /-----END[A-Z ]{0,40}PRIVATE KEY-----/
+const KEY_MARKER = '[REDACTED:private-key]'
 const BASE64_LINE_RE = /^[A-Za-z0-9+/=]{16,128}\r?$/
 /** 私钥正文最多回溯的行数（8192 位 RSA 的 PEM 约 100 行）。 */
 const KEY_BODY_MAX_LINES = 200
@@ -85,11 +86,12 @@ const KEY_BODY_MAX_LINES = 200
  * 每行最多被看一次，回溯行数有上限。
  */
 function redactKeyBodies(text: string): string {
-  if (!text.includes('PRIVATE KEY-----')) return text
+  if (!text.includes('PRIVATE KEY-----') && !text.includes(KEY_MARKER)) return text
   const lines = text.split('\n')
   const out: string[] = []
   for (const line of lines) {
-    if (KEY_END_RE.test(line)) {
+    // 上游已把 BEGIN / END 行替换成标记时（例如合同在入账时已脱敏），标记行同样视为结束行。
+    if (KEY_END_RE.test(line) || line.trim() === KEY_MARKER) {
       let n = 0
       while (
         n < KEY_BODY_MAX_LINES &&
@@ -219,4 +221,12 @@ export function sanitizeMessage(message: string): string {
     redactSecrets(clipText(redactKnownSecrets(message), BLOCKED_MESSAGE_MAX)),
     BLOCKED_MESSAGE_MAX,
   )
+}
+
+/** 账本中每条活动文本的长度上限（字符）。 */
+export const ACTIVITY_TEXT_MAX = 4096
+
+/** 任意文本入账前的处理：先替换已知密钥，再截断到 max，再正则脱敏，最后再保证不超过 max。 */
+export function sanitizeText(text: string, max: number): string {
+  return clipText(redactSecrets(clipText(redactKnownSecrets(text), max)), max)
 }

@@ -69,6 +69,9 @@ export const PROTOCOL_ERRORS = {
   reply_not_found: { status: 404, kind: 'failure' },
   user_only: { status: 403, kind: 'failure' },
   actor_mismatch: { status: 403, kind: 'failure' },
+  reserved_actor: { status: 403, kind: 'failure' },
+  remote_not_allowed: { status: 403, kind: 'failure' },
+  scope_denied: { status: 403, kind: 'failure' },
   hub_busy: { status: 503, kind: 'retryable' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
@@ -140,20 +143,40 @@ export type HubStatusData = z.infer<typeof hubStatusData>
 // ---------------------------------------------------------------------------
 
 /**
- * 绑定 token 不能使用的身份：`user` 只属于 `state/hub.token`；`hub`、`scheduler`、`policy`
- * 是中枢内部写事件用的身份，`unknown` 是历史上缺省的占位，也不允许签发。
+ * 保留身份（比较时不区分大小写）：`user` 只属于 `state/hub.token`；`hub`、`scheduler`、`policy`
+ * 是中枢内部写事件用的身份，`unknown` 是历史上缺省的占位。`node:*` 只由中枢在节点注册流程中设置，
+ * 或由签发给 `node:<id>` 的绑定 token 使用。
  */
-export const RESERVED_BOUND_ACTORS = ['user', 'hub', 'scheduler', 'policy', 'unknown'] as const
+export const RESERVED_ACTORS = ['user', 'hub', 'scheduler', 'policy', 'unknown'] as const
+
+/** 名字（不区分大小写）属于保留身份。 */
+export const isReservedName = (a: string) =>
+  (RESERVED_ACTORS as readonly string[]).includes(a.toLowerCase())
+/** 身份（不区分大小写）以 `node:` 开头。 */
+export const isNodeActor = (a: string) => a.toLowerCase().startsWith('node:')
+
+/**
+ * user token 用 `X-Flow-Actor` 降级时可以声明的身份：除精确的 `user` 外，
+ * 不能是保留身份或其大小写变体，也不能是 `node:*`。
+ */
+export const isDeclarableActor = (a: string) =>
+  a === 'user' || (!isReservedName(a) && !isNodeActor(a))
 
 export const hubTokenId = z
   .string()
   .regex(/^tok_[0-9a-f]{12}$/, 'token id 格式为 tok_ 加 12 位十六进制')
   .meta({ description: '绑定 token 的 id（不是 token 本身）' })
 
-export const boundActor = actor.refine(
-  (a) => !(RESERVED_BOUND_ACTORS as readonly string[]).includes(a),
-  { message: `绑定 token 的身份不能是 ${RESERVED_BOUND_ACTORS.join('、')}` },
-)
+const NODE_ACTOR_RE = /^node:[A-Za-z0-9][A-Za-z0-9._-]{0,57}$/
+
+/** 绑定 token 的身份：不能是保留身份（不区分大小写）；`node:` 前缀必须是小写且后接合法节点 id。 */
+export const boundActor = actor
+  .refine((a) => !isReservedName(a), {
+    message: `绑定 token 的身份不能是 ${RESERVED_ACTORS.join('、')}（不区分大小写）`,
+  })
+  .refine((a) => !isNodeActor(a) || NODE_ACTOR_RE.test(a), {
+    message: '节点身份应为 node:<节点 id>（小写 node:）',
+  })
 
 /** token 记录的公开视图：不含摘要。 */
 export const hubTokenView = z
@@ -177,6 +200,11 @@ export const issueTokenRequest = z
     actor: boundActor,
     note: z.string().max(200).optional(),
     remote: z.boolean().optional(),
+  })
+  // 目前只签发两类：本机以外的节点（node:<id>），或给变更 ⑤ 远程入口用的 remote token。
+  .refine((r) => NODE_ACTOR_RE.test(r.actor) || r.remote === true, {
+    message: '目前只能签发 node:<id> 身份的 token，或带 --remote 标注的 token',
+    path: ['actor'],
   })
   .meta({ title: 'POST /v1/hub/tokens', description: '签发绑定 token；仅 user' })
 export type IssueTokenRequest = z.infer<typeof issueTokenRequest>

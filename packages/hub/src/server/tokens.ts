@@ -44,6 +44,8 @@ const fileSchema = z.strictObject({ version: z.literal(1), tokens: z.array(recor
 export interface BoundIdentity {
   id: string
   actor: string
+  /** 远程 token：只能用于变更 ⑤ 的远程入口，本机端口一律拒绝。 */
+  remote: boolean
 }
 
 /** 鉴权中间件需要的最小接口。 */
@@ -155,7 +157,7 @@ export async function openTokenStore(
       if (!found || found.revoked_at !== null) return null
       found.last_used_at = iso()
       scheduleFlush()
-      return { id: found.id, actor: found.actor }
+      return { id: found.id, actor: found.actor, remote: found.remote === true }
     },
 
     async issue(req) {
@@ -173,12 +175,12 @@ export async function openTokenStore(
         revoked_at: null,
         ...(req.remote === undefined ? {} : { remote: req.remote }),
       }
-      const before = records
       records = [...records, record]
       try {
         await persist()
       } catch {
-        records = before
+        // 只撤下自己这一条：写盘期间其他记录可能已被撤销或更新，不能整体还原。
+        records = records.filter((r) => r !== record)
         return fail('failure', 'hub_tokens_write_failed', '无法写入 token 文件，未签发')
       }
       return ok({ token: view(record), secret })

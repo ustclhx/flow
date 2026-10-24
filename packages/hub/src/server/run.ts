@@ -24,7 +24,7 @@ import { type RunningHub, type StartHubOptions, startHub } from './start.ts'
 import { ensureHubToken } from './token.ts'
 
 export interface RunHubOptions
-  extends Omit<StartHubOptions, 'ledger' | 'openLedger' | 'routes' | 'onStop'> {
+  extends Omit<StartHubOptions, 'ledger' | 'openLedger' | 'routes' | 'onStop' | 'leaseHolders'> {
   /** 密钥解析的注入点（测试用）；默认用 sops 解密 `config/secrets.sops.yaml`。 */
   secrets?: Pick<HubSecretsOptions, 'load' | 'debounceMs' | 'onChange'> & {
     /** 是否监听 config/ 的变化，默认 true。 */
@@ -63,6 +63,11 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let protocol: NodeProtocol | undefined
   const started = await startHub({
     ...options,
+    leaseHolders: (taskId) =>
+      ledger
+        ?.activeLeases()
+        .filter((l) => l.task_id === taskId)
+        .map((l) => l.node_id) ?? [],
     openLedger: async () => {
       // startHub 在打开账本之前已校验过 hub.yaml，这里再读一次取租约参数。
       const loaded = await loadHubConfig(options.home)

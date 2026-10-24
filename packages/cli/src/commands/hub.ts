@@ -88,16 +88,8 @@ export const hubRebuildCommand = defineCommand({
     `已重放 ${data.events_replayed} 条事件，耗时 ${data.duration_ms} 毫秒（账本序号 ${data.ledger_seq}）`,
 })
 
-/**
- * CLI 的有效身份：`FLOW_ACTOR` 声明了非 user 时只能降级，`--actor user` 不能覆盖它
- * （与 `flow secrets get` 一致）。中枢按 token 与该身份再做一次校验（design D9）。
- */
-const effectiveActor = (actor: string) => {
-  const env = process.env.FLOW_ACTOR
-  return env !== undefined && env !== '' && env !== 'user' ? env : actor
-}
-const hubClient = (actor: string) =>
-  new HubClient({ home: resolveFlowHome(process.env), actor: effectiveActor(actor) })
+// FLOW_ACTOR 的降级规则已在 runCli 中统一处理（resolveActor）。
+const hubClient = (actor: string) => new HubClient({ home: resolveFlowHome(process.env), actor })
 
 const tokenRows = (tokens: HubTokenView[]) =>
   renderTable(tokens, [

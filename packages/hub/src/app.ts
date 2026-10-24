@@ -32,6 +32,8 @@ export interface HubDeps {
   token?: string
   /** 绑定 token 的存储；提供时启用绑定 token 鉴权并挂载 token 管理路由。 */
   tokens?: HubTokenStore
+  /** 某任务活动租约所属的节点 id；node:* 身份据此只读自己持有租约的任务。 */
+  leaseHolders?: (taskId: string) => readonly string[]
   ledger?: LedgerReader
   mount?: Array<{ path: string; app: Hono }>
   clock?: HubClock
@@ -63,7 +65,14 @@ export function createHubApp(deps: HubDeps = {}): Hono {
   const ledgerSeq = ledger ? () => ledger.seq() : (deps.ledgerSeq ?? (() => 0))
 
   const app = new Hono()
-  app.use('/v1/*', hubAuth(deps.token, deps.tokens))
+  app.use(
+    '/v1/*',
+    hubAuth({
+      ...(deps.token === undefined ? {} : { token: deps.token }),
+      ...(deps.tokens ? { tokens: deps.tokens } : {}),
+      ...(deps.leaseHolders ? { leaseHolders: deps.leaseHolders } : {}),
+    }),
+  )
   if (deps.tokens) app.route('/', createTokenRoutes(deps.tokens))
 
   app.get(ENDPOINTS.health.path, (c) => {

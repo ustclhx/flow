@@ -9,6 +9,7 @@ import {
   type VerifyStep,
 } from '@flow/core'
 import type { NodeClock } from './clock.ts'
+import { executorEnv } from './env.ts'
 
 const DEFAULT_VERIFY_TIMEOUT_S = 600
 
@@ -74,6 +75,7 @@ function verifyCommand(
     try {
       child = spawn(step.cmd[0] ?? '', step.cmd.slice(1), {
         cwd,
+        env: executorEnv(),
         shell: false,
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],

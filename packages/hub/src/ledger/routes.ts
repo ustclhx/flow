@@ -132,7 +132,8 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     )
   })
 
-  app.post(ENDPOINTS['hub-rebuild'].path, (c) => {
+  // 重建投影只有用户能做（审查意见：AI 与节点身份不应触发全量重放）。
+  app.post(ENDPOINTS['hub-rebuild'].path, userOnly('重建投影'), (c) => {
     const actor = actorOf(c)
     if (!actor.ok) return respond(c, actor, rebuildData)
     return respond(c, ledger.rebuild({ actor: actor.data }), rebuildData)

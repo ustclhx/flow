@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
+  ACTIVITY_TEXT_MAX,
   execCommand,
   flowPaths,
   HubClient,
@@ -30,6 +31,8 @@ import {
 // 测试里不写像真密钥的字面量：运行时拼接出形似 Telegram bot token 的值。
 const fakeBotToken = () => `${'7'.repeat(10)}:${['AAH', 'not', 'real', 'x'.repeat(24)].join('')}`
 const LABEL = '[secret:telegram/bot-token]'
+const flowToken = `fht_${'Q'.repeat(43)}`
+const ghToken = `ghp_${'R1'.repeat(18)}`
 
 const roots: string[] = []
 let hub: RunningHub | undefined
@@ -249,12 +252,13 @@ describe('中枢集成', () => {
     if (!started.ok) throw new Error(started.error.message)
     hub = started.data
     const token = readFileSync(flowPaths(home).hubToken, 'utf8').trim()
-    const call = async (path: string, body?: unknown, actor = 'node:n1') => {
+    // 本机节点：user token、不声明身份。
+    const call = async (path: string, body?: unknown, actor = '') => {
       const res = await fetch(`${hub?.url}${path}`, {
         method: body === undefined ? 'GET' : 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          'X-Flow-Actor': actor,
+          ...(actor ? { 'X-Flow-Actor': actor } : {}),
           'Content-Type': 'application/json',
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -263,7 +267,12 @@ describe('中枢集成', () => {
     }
     const created = await call(
       '/v1/tasks',
-      { goal: `目标里也有 ${value}`, workspace: 'ws/demo', role: 'dev', executor: 'fake' },
+      {
+        goal: `目标里也有 ${value} ${flowToken} ${ghToken}`,
+        workspace: 'ws/demo',
+        role: 'dev',
+        executor: 'fake',
+      },
       'user',
     )
     expect(created.ok).toBe(true)
@@ -282,7 +291,11 @@ describe('中枢集成', () => {
     const ts = new Date().toISOString()
     const renewed = await call(`/v1/leases/${lease_id}/renew`, {
       lease_token,
-      activity: [{ ts, kind: 'output', text: `bot token: ${value}` }],
+      activity: [
+        { ts, kind: 'output', text: `bot token: ${value}` },
+        { ts, kind: 'output', text: `push with ${ghToken} and ${flowToken}` },
+        { ts, kind: 'output', text: `${'y'.repeat(10_000)}${ghToken}` },
+      ],
     })
     expect(renewed.ok).toBe(true)
     const done = await call(`/v1/leases/${lease_id}/complete`, {
@@ -301,15 +314,26 @@ describe('中枢集成', () => {
       const events = ledger.eventsAfter(0)
       const all = JSON.stringify(events)
       expect(all).not.toContain(value)
+      expect(all).not.toContain(ghToken)
+      expect(all).not.toContain(flowToken)
       const blocked = events.find((e) => e.type === 'task.blocked')
       expect(blocked?.payload).toMatchObject({
         message: `卡住了 ${LABEL}`,
         tail: ['启动中', LABEL, `TELEGRAM_BOT_TOKEN=${LABEL}`],
       })
       const task = events.find((e) => e.type === 'task.created')
-      expect(JSON.stringify(task?.payload)).toContain(LABEL)
+      // 账本写入端：名单替换（[secret:路径]）+ 正则兜底（fht_、ghp_）。
+      expect(JSON.stringify(task?.payload)).toContain(
+        `目标里也有 ${LABEL} [REDACTED:flow-hub-token] [REDACTED:github-token]`,
+      )
       const activity = ledger.taskActivity(task?.task_id as string)
-      expect(activity.map((a) => a.text)).toEqual([`bot token: ${LABEL}`])
+      expect(activity.map((a) => a.text).slice(0, 2)).toEqual([
+        `bot token: ${LABEL}`,
+        'push with [REDACTED:github-token] and [REDACTED:flow-hub-token]',
+      ])
+      // 活动文本限长到 ACTIVITY_TEXT_MAX，截断后的部分不会入账。
+      expect(activity[2]?.text?.length).toBe(ACTIVITY_TEXT_MAX)
+      expect(JSON.stringify(activity)).not.toContain(ghToken)
     } finally {
       ledger.close()
     }
