@@ -483,8 +483,8 @@ policy:
 8. **拆成 4 个变更**：
    - ① 账本、守护进程、节点协议；
    - ② 执行器和卡住检测；
-   - ③ 收件箱、Telegram、Web 页和策略；
-   - ④ supervisor 和 sops 密钥。
+   - ③ 收件箱、Telegram、Web 页、策略，以及 sops 密钥（Telegram token 是第一个需要保管的密钥，所以密钥提供器提前到 ③）；
+   - ④ supervisor。
 
    ② 和 ③ 依赖 ①，④ 依赖 ② 和 ③。
 
