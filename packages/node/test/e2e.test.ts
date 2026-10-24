@@ -177,7 +177,12 @@ describe('节点端到端（fake 执行器）', () => {
       }),
     )
     const { task, events } = await until(id, (t) => t.status === 'blocked', 'blocked')
-    expect(task.blocked).toEqual({ reason: 'question', message: '用哪个分支？', tail: ['问'] })
+    expect(task.blocked).toEqual({
+      reason: 'question',
+      message: '用哪个分支？',
+      tail: ['问'],
+      lease_held: false,
+    })
     expect(events.at(-1)).toMatchObject({
       type: 'task.blocked',
       actor: `node:${node.nodeId}`,

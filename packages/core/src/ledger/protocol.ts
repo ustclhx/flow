@@ -3,7 +3,20 @@ import { scheduleErrorSchema } from '../daemon/schedules.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import { executorInfo, ledgerEvent } from './events.ts'
-import { activity, blockedReason, taskContract, taskResult, taskStatus, taskView } from './task.ts'
+import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
+import {
+  activity,
+  blockedReason,
+  deliveredReply,
+  replyId,
+  replyKind,
+  replyView,
+  taskContract,
+  taskResult,
+  taskResume,
+  taskStatus,
+  taskView,
+} from './task.ts'
 
 /**
  * 中枢 HTTP 协议（hub-daemon、node-protocol spec；design D3、D4）。
@@ -17,6 +30,17 @@ import { activity, blockedReason, taskContract, taskResult, taskStatus, taskView
  */
 
 export const PROTOCOL_VERSION = 'v1'
+
+/**
+ * 节点上报的卡住说明与末尾输出的上限（PR #16 复核第 1 条）：超长的请求直接被 zod 拒绝，
+ * 不让任意大小的文本进入中枢的同步写事务。节点上报前用 `clipTail` 截断。
+ */
+const blockedMessage = z.string().min(1).max(PROTOCOL_MESSAGE_MAX)
+const blockedTail = z
+  .array(z.string().max(TAIL_LINE_MAX))
+  .max(200)
+  .optional()
+  .meta({ description: '末尾输出：最多 200 行，每行最多 2000 字符' })
 export const DEFAULT_HUB_PORT = 7477
 export const HUB_HOSTNAME = '127.0.0.1'
 
@@ -37,6 +61,11 @@ export const PROTOCOL_ERRORS = {
   lease_not_found: { status: 404, kind: 'failure' },
   invalid_lease_token: { status: 403, kind: 'failure' },
   node_not_registered: { status: 409, kind: 'failure' },
+  not_blocked: { status: 409, kind: 'failure' },
+  reply_kind_mismatch: { status: 409, kind: 'failure' },
+  reply_pending: { status: 409, kind: 'failure' },
+  reply_not_found: { status: 404, kind: 'failure' },
+  user_only: { status: 403, kind: 'failure' },
   hub_busy: { status: 503, kind: 'retryable' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
@@ -132,6 +161,7 @@ export const showTaskData = z
   .object({
     task: taskView,
     events: z.array(ledgerEvent).meta({ description: '该任务的全部事件' }),
+    replies: z.array(replyView).default([]).meta({ description: '该任务收到的全部回复' }),
   })
   .meta({ title: 'GET /v1/tasks/:id' })
 export type ShowTaskData = z.infer<typeof showTaskData>
@@ -145,6 +175,33 @@ export const cancelTaskData = z.object({ task: taskView }).meta({
   description: 'queued/blocked 任务立即 cancelled；running/verifying 任务 cancel_requested=true',
 })
 export type CancelTaskData = z.infer<typeof cancelTaskData>
+
+/**
+ * `POST /v1/tasks/:id/reply`（task-interaction spec）：只有 blocked 任务可以回复。
+ * - question：只接受文字；awaiting_approval：approve / deny / 文字；其他原因：只接受文字。
+ * - 节点仍持有租约时，回复在下一次续约时送达；否则任务带着回复重新排队（D7）。
+ */
+export const replyTaskRequest = z
+  .strictObject({
+    kind: replyKind,
+    text: z.string().trim().min(1).max(16_384).optional().meta({
+      description: '回复文字；kind=deny 时可作为理由，kind=text 时必填',
+    }),
+  })
+  .refine((r) => r.kind !== 'text' || r.text !== undefined, {
+    message: '文字回复不能为空',
+    path: ['text'],
+  })
+  .meta({ title: 'POST /v1/tasks/:id/reply' })
+export type ReplyTaskRequest = z.infer<typeof replyTaskRequest>
+export const replyTaskData = z
+  .object({
+    task: taskView,
+    reply: replyView,
+    requeued: z.boolean().meta({ description: 'true：没有节点持有该任务，任务已带着回复重新排队' }),
+  })
+  .meta({ title: 'POST /v1/tasks/:id/reply 响应' })
+export type ReplyTaskData = z.infer<typeof replyTaskData>
 
 // ---------------------------------------------------------------------------
 // events（SSE）
@@ -235,6 +292,9 @@ export const leaseGrant = z
     attempt: z.number().int().min(1),
     ttl_s: z.number().int().positive(),
     expires_at: timestamp,
+    resume: taskResume
+      .optional()
+      .meta({ description: '任务带着回复重新排队时，本次执行要带上的回复与会话 id' }),
   })
   .meta({ title: 'Lease grant' })
 export type LeaseGrant = z.infer<typeof leaseGrant>
@@ -252,6 +312,31 @@ export const renewLeaseRequest = z
       .literal('verifying')
       .optional()
       .meta({ description: '开始执行验收命令时带上，中枢写入 task.verifying' }),
+    blocked: z
+      .strictObject({
+        reason: blockedReason,
+        message: blockedMessage,
+        tail: blockedTail,
+        session: z
+          .string()
+          .min(1)
+          .max(512)
+          .optional()
+          .meta({ description: '执行器会话 id；重新排队时随 resume 带给下一次执行' }),
+      })
+      .optional()
+      .meta({
+        description:
+          'worker 卡住但仍活着（交互式执行器）：中枢写入 task.blocked(lease_held=true)，租约照常续约',
+      }),
+    resumed: z
+      .strictObject({ note: z.string().optional() })
+      .optional()
+      .meta({ description: 'worker 未经回复自行恢复（或即将结束）：中枢写入 task.unblocked' }),
+  })
+  .refine((r) => r.blocked === undefined || r.resumed === undefined, {
+    message: 'blocked 与 resumed 不能同时出现',
+    path: ['resumed'],
   })
   .meta({ title: 'POST /v1/leases/:id/renew' })
 export type RenewLeaseRequest = z.infer<typeof renewLeaseRequest>
@@ -263,6 +348,10 @@ export const renewLeaseData = z
     cancel_requested: z
       .boolean()
       .meta({ description: '为 true 时节点应停止执行器并提交 cancelled' }),
+    reply: deliveredReply.nullable().default(null).meta({
+      description:
+        '任务处于 blocked 时最早一条未送达的回复；节点交给执行器后用 ack-reply 确认，确认前每次续约都会返回它',
+    }),
   })
   .meta({ title: 'POST /v1/leases/:id/renew 响应' })
 export type RenewLeaseData = z.infer<typeof renewLeaseData>
@@ -276,13 +365,19 @@ export const completeLeaseRequest = z
       ...token,
       outcome: z.literal('blocked'),
       blocked_reason: blockedReason,
-      message: z.string().min(1),
-      tail: z.array(z.string()).max(200).optional(),
+      message: blockedMessage,
+      tail: blockedTail,
+      session: z
+        .string()
+        .min(1)
+        .max(512)
+        .optional()
+        .meta({ description: '执行器会话 id，回复后下一次执行据此恢复' }),
     }),
     z.strictObject({
       ...token,
       outcome: z.literal('cancelled'),
-      message: z.string().optional(),
+      message: z.string().max(PROTOCOL_MESSAGE_MAX).optional(),
     }),
   ])
   .meta({
@@ -295,6 +390,25 @@ export const completeLeaseData = z
   .object({ task: taskView })
   .meta({ title: 'POST /v1/leases/:id/complete 响应' })
 export type CompleteLeaseData = z.infer<typeof completeLeaseData>
+
+/**
+ * `POST /v1/leases/:id/ack-reply`：节点报告回复的送达结果（node-protocol "续约携带待送达的回复"）。
+ * - delivered：中枢在同一事务中写入 `task.unblocked`（带 reply_id），回复标记为已送达；
+ * - not_running：worker 已不在运行，中枢写入 `task.requeued_with_reply`，任务带着回复重新排队。
+ * 对已确认过的回复重复确认是幂等的。
+ */
+export const ackReplyRequest = z
+  .strictObject({
+    lease_token: z.string().min(16),
+    reply_id: replyId,
+    outcome: z.enum(['delivered', 'not_running']).default('delivered'),
+  })
+  .meta({ title: 'POST /v1/leases/:id/ack-reply' })
+export type AckReplyRequest = z.infer<typeof ackReplyRequest>
+export const ackReplyData = z
+  .object({ task: taskView })
+  .meta({ title: 'POST /v1/leases/:id/ack-reply 响应' })
+export type AckReplyData = z.infer<typeof ackReplyData>
 
 // ---------------------------------------------------------------------------
 // 端点清单（导出 JSON Schema 与文档用）
@@ -337,6 +451,13 @@ export const ENDPOINTS = {
     request: cancelTaskRequest,
     response: cancelTaskData,
   },
+  'tasks-reply': {
+    method: 'POST',
+    path: '/v1/tasks/:id/reply',
+    auth: true,
+    request: replyTaskRequest,
+    response: replyTaskData,
+  },
   events: {
     method: 'GET',
     path: '/v1/events',
@@ -373,6 +494,13 @@ export const ENDPOINTS = {
     auth: true,
     request: completeLeaseRequest,
     response: completeLeaseData,
+  },
+  'leases-ack-reply': {
+    method: 'POST',
+    path: '/v1/leases/:id/ack-reply',
+    auth: true,
+    request: ackReplyRequest,
+    response: ackReplyData,
   },
 } as const satisfies Record<string, EndpointDef>
 export type EndpointName = keyof typeof ENDPOINTS

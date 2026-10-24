@@ -209,7 +209,9 @@ const ALLOWED: Record<TaskStatus | 'none', DraftKey[]> = {
     'task.cancelled',
     'task.lease_expired',
   ],
-  blocked: ['task.failed', 'task.unblocked', 'task.requeued:manual', 'task.cancelled'],
+  // blocked 且租约已释放（lease_held=false）：不能 unblocked（D7a，应重新排队）。
+  // blocked → blocked（lease_held=false）表示本轮结束，例如卡住期间崩溃、节点掉线。
+  blocked: ['task.failed', 'task.blocked', 'task.requeued:manual', 'task.cancelled'],
   done: [],
   failed: [],
   cancelled: [],
@@ -245,6 +247,72 @@ function reach(store: LedgerStore, status: TaskStatus | 'none') {
   for (const k of path[status]) must(store.append(d[k], sys))
   expect(store.getTask('t')?.status).toBe(status)
 }
+
+describe('状态机：blocked 且仍持有租约（lease_held，D7a）', () => {
+  const HELD: DraftKey[] = [
+    'task.failed',
+    'task.blocked',
+    'task.unblocked',
+    'task.requeued:manual',
+    'task.cancelled',
+    'task.cancel_requested',
+    'task.lease_expired',
+  ]
+  const keys = Object.keys(drafts('t')).filter((k) => k !== 'lease.granted') as DraftKey[]
+  for (const key of keys) {
+    const allowed = HELD.includes(key)
+    test(`blocked(lease_held) + ${key} → ${allowed ? '接受' : '拒绝'}`, async () => {
+      const { store } = await ledger()
+      create(store, 't')
+      startTask(store, 't')
+      const d = drafts('t')
+      must(
+        store.append(
+          { ...d['task.blocked'], payload: { ...d['task.blocked'].payload, lease_held: true } },
+          sys,
+        ),
+      )
+      expect(store.getTask('t')?.blocked?.lease_held).toBe(true)
+      expect(store.activeLease('t')).not.toBeNull()
+      const before = store.seq()
+      const r = store.append(drafts('t', { attempt: key === 'task.started' ? 2 : 1 })[key], sys)
+      expect(r.ok).toBe(allowed)
+      if (!allowed) expect(store.seq()).toBe(before)
+    })
+  }
+
+  test('lease_held=true 要求活动租约', async () => {
+    const { store } = await ledger()
+    create(store, 't')
+    startTask(store, 't')
+    const d = drafts('t')
+    must(store.append(d['task.blocked'], sys))
+    must(store.append(d['task.requeued:manual'], sys))
+    const r = store.append(
+      { ...d['task.blocked'], payload: { ...d['task.blocked'].payload, lease_held: true } },
+      sys,
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  test('lease_held 的 blocked 租约过期后不再 lease_held', async () => {
+    const { store } = await ledger()
+    create(store, 't')
+    startTask(store, 't')
+    const d = drafts('t')
+    must(
+      store.append(
+        { ...d['task.blocked'], payload: { ...d['task.blocked'].payload, lease_held: true } },
+        sys,
+      ),
+    )
+    must(store.append(d['task.lease_expired'], sys))
+    expect(store.getTask('t')).toMatchObject({ status: 'blocked', lease: null })
+    expect(store.getTask('t')?.blocked?.lease_held).toBe(false)
+    const r = store.append(d['task.unblocked'], sys)
+    expect(r.ok ? 'ok' : r.error.code).toBe('invalid_transition')
+  })
+})
 
 describe('状态机：合法与非法转换', () => {
   const keys = Object.keys(drafts('t')).filter((k) => k !== 'lease.granted') as DraftKey[]

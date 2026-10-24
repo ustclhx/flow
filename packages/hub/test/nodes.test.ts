@@ -229,6 +229,7 @@ describe('续约与提交', () => {
       lease_id: lease.lease_id,
       expires_at: new Date(ctx.clock.now() + TTL * 1000).toISOString(),
       cancel_requested: false,
+      reply: null,
     })
     expect(ctx.ledger.taskActivity(id).map((a) => a.text)).toEqual(['hello'])
     expect(ctx.ledger.getNode('n1')?.last_seen_at).toBe(at)
@@ -310,6 +311,7 @@ describe('续约与提交', () => {
       reason: 'question',
       message: '要用哪个分支？',
       tail: ['line'],
+      lease_held: false,
     })
     expect(ctx.ledger.activeLease(id)).toBeNull()
   })

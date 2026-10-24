@@ -8,7 +8,7 @@ import {
   kbProposeOp,
 } from './proposals.ts'
 import { kbGetOp, kbQueryOp, kbSearchOp } from './search.ts'
-import { taskCancelOp, taskCreateOp, taskListOp, taskShowOp } from './tasks.ts'
+import { taskCancelOp, taskCreateOp, taskListOp, taskReplyOp, taskShowOp } from './tasks.ts'
 import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './workspace.ts'
 
 export * from './journal.ts'
@@ -27,6 +27,7 @@ export const operations = [
   taskListOp,
   taskShowOp,
   taskCancelOp,
+  taskReplyOp,
   kbJournalOp,
   captureOp,
   kbSearchOp,

@@ -26,6 +26,8 @@ const SAMPLE_INPUTS: Record<string, Json> = {
     role: 'dev',
     executor: 'fake',
   },
+  // text / approve / deny 三选一，schema 采样器无法推断。
+  task_reply: { id: 't-parity', text: '好的' },
   kb_journal: { text: '一致性测试日志', workspace: 'ws/product-res' },
   // content 与 file 二选一，schema 采样器无法推断。
   kb_propose: {

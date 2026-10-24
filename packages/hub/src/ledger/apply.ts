@@ -12,14 +12,31 @@ import type { Database, LedgerEvent, Statement, TaskStatus } from '@flow/core'
  */
 export type Applier = (event: LedgerEvent) => void
 
-/** 结束租约的事件：任务离开 running / verifying 时，当前租约随之释放。 */
+/**
+ * 结束租约的事件：任务离开 running / verifying 时，当前租约随之释放。
+ * 例外：`task.blocked` 带 `lease_held: true` 时（交互式执行器的 worker 还活着，D7a）不释放。
+ */
 const RELEASING: ReadonlySet<LedgerEvent['type']> = new Set([
   'task.done',
   'task.failed',
   'task.blocked',
   'task.requeued',
+  'task.requeued_with_reply',
   'task.cancelled',
 ])
+
+/** 任务离开 blocked 的事件：尚未送达的回复不再有人等待，标记为 dropped。 */
+const DROPPING_REPLIES: ReadonlySet<LedgerEvent['type']> = new Set([
+  'task.done',
+  'task.failed',
+  'task.unblocked',
+  'task.requeued',
+  'task.requeued_with_reply',
+  'task.cancelled',
+])
+
+const releases = (e: LedgerEvent) =>
+  RELEASING.has(e.type) && !(e.type === 'task.blocked' && e.payload.lease_held === true)
 
 export function createApplier(db: Database): Applier {
   const stmt = (() => {
@@ -55,8 +72,20 @@ export function createApplier(db: Database): Applier {
     ).run(e.ts, e.task_id ?? null)
   }
 
+  /** 先处理事件本身指向的回复，再把其余待送达回复标记为 dropped。 */
+  const dropPendingReplies = (e: LedgerEvent) => {
+    stmt(`UPDATE replies SET state = 'dropped' WHERE task_id = ? AND state = 'pending'`).run(
+      e.task_id ?? null,
+    )
+  }
+
   return (e) => {
-    if (RELEASING.has(e.type)) releaseLease(e)
+    if (releases(e)) releaseLease(e)
+    applyEvent(e)
+    if (DROPPING_REPLIES.has(e.type)) dropPendingReplies(e)
+  }
+
+  function applyEvent(e: LedgerEvent) {
     switch (e.type) {
       case 'task.created': {
         const c = e.payload.contract
@@ -82,7 +111,8 @@ export function createApplier(db: Database): Applier {
         setStatus(
           e,
           'running',
-          ', attempt = ?, started_at = ?, blocked_json = NULL',
+          // resume 只给紧接着的这一次执行，开始执行即消费（重建时同样在此清空）。
+          ', attempt = ?, started_at = ?, blocked_json = NULL, resume_json = NULL',
           e.payload.attempt,
           e.ts,
         )
@@ -124,13 +154,56 @@ export function createApplier(db: Database): Applier {
           reason: p.reason,
           message: p.message,
           ...(p.tail ? { tail: p.tail } : {}),
+          ...(p.session ? { session: p.session } : {}),
+          ...(p.prior_reason ? { prior_reason: p.prior_reason } : {}),
         }
         setStatus(e, 'blocked', ', blocked_json = ?', JSON.stringify(blocked))
         return
       }
       case 'task.unblocked':
+        if (e.payload.reply_id !== undefined) {
+          stmt(`UPDATE replies SET state = 'delivered', delivered_at = ? WHERE id = ?`).run(
+            e.ts,
+            e.payload.reply_id,
+          )
+        }
         setStatus(e, 'running', ', blocked_json = NULL')
         return
+      case 'task.replied':
+        stmt(
+          `INSERT INTO replies (id, task_id, kind, text, by, created_at, created_seq, state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        ).run(
+          e.payload.reply_id,
+          e.task_id ?? null,
+          e.payload.kind,
+          e.payload.text ?? null,
+          e.actor,
+          e.ts,
+          e.seq,
+        )
+        touchTask(e, '')
+        return
+      case 'task.requeued_with_reply': {
+        const reply = stmt('SELECT kind, text, by FROM replies WHERE id = ?').get(
+          e.payload.reply_id,
+        ) as { kind: string; text: string | null; by: string } | undefined
+        stmt(`UPDATE replies SET state = 'requeued', delivered_at = ? WHERE id = ?`).run(
+          e.ts,
+          e.payload.reply_id,
+        )
+        const resume = {
+          reply: {
+            reply_id: e.payload.reply_id,
+            kind: reply?.kind ?? 'text',
+            ...(reply?.text != null ? { text: reply.text } : {}),
+            by: reply?.by ?? 'unknown',
+          },
+          ...(e.payload.session ? { session: e.payload.session } : {}),
+        }
+        setStatus(e, 'queued', ', blocked_json = NULL, resume_json = ?', JSON.stringify(resume))
+        return
+      }
       case 'task.requeued':
         setStatus(e, 'queued', ', blocked_json = NULL')
         return

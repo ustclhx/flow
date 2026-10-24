@@ -1,0 +1,27 @@
+{
+  "$id": "https://flow.local/schemas/protocol/tasks-reply.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "text",
+        "approve",
+        "deny"
+      ],
+      "description": "text 文字回复；approve 批准；deny 拒绝（可以附带理由）"
+    },
+    "text": {
+      "description": "回复文字；kind=deny 时可作为理由，kind=text 时必填",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384
+    }
+  },
+  "required": [
+    "kind"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/tasks/:id/reply"
+}

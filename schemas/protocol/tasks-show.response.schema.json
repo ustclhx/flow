@@ -118,6 +118,12 @@
                   "exclusiveMinimum": 0,
                   "maximum": 9007199254740991
                 },
+                "no_progress_minutes": {
+                  "description": "无进展阈值（分钟）：执行器这么久没有任何新活动即上报 blocked(no_progress)；缺省取角色设置，再缺省为 15",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10080
+                },
                 "retry": {
                   "description": "重试策略；缺省为不重试（执行器可能已有副作用）",
                   "type": "object",
@@ -194,6 +200,392 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "script": {
+                          "description": "在 activity / delay_ms 之前依次执行的脚本步骤",
+                          "maxItems": 1000,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "output"
+                                  },
+                                  "text": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "text"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "wait"
+                                  },
+                                  "ms": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 86400000
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "ms"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "idle"
+                                  },
+                                  "hint": {
+                                    "description": "随 idle 信号附带的结构化信息，交给 classify",
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": [
+                                  "do"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "await_reply"
+                                  }
+                                },
+                                "required": [
+                                  "do"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "resumed"
+                                  }
+                                },
+                                "required": [
+                                  "do"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "exit"
+                                  },
+                                  "code": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "退出码；被信号终止时为 null"
+                                  },
+                                  "signal": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "code"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "hang"
+                                  },
+                                  "ignore_cancel": {
+                                    "default": false,
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "ignore_cancel"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ],
+                            "title": "Fake executor step"
+                          }
+                        },
+                        "session": {
+                          "description": "以 blocked 结束时上报的会话 id（模拟无头执行器的 resume）",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deliver_failures": {
+                          "description": "deliver 前 N 次抛出异常（模拟临时送达失败）",
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
+                        "deliver_hangs": {
+                          "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
+                        "deliver_delay_ms": {
+                          "description": "deliver 耗时（毫秒），模拟缓慢的送达",
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 86400000
+                        },
+                        "resume": {
+                          "description": "任务带着回复重新排队后，下一次执行改按这里的指令",
+                          "type": "object",
+                          "properties": {
+                            "outcome": {
+                              "default": "done",
+                              "description": "模拟的结束方式",
+                              "type": "string",
+                              "enum": [
+                                "done",
+                                "failed",
+                                "blocked"
+                              ]
+                            },
+                            "delay_ms": {
+                              "default": 0,
+                              "description": "结束前等待的毫秒数，用于模拟长时间运行",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 86400000
+                            },
+                            "blocked_reason": {
+                              "description": "outcome=blocked 时必填的卡住原因",
+                              "type": "string",
+                              "enum": [
+                                "awaiting_approval",
+                                "question",
+                                "no_progress",
+                                "crashed",
+                                "node_lost",
+                                "other"
+                              ]
+                            },
+                            "message": {
+                              "description": "卡住或失败时的说明；done 时作为结果摘要",
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "activity": {
+                              "default": [],
+                              "description": "执行期间依次上报的输出片段（kind=output）",
+                              "maxItems": 1000,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "script": {
+                              "description": "在 activity / delay_ms 之前依次执行的脚本步骤",
+                              "maxItems": 1000,
+                              "type": "array",
+                              "items": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "output"
+                                      },
+                                      "text": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "text"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "wait"
+                                      },
+                                      "ms": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 86400000
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "ms"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "idle"
+                                      },
+                                      "hint": {
+                                        "description": "随 idle 信号附带的结构化信息，交给 classify",
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {}
+                                      }
+                                    },
+                                    "required": [
+                                      "do"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "await_reply"
+                                      }
+                                    },
+                                    "required": [
+                                      "do"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "resumed"
+                                      }
+                                    },
+                                    "required": [
+                                      "do"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "exit"
+                                      },
+                                      "code": {
+                                        "anyOf": [
+                                          {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ],
+                                        "description": "退出码；被信号终止时为 null"
+                                      },
+                                      "signal": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "code"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "hang"
+                                      },
+                                      "ignore_cancel": {
+                                        "default": false,
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "ignore_cancel"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ],
+                                "title": "Fake executor step"
+                              }
+                            },
+                            "session": {
+                              "description": "以 blocked 结束时上报的会话 id（模拟无头执行器的 resume）",
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "deliver_failures": {
+                              "description": "deliver 前 N 次抛出异常（模拟临时送达失败）",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "deliver_hangs": {
+                              "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "deliver_delay_ms": {
+                              "description": "deliver 耗时（毫秒），模拟缓慢的送达",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 86400000
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "delay_ms",
+                            "activity"
+                          ],
+                          "additionalProperties": false,
+                          "title": "Fake executor resume inputs"
                         }
                       },
                       "required": [
@@ -294,11 +686,32 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "session": {
+                      "description": "执行器上报的会话 id（用于恢复）",
+                      "type": "string"
+                    },
+                    "prior_reason": {
+                      "description": "node_lost 之前的卡住原因",
+                      "type": "string",
+                      "enum": [
+                        "awaiting_approval",
+                        "question",
+                        "no_progress",
+                        "crashed",
+                        "node_lost",
+                        "other"
+                      ]
+                    },
+                    "lease_held": {
+                      "type": "boolean",
+                      "description": "true 表示节点仍持有租约、worker 还活着（交互式执行器，D7a）"
                     }
                   },
                   "required": [
                     "reason",
-                    "message"
+                    "message",
+                    "lease_held"
                   ],
                   "additionalProperties": false
                 },
@@ -458,6 +871,11 @@
                       "type": "string",
                       "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
                       "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+                    },
+                    "reason": {
+                      "description": "失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）",
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
                     }
                   },
                   "required": [
@@ -639,6 +1057,12 @@
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "no_progress_minutes": {
+                            "description": "无进展阈值（分钟）：执行器这么久没有任何新活动即上报 blocked(no_progress)；缺省取角色设置，再缺省为 15",
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 10080
+                          },
                           "retry": {
                             "description": "重试策略；缺省为不重试（执行器可能已有副作用）",
                             "type": "object",
@@ -715,6 +1139,392 @@
                                     "items": {
                                       "type": "string"
                                     }
+                                  },
+                                  "script": {
+                                    "description": "在 activity / delay_ms 之前依次执行的脚本步骤",
+                                    "maxItems": 1000,
+                                    "type": "array",
+                                    "items": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "do": {
+                                              "type": "string",
+                                              "const": "output"
+                                            },
+                                            "text": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "do",
+                                            "text"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "do": {
+                                              "type": "string",
+                                              "const": "wait"
+                                            },
+                                            "ms": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 86400000
+                                            }
+                                          },
+                                          "required": [
+                                            "do",
+                                            "ms"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "do": {
+                                              "type": "string",
+                                              "const": "idle"
+                                            },
+                                            "hint": {
+                                              "description": "随 idle 信号附带的结构化信息，交给 classify",
+                                              "type": "object",
+                                              "propertyNames": {
+                                                "type": "string"
+                                              },
+                                              "additionalProperties": {}
+                                            }
+                                          },
+                                          "required": [
+                                            "do"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "do": {
+                                              "type": "string",
+                                              "const": "await_reply"
+                                            }
+                                          },
+                                          "required": [
+                                            "do"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "do": {
+                                              "type": "string",
+                                              "const": "resumed"
+                                            }
+                                          },
+                                          "required": [
+                                            "do"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "do": {
+                                              "type": "string",
+                                              "const": "exit"
+                                            },
+                                            "code": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": -9007199254740991,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "description": "退出码；被信号终止时为 null"
+                                            },
+                                            "signal": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "required": [
+                                            "do",
+                                            "code"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "do": {
+                                              "type": "string",
+                                              "const": "hang"
+                                            },
+                                            "ignore_cancel": {
+                                              "default": false,
+                                              "type": "boolean"
+                                            }
+                                          },
+                                          "required": [
+                                            "do",
+                                            "ignore_cancel"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      ],
+                                      "title": "Fake executor step"
+                                    }
+                                  },
+                                  "session": {
+                                    "description": "以 blocked 结束时上报的会话 id（模拟无头执行器的 resume）",
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "deliver_failures": {
+                                    "description": "deliver 前 N 次抛出异常（模拟临时送达失败）",
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000000
+                                  },
+                                  "deliver_hangs": {
+                                    "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000000
+                                  },
+                                  "deliver_delay_ms": {
+                                    "description": "deliver 耗时（毫秒），模拟缓慢的送达",
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 86400000
+                                  },
+                                  "resume": {
+                                    "description": "任务带着回复重新排队后，下一次执行改按这里的指令",
+                                    "type": "object",
+                                    "properties": {
+                                      "outcome": {
+                                        "default": "done",
+                                        "description": "模拟的结束方式",
+                                        "type": "string",
+                                        "enum": [
+                                          "done",
+                                          "failed",
+                                          "blocked"
+                                        ]
+                                      },
+                                      "delay_ms": {
+                                        "default": 0,
+                                        "description": "结束前等待的毫秒数，用于模拟长时间运行",
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 86400000
+                                      },
+                                      "blocked_reason": {
+                                        "description": "outcome=blocked 时必填的卡住原因",
+                                        "type": "string",
+                                        "enum": [
+                                          "awaiting_approval",
+                                          "question",
+                                          "no_progress",
+                                          "crashed",
+                                          "node_lost",
+                                          "other"
+                                        ]
+                                      },
+                                      "message": {
+                                        "description": "卡住或失败时的说明；done 时作为结果摘要",
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "activity": {
+                                        "default": [],
+                                        "description": "执行期间依次上报的输出片段（kind=output）",
+                                        "maxItems": 1000,
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "script": {
+                                        "description": "在 activity / delay_ms 之前依次执行的脚本步骤",
+                                        "maxItems": 1000,
+                                        "type": "array",
+                                        "items": {
+                                          "oneOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "do": {
+                                                  "type": "string",
+                                                  "const": "output"
+                                                },
+                                                "text": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "do",
+                                                "text"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "do": {
+                                                  "type": "string",
+                                                  "const": "wait"
+                                                },
+                                                "ms": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 86400000
+                                                }
+                                              },
+                                              "required": [
+                                                "do",
+                                                "ms"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "do": {
+                                                  "type": "string",
+                                                  "const": "idle"
+                                                },
+                                                "hint": {
+                                                  "description": "随 idle 信号附带的结构化信息，交给 classify",
+                                                  "type": "object",
+                                                  "propertyNames": {
+                                                    "type": "string"
+                                                  },
+                                                  "additionalProperties": {}
+                                                }
+                                              },
+                                              "required": [
+                                                "do"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "do": {
+                                                  "type": "string",
+                                                  "const": "await_reply"
+                                                }
+                                              },
+                                              "required": [
+                                                "do"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "do": {
+                                                  "type": "string",
+                                                  "const": "resumed"
+                                                }
+                                              },
+                                              "required": [
+                                                "do"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "do": {
+                                                  "type": "string",
+                                                  "const": "exit"
+                                                },
+                                                "code": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "integer",
+                                                      "minimum": -9007199254740991,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ],
+                                                  "description": "退出码；被信号终止时为 null"
+                                                },
+                                                "signal": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "required": [
+                                                "do",
+                                                "code"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "do": {
+                                                  "type": "string",
+                                                  "const": "hang"
+                                                },
+                                                "ignore_cancel": {
+                                                  "default": false,
+                                                  "type": "boolean"
+                                                }
+                                              },
+                                              "required": [
+                                                "do",
+                                                "ignore_cancel"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          ],
+                                          "title": "Fake executor step"
+                                        }
+                                      },
+                                      "session": {
+                                        "description": "以 blocked 结束时上报的会话 id（模拟无头执行器的 resume）",
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "deliver_failures": {
+                                        "description": "deliver 前 N 次抛出异常（模拟临时送达失败）",
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000000
+                                      },
+                                      "deliver_hangs": {
+                                        "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000000
+                                      },
+                                      "deliver_delay_ms": {
+                                        "description": "deliver 耗时（毫秒），模拟缓慢的送达",
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 86400000
+                                      }
+                                    },
+                                    "required": [
+                                      "outcome",
+                                      "delay_ms",
+                                      "activity"
+                                    ],
+                                    "additionalProperties": false,
+                                    "title": "Fake executor resume inputs"
                                   }
                                 },
                                 "required": [
@@ -1045,6 +1855,11 @@
                             "type": "string",
                             "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
                             "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+                          },
+                          "reason": {
+                            "description": "失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）",
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
                           }
                         },
                         "required": [
@@ -1228,6 +2043,11 @@
                             "type": "string",
                             "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
                             "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+                          },
+                          "reason": {
+                            "description": "失败原因的机器可读码，例如 timeout（超过 timeout_s 被停止）",
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
                           }
                         },
                         "required": [
@@ -1326,11 +2146,35 @@
                         "type": "string",
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
                         "description": "节点 id，节点首次启动时生成并保存在 state/node-id"
+                      },
+                      "lease_held": {
+                        "default": false,
+                        "description": "true：交互式执行器的 worker 还活着，节点继续持有并续约租约（D7a）；false：这一轮执行已结束，租约随之释放",
+                        "type": "boolean"
+                      },
+                      "session": {
+                        "description": "执行器的会话 id；带回复重新排队时附到下一次执行（D6）",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512
+                      },
+                      "prior_reason": {
+                        "description": "node_lost 时节点掉线之前的卡住原因，例如 awaiting_approval（仍可 approve / deny）",
+                        "type": "string",
+                        "enum": [
+                          "awaiting_approval",
+                          "question",
+                          "no_progress",
+                          "crashed",
+                          "node_lost",
+                          "other"
+                        ]
                       }
                     },
                     "required": [
                       "reason",
-                      "message"
+                      "message",
+                      "lease_held"
                     ],
                     "additionalProperties": false
                   }
@@ -1387,6 +2231,20 @@
                       "note": {
                         "description": "解除卡住的说明，例如用户的答复摘要",
                         "type": "string"
+                      },
+                      "reply_id": {
+                        "description": "因送达这条回复而解除卡住（ack-reply）；没有时为执行器自行恢复",
+                        "type": "string",
+                        "pattern": "^r-[A-Za-z0-9_.-]{1,64}$"
+                      },
+                      "dropped_reply_ids": {
+                        "description": "worker 自行恢复时尚未送达、因此被丢弃的回复（供收件箱通知回复者）",
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
+                          "description": "回复 id，由中枢在收到回复时分配"
+                        }
                       }
                     },
                     "additionalProperties": false
@@ -1403,6 +2261,150 @@
                 ],
                 "additionalProperties": false,
                 "title": "task.unblocked"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991,
+                    "description": "账本序号，单调递增"
+                  },
+                  "ts": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "task.replied"
+                  },
+                  "workspace": {
+                    "type": "string",
+                    "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                    "description": "workspace 标识，形如 ws/<id>"
+                  },
+                  "task_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                    "description": "任务 id，由中枢在创建时分配"
+                  },
+                  "actor": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                    "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "properties": {
+                      "reply_id": {
+                        "type": "string",
+                        "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
+                        "description": "回复 id，由中枢在收到回复时分配"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "text",
+                          "approve",
+                          "deny"
+                        ],
+                        "description": "text 文字回复；approve 批准；deny 拒绝（可以附带理由）"
+                      },
+                      "text": {
+                        "description": "回复文字或拒绝理由",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16384
+                      }
+                    },
+                    "required": [
+                      "reply_id",
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "seq",
+                  "ts",
+                  "type",
+                  "workspace",
+                  "task_id",
+                  "actor",
+                  "payload"
+                ],
+                "additionalProperties": false,
+                "title": "task.replied"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991,
+                    "description": "账本序号，单调递增"
+                  },
+                  "ts": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "task.requeued_with_reply"
+                  },
+                  "workspace": {
+                    "type": "string",
+                    "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                    "description": "workspace 标识，形如 ws/<id>"
+                  },
+                  "task_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                    "description": "任务 id，由中枢在创建时分配"
+                  },
+                  "actor": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                    "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "properties": {
+                      "reply_id": {
+                        "type": "string",
+                        "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
+                        "description": "回复 id，由中枢在收到回复时分配"
+                      },
+                      "session": {
+                        "description": "上一轮卡住时上报的会话 id，下一次执行据此恢复",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512
+                      }
+                    },
+                    "required": [
+                      "reply_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "seq",
+                  "ts",
+                  "type",
+                  "workspace",
+                  "task_id",
+                  "actor",
+                  "payload"
+                ],
+                "additionalProperties": false,
+                "title": "task.requeued_with_reply"
               },
               {
                 "type": "object",
@@ -2242,11 +3244,91 @@
             "description": "账本事件；按 type 区分载荷"
           },
           "description": "该任务的全部事件"
+        },
+        "replies": {
+          "default": [],
+          "description": "该任务收到的全部回复",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
+                "description": "回复 id，由中枢在收到回复时分配"
+              },
+              "task_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                "description": "任务 id，由中枢在创建时分配"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "approve",
+                  "deny"
+                ],
+                "description": "text 文字回复；approve 批准；deny 拒绝（可以附带理由）"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "by": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "delivered",
+                  "requeued",
+                  "dropped"
+                ]
+              },
+              "delivered_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "送达或随重新排队附上的时间"
+              }
+            },
+            "required": [
+              "id",
+              "task_id",
+              "kind",
+              "text",
+              "by",
+              "created_at",
+              "state",
+              "delivered_at"
+            ],
+            "additionalProperties": false,
+            "title": "Task reply view"
+          }
         }
       },
       "required": [
         "task",
-        "events"
+        "events",
+        "replies"
       ],
       "additionalProperties": false,
       "title": "GET /v1/tasks/:id"

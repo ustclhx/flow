@@ -16,19 +16,32 @@ export { type NodeClock, sleep, systemClock } from './clock.ts'
 export {
   ActivityQueue,
   createExecutorRegistry,
+  type DeliverResult,
   type ExecutorContext,
   type ExecutorOutcome,
   type ExecutorPlugin,
   type ExecutorRegistry,
   type ExecutorRun,
+  idleSignal,
+  isIdleSignal,
+  isResumedSignal,
+  resumedSignal,
+  type StuckSnapshot,
+  type StuckVerdict,
 } from './executor.ts'
-export { createFakeExecutor, type FakeExecutorOptions } from './fake.ts'
+export { classifyFake, createFakeExecutor, type FakeExecutorOptions } from './fake.ts'
 export {
+  DELIVER_GIVE_UP_MS,
+  DELIVER_TIMEOUT_MS,
   generateNodeId,
   JUMP_THRESHOLD_MS,
   loadOrCreateNodeId,
   type NodeLogger,
+  type NoProgressResolver,
+  noProgressMs,
   type RunningNode,
+  STUCK_TAIL_LINES,
   type StartNodeOptions,
   startNode,
+  TIMEOUT_GRACE_MS,
 } from './node.ts'

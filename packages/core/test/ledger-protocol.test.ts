@@ -201,12 +201,14 @@ describe('端点清单与 JSON Schema 导出', () => {
       'GET /v1/tasks',
       'GET /v1/tasks/:id',
       'POST /v1/tasks/:id/cancel',
+      'POST /v1/tasks/:id/reply',
       'GET /v1/events',
       'POST /v1/nodes',
       'GET /v1/nodes',
       'POST /v1/leases',
       'POST /v1/leases/:id/renew',
       'POST /v1/leases/:id/complete',
+      'POST /v1/leases/:id/ack-reply',
     ])
     expect(Object.values(ENDPOINTS).filter((d) => !d.auth)).toHaveLength(1)
   })

@@ -1,4 +1,5 @@
 import {
+  ackReplyData,
   acquireLeaseData,
   completeLeaseData,
   ENDPOINTS,
@@ -51,6 +52,12 @@ export function createNodeRoutes({ service }: NodeRoutesDeps): Hono {
     const body = await jsonBody(c, false)
     if (!body.ok) return respond(c, body, completeLeaseData)
     return respond(c, service.complete(c.req.param('id'), body.data), completeLeaseData)
+  })
+
+  app.post(ENDPOINTS['leases-ack-reply'].path, async (c) => {
+    const body = await jsonBody(c, false)
+    if (!body.ok) return respond(c, body, ackReplyData)
+    return respond(c, service.ackReply(c.req.param('id'), body.data), ackReplyData)
   })
 
   app.onError((err, c) => respond(c, fail('failure', 'internal_error', err.message), listNodesData))

@@ -2,10 +2,11 @@ import { z } from 'zod'
 import { HubClient } from '../daemon/client.ts'
 import { renderTable } from '../format/table.ts'
 import { taskId } from '../ledger/common.ts'
-import { cancelTaskRequest, listTasksQuery } from '../ledger/protocol.ts'
+import { cancelTaskRequest, listTasksQuery, type ReplyTaskRequest } from '../ledger/protocol.ts'
 import { type TaskContractInput, type TaskView, taskContract } from '../ledger/task.ts'
 import { fail } from '../result.ts'
 import { loadRoles } from '../roles.ts'
+import { USER_ACTOR } from '../write/policy.ts'
 import { defineOperation, type OpContext } from './operation.ts'
 
 const client = (ctx: OpContext) => new HubClient(ctx)
@@ -83,4 +84,73 @@ export const taskCancelOp = defineOperation({
     return client(ctx).cancelTask(id, body)
   },
   human: ({ task }) => `${task.cancel_requested ? '已请求取消' : '已取消'}：${taskSummary(task)}`,
+})
+
+/**
+ * `task_reply`（task-interaction "回复卡住的任务"）：文字回复、`--approve` 或 `--deny`（可附理由）。
+ * 三者恰好选一种；`--deny` 可以同时给出文字作为理由。回复者即操作者（CLI 为 user，MCP 为其 actor）。
+ */
+export const taskReplyInput = z
+  .strictObject({
+    id: taskId,
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .max(16_384)
+      .optional()
+      .meta({ description: '回复文字；与 deny 同时给出时作为拒绝理由' }),
+    approve: z.boolean().optional().meta({ description: '批准等待中的授权请求' }),
+    deny: z.boolean().optional().meta({ description: '拒绝等待中的授权请求' }),
+  })
+  .superRefine((v, ctx) => {
+    if (v.approve && v.deny) {
+      ctx.addIssue({ code: 'custom', path: ['deny'], message: 'approve 与 deny 只能选一个' })
+    } else if (v.approve && v.text !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['text'], message: '批准时不能附带文字' })
+    } else if (!v.approve && !v.deny && v.text === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['text'],
+        message: '需要回复文字，或者 approve / deny',
+      })
+    }
+  })
+export type TaskReplyInput = z.infer<typeof taskReplyInput>
+
+/** 操作输入 → 协议请求体。 */
+export function replyRequestOf(input: TaskReplyInput): ReplyTaskRequest {
+  if (input.approve) return { kind: 'approve' }
+  if (input.deny) return { kind: 'deny', ...(input.text === undefined ? {} : { text: input.text }) }
+  return { kind: 'text', text: input.text as string }
+}
+
+const userOnly = (actor: string) =>
+  fail(
+    'failure',
+    'user_only',
+    `只有用户本人（actor=user，经 CLI）可以回复卡住的任务，当前为 ${actor}`,
+    {
+      actor,
+    },
+  )
+
+export const taskReplyOp = defineOperation({
+  name: 'task_reply',
+  cli: 'task reply',
+  summary: '回复卡住的任务：文字、--approve 或 --deny（可附理由）',
+  input: taskReplyInput,
+  positional: ['id', 'text'],
+  run: async (input: TaskReplyInput, ctx) => {
+    // 防止 AI 自批：回复与审批只允许人（actor=user，经 CLI）。MCP 的调用方一定是 AI harness，
+    // worker 可能借此批准自己的授权请求，所以一律拒绝。supervisor 代为答复留到变更 ④ 再放开
+    // （届时由策略引擎决定哪些请求可以由 supervisor 答复）。中枢 /v1/tasks/:id/reply 同样校验 actor。
+    if (ctx.via !== 'cli' || ctx.actor !== USER_ACTOR) return userOnly(ctx.actor)
+    return client(ctx).replyTask(input.id, replyRequestOf(input))
+  },
+  human: ({ task, reply, requeued }) =>
+    [
+      `已回复（${reply.kind === 'approve' ? '批准' : reply.kind === 'deny' ? '拒绝' : '文字'}）：${taskSummary(task)}`,
+      requeued ? '没有节点持有该任务，已带着回复重新排队。' : '回复将在节点下一次续约时送达。',
+    ].join('\n'),
 })

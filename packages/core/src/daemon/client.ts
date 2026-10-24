@@ -13,6 +13,7 @@ import {
   type HubStatusData,
   type listTasksQuery,
   okBody,
+  type ReplyTaskRequest,
 } from '../ledger/protocol.ts'
 import type { TaskContractInput } from '../ledger/task.ts'
 import { fail, ok, type Result } from '../result.ts'
@@ -116,6 +117,9 @@ export class HubClient {
   }
   cancelTask(id: string, input: CancelTaskRequest = {}) {
     return this.request('tasks-cancel', input, id)
+  }
+  replyTask(id: string, input: ReplyTaskRequest) {
+    return this.request('tasks-reply', input, id)
   }
   health() {
     return this.request('health')

@@ -8,6 +8,7 @@ import { activity, taskContract, taskResult, taskStatus, taskView } from './task
 export * from './common.ts'
 export * from './events.ts'
 export * from './protocol.ts'
+export * from './redact.ts'
 export * from './task.ts'
 
 type SchemaEntry = { schema: z.ZodType; io: 'input' | 'output' }
