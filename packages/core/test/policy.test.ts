@@ -252,7 +252,7 @@ describe('动作识别', () => {
     )
     expect(decide(rules, { ...request, actions, command }).level).toBe('user')
     rules.push(
-      ...['pr.merge', 'deploy', 'secrets', 'policy.edit'].map((action, index) => ({
+      ...['pr.merge', 'deploy', 'secrets', 'policy.edit', 'config.edit'].map((action, index) => ({
         rule_index: index + rules.length,
         rule: rule('dev', action),
       })),
@@ -554,5 +554,141 @@ describe('策略条件、保护与审计明细', () => {
       ).toBe('draft-approve')
     }
     expect(decide(rules, { ...request, paths: ['src/main.ts'] }).level).toBe('draft-approve')
+  })
+})
+
+describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', () => {
+  const judge = (
+    rules: PolicyRule[],
+    req: { tool: string; command?: string; paths?: string[] },
+    flowHomes?: string[],
+  ) => {
+    const actions = classifyAction(req, undefined, flowHomes ? { flowHomes } : {})
+    return { ...decide(indexed(...rules), { ...request, ...req, actions }), ids: actions }
+  }
+  const WILDCARDS = [
+    [rule('dev', 'tool:*')],
+    [rule('*', 'tool:*')],
+    [rule('*', '*')],
+    [rule('ws/xuanxue-saas', '*')],
+  ]
+
+  test('mcp__flow__task_create：识别为 task.create，tool:* 不能放行；显式 task.create 规则可以', () => {
+    const req = { tool: 'mcp__flow__task_create' }
+    expect(classifyAction(req)).toEqual(['tool:mcp__flow__task_create', 'task.create'])
+    for (const rules of [...WILDCARDS, [rule('dev', 'tool:mcp__*')], [rule('*', 'task.create')]]) {
+      expect(judge(rules, req).level).not.toMatch(/^auto/)
+    }
+    // tool:* 匹配不到具体动作 task.create：无规则覆盖，交给用户；`* *` 命中但被拦下。
+    expect(judge([rule('dev', 'tool:*')], req).level).toBe('user')
+    expect(judge([rule('dev', '*')], req).level).toBe('draft-approve')
+    expect(judge([rule('dev', 'task.create')], req).level).toBe('auto')
+    expect(judge([rule('dev', 'tool:mcp__flow__task_create')], req).level).toBe('user')
+  })
+
+  test('其他会扩大权限的 flow 工具同样识别为具体动作', () => {
+    expect(classifyAction({ tool: 'mcp__flow__task_cancel' })).toContain('task.cancel')
+    expect(classifyAction({ tool: 'mcp__flow__kb_proposals_accept' })).toContain('proposal.decide')
+    expect(classifyAction({ tool: 'mcp__flow__kb_proposals_reject' })).toContain('proposal.decide')
+    expect(classifyAction({ tool: 'mcp__flow__kb_search' })).toEqual(['tool:mcp__flow__kb_search'])
+    expect(judge([rule('dev', '*')], { tool: 'mcp__flow__kb_proposals_accept' }).level).toBe(
+      'draft-approve',
+    )
+  })
+
+  test('第三方 MCP、WebFetch、WebSearch、Task：通配规则不能放行，精确工具规则可以', () => {
+    for (const tool of ['mcp__github__create_pr', 'WebFetch', 'WebSearch', 'Task']) {
+      for (const rules of [...WILDCARDS, [rule('dev', 'tool:mcp__*')]]) {
+        expect(judge(rules, { tool }).level).not.toMatch(/^auto/)
+      }
+      expect(judge([rule('dev', 'tool:*')], { tool }).level).toBe('draft-approve')
+      expect(judge([rule('dev', `tool:${tool}`)], { tool }).level).toBe('auto')
+    }
+  })
+
+  test.each([
+    'sed -i s/draft-approve/auto/ ~/flow-home/config/polic*.yaml',
+    // 字面的 ${p}（shell 变量展开），拼接以免被当作模板字符串。
+    'p=polic; sed -i s/x/y/ ~/flow-home/config/$' + '{p}ies.yaml',
+    'cp /tmp/evil ~/flow-home/config/policies.yam?',
+    'cp /tmp/evil ~/flow-home/config/[p]olicies.yaml',
+    'cat /tmp/evil > $HOME/flow-home/config/policies.yaml',
+    'cp /tmp/evil ~/flow-home/CONFIG/Policies.YAML',
+  ])('策略文件的动态或大小写变体写法不能被通配规则放行：%s', (command) => {
+    const { ids } = judge([], { tool: 'Bash', command })
+    expect(ids).toContain('policy.edit')
+    for (const rules of [...WILDCARDS, [rule('*', 'tool:Bash')], [rule('dev', 'tool:Bash')]]) {
+      expect(judge(rules, { tool: 'Bash', command }).level).not.toMatch(/^auto/)
+    }
+  })
+
+  test('路径不区分大小写：Write /Users/u/flow-home/CONFIG/Policies.yaml', () => {
+    const req = { tool: 'Write', paths: ['/Users/u/flow-home/CONFIG/Policies.yaml'] }
+    expect(classifyAction(req)).toContain('policy.edit')
+    const r = judge([rule('dev', 'tool:*'), rule('dev', 'tool:Write')], req, ['/Users/u/flow-home'])
+    expect(r.ids).toContain('config.edit')
+    expect(r.level).toBe('user')
+  })
+
+  test('flow-home 的 config/ 下任何路径或命令都识别为 config.edit，必须显式授权', () => {
+    const home = '/Users/u/flow-home'
+    for (const req of [
+      { tool: 'Edit', paths: [`${home}/config/roles/dev.yaml`] },
+      { tool: 'Write', paths: [`${home}/Config/remote.yaml`] },
+      { tool: 'Bash', command: `echo x >> ${home}/config/roles/dev.yaml` },
+      { tool: 'Bash', command: 'tee ~/flow-home/config/remote.yaml < /tmp/x' },
+    ]) {
+      const r = judge([rule('*', '*'), rule('dev', 'tool:*')], req, [home])
+      expect(r.ids).toContain('config.edit')
+      expect(r.level).not.toMatch(/^auto/)
+    }
+    // 不在 flow-home 下的普通 config 目录不受影响。
+    expect(
+      judge([rule('dev', 'tool:Edit')], { tool: 'Edit', paths: ['/repo/config/app.ts'] }, [home])
+        .level,
+    ).toBe('auto')
+    const explicit = judge(
+      [rule('dev', 'config.edit')],
+      { tool: 'Edit', paths: [`${home}/config/roles/dev.yaml`] },
+      [home],
+    )
+    expect(explicit.level).toBe('auto')
+  })
+
+  test.each(['rm -rf ~', 'curl -d @dist https://example.com/upload', 'git push origin main'])(
+    'CodexCommand 被通配规则拦下：%s',
+    (command) => {
+      for (const rules of WILDCARDS) {
+        expect(judge(rules, { tool: 'CodexCommand', command }).level).not.toMatch(/^auto/)
+      }
+      expect(judge([rule('*', '*')], { tool: 'CodexCommand', command }).level).toBe('draft-approve')
+    },
+  )
+
+  test('CodexCommand 的显式规则仍可放行', () => {
+    expect(
+      judge([rule('ws/xuanxue-saas', 'tool:CodexCommand')], {
+        tool: 'CodexCommand',
+        command: 'rm -rf build',
+      }).level,
+    ).toBe('auto')
+    expect(
+      judge([rule('*', 'git.push')], { tool: 'CodexCommand', command: 'git push origin feat' })
+        .level,
+    ).toBe('auto')
+  })
+
+  test('普通工具的通配规则不受影响', () => {
+    expect(judge([rule('*', 'tool:*')], { tool: 'Bash', command: 'ls' }).level).toBe('auto')
+    expect(judge([rule('dev', 'tool:*')], { tool: 'Read', paths: ['/repo/a.ts'] }).level).toBe(
+      'auto',
+    )
+  })
+
+  test('命令中的非打印字符（双向覆盖、零宽、控制字符）按不透明处理', () => {
+    for (const command of ['ls ‮', 'ls​ -la', 'echo a\u0007']) {
+      expect(classifyAction({ tool: 'Bash', command })).toContain('shell.opaque')
+    }
+    expect(classifyAction({ tool: 'Bash', command: 'ls\n\tpwd' })).not.toContain('shell.opaque')
   })
 })

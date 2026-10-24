@@ -601,6 +601,7 @@ class LeaseRunner {
           precheck: createPolicyPrecheck({
             client: env.client,
             taskId: grant.task_id,
+            cwd: grant.contract.cwd ?? env.defaultCwd,
             clock: env.clock,
             signal: this.abort.signal,
             ...(env.precheckTimeoutMs === undefined ? {} : { timeoutMs: env.precheckTimeoutMs }),

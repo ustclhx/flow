@@ -15,6 +15,7 @@ import type {
 import {
   BLOCKED_REASONS,
   type BlockedReason,
+  FLOW_MCP_TOOL_PREFIX as CORE_FLOW_MCP_TOOL_PREFIX,
   clipText,
   type DeliveredReply,
   fail,
@@ -89,8 +90,8 @@ export const FLOW_MCP_AUTO_ALLOWED = [
   'task_list',
   'task_show',
 ] as const
-/** SDK 中 flow MCP 工具的全名前缀（服务名 flow）。 */
-export const FLOW_MCP_TOOL_PREFIX = 'mcp__flow__'
+/** SDK 中 flow MCP 工具的全名前缀（服务名 flow），与 core 的动作识别共用。 */
+export const FLOW_MCP_TOOL_PREFIX = CORE_FLOW_MCP_TOOL_PREFIX
 /** 项目约定文件（setting_sources 为 [] 时作为纯文本追加到系统提示词）。 */
 export const PROJECT_INSTRUCTION_FILES = ['CLAUDE.md', 'AGENTS.md'] as const
 const PROJECT_INSTRUCTION_MAX = 16_000

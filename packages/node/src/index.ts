@@ -121,6 +121,7 @@ export {
 export {
   autoApprovedText,
   createPolicyPrecheck,
+  expandPolicyPaths,
   isAutoDecision,
   needsUserText,
   type PolicyPrecheckOptions,
@@ -128,4 +129,5 @@ export {
   type Precheck,
   type PrecheckRequest,
   type PrecheckVerdict,
+  realPolicyPath,
 } from './precheck.ts'

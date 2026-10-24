@@ -1,3 +1,6 @@
+import { realpath } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { type PolicyCheckData, type PolicyDecisionLevel, redactSecrets } from '@flow/core'
 import type { NodeHubClient } from './client.ts'
 import { type NodeClock, systemClock } from './clock.ts'
@@ -55,6 +58,38 @@ export function isAutoDecision(d: PolicyCheckData): d is PolicyCheckData & {
   return decided.every((a) => AUTO_LEVELS.has(a.level))
 }
 
+/**
+ * 解析路径的真实位置（符号链接、`..`、`~`）：相对路径按 cwd 解析；文件不存在时对最近的已存在
+ * 祖先目录做 realpath 再拼回其余部分。解析失败时只保留原路径。
+ */
+export async function realPolicyPath(path: string, cwd: string): Promise<string | undefined> {
+  const expanded = path === '~' || path.startsWith('~/') ? join(homedir(), path.slice(1)) : path
+  let current = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded)
+  const rest: string[] = []
+  for (;;) {
+    try {
+      const real = await realpath(current)
+      return rest.length ? join(real, ...rest.reverse()) : real
+    } catch {
+      const parent = dirname(current)
+      if (parent === current) return undefined
+      rest.push(basename(current))
+      current = parent
+    }
+  }
+}
+
+/** 原路径与解析后的路径都送去判定（去重、保持顺序）。 */
+export async function expandPolicyPaths(paths: readonly string[], cwd: string): Promise<string[]> {
+  const out = new Set<string>()
+  for (const p of paths) {
+    out.add(p)
+    const real = await realPolicyPath(p, cwd)
+    if (real) out.add(real)
+  }
+  return [...out]
+}
+
 export interface PolicyPrecheckOptions {
   client: Pick<NodeHubClient, 'policyCheck'>
   taskId: string
@@ -64,6 +99,8 @@ export interface PolicyPrecheckOptions {
   clock?: NodeClock
   /** 任务被取消时中止预检（结果按需要用户处理）。 */
   signal?: AbortSignal
+  /** 解析相对路径的目录（任务的工作目录），缺省为进程 cwd。 */
+  cwd?: string
 }
 
 /** 构造绑定到一个任务的预检函数。永不抛出：异常同样按需要用户处理。 */
@@ -85,12 +122,17 @@ export function createPolicyPrecheck(o: PolicyPrecheckOptions): Precheck {
     })
     const checked = (async (): Promise<PrecheckVerdict> => {
       try {
+        // 符号链接与大小写变体由中枢的识别处理，节点负责把真实路径一并送去（不信任原路径的字面）。
+        const paths =
+          req.paths === undefined
+            ? undefined
+            : await expandPolicyPaths(req.paths, o.cwd ?? process.cwd())
         const r = await o.client.policyCheck(
           {
             task_id: o.taskId,
             tool: req.tool,
             ...(req.command === undefined ? {} : { command: req.command }),
-            ...(req.paths === undefined ? {} : { paths: req.paths }),
+            ...(paths === undefined ? {} : { paths }),
           },
           { signal: controller.signal, timeoutMs },
         )

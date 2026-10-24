@@ -21,8 +21,47 @@ export const SENSITIVE_ACTIONS = [
   'deploy',
   'secrets',
   'policy.edit',
+  'config.edit',
   'shell.opaque',
 ] as const
+
+/**
+ * flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做决定的操作，额外识别为具体动作。
+ * 只读和写入边界内的操作（见 claude-sdk 的 FLOW_MCP_AUTO_ALLOWED）不在此列。
+ */
+export const FLOW_MCP_TOOL_PREFIX = 'mcp__flow__'
+export const FLOW_TOOL_ACTIONS: Readonly<Record<string, string>> = {
+  task_create: 'task.create',
+  task_cancel: 'task.cancel',
+  task_reply: 'task.reply',
+  kb_proposals_accept: 'proposal.decide',
+  kb_proposals_reject: 'proposal.decide',
+  resource_transfer: 'resource.transfer',
+}
+
+/**
+ * 受保护的动作：只有具体 workspace 或角色 scope 加精确 action（不含通配符）的规则才能自动放行。
+ * 包括识别不确定时的全部敏感动作，以及 flow MCP 中会扩大权限的操作。
+ */
+export const GUARDED_ACTIONS: readonly string[] = [
+  ...SENSITIVE_ACTIONS,
+  ...new Set(Object.values(FLOW_TOOL_ACTIONS)),
+]
+
+/**
+ * 受保护的工具：Codex 越出沙箱的请求、所有 MCP 工具（含第三方）、外发与派生子 agent。
+ * 请求涉及这些工具时，参与判定的每个动作都只有精确 action 的规则才能自动放行，
+ * `*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为 draft-approve。
+ */
+export const GUARDED_TOOLS: readonly string[] = [
+  'tool:CodexCommand',
+  'tool:WebFetch',
+  'tool:WebSearch',
+  'tool:Task',
+  'tool:Agent',
+]
+export const isGuardedTool = (action: string): boolean =>
+  GUARDED_TOOLS.includes(action) || action.startsWith('tool:mcp__')
 
 interface ParsedCommands {
   commands: string[][]
@@ -233,7 +272,7 @@ function nestedScript(words: string[]): { opaque: boolean; script?: string } {
 export const hasCommandPrefix = (words: readonly string[], prefix: readonly string[]): boolean =>
   prefix.length > 0 && prefix.every((word, index) => words[index] === word)
 
-/** 调用方提供的路径先按词法归一；不读取文件，也不解析符号链接。 */
+/** 调用方提供的路径先按词法归一；不读取文件，也不解析符号链接（节点侧负责 realpath）。 */
 export const normalizePolicyPath = (path: string): string =>
   posix.normalize(path.replaceAll('\\', '/'))
 
@@ -243,23 +282,52 @@ export interface ActionRequest {
   paths?: readonly string[]
 }
 
+export interface ClassifyOptions {
+  /** flow-home 的路径（可给多个，例如原路径与 realpath）；其下 `config/` 中的路径识别为 config.edit。 */
+  flowHomes?: readonly string[]
+}
+
+/** 不区分大小写（APFS 默认不区分大小写）。 */
+const POLICY_FILE_RE = /(^|\/)config\/policies\.yaml$/i
+/** glob、变量展开、命令替换：命令实际作用的文件无法静态确定。 */
+const DYNAMIC_RE = /[*?[]|\$[A-Za-z_{(]|`|[<>]\(/
+const CONFIG_HINT_RE = /config|polic/i
+/** 非打印字符（换行、回车、制表符之外的控制字符与格式字符）：显示内容与实际执行可能不一致。 */
+const UNPRINTABLE_RE = /[\p{Cc}\p{Cf}\u2028\u2029]/u
+const unprintable = (text: string) => UNPRINTABLE_RE.test(text.replace(/[\t\n\r]/g, ''))
+
+const lower = (p: string) => normalizePolicyPath(p).replace(/\/+$/, '').toLowerCase()
+
 /** 命令来源由适配器决定；只要提供 command 就识别，兼容 Bash 与 Codex 工具命名。 */
 export function classifyAction(
   request: ActionRequest,
   mappings: readonly CommandActionMapping[] = COMMAND_ACTION_MAPPINGS,
+  opts: ClassifyOptions = {},
 ): string[] {
   const actions = new Set([`tool:${request.tool}`])
-  const pending = [request.command ?? '']
-  const seen = new Set<string>()
+  const flowAction = request.tool.startsWith(FLOW_MCP_TOOL_PREFIX)
+    ? FLOW_TOOL_ACTIONS[request.tool.slice(FLOW_MCP_TOOL_PREFIX.length)]
+    : undefined
+  if (flowAction) actions.add(flowAction)
   const markOpaque = () => {
     for (const action of SENSITIVE_ACTIONS) actions.add(action)
   }
+  const configDirs = (opts.flowHomes ?? []).map((home) => `${lower(home)}/config`)
+  const pending = [request.command ?? '']
+  const seen = new Set<string>()
   // 用队列代替调用栈递归，重复字符串只分析一次。
   for (let index = 0; index < pending.length; index++) {
     const command = pending[index] as string
     if (seen.has(command)) continue
     seen.add(command)
-    if (command.includes('policies.yaml')) actions.add('policy.edit')
+    const folded = command.toLowerCase()
+    if (folded.includes('policies.yaml')) actions.add('policy.edit')
+    if (folded.includes('flow-home/config') || configDirs.some((d) => folded.includes(d))) {
+      actions.add('config.edit')
+    }
+    // 动态写法可能拼出策略或配置文件（polic*.yaml、${p}ies.yaml）：按不透明处理。
+    if (DYNAMIC_RE.test(command) && CONFIG_HINT_RE.test(command)) markOpaque()
+    if (unprintable(command)) markOpaque()
     const parsed = splitCommands(command)
     if (parsed.opaque) markOpaque()
     for (const input of parsed.commands) {
@@ -273,10 +341,13 @@ export function classifyAction(
       }
     }
   }
-  if (
-    request.paths?.some((path) => /(^|\/)config\/policies\.yaml$/.test(normalizePolicyPath(path)))
-  ) {
-    actions.add('policy.edit')
+  for (const path of request.paths ?? []) {
+    const p = lower(path)
+    if (POLICY_FILE_RE.test(p)) actions.add('policy.edit')
+    if (configDirs.some((d) => p === d || p.startsWith(`${d}/`))) actions.add('config.edit')
+    // 路径本身带 glob 或变量且指向配置时同样无法确定目标。
+    if (DYNAMIC_RE.test(path) && CONFIG_HINT_RE.test(path)) markOpaque()
+    if (unprintable(path)) markOpaque()
   }
   return [...actions]
 }

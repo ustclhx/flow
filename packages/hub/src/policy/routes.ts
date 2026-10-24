@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs'
 import {
   classifyAction,
   decide,
@@ -24,6 +25,14 @@ export function createPolicyRoutes(deps: {
   leaseHolders: HubAuthOptions['leaseHolders']
 }): Hono {
   const app = new Hono()
+  // flow-home 的原路径与 realpath：其下 config/ 中的路径识别为 config.edit。
+  const flowHomes = (() => {
+    try {
+      return [...new Set([deps.home, realpathSync(deps.home)])]
+    } catch {
+      return [deps.home]
+    }
+  })()
   app.post(ENDPOINTS['policy-check'].path, async (c) => {
     const body = await jsonBody(c, false)
     if (!body.ok) return respond(c, body, policyCheckData)
@@ -63,7 +72,7 @@ export function createPolicyRoutes(deps: {
     // 异步读取配置期间租约可能结束或过期；入账前重新校验，此后到 append 之间没有 await。
     const expired = checkTaskScope(c, task_id, deps.leaseHolders)
     if (expired) return expired
-    const actions = classifyAction(request)
+    const actions = classifyAction(request, undefined, { flowHomes })
     const decision = decide(loaded.data.rules, {
       scope: { workspace: task.contract.workspace, role: task.contract.role },
       actions,

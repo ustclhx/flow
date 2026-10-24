@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Options, PermissionResult, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { ok, type PolicyCheckData, type Result, type Role, type TaskView } from '@flow/core'
@@ -15,6 +15,7 @@ import {
   isAutoDecision,
   PRECHECK_TIMEOUT_MS,
   type PrecheckVerdict,
+  realPolicyPath,
 } from '../src/index.ts'
 import { type Bench, bench, type Intercept, ManualClock } from './harness.ts'
 
@@ -223,6 +224,11 @@ const approvalTask = (b: Bench, step: { tool: string; command?: string; paths?: 
 
 const texts = (b: Bench, id: string) => b.ledger.taskActivity(id).map((a) => a.text ?? '')
 const decided = (b: Bench, id: string) => b.events(id).filter((e) => e.type === 'policy.decided')
+const firstDecided = (b: Bench, id: string) => {
+  const e = decided(b, id)[0]
+  if (!e) throw new Error(`任务 ${id} 没有 policy.decided`)
+  return e
+}
 
 describe('端到端（fake 执行器 + 真实 policy/check）', () => {
   test('auto：本地放行，任务不进入 blocked；中枢以 policy 身份记录 policy.decided', async () => {
@@ -510,5 +516,94 @@ describe('端到端（claude-sdk 模拟 SDK + 真实 policy/check）', () => {
     await b.api('POST', `/v1/tasks/${id}/reply`, { kind: 'approve' })
     await settle(b, id, (t) => t.status === 'done', 'done')
     expect(permissions[0]).toMatchObject({ behavior: 'allow' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PR #29 审查的对抗用例：受保护的工具、配置写入、符号链接
+// ---------------------------------------------------------------------------
+
+describe('对抗用例（真实 policy/check）', () => {
+  test('mcp__flow__task_create 在 `dev tool:* auto` 下不放行；显式 `dev task.create auto` 放行', async () => {
+    const blocked = await sdkBench(
+      [{ scope: 'dev', action: 'tool:*', level: 'auto' }],
+      [['mcp__flow__task_create', { goal: '提权', role: 'admin' }]],
+    )
+    const t = await settle(blocked.b, blocked.id, (t) => t.status === 'blocked', 'blocked')
+    expect(t.blocked?.reason).toBe('awaiting_approval')
+    expect(blocked.permissions).toEqual([])
+    expect(decided(blocked.b, blocked.id)[0]?.payload).toMatchObject({
+      request: {
+        tool: 'mcp__flow__task_create',
+        actions: ['tool:mcp__flow__task_create', 'task.create'],
+      },
+    })
+    await current?.close()
+    current = undefined
+
+    const allowed = await sdkBench(
+      [{ scope: 'dev', action: 'task.create', level: 'auto' }],
+      [['mcp__flow__task_create', { goal: '子任务', role: 'dev' }]],
+    )
+    await settle(allowed.b, allowed.id, (t) => t.status === 'done', 'done')
+    expect(allowed.b.types(allowed.id)).not.toContain('task.blocked')
+    expect(allowed.permissions[0]).toMatchObject({ behavior: 'allow' })
+  })
+
+  test('第三方 MCP 在 `* tool:* auto` 下不放行', async () => {
+    const { b, id, permissions } = await sdkBench(
+      [{ scope: '*', action: 'tool:*', level: 'auto' }],
+      [['mcp__github__merge_pull_request', { pull_number: 42 }]],
+    )
+    await settle(b, id, (t) => t.status === 'blocked', 'blocked')
+    expect(permissions).toEqual([])
+  })
+
+  for (const [name, rel] of [
+    ['大小写变体的策略文件', ['CONFIG', 'Policies.yaml']],
+    ['flow-home 下的角色文件', ['config', 'roles', 'dev.yaml']],
+  ] as const) {
+    test(`Write ${name}：\`* tool:* auto\` 下进入 blocked`, async () => {
+      const b = await fakeBench([{ scope: '*', action: 'tool:*', level: 'auto' }])
+      const id = await approvalTask(b, { tool: 'Write', paths: [join(b.home, ...rel)] })
+      await settle(b, id, (t) => t.status === 'blocked', 'blocked')
+      const actions = (firstDecided(b, id).payload as { request: { actions: string[] } }).request
+        .actions
+      expect(actions).toContain('config.edit')
+    })
+  }
+
+  test('符号链接指向策略文件：节点送去 realpath，识别为 policy.edit，进入 blocked', async () => {
+    const b = await fakeBench([{ scope: '*', action: 'tool:Edit', level: 'auto' }])
+    const repo = mkdtempSync(join(tmpdir(), 'flow-precheck-link-'))
+    try {
+      const link = join(repo, 'harmless.yaml')
+      symlinkSync(join(b.home, 'config', 'policies.yaml'), link)
+      const id = await approvalTask(b, { tool: 'Edit', paths: [link] })
+      await settle(b, id, (t) => t.status === 'blocked', 'blocked')
+      const request = (
+        firstDecided(b, id).payload as { request: { actions: string[]; paths: string[] } }
+      ).request
+      expect(request.paths[0]).toBe(link)
+      expect(request.paths.some((p) => p.endsWith('/config/policies.yaml'))).toBe(true)
+      expect(request.actions).toContain('policy.edit')
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test('realPolicyPath：不存在的文件对最近的已存在祖先目录做 realpath；~ 展开', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flow-precheck-real-')))
+    try {
+      mkdirSync(join(dir, 'real'))
+      symlinkSync(join(dir, 'real'), join(dir, 'alias'))
+      expect(await realPolicyPath(join(dir, 'alias', 'new', 'file.yaml'), '/')).toBe(
+        join(dir, 'real', 'new', 'file.yaml'),
+      )
+      expect(await realPolicyPath('alias/x.yaml', dir)).toBe(join(dir, 'real', 'x.yaml'))
+      expect(await realPolicyPath('~/x', dir)).toBe(join(realpathSync(homedir()), 'x'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

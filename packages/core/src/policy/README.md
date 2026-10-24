@@ -33,12 +33,29 @@ shell 解释器、`eval`、`source`、点号命令与 Python/Node/Ruby/Perl 解�
 `shell.opaque` 处理，范围保守覆盖 `-c` / `-e`、脚本文件及其他调用方式。
 命令文本包含 `$()`、反引号或进程替换 `<()` / `>()` 时也标记为不透明，即使位于引号或
 注释中。只要出现 `shell.opaque`，结果同时包含 `pr.merge`、`deploy`、`secrets`、
-`policy.edit`；能提取的 shell `-c` 字符串和 `eval` 文本继续递归识别，结果取并集，
+`policy.edit`、`config.edit`；能提取的 shell `-c` 字符串和 `eval` 文本继续递归识别，结果取并集，
 始终保留不透明标记，不以递归识别成功为自动放行依据。
 
 路径由适配器完整提供；归一后的路径等于或以 `/config/policies.yaml` 结尾时增加
 `policy.edit`。此外，命令文本只要包含 `policies.yaml` 就增加 `policy.edit`，包括读取、
-输出文字或备份文件名等可能的误报。不访问文件系统或解析符号链接。
+输出文字或备份文件名等可能的误报。路径与命令文本的这些比较都**不区分大小写**
+（APFS 默认不区分大小写，`CONFIG/Policies.yaml` 指向同一个文件）。
+命令或路径中出现 glob 字符（`*` `?` `[`）、变量展开（`$x`、`${…}`）或命令替换，并且同时
+出现 `config` 或 `polic`（不区分大小写）时，实际作用的文件无法静态确定（`polic*.yaml`、
+`${p}ies.yaml`、`policies.yam?`），按 `shell.opaque` 处理，因而包含 `policy.edit`。
+命令或路径含非打印字符（换行、回车、制表符之外的控制字符、零宽与双向覆盖等格式字符）时
+同样按不透明处理。
+
+第三个参数 `{ flowHomes }` 给出 flow-home 的路径（中枢传入自身 home 及其 realpath）：
+落在其 `config/` 目录下的任何路径，以及命令文本中出现该目录或 `flow-home/config` 时，
+增加 `config.edit`。roles、remote.yaml 等与策略文件一样是提权面，不只 policies.yaml。
+core 不访问文件系统或解析符号链接；节点在预检前对每个路径做 realpath（文件不存在时对
+最近的已存在祖先目录做 realpath 再拼回其余部分），原路径与解析后的路径都送去判定。
+
+flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做决定的操作额外识别为具体
+动作（`FLOW_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、
+`task_reply` → `task.reply`、`kb_proposals_accept` / `kb_proposals_reject` → `proposal.decide`、
+`resource_transfer` → `resource.transfer`。
 
 `decide(config.rules, request)` 是纯函数。workspace 使用完整的 `ws/<id>`。
 `tool:<名称>` 只作为兜底：请求中存在任何非 `tool:` 开头的具体动作（包括 `shell.opaque`）
@@ -56,10 +73,22 @@ shell 解释器、`eval`、`source`、点号命令与 Python/Node/Ruby/Perl 解�
 还包含 `shell.opaque` 等敏感动作，只配置 `pr.merge` 仍交给用户处理。
 合并次序为 `notify > user > draft-approve > auto-report > auto`，空动作也返回 `user`。
 **安全底线是：敏感动作只能由显式规则放行，识别不确定时按敏感处理。**
-`shell.opaque` 和上述四个敏感动作均只有具体 workspace 或角色 scope 加精确 action
-（不含通配符）的规则才能自动放行；不透明请求必须逐一满足全部动作的显式授权。
-其他自动档位提升为
-`draft-approve`，以 `guarded` 标明。每个动作的 `matched_rules` 保留最高具体程度的全部
+**受保护的动作**（`GUARDED_ACTIONS`）：`shell.opaque`、`pr.merge`、`deploy`、`secrets`、
+`policy.edit`、`config.edit`，以及上述 flow 工具的具体动作，均只有具体 workspace 或角色
+scope 加精确 action（不含通配符）的规则才能自动放行；不透明请求必须逐一满足全部动作的
+显式授权。
+
+**受保护的工具**（`GUARDED_TOOLS` / `isGuardedTool`）：`tool:CodexCommand`（Codex 请求越出
+沙箱执行）、所有 `tool:mcp__*`（flow 自己的工具与以后接入的第三方 MCP）、`tool:WebFetch`、
+`tool:WebSearch`（外发数据）、`tool:Task` / `tool:Agent`（派生子 agent，继承并放大权限）。
+请求涉及这些工具时，参与判定的每个动作（工具本身或从命令识别出的具体动作）都只有 action
+不含通配符的规则才能自动放行；`*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为
+`draft-approve`。原因：通配的 auto 规则通常是为本地读写工具写的，不应顺带放行越出沙箱、
+外发或提权的请求；例如 `rm -rf ~`、`curl -d @dist …` 经 Codex 请求时只有工具动作，
+`scope: * action: tool:* level: auto` 不能放行它们，需要显式写出
+`scope: ws/<id> action: tool:CodexCommand`。
+
+上述两类中，不满足条件的自动档位提升为 `draft-approve`，以 `guarded` 标明。每个动作的 `matched_rules` 保留最高具体程度的全部
 规则，按档位和原始序号排序；汇总按动作顺序去重。保留原始规则内容供后续审计，判定
 本身不写事件、不调用 HTTP、不生成收件箱条目。
 
