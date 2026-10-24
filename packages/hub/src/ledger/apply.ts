@@ -211,7 +211,13 @@ export function createApplier(db: Database): Applier {
         touchTask(e, ', cancel_requested = 1')
         return
       case 'task.cancelled':
-        setStatus(e, 'cancelled', ', finished_at = ?, blocked_json = NULL', e.ts)
+        setStatus(
+          e,
+          'cancelled',
+          ', finished_at = ?, blocked_json = NULL, result_json = ?',
+          e.ts,
+          e.payload.result === undefined ? null : JSON.stringify(e.payload.result),
+        )
         return
       case 'task.lease_expired':
         stmt(`UPDATE leases SET state = 'expired', ended_at = ? WHERE lease_id = ?`).run(

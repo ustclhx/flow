@@ -26,7 +26,7 @@
 
 ## 5. 验收运行器
 
-- [ ] 5.1 `verifying` 阶段：argv 执行（不经过 shell）、每条命令的超时、失败即停、只保留输出末尾并做密钥脱敏后入账；验证 task-verification spec 的全部场景
+- [x] 5.1 `verifying` 阶段：argv 执行（不经过 shell）、每条命令的超时、失败即停、只保留输出末尾并做密钥脱敏后入账；验证 task-verification spec 的全部场景
 
 ## 6. 真实环境集成
 

@@ -40,6 +40,7 @@ import {
   type StuckVerdict,
 } from './executor.ts'
 import { createFakeExecutor } from './fake.ts'
+import { verifyTask } from './verify.ts'
 
 /**
  * `flow node` 执行节点（tasks.md 4.3；design D6；node-protocol spec）。
@@ -176,6 +177,7 @@ export function noProgressMs(contract: TaskContract, resolver?: NoProgressResolv
 type RenewSignal =
   | { blocked: { reason: BlockedReason; message: string; tail?: string[]; session?: string } }
   | { resumed: { note: string } }
+  | { phase: 'verifying' }
 
 /** 节点上报 blocked 时附带的末尾输出行数（stuck-detection "卡住的原因分类"）。 */
 export const STUCK_TAIL_LINES = 40
@@ -235,7 +237,7 @@ class LeaseRunner {
   /** 租约已不属于本节点（过期、被处理、令牌不符）或节点停止：不再续约，也不提交。 */
   private released = false
   /** 节点视角的阶段：blocked 表示已判定卡住、等待回复（worker 仍活着）。 */
-  private phase: 'running' | 'blocked' = 'running'
+  private phase: 'running' | 'blocked' | 'verifying' = 'running'
   /** 待随下一次续约上报的状态变化。 */
   private signal: RenewSignal | undefined
   /** 最近的输出行。 */
@@ -612,7 +614,7 @@ class LeaseRunner {
     if (this.delivering) await this.delivering
     if (this.unacked && !this.released) await this.ack()
     if (this.released) return
-    const req = this.completion(outcome)
+    let req = this.completion(outcome)
     // 卡住期间执行器完成（例如用户直接在终端里答复后 worker 做完了）：blocked 不能直接转 done，
     // 先上报恢复为 running。崩溃或以 blocked 结束时不上报恢复：中枢写 blocked → blocked，
     // 有待送达的回复时带着回复重新排队（PR #16 审查第 5 条）。
@@ -626,6 +628,36 @@ class LeaseRunner {
       if (this.signal && !this.released) await sleep(env.clock, env.retryMs)
     }
     if (this.released) return
+    if (req.outcome === 'done' && grant.contract.verify?.length && !this.cancelRequested) {
+      this.phase = 'verifying'
+      this.signal = { phase: 'verifying' }
+      // 中枢确认阶段切换后才启动命令；可重试错误时保留 signal，期间继续续约。
+      while (this.signal && !this.released && !this.cancelRequested) {
+        await this.renewNow()
+        if (this.signal && !this.released) await sleep(env.clock, env.retryMs)
+      }
+      if (this.released) return
+      const verify = await verifyTask(
+        grant.contract.verify,
+        grant.contract.cwd ?? env.defaultCwd,
+        env.clock,
+        this.abort.signal,
+      )
+      if (this.released) return
+      const failed = !this.cancelRequested && verify.some((v) => v.exit_code !== 0 || v.timed_out)
+      req = {
+        ...req,
+        outcome: failed ? 'failed' : 'done',
+        result: { ...req.result, verify, ...(failed ? { reason: 'verify_failed' } : {}) },
+      }
+    }
+    if (this.cancelRequested) {
+      req = {
+        lease_token: grant.lease_token,
+        outcome: 'cancelled',
+        ...('result' in req ? { result: req.result } : {}),
+      }
+    }
     await this.submit(req)
   }
 
