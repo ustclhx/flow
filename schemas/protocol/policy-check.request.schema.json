@@ -25,6 +25,10 @@
         "minLength": 1,
         "maxLength": 2000
       }
+    },
+    "dry_run": {
+      "description": "默认 false；user 可设为 true 只判定不入账，节点传 true 返回 400",
+      "type": "boolean"
     }
   },
   "required": [

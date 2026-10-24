@@ -27,7 +27,7 @@ beforeAll(async () => {
   await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
   await writeFile(
     flowPaths(home).policiesConfig,
-    '- scope: "*"\n  action: git.push\n  level: always\n- scope: ws/product-res\n  action: git.push\n  level: draft-approve\n',
+    '- scope: "*"\n  action: git.push\n  level: always\n- scope: ws/product-res\n  action: git.push\n  level: auto-report\n',
   )
   const created = await new HubClient({ home, actor: 'user' }).createTask({
     goal: '调试策略',
@@ -47,32 +47,40 @@ afterAll(async () => {
   if (home) await rm(home, { recursive: true, force: true })
 })
 
-test('policy check 经 HubClient 返回明细，并支持重复路径；hub status 人类输出报告策略错误', async () => {
-  const checked = await runCli(
-    [
-      'policy',
-      'check',
-      '--task',
-      taskId,
-      '--tool',
-      'Bash',
-      '--command',
-      'git push',
-      '--path',
-      'src/a',
-      '--path',
-      'src/b',
-      '--json',
-    ],
-    commands,
-  )
+test('policy check 默认只判定 auto-report，--record 才入账；支持重复路径并报告策略错误', async () => {
+  const client = new HubClient({ home, actor: 'user' })
+  const before = await client.showTask(taskId)
+  if (!before.ok) throw new Error(before.error.message)
+  const args = [
+    'policy',
+    'check',
+    '--task',
+    taskId,
+    '--tool',
+    'Bash',
+    '--command',
+    'git push',
+    '--path',
+    'src/a',
+    '--path',
+    'src/b',
+    '--json',
+  ]
+  const checked = await runCli(args, commands)
   expect(checked.exitCode).toBe(0)
   expect(JSON.parse(checked.stdout)).toMatchObject({
     ok: true,
-    data: { level: 'draft-approve', matched_rules: [{ rule_index: 1 }] },
+    data: { level: 'auto-report', matched_rules: [{ rule_index: 1 }] },
   })
-  const shown = await new HubClient({ home, actor: 'user' }).showTask(taskId)
+  const dry = await client.showTask(taskId)
+  if (!dry.ok) throw new Error(dry.error.message)
+  expect(dry.data).toEqual(before.data)
+  const recorded = await runCli([...args, '--record'], commands)
+  expect(recorded.exitCode).toBe(0)
+  expect(JSON.parse(recorded.stdout)).toEqual(JSON.parse(checked.stdout))
+  const shown = await client.showTask(taskId)
   if (!shown.ok) throw new Error(shown.error.message)
+  expect(shown.data.events).toHaveLength(before.data.events.length + 1)
   expect(shown.data.events.at(-1)).toMatchObject({
     type: 'policy.decided',
     payload: { request: { paths: ['src/a', 'src/b'] } },

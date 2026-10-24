@@ -63,8 +63,8 @@ shell 解释器、`eval`、`source`、点号命令与 Python/Node/Ruby/Perl 解�
 规则，按档位和原始序号排序；汇总按动作顺序去重。保留原始规则内容供后续审计，判定
 本身不写事件、不调用 HTTP、不生成收件箱条目。
 
-中枢的 `POST /v1/policy/check` 接受 `{ task_id, tool, command?, paths? }`，从任务合同取得
-workspace 和角色，每次请求重新读取策略文件，返回原有 `decide` 结果，并先写入
+中枢的 `POST /v1/policy/check` 接受 `{ task_id, tool, command?, paths?, dry_run? }`，从任务合同取得
+workspace 和角色，每次请求重新读取策略文件，返回原有 `decide` 结果。`dry_run` 默认 false，先写入
 `policy.decided`。事件载荷为 `{ task_id, request: { tool, actions, command?, paths? },
 level, matched_rules, actions }`：`request.actions` 是动作 id，外层 `actions` 是逐动作明细，
 规则含原始的从 0 开始的 `rule_index` 和 `rule` 内容。事件操作者为 `policy`，任务信封中
@@ -73,10 +73,13 @@ level, matched_rules, actions }`：`request.actions` 是动作 id，外层 `acti
 仅 user 或持有该任务未过期活动租约的节点能调用；权限表见 `docs/hub-auth.md`。
 请求命令最多 8192 字符、路径最多 200 项且每项最多 2000 字符，超出返回 400，不把
 截断输入用于判定。入账时命令、路径与命中规则的同类条件按自由文本脱敏，并限长到
-2000 字符；响应采用入账后的规则明细。超长命令仍使用完整的合法输入判定。
+2000 字符；响应采用同样脱敏、限长后的规则明细，dry run 也不例外。超长命令仍使用完整的合法输入判定。
 单条规则错误跳过并由 `flow hub status` 报告；文件级读取、YAML 或顶层类型错误使
 检查返回 500 `internal_error`，status 报告加载错误，节点按 D2 保守交给用户。
 
 人工调试使用 `flow policy check --task <id> --tool Bash --command "git push"`，
-路径通过可重复的 `--path` 传入。此命令走 HubClient，属于管理命令，不注册为知识访问操作。
+路径通过可重复的 `--path` 传入。CLI 默认传 `dry_run: true`，只返回判定，不写事件，避免
+把调试的 auto-report 结果记为真实放行并产生 Digest；加 `--record` 才传 false 并入账。
+只有 user 能使用 dry run；节点省略该字段或传 false 均入账，传 true 返回 400
+`invalid_arguments`，不能绕过审计。此命令走 HubClient，属于管理命令，不注册为知识访问操作。
 节点的自动放行与 blocked 上报由任务 2.3 接入，Digest 和收件箱条目由任务 3.1 的反应器生成。

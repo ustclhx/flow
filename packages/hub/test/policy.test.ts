@@ -123,6 +123,37 @@ test('通配规则不能放行合并；角色与 workspace 的显式规则可自
   }
 })
 
+test('user dry_run：auto-report 只返回脱敏明细、不入账；false 入账且结果一致', async () => {
+  const fake = `ghp_${'Ab9'.repeat(12)}`
+  const { user, request, task } = await setup([
+    {
+      scope: 'dev',
+      action: 'git.push',
+      level: 'auto-report',
+      when: { command_prefix: `git push ${fake}` },
+    },
+  ])
+  const input = { ...request, command: `git push ${fake}` }
+  const before = must(await user.showTask(task.id))
+  const dry = must(await user.checkPolicy({ ...input, dry_run: true }))
+  expect(dry.level).toBe('auto-report')
+  expect(dry.actions).toMatchObject([
+    { action: 'tool:Bash', level: 'skipped' },
+    { action: 'git.push', level: 'auto-report' },
+  ])
+  expect(JSON.stringify(dry)).not.toContain(fake)
+  expect(dry.matched_rules[0]?.rule.when?.command_prefix).toContain('[REDACTED:github-token]')
+  expect(must(await user.showTask(task.id))).toEqual(before)
+  const recorded = must(await user.checkPolicy({ ...input, dry_run: false }))
+  expect(recorded).toEqual(dry)
+  const after = must(await user.showTask(task.id))
+  expect(after.events).toHaveLength(before.events.length + 1)
+  expect(after.events.at(-1)).toMatchObject({
+    type: 'policy.decided',
+    payload: { level: 'auto-report' },
+  })
+})
+
 test('坏规则被跳过、保留原始索引；status 报错，配置修正后立即生效', async () => {
   const { user, request, policies } = await setup([
     { scope: '*', action: 'git.push', level: 'always' },
@@ -162,7 +193,19 @@ test('scope：仅租约持有节点或 user；其他节点、AI、过期或已�
     }),
   ).lease
   if (!lease) throw new Error('未领取到租约')
-  expect((await raw(request, nodeToken)).status).toBe(200)
+  const initial = must(await user.showTask(task.id)).events.length
+  const dry = await raw({ ...request, dry_run: true }, nodeToken)
+  expect(dry.status).toBe(400)
+  expect(await dry.json()).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } })
+  expect(must(await user.showTask(task.id)).events).toHaveLength(initial)
+  // 节点省略 dry_run 或显式传 false，都必须写审计事件。
+  for (const input of [request, { ...request, dry_run: false }]) {
+    const before = must(await user.showTask(task.id)).events.length
+    expect((await raw(input, nodeToken)).status).toBe(200)
+    const events = must(await user.showTask(task.id)).events
+    expect(events).toHaveLength(before + 1)
+    expect(events.at(-1)?.type).toBe('policy.decided')
+  }
   const before = must(await user.showTask(task.id)).events.length
   expect((await raw(request, otherToken)).status).toBe(403)
   expect((await raw(request, undefined, 'codex')).status).toBe(403)
@@ -234,6 +277,7 @@ test('不存在的任务返回 404，非法或超长请求返回 400；文件级
   expect((await raw({ ...request, task_id: 't-missing' })).status).toBe(404)
   expect((await raw({ ...request, command: 'x'.repeat(8193) })).status).toBe(400)
   expect((await raw({ ...request, paths: ['x'.repeat(2001)] })).status).toBe(400)
+  expect((await raw({ ...request, dry_run: 'true' })).status).toBe(400)
   writeFileSync(flowPaths(home).policiesConfig, '- [\n')
   expect((await raw(request)).status).toBe(500)
   expect(must(await user.status()).policies).toMatchObject({

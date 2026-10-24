@@ -273,6 +273,9 @@ export const policyCheckRequest = z
     tool: z.string().trim().min(1).max(128),
     command: z.string().max(PROTOCOL_MESSAGE_MAX).optional(),
     paths: z.array(z.string().min(1).max(TAIL_LINE_MAX)).max(200).optional(),
+    dry_run: z.boolean().optional().meta({
+      description: '默认 false；user 可设为 true 只判定不入账，节点传 true 返回 400',
+    }),
   })
   .meta({ title: 'POST /v1/policy/check' })
 export type PolicyCheckRequest = z.infer<typeof policyCheckRequest>

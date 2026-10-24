@@ -3,6 +3,7 @@ import {
   decide,
   ENDPOINTS,
   fail,
+  isNodeActor,
   loadPoliciesConfig,
   policyCheckData,
   policyCheckRequest,
@@ -11,6 +12,7 @@ import {
 import { Hono } from 'hono'
 import { errorResponse } from '../app.ts'
 import { jsonBody, respond } from '../ledger/routes.ts'
+import { scrubPayload } from '../ledger/scrub.ts'
 import type { LedgerStore } from '../ledger/store.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { checkTaskScope, type HubAuthOptions } from '../server/auth.ts'
@@ -38,7 +40,14 @@ export function createPolicyRoutes(deps: {
         policyCheckData,
       )
     }
-    const { task_id, tool, command, paths } = parsed.data
+    const { task_id, tool, command, paths, dry_run = false } = parsed.data
+    if (dry_run && isNodeActor(c.get('actor'))) {
+      return errorResponse(
+        c,
+        'invalid_arguments',
+        '节点策略检查不允许 dry_run=true，必须记录审计事件',
+      )
+    }
     const request = {
       tool,
       ...(command === undefined ? {} : { command }),
@@ -60,6 +69,14 @@ export function createPolicyRoutes(deps: {
       actions,
       ...request,
     })
+    if (dry_run) {
+      // 调试不入账，响应仍按同一规则脱敏，避免从命中条件返回密钥。
+      return respond(
+        c,
+        { ok: true, data: scrubPayload('policy.decided', decision) },
+        policyCheckData,
+      )
+    }
     const recorded = deps.ledger.append(
       {
         type: 'policy.decided',

@@ -72,6 +72,8 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 remote token 一列的 403 都是 `remote_not_allowed`。以后的 `inbox_act`（除"忽略自己发起的条目"）
 与读取密钥接口也使用 `userOnly` 中间件。只有用户能做的接口在读取请求体、调用服务之前拒绝；
 策略检查的节点 scope 需要读取请求体中的 `task_id`，加载策略后在入账前再次校验租约。
+策略检查的 `dry_run` 默认 false；user 可传 true 只判定不入账。节点只能省略或传 false，
+传 true 返回 400 `invalid_arguments`，不产生事件。CLI 默认 dry run，只有 `--record` 才入账。
 所有权限拒绝均不产生事件。任务不存在时，策略检查返回 404 `not_found`。
 MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有读取密钥的工具）保留，作为第一道防线。
 
