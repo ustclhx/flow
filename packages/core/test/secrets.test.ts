@@ -29,7 +29,7 @@ function fakeSops(ageKeyFile: string) {
     async exec(bin, args, options = {}) {
       if (bin !== 'injected-sops') return execCommand(bin, args, options)
       calls.push({ bin, args, opts: options })
-      if (args.includes('--encrypt')) {
+      if (args.includes('encrypt')) {
         data = JSON.parse(options.input as string)
         return {
           code: 0,
@@ -92,27 +92,28 @@ describe('密钥提供器（注入 sops）', () => {
         ['other/key', 'test-value-not-a-secret-0002'],
       ]),
     })
-    const encrypted = fake.calls.filter((c) => c.args.includes('--encrypt'))
+    const encrypted = fake.calls.filter((c) => c.args.includes('encrypt'))
     expect(JSON.parse(encrypted[1]?.opts.input as string)).toEqual({
       telegram: { 'bot-token': value },
     })
-    expect(fake.calls.slice(1, 3).map((c) => c.args[0])).toEqual(['-d', '--encrypt'])
+    expect(
+      fake.calls.slice(1, 3).map((c) => (c.args.includes('encrypt') ? 'encrypt' : c.args[0])),
+    ).toEqual(['-d', 'encrypt'])
     for (const call of fake.calls) {
       expect(call.args.join(' ')).not.toContain(value)
       expect(call.opts.env?.SOPS_AGE_KEY_FILE).toBe(ageKeyFile)
       expect(call.opts.cwd).toBe(config)
     }
     expect(encrypted[1]?.args).toEqual([
-      '--encrypt',
       '--config',
       '.sops.yaml',
+      'encrypt',
       '--input-type',
       'json',
       '--output-type',
       'yaml',
       '--filename-override',
       'secrets.sops.yaml',
-      '/dev/stdin',
     ])
     const allHistory = await git(config, ['log', '-p', '--all', '--format=fuller'])
     expect(allHistory.stdout).not.toContain(value)

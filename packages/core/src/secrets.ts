@@ -63,21 +63,22 @@ async function readTree(home: string, opts: SecretsOptions): Promise<Result<Secr
 }
 
 async function encrypt(home: string, tree: SecretTree, opts: SecretsOptions, recipient?: string) {
-  // 已在 macOS 的 sops 3.13.3 验证：/dev/stdin + --filename-override 可匹配
-  // .sops.yaml 的 creation_rules；显式 JSON 输入、YAML 输出也支持空对象 {}。
-  // 明文只经 stdin 传递，不能用 sops set（它把值放在 argv）或明文临时文件。
+  // sops 3.13.3 的 encrypt 子命令不传文件名时直接读 stdin；在 macOS 实测，
+  // Linux 的 execCommand 子进程也已验证。不能传 /dev/stdin：Linux 下子进程
+  // stdin 是 socket，重新按文件打开会报 ENXIO。--filename-override 用于匹配规则，
+  // JSON 输入、YAML 输出支持空对象 {}。明文只经 stdin，不放 argv 或临时文件。
   return sops(
     home,
     [
-      '--encrypt',
-      ...(recipient ? ['--age', recipient] : ['--config', '.sops.yaml']),
+      ...(recipient ? [] : ['--config', '.sops.yaml']),
+      'encrypt',
+      ...(recipient ? ['--age', recipient] : []),
       '--input-type',
       'json',
       '--output-type',
       'yaml',
       '--filename-override',
       'secrets.sops.yaml',
-      '/dev/stdin',
     ],
     opts,
     JSON.stringify(tree),

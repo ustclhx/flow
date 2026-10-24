@@ -24,9 +24,11 @@ CLI 默认身份为 user；`--actor` 或 `FLOW_ACTOR` 声明非 user 时，get �
 
 - 解密用 `sops -d --output-type json secrets.sops.yaml`，输出只进入内存。
 - 将嵌套映射在内存中修改并序列化为 JSON，经子进程 stdin 传给
-  `sops --encrypt --config .sops.yaml --input-type json --output-type yaml --filename-override secrets.sops.yaml /dev/stdin`。
+  `sops --config .sops.yaml encrypt --input-type json --output-type yaml --filename-override secrets.sops.yaml`。
   首次初始化尚无规则文件时，以 `--age <公钥>` 代替 `--config`；公钥不含密钥值。
-- `/dev/stdin` 与 `--filename-override` 能匹配规则中的精确文件名，也支持加密空对象 `{}`。
+- encrypt 子命令不传文件名，直接读 stdin；`--filename-override` 匹配规则中的精确文件名，
+  也支持加密空对象 `{}`。不能传 `/dev/stdin`：Linux 的子进程 stdin 是 socket，
+  重新按文件打开会报 `ENXIO`；已用 Linux 容器的真实 execCommand 复现并验证修正。
   明文不进入 argv、临时文件、提交信息或工具错误信息。所有 sops 调用显式设置 `SOPS_AGE_KEY_FILE`。
 - 写入在 `withWriteLock` 中串行进行，密文经过 gitleaks 扫描和提交前钩子，原子替换后提交；
   提交失败恢复原文件。私钥保存在 config 仓库外，初始化提交失败仍保留，方便重试。
