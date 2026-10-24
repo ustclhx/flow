@@ -68,7 +68,11 @@ function channelSummary(channels: NonNullable<HubStatus['channels']>): string {
               : ''
       const failed = c.failed_items > 0 ? `，推送失败 ${c.failed_items} 条` : ''
       const ignored = c.ignored_inbound > 0 ? `，已忽略 ${c.ignored_inbound} 次陌生访问` : ''
-      return `${c.id}：${CHANNEL_STATE[c.state] ?? c.state}${extra}${failed}${ignored}`
+      const warning = c.warning ? `，⚠ ${c.warning}` : ''
+      const rebound = c.last_rebound_at
+        ? `，最近一次改绑 ${new Date(c.last_rebound_at).toLocaleString()}`
+        : ''
+      return `${c.id}：${CHANNEL_STATE[c.state] ?? c.state}${extra}${failed}${ignored}${warning}${rebound}`
     })
     .join('；')
 }

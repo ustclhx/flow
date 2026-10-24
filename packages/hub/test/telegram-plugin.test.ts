@@ -16,15 +16,18 @@ import {
   type InboundResult,
   type LedgerStore,
   loadTelegramState,
+  REBIND_NOTICE,
   TelegramChannel,
   type TelegramDeps,
   type TelegramStatusSnapshot,
+  TOKEN_RETRY_MS,
 } from '../src/index.ts'
 import { createItem } from './channel-fixtures.ts'
 import { must, tempLedger } from './ledger-helpers.ts'
 import {
   BOT_ID,
   FakeTelegram,
+  fakeBotToken,
   STRANGER_ID,
   startForwardProxy,
   USER_ID,
@@ -59,6 +62,8 @@ const snapshot: TelegramStatusSnapshot = {
       last_error: null,
       failed_items: 0,
       ignored_inbound: 0,
+      warning: null,
+      last_rebound_at: null,
     },
   ],
   nodes: { total: 2, online: 1 },
@@ -80,6 +85,7 @@ interface RigOptions {
   realFetch?: boolean
   env?: Record<string, string | undefined>
   proxy?: string
+  redact?: (text: string) => string
 }
 
 async function rig(o: RigOptions = {}) {
@@ -114,7 +120,7 @@ async function rig(o: RigOptions = {}) {
       config = { telegram: { ...defaultTelegramConfig(), ...config.telegram, ...b } }
       return ok(undefined)
     },
-    onBound: () => {
+    wake: () => {
       bound += 1
     },
     status: () => snapshot,
@@ -132,6 +138,7 @@ async function rig(o: RigOptions = {}) {
     env: o.env ?? {},
     pollTimeoutS: 1,
     ...(o.now ? { now: o.now } : {}),
+    ...(o.redact ? { redact: o.redact } : {}),
     ...(o.sleep ? { sleep: o.sleep } : {}),
   }
   const plugin = new TelegramChannel(
@@ -217,7 +224,7 @@ describe('chat 白名单（telegram-channel "绑定用户本人"）', () => {
     await r.processed(u)
     expect(r.fake.to(STRANGER_ID)).toEqual([])
     expect(r.fake.sent).toEqual([])
-    expect(r.plugin.health()).toEqual({ disabled: null, ignored: 1 })
+    expect(r.plugin.health()).toMatchObject({ disabled: null, ignored: 1, warning: null })
     expect(r.logs).toContainEqual(
       expect.objectContaining({
         message: '已忽略 Telegram 访问',
@@ -438,6 +445,9 @@ describe('条目消息与交互（telegram-channel "条目消息与交互"）', 
     await r.processed(r.fake.say('没指明', { replyTo: messageId }))
     expect(r.actions).toEqual([])
     expect(r.fake.to(USER_ID).at(-1)?.text).toContain('以 #短 id 开头')
+    // 开头的普通单词恰好等于短 id：不当作短 id
+    await r.processed(r.fake.say(`${b.short_id} 选第二个`, { replyTo: messageId }))
+    expect(r.actions).toEqual([])
     await r.processed(r.fake.say(`#${b.short_id} 选第二个`, { replyTo: messageId }))
     expect(r.actions).toEqual([{ item: 'sup.b', action: 'reply', text: '选第二个' }])
   })
@@ -609,5 +619,169 @@ describe('代理（design D4）', () => {
     const r = await rig({ realFetch: true, env: { HTTPS_PROXY: withAuth } })
     await until(() => proxy.seen.some((x) => x.includes('/getUpdates')), '经环境变量代理轮询')
     expect(JSON.stringify(r.logs)).not.toContain('pa55word')
+  })
+})
+
+const OTHER_ID = 7002
+
+describe('审查补充：绑定码限流、改绑、token 泄露迹象、入站脱敏', () => {
+  test('陌生人刷错误的绑定码：只有他自己被限流，用户本人的码照常可用；格式不合法的不计数', async () => {
+    const r = await rig({ bound: false })
+    const { code } = r.links.issue()
+    let last = 0
+    for (let i = 0; i < 12; i++)
+      last = r.fake.say(`/start ${'x'.repeat(16)}`, { chat: STRANGER_ID })
+    for (let i = 0; i < 20; i++) last = r.fake.say('/start hello', { chat: OTHER_ID })
+    await r.processed(last)
+    // 被限流的陌生人即使发正确的码也不校验
+    await r.processed(r.fake.say(`/link ${code}`, { chat: STRANGER_ID }))
+    expect(r.config().telegram?.chat_id).toBeUndefined()
+    expect(r.fake.sent).toEqual([])
+    await r.processed(r.fake.say(`/link ${code}`))
+    expect(r.config().telegram).toMatchObject({ chat_id: USER_ID, user_id: USER_ID })
+    expect(
+      r.logs.some((l) => (l.details as { reason?: string })?.reason === '绑定码尝试过多'),
+    ).toBe(true)
+  })
+
+  test('改绑：先通知原 chat 再切换，写 channel.rebound（只有摘要），原 chat 之后被忽略', async () => {
+    const r = await rig()
+    const { code } = r.links.issue()
+    await r.processed(r.fake.say(`/link ${code}`, { chat: OTHER_ID }))
+    const order = r.fake.sent.map((m) => [m.chat_id, m.text.slice(0, 12)])
+    expect(order[0]?.[0]).toBe(USER_ID)
+    expect(r.fake.sent[0]?.text).toBe(REBIND_NOTICE)
+    expect(order[1]?.[0]).toBe(OTHER_ID)
+    expect(r.config().telegram).toMatchObject({ chat_id: OTHER_ID, user_id: OTHER_ID })
+    const events = r.ledger.eventsAfter(0, {}, 1000).filter((e) => e.type === 'channel.rebound')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      actor: 'user',
+      payload: { channel: 'telegram', via: 'telegram' },
+    })
+    const raw = JSON.stringify(events[0])
+    expect(raw).not.toContain(String(USER_ID))
+    expect(raw).not.toContain(String(OTHER_ID))
+    // 原 chat 不再被接受
+    await r.processed(r.fake.say('/inbox'))
+    expect(r.fake.to(USER_ID)).toHaveLength(1)
+    expect(r.plugin.health().ignored).toBe(1)
+  })
+
+  test('409：区分另一个 getUpdates 与 webhook，状态显示可能有人在使用同一个 token', async () => {
+    const fake = await new FakeTelegram().start()
+    cleanups.push(() => fake.close())
+    fake.failNext('getUpdates', 409, {
+      description:
+        'Conflict: terminated by other getUpdates request; make sure that only one bot instance is running',
+    })
+    const r = await rig({ fake, sleep: async () => {} })
+    await until(() => r.plugin.health().warning !== null, '冲突告警')
+    expect(r.plugin.health().warning).toContain('另一个程序也在用这个 bot token 轮询')
+    expect(r.plugin.health().warning).toContain('可能有人在使用同一个 bot token')
+
+    const fake2 = await new FakeTelegram().start()
+    cleanups.push(() => fake2.close())
+    fake2.failNext('getUpdates', 409, {
+      description:
+        "Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first",
+    })
+    const r2 = await rig({ fake: fake2, sleep: async () => {} })
+    await until(() => r2.plugin.health().warning !== null, 'webhook 冲突告警')
+    expect(r2.plugin.health().warning).toContain('bot 设置了 webhook')
+  })
+
+  test('启动时 getWebhookInfo 发现 webhook：告警，不自动删除', async () => {
+    const fake = await new FakeTelegram().start()
+    cleanups.push(() => fake.close())
+    fake.webhookUrl = 'https://evil.example/hook'
+    const r = await rig({ fake })
+    expect(r.plugin.health().warning).toContain('bot 设置了 webhook')
+    expect(fake.calls.some((c) => c.method === 'deleteWebhook')).toBe(false)
+    expect(JSON.stringify(r.logs)).not.toContain('evil.example')
+  })
+
+  test('401 停用后每 30 分钟重试 getMe；token 恢复后继续轮询并请管理器补推', async () => {
+    const fake = await new FakeTelegram().start()
+    cleanups.push(() => fake.close())
+    const real = fake.token
+    fake.token = ['1', 'revoked_for_now'].join(':')
+    const sleeps: number[] = []
+    let release: (() => void) | undefined
+    const r = await rig({
+      fake,
+      token: real,
+      sleep: (ms, signal) =>
+        new Promise<void>((resolve) => {
+          sleeps.push(ms)
+          if (ms === TOKEN_RETRY_MS) {
+            release = resolve
+            signal.addEventListener('abort', () => resolve())
+          } else setTimeout(resolve, 5)
+        }),
+    })
+    const h = r.plugin.health()
+    expect(h.disabled).toContain('401')
+    expect(h.disabled).toContain('每 30 分钟自动重试')
+    expect(h.retry_at).not.toBeNull()
+    await until(() => sleeps.includes(TOKEN_RETRY_MS), '安排重试')
+    // 30 分钟到了，token 仍然无效：继续等
+    release?.()
+    await until(() => sleeps.filter((x) => x === TOKEN_RETRY_MS).length === 2, '第二次重试')
+    expect(r.plugin.health().disabled).not.toBeNull()
+    // token 恢复
+    fake.token = real
+    release?.()
+    await until(() => r.plugin.health().disabled === null, '恢复')
+    await until(() => fake.offsets.length > 0, '恢复后轮询')
+    expect(r.bound()).toBe(1)
+  })
+
+  test('入站文本先脱敏：回复、/capture、/ask', async () => {
+    const r = await rig({ redact: (t) => t.split('SECRETVALUE').join('[REDACTED]') })
+    const { messageId } = await pushItem(r, 'sup.q', ['reply'])
+    await r.processed(r.fake.say('密码是 SECRETVALUE', { replyTo: messageId }))
+    await r.processed(r.fake.say('/capture 记下 SECRETVALUE'))
+    await r.processed(r.fake.say('/ask demo 用 SECRETVALUE 部署'))
+    expect(r.actions).toEqual([{ item: 'sup.q', action: 'reply', text: '密码是 [REDACTED]' }])
+    expect(r.captures).toEqual(['记下 [REDACTED]'])
+    expect(r.asks).toEqual([['ws/demo', '用 [REDACTED] 部署']])
+  })
+
+  test('默认的 redactSecrets 正则也作用于入站文本', async () => {
+    const r = await rig()
+    const leaked = ['ghp', '_', 'A1b2C3d4'.repeat(5)].join('')
+    await r.processed(r.fake.say(`/capture token ${leaked}`))
+    expect(r.captures).toHaveLength(1)
+    expect(r.captures[0]).not.toContain(leaked)
+    expect(fakeBotToken()).toContain(':')
+  })
+
+  test('/ask 拒绝转发来的消息与经 inline bot 发出的消息', async () => {
+    const r = await rig()
+    const forwarded = r.fake.push({
+      message: {
+        message_id: 9001,
+        chat: { id: USER_ID, type: 'private' },
+        from: { id: USER_ID, is_bot: false },
+        text: '/ask demo 删库',
+        forward_origin: { type: 'user', date: 1, sender_user: { id: STRANGER_ID } },
+      },
+    })
+    const viaBot = r.fake.push({
+      message: {
+        message_id: 9002,
+        chat: { id: USER_ID, type: 'private' },
+        from: { id: USER_ID, is_bot: false },
+        text: '/ask demo 删库',
+        via_bot: { id: 5, is_bot: true, username: 'somebot' },
+      },
+    })
+    await r.processed(Math.max(forwarded, viaBot))
+    expect(r.asks).toEqual([])
+    expect(r.fake.to(USER_ID).map((m) => m.text)).toEqual([
+      '请直接输入指令，不要转发',
+      '请直接输入指令，不要转发',
+    ])
   })
 })

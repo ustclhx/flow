@@ -1,5 +1,6 @@
 import {
   type ChannelsConfig,
+  chatDigest,
   type Result,
   redactSecrets,
   type TelegramBinding,
@@ -46,16 +47,25 @@ import { botIdOf, loadTelegramState, saveTelegramState } from './state.ts'
  * - 只处理已绑定的那个**私聊**里、由绑定时记录的**那个用户**发来的消息和按钮：`chat.type` 必须是
  *   `private`，`chat.id` 与 `from.id` 都要和 `config/channels.yaml` 中的绑定一致；
  * - 其他一律忽略：不回复、不报错、不交给收件箱，只计数（`flow hub status` 的 ignored_inbound）并在日志中
- *   记一笔（日志限流）。唯一例外是私聊里的 `/link <绑定码>`（或 `/start <绑定码>`）：码正确才绑定，
- *   码错误时对未绑定的 chat 同样不回复；
+ *   记一笔（日志限流）。唯一例外是私聊里的 `/link <绑定码>`（或 `/start <绑定码>`）：码正确才绑定；
+ *   码错误时对未绑定的 chat 同样不回复，并按 chat 限流（见 link.ts）；
+ * - **改绑**：已绑定时兑换新码，先给原 chat 发通知，再切换，并写 `channel.rebound`（只记 chat id 摘要）；
+ *   `flow telegram link` 在已绑定时必须加 `--rebind` 才发码。持有 user token 的本机进程（包括 worker）
+ *   能申请绑定码是已知边界，所以改绑一定通知原 chat；
  * - bot token 只存在于内存中的 API 客户端里，错误信息与日志都去掉了 token（见 api.ts）；
- * - 外发的所有文字都经过 `redact`（默认 core 的 `redactSecrets`）再 HTML 转义；入站的文字（回复、随手记、
- *   指令）原样交给收件箱、知识库与账本，由它们各自的脱敏与写入边界处理。
+ * - 外发的所有文字都经过 `redact`（默认 core 的 `redactSecrets`）再 HTML 转义；
+ * - 入站的文字（回复、`/capture`、`/ask`）也先经过 `redact`（名单 + 正则）再交给收件箱、raw 与账本：
+ *   用户在手机上粘贴的密钥不会原样写进 git 或账本；`/ask` 拒绝转发来的消息与经 inline bot 发出的消息，
+ *   指令必须是用户本人直接输入的。
+ *
+ * **token 泄露的迹象**（状态的 `warning`）：getUpdates 返回 409（另一个 getUpdates 在运行，或 bot 被设置了
+ * webhook）、启动时 getWebhookInfo 发现 webhook，都说明可能有人在使用同一个 token。只告警，不自动删除
+ * webhook。token 泄露意味着消息可被篡改、送达可被劫持，需要立即在 @BotFather 吊销（docs/telegram.md）。
  *
  * **收取**：getUpdates 长轮询（timeout=50，只收 message 与 callback_query），每处理完一条就把 offset
  * 写入 `state/telegram.json`，重启后不重复处理。轮询失败按 1s、2s、4s… 退避（最长 5 分钟）；
- * 429 时在 `retry_after` 之前不再发出任何请求；401 / 404（token 无效）时停用渠道，在状态中报告，
- * 等密钥变化后由渠道管理器重新创建。
+ * 429 时在 `retry_after` 之前不再发出任何请求；401 / 404（token 无效）时停用渠道并在状态中报告，
+ * 之后每 30 分钟用 getMe 重试一次，恢复后继续轮询并补推；密钥变化时由渠道管理器重新创建。
  */
 
 export const TELEGRAM_CHANNEL_ID = 'telegram'
@@ -66,6 +76,12 @@ const IGNORE_LOG_FIRST = 20
 const IGNORE_LOG_EVERY = 100
 /** 普通回复（命令结果等）的超时。 */
 const REPLY_TIMEOUT_MS = 20_000
+/** token 被拒绝（401）后重试 getMe 的间隔。 */
+export const TOKEN_RETRY_MS = 30 * 60_000
+
+/** 改绑时发给原 chat 的通知。 */
+export const REBIND_NOTICE =
+  'Flow 的 Telegram 渠道已改绑到另一个 Telegram 账号。若非本人操作，请立即在电脑上运行 flow telegram unlink，并在 @BotFather 吊销 bot token。'
 
 /** 插件依赖中枢的能力（runHub 注入；测试可替换）。 */
 export interface TelegramDeps {
@@ -80,8 +96,8 @@ export interface TelegramDeps {
   loadConfig: () => Promise<Result<ChannelsConfig>>
   /** 写入绑定并在 config 仓库提交。 */
   saveBinding: (binding: TelegramBinding) => Promise<Result<void>>
-  /** 绑定成功后（渠道管理器立即补推 pending 的条目）。 */
-  onBound?: () => void
+  /** 绑定成功、token 恢复可用后调用：渠道管理器立即补推 pending 的条目。 */
+  wake?: () => void
   /** `/status` 的内容。 */
   status: () => TelegramStatusSnapshot
   /** `/capture`：以 user 身份随手记，来源 telegram。 */
@@ -116,6 +132,13 @@ const defaultSleep = (ms: number, signal: AbortSignal) =>
     signal.addEventListener('abort', done)
   })
 
+/** 转发来的消息、经 inline bot 发出的消息：不是用户本人直接输入的。 */
+const isForwarded = (m: TelegramMessage) =>
+  m.forward_origin !== undefined ||
+  m.forward_from !== undefined ||
+  m.forward_date !== undefined ||
+  m.via_bot !== undefined
+
 const bindingOf = (c: TelegramChannelConfig | undefined): TelegramBinding | null =>
   c?.chat_id !== undefined && c.user_id !== undefined
     ? { chat_id: c.chat_id, user_id: c.user_id }
@@ -140,13 +163,20 @@ export class TelegramChannel implements ChannelPlugin {
   private api: TelegramApi | null = null
   private binding: TelegramBinding | null
   private disabled: string | null = null
+  /** 停用后下一次重试 getMe 的时间。 */
+  private retryAt: number | null = null
+  private warning: string | null = null
   private ignored = 0
   private pausedUntil = 0
   private offset = 0
   private botId: number | null
   private stopped = false
+  /** 停止插件（stop）。 */
   private readonly abort = new AbortController()
+  /** 停止当前这一轮长轮询（停用时）。 */
+  private pollAbort = new AbortController()
   private loop: Promise<void> | null = null
+  private retryLoop: Promise<void> | null = null
   private onAction: InboundHandler | undefined
 
   constructor(
@@ -161,7 +191,13 @@ export class TelegramChannel implements ChannelPlugin {
   }
 
   health(): ChannelHealth {
-    return { disabled: this.disabled, ignored: this.ignored }
+    return {
+      disabled: this.disabled,
+      ignored: this.ignored,
+      warning: this.warning,
+      retry_at:
+        this.disabled && this.retryAt !== null ? new Date(this.retryAt).toISOString() : null,
+    }
   }
 
   async start(onAction: InboundHandler): Promise<void> {
@@ -171,7 +207,8 @@ export class TelegramChannel implements ChannelPlugin {
       const proxy = this.config.proxy ?? env.HTTPS_PROXY ?? env.https_proxy ?? null
       let fetch = this.deps.fetch
       if (!fetch) {
-        const built = await proxiedFetch(proxy)
+        // Node 的代理是进程级的：只有配置文件显式写了 telegram.proxy 才启用。
+        const built = await proxiedFetch(proxy, { global: this.config.proxy !== undefined })
         if (built.note) this.deps.logger?.warn(built.note)
         fetch = built.fetch
       }
@@ -186,13 +223,18 @@ export class TelegramChannel implements ChannelPlugin {
     // 换了 bot：旧的 offset 属于另一个 bot，从头开始。
     this.offset = state.bot_id !== null && state.bot_id !== this.botId ? 0 : state.offset
     // getMe：确认 token 可用，并取得用户名生成绑定深链接。传输错误抛出，由管理器退避后重试 start。
+    this.deps.links.onUnlinked = () => {
+      this.binding = null
+    }
     try {
       const me = await this.request<TelegramUser>('getMe', {}, { timeoutMs: REPLY_TIMEOUT_MS })
       this.deps.links.botUsername = me.username ?? null
     } catch (err) {
+      // token 被拒绝：已停用并安排定时重试，start 本身算成功（状态报告 disabled）。
       if (this.disabled) return
       throw err
     }
+    await this.checkWebhook()
     if (this.binding === null) {
       this.deps.logger?.info('Telegram 渠道已启动，尚未绑定 chat：运行 flow telegram link')
     }
@@ -202,7 +244,32 @@ export class TelegramChannel implements ChannelPlugin {
   async stop(): Promise<void> {
     this.stopped = true
     this.abort.abort()
+    this.pollAbort.abort()
+    this.deps.links.onUnlinked = null
     await this.loop
+    await this.retryLoop
+  }
+
+  /** 启动时检查 webhook：设置了 webhook 说明有别的程序在用这个 token。只告警，不删除。 */
+  private async checkWebhook() {
+    try {
+      const info = await this.request<{ url?: string }>(
+        'getWebhookInfo',
+        {},
+        { timeoutMs: REPLY_TIMEOUT_MS },
+      )
+      if (typeof info?.url === 'string' && info.url.length > 0) {
+        this.setWarning('bot 设置了 webhook：可能有人在使用同一个 bot token（未自动删除）')
+      }
+    } catch (err) {
+      this.warn('Telegram getWebhookInfo 失败', err)
+    }
+  }
+
+  private setWarning(text: string) {
+    if (this.warning?.startsWith(text)) return
+    this.warning = `${text}；${new Date(this.now()).toISOString()}`
+    this.deps.logger?.warn('Telegram 可能有人在使用同一个 bot token', { warning: text })
   }
 
   async send(message: ChannelMessage, options: ChannelCallOptions): Promise<string> {
@@ -278,6 +345,13 @@ export class TelegramChannel implements ChannelPlugin {
           this.pausedUntil = Math.max(this.pausedUntil, this.now() + err.retryAfterMs)
         }
         if (err.unauthorized) this.disable(err.status)
+        if (err.conflict === 'webhook') {
+          this.setWarning('getUpdates 冲突：bot 设置了 webhook，可能有人在使用同一个 bot token')
+        } else if (err.conflict === 'polling') {
+          this.setWarning(
+            'getUpdates 冲突：另一个程序也在用这个 bot token 轮询，可能有人在使用同一个 bot token',
+          )
+        }
       }
       throw err
     }
@@ -285,14 +359,45 @@ export class TelegramChannel implements ChannelPlugin {
 
   private disable(status: number | null) {
     if (this.disabled) return
-    this.disabled = `Telegram 拒绝了 bot token（${status ?? '?'}），渠道已停用：请检查 secret://telegram/bot-token`
+    this.disabled = `Telegram 拒绝了 bot token（${status ?? '?'}），渠道已停用：请检查 secret://telegram/bot-token；每 30 分钟自动重试`
+    this.retryAt = this.now() + TOKEN_RETRY_MS
     this.deps.logger?.warn(this.disabled)
-    this.abort.abort()
+    this.pollAbort.abort()
+    if (!this.retryLoop && !this.stopped) this.retryLoop = this.retryToken()
+  }
+
+  /** 停用后每 30 分钟用 getMe 重试；恢复后重新开始轮询，并请渠道管理器补推。 */
+  private async retryToken(): Promise<void> {
+    try {
+      while (!this.stopped && this.disabled) {
+        this.retryAt = this.now() + TOKEN_RETRY_MS
+        await this.sleep(TOKEN_RETRY_MS, this.abort.signal)
+        if (this.stopped) return
+        const api = this.api
+        if (!api) return
+        try {
+          const me = await api.call<TelegramUser>('getMe', {}, { timeoutMs: REPLY_TIMEOUT_MS })
+          this.deps.links.botUsername = me.username ?? null
+        } catch (err) {
+          this.warn('Telegram token 仍不可用', err)
+          continue
+        }
+        await this.loop
+        this.disabled = null
+        this.retryAt = null
+        this.deps.logger?.info('Telegram bot token 已恢复可用')
+        this.pollAbort = new AbortController()
+        this.loop = this.pollLoop()
+        this.deps.wake?.()
+      }
+    } finally {
+      this.retryLoop = null
+    }
   }
 
   /** 发一条文字消息（命令结果、提示）；失败只记日志。 */
-  private async reply(chatId: number, text: string, replyTo?: number) {
-    if (this.disabled || this.pausedUntil > this.now()) return
+  private async reply(chatId: number, text: string, replyTo?: number): Promise<boolean> {
+    if (this.disabled || this.pausedUntil > this.now()) return false
     try {
       await this.request(
         'sendMessage',
@@ -307,8 +412,10 @@ export class TelegramChannel implements ChannelPlugin {
         },
         { timeoutMs: REPLY_TIMEOUT_MS },
       )
+      return true
     } catch (err) {
       this.warn('Telegram 回复发送失败', err)
+      return false
     }
   }
 
@@ -335,7 +442,7 @@ export class TelegramChannel implements ChannelPlugin {
 
   private async pollLoop(): Promise<void> {
     let failures = 0
-    const signal = this.abort.signal
+    const signal = AbortSignal.any([this.abort.signal, this.pollAbort.signal])
     while (!this.stopped && !this.disabled) {
       const wait = this.pausedUntil - this.now()
       if (wait > 0) await this.sleep(wait, signal)
@@ -428,9 +535,14 @@ export class TelegramChannel implements ChannelPlugin {
     const text = typeof m.text === 'string' ? m.text.trim() : ''
     const command = parseCommand(text)
     if (command && (command.name === 'link' || command.name === 'start') && command.args) {
-      if (await this.tryLink(command.args, m)) return
-      if (!this.authorized(chat, from)) return this.ignore('绑定码无效', chat, from)
-      return this.reply(chat.id, '绑定码无效或已过期，请在电脑上重新运行 flow telegram link。')
+      const outcome = await this.tryLink(command.args, m)
+      if (outcome === 'ok') return
+      // 格式不合法、被限流：一律静默忽略；格式正确但无效：只告诉已绑定的用户本人。
+      if (outcome !== 'invalid' || !this.authorized(chat, from)) {
+        return this.ignore(`绑定码${outcome === 'limited' ? '尝试过多' : '无效'}`, chat, from)
+      }
+      await this.reply(chat.id, '绑定码无效或已过期，请在电脑上重新运行 flow telegram link。')
+      return
     }
     if (!this.authorized(chat, from)) return this.ignore('未绑定的 chat 或用户', chat, from)
     if (m.reply_to_message) return this.handleReply(m, text)
@@ -438,26 +550,53 @@ export class TelegramChannel implements ChannelPlugin {
     return this.reply(chat.id, HELP_TEXT)
   }
 
-  private async tryLink(code: string, m: TelegramMessage): Promise<boolean> {
+  private async tryLink(
+    code: string,
+    m: TelegramMessage,
+  ): Promise<'ok' | 'invalid' | 'malformed' | 'limited'> {
     const { chat, from } = m
-    if (!from || from.is_bot === true || from.id !== chat.id) return false
-    if (!this.deps.links.redeem(code)) return false
+    if (!from || from.is_bot === true || from.id !== chat.id) return 'malformed'
+    const outcome = this.deps.links.redeem(code, chat.id)
+    if (outcome !== 'ok') return outcome
     const binding = { chat_id: chat.id, user_id: from.id }
+    const previous = this.binding
+    if (previous && previous.chat_id === binding.chat_id && previous.user_id === binding.user_id) {
+      await this.reply(chat.id, '这个账号已经绑定，无需重复绑定。')
+      return 'ok'
+    }
+    if (previous) {
+      // 改绑：先通知原 chat，再切换。通知发不出去（例如原账号屏蔽了 bot）也继续，但记日志。
+      const notified = await this.reply(previous.chat_id, REBIND_NOTICE)
+      if (!notified) this.deps.logger?.warn('Telegram 改绑通知未能送达原 chat')
+    }
     const saved = await this.deps.saveBinding(binding)
     if (!saved.ok) {
       this.deps.logger?.warn('Telegram 绑定写入失败', { error: saved.error.code })
       await this.reply(chat.id, '绑定没有完成：写入配置失败，请在电脑上查看中枢日志后重试。')
-      return true
+      return 'ok'
     }
-    const previous = this.binding
     this.binding = binding
-    if (previous && previous.chat_id !== binding.chat_id) {
-      this.deps.logger?.warn('Telegram 已改绑到新的 chat', { from: previous.chat_id })
+    if (previous) {
+      const r = this.deps.ledger.append(
+        {
+          type: 'channel.rebound',
+          payload: {
+            channel: TELEGRAM_CHANNEL_ID,
+            from_chat: chatDigest(TELEGRAM_CHANNEL_ID, previous.chat_id),
+            to_chat: chatDigest(TELEGRAM_CHANNEL_ID, binding.chat_id),
+            via: 'telegram',
+          },
+        },
+        { actor: 'user' },
+      )
+      if (!r.ok) this.deps.logger?.warn('改绑记录写入失败', { error: r.error.code })
+      this.deps.logger?.warn('Telegram 已改绑到新的 chat')
+    } else {
+      this.deps.logger?.info('Telegram 已绑定')
     }
-    this.deps.logger?.info('Telegram 已绑定', { chat_id: binding.chat_id })
     await this.reply(chat.id, `已绑定。之后需要你处理的事情会推送到这里。\n\n${HELP_TEXT}`)
-    this.deps.onBound?.()
-    return true
+    this.deps.wake?.()
+    return 'ok'
   }
 
   private async handleReply(m: TelegramMessage, text: string) {
@@ -473,8 +612,8 @@ export class TelegramChannel implements ChannelPlugin {
     let itemId = ids[0]
     let body = text
     if (ids.length > 1) {
-      // 合并消息：以 #<短 id> 开头指明条目。
-      const match = /^#?([0-9a-z]{1,11})\s+([\s\S]+)$/.exec(text)
+      // 合并消息：必须以 #<短 id> 开头指明条目（不把开头的普通单词当作短 id）。
+      const match = /^#([0-9a-z]{1,11})\s+([\s\S]+)$/.exec(text)
       const items = ids.map((id) => this.deps.ledger.getInboxItem(id)).filter((i) => i !== null)
       const hit = match ? items.find((i) => i.short_id === match[1]) : undefined
       if (!match?.[2] || !hit) {
@@ -490,7 +629,7 @@ export class TelegramChannel implements ChannelPlugin {
     }
     if (!body) return this.reply(chatId, '只支持文字回复，内容不能为空。', m.message_id)
     if (!itemId || !this.onAction) return
-    const r = await this.onAction({ item: itemId, action: 'reply', text: body })
+    const r = await this.onAction({ item: itemId, action: 'reply', text: this.redact(body) })
     return this.reply(chatId, r.ok ? '已回复' : `没有完成：${r.error.message}`, m.message_id)
   }
 
@@ -529,7 +668,7 @@ export class TelegramChannel implements ChannelPlugin {
         return this.reply(chatId, statusText(this.deps.status()))
       case 'capture': {
         if (!c.args) return this.reply(chatId, '用法：/capture <内容>')
-        const r = await this.deps.capture(c.args)
+        const r = await this.deps.capture(this.redact(c.args))
         return this.reply(
           chatId,
           r.ok ? `已记下：${r.data.file}` : `没有记下：${r.error.message}`,
@@ -537,6 +676,7 @@ export class TelegramChannel implements ChannelPlugin {
         )
       }
       case 'ask': {
+        if (isForwarded(m)) return this.reply(chatId, '请直接输入指令，不要转发', m.message_id)
         const match = /^(\S+)\s+([\s\S]+)$/.exec(c.args)
         if (!match?.[1] || !match[2]?.trim()) {
           return this.reply(
@@ -545,7 +685,7 @@ export class TelegramChannel implements ChannelPlugin {
           )
         }
         const ws = match[1].startsWith('ws/') ? match[1] : `ws/${match[1]}`
-        const r = await this.deps.ask(ws, match[2].trim())
+        const r = await this.deps.ask(ws, this.redact(match[2].trim()))
         return this.reply(
           chatId,
           r.ok ? '已记录，supervisor 尚未启用' : `没有记录：${r.error.message}`,

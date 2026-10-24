@@ -398,6 +398,8 @@ export function createApplier(db: Database): Applier {
       case 'hub.backup_done':
       case 'hub.rebuilt':
       case 'user.instruction':
+      case 'channel.rebound':
+      case 'channel.unlinked':
         // 中枢运维事件与用户指令（变更 ④ 消费）不影响投影（租约顺延属于软状态，由调用方直接更新 expires_at）。
         return
       default: {

@@ -16,6 +16,7 @@ import type { HubClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
 import { renderMessage } from './render.ts'
 import {
+  type ChannelHealth,
   type ChannelPlugin,
   type ChannelSpec,
   type ChannelStatus,
@@ -247,12 +248,24 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
     }
   }
 
-  function ignoredOf(slot: Slot): number {
+  function healthOf(slot: Slot): ChannelHealth | null {
     try {
-      return slot.plugin?.health?.().ignored ?? 0
+      return slot.plugin?.health?.() ?? null
     } catch {
-      return 0
+      return null
     }
+  }
+
+  /** 最近一次改绑的时间（`channel.rebound`，按渠道）。 */
+  function lastRebound(id: string): string | null {
+    let before: number | undefined
+    for (let i = 0; i < 50; i++) {
+      const e = ledger.latestEvent(before, 'channel.rebound')
+      if (!e) return null
+      if (e.type === 'channel.rebound' && e.payload.channel === id) return e.ts
+      before = e.seq
+    }
+    return null
   }
 
   function onFailure(slot: Slot, err: unknown) {
@@ -568,6 +581,7 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
     status() {
       return slots.map((s) => {
         const disabled = selfDisabled(s)
+        const health = healthOf(s)
         return {
           id: s.id,
           state: stopped
@@ -580,10 +594,16 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
           missing_secrets: [...s.missing],
           failures: s.failures,
           next_retry_at:
-            s.retryAt === null || disabled !== null ? null : new Date(s.retryAt).toISOString(),
+            disabled !== null
+              ? (health?.retry_at ?? null)
+              : s.retryAt === null
+                ? null
+                : new Date(s.retryAt).toISOString(),
           last_error: disabled ?? s.lastError,
           failed_items: ledger.channelFailedCount(s.id),
-          ignored_inbound: ignoredOf(s),
+          ignored_inbound: health?.ignored ?? 0,
+          warning: health?.warning ?? null,
+          last_rebound_at: lastRebound(s.id),
         }
       })
     },

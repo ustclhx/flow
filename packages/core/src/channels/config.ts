@@ -110,7 +110,7 @@ export interface TelegramBinding {
  */
 export function applyTelegramBinding(
   text: string | null,
-  binding: TelegramBinding,
+  binding: TelegramBinding | null,
 ): Result<string> {
   const doc = parseDocument(text ?? '')
   if (doc.errors.length > 0) return fail('failure', 'invalid_config', `${FILE} 不是合法的 YAML`)
@@ -121,8 +121,14 @@ export function applyTelegramBinding(
   if (telegram !== undefined && telegram !== null && !isMap(telegram)) {
     return fail('failure', 'invalid_config', `${FILE} 的 telegram 必须是对象`)
   }
-  doc.setIn(['telegram', 'chat_id'], binding.chat_id)
-  doc.setIn(['telegram', 'user_id'], binding.user_id)
+  if (binding) {
+    doc.setIn(['telegram', 'chat_id'], binding.chat_id)
+    doc.setIn(['telegram', 'user_id'], binding.user_id)
+  } else if (isMap(telegram)) {
+    // 解除绑定：只删这两个字段，保留代理等其他配置。
+    telegram.delete('chat_id')
+    telegram.delete('user_id')
+  }
   const out = doc.toString()
   const check = parseChannelsConfig(parseDocument(out).toJS())
   if (!check.ok) return check
@@ -130,12 +136,12 @@ export function applyTelegramBinding(
 }
 
 /**
- * 把 Telegram 绑定写入 `config/channels.yaml` 并在 config 仓库提交（作者 `Flow (user)`：
+ * 把 Telegram 绑定写入 `config/channels.yaml`（`null` 表示解除绑定）并在 config 仓库提交（作者 `Flow (user)`：
  * 绑定由用户本人用 `flow telegram link` 申请的一次性码完成）。持有写锁；提交失败时恢复原文件。
  */
 export async function saveTelegramBinding(
   home: string,
-  binding: TelegramBinding,
+  binding: TelegramBinding | null,
 ): Promise<Result<void>> {
   const dir = flowPaths(home).config
   const abs = flowPaths(home).channelsConfig
@@ -149,6 +155,7 @@ export async function saveTelegramBinding(
       }
       before = null
     }
+    if (binding === null && before === null) return ok(undefined)
     const next = applyTelegramBinding(before, binding)
     if (!next.ok) return next
     if (next.data === before) return ok(undefined)
@@ -159,7 +166,7 @@ export async function saveTelegramBinding(
       const committed = await gitCommit(dir, {
         paths: ['channels.yaml'],
         author: flowAuthor('user'),
-        message: 'channels: 绑定 Telegram chat',
+        message: binding ? 'channels: 绑定 Telegram chat' : 'channels: 解除 Telegram 绑定',
       })
       if (committed.ok) return ok(undefined)
     } catch {

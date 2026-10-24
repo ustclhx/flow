@@ -180,6 +180,23 @@ const samples: Record<
     valid: { payload: { channel: 'telegram', ref: '42:7', item_ids: ['blk.12'] } },
     invalid: { payload: { channel: 'Tele Gram', ref: '42:7', item_ids: [] } },
   },
+  'channel.rebound': {
+    valid: {
+      payload: {
+        channel: 'telegram',
+        from_chat: '0123456789abcdef',
+        to_chat: 'fedcba9876543210',
+        via: 'telegram',
+      },
+    },
+    invalid: {
+      payload: { channel: 'telegram', from_chat: '7001', to_chat: '9009', via: 'telegram' },
+    },
+  },
+  'channel.unlinked': {
+    valid: { payload: { channel: 'telegram', chat: '0123456789abcdef', via: 'cli' } },
+    invalid: { payload: { channel: 'telegram', chat: 7001, via: 'cli' } },
+  },
   'user.instruction': {
     valid: { workspace: 'ws/global', payload: { text: '看看昨天的部署', via: 'telegram' } },
     invalid: { payload: { text: '缺少 workspace', via: 'telegram' } },

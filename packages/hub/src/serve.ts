@@ -104,19 +104,28 @@ let nodeProxyApplied: string | null = null
 /**
  * 经代理访问外网的 fetch（design D4："用运行时支持的方式传入代理，保持 Bun 与 Node 兼容"）：
  * - Bun：fetch 的 `proxy` 选项，按请求生效，不影响进程里的其他请求；
- * - Node：内置 fetch（undici）没有按请求的代理选项，用 `http.setGlobalProxyFromEnv` 打开内置代理支持，
- *   对进程内的出站请求全局生效；回环地址始终直连（本机节点与中枢之间的请求不受影响）。
- *   没有这个接口的旧版 Node 返回 `note`，由调用方告警（此时可以用 `NODE_USE_ENV_PROXY=1` 启动）。
+ * - Node：内置 fetch（undici）没有按请求的代理选项，用 `http.setGlobalProxyFromEnv` 打开内置代理支持。
+ *   这是**进程级**的：对进程内全部出站请求生效（回环地址始终直连，本机节点与中枢之间的请求不受影响）。
+ *   所以只有调用方传 `global: true`（配置文件里显式写了代理）时才启用；单独的 HTTPS_PROXY 环境变量
+ *   不会触发，此时返回 `note` 提示（Node 自己的 `NODE_USE_ENV_PROXY=1` 也可以让它识别环境变量）。
+ *   没有这个接口的旧版 Node 同样返回 `note`。
  * `proxy` 为 null 时直连。
  */
 export async function proxiedFetch(
   proxy: string | null,
-  runtime: Runtime = currentRuntime(),
+  options: { runtime?: Runtime; global?: boolean } = {},
 ): Promise<{ fetch: OutboundFetch; note: string | null }> {
+  const runtime = options.runtime ?? currentRuntime()
   const plain: OutboundFetch = (url, init) => fetch(url, init)
   if (!proxy) return { fetch: plain, note: null }
   if (runtime === 'bun') {
     return { fetch: (url, init) => fetch(url, { ...init, proxy } as RequestInit), note: null }
+  }
+  if (!options.global) {
+    return {
+      fetch: plain,
+      note: 'Node 下只按 config/channels.yaml 的 telegram.proxy 启用代理（进程级）；单独的 HTTPS_PROXY 不生效，可改用 NODE_USE_ENV_PROXY=1 启动',
+    }
   }
   const http = (await import('node:http')) as unknown as { setGlobalProxyFromEnv?: SetGlobalProxy }
   if (typeof http.setGlobalProxyFromEnv !== 'function') {

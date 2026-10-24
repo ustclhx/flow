@@ -529,6 +529,8 @@ describe('缺少密钥', () => {
         last_error: null,
         failed_items: 0,
         ignored_inbound: 0,
+        warning: null,
+        last_rebound_at: null,
       },
     ])
     expect(created).toHaveLength(0)
@@ -551,7 +553,12 @@ describe('插件自己报告停用（例如 Telegram token 无效）', () => {
             const ch = new MemoryChannel('tg')
             const reason = disabled
             // 与 Telegram 一样：启动时（getMe 401）才发现 token 无效
-            ch.health = () => ({ disabled: ch.started > 0 ? reason : null, ignored: 3 })
+            ch.health = () => ({
+              disabled: ch.started > 0 ? reason : null,
+              ignored: 3,
+              warning: '可能有人在使用同一个 bot token',
+              retry_at: '2026-10-26T10:30:00.000Z',
+            })
             instances.push(ch)
             return ch
           },
@@ -567,8 +574,9 @@ describe('插件自己报告停用（例如 Telegram token 无效）', () => {
       id: 'tg',
       state: 'disabled',
       last_error: 'token 无效（401）',
-      next_retry_at: null,
+      next_retry_at: '2026-10-26T10:30:00.000Z',
       ignored_inbound: 3,
+      warning: '可能有人在使用同一个 bot token',
     })
     expect(instances[0]?.sendCalls).toBe(0)
 

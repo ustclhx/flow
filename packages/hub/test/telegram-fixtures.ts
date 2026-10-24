@@ -45,6 +45,8 @@ export class FakeTelegram {
   sent: SentMessage[] = []
   edits: { chat_id: number; message_id: number; text: string }[] = []
   answers: { callback_query_id: string; text?: string }[] = []
+  /** getWebhookInfo 返回的 webhook 地址（空串表示没有设置）。 */
+  webhookUrl = ''
   private updates: Record<string, unknown>[] = []
   private nextUpdateId = 100
   private nextMessageId = 500
@@ -156,6 +158,8 @@ export class FakeTelegram {
     if (failure) return reply(failure.status, failure.body)
     const ok = (result: unknown) => reply(200, { ok: true, result })
     switch (method) {
+      case 'getWebhookInfo':
+        return ok({ url: this.webhookUrl, pending_update_count: 0 })
       case 'getMe':
         return ok({ id: BOT_ID, is_bot: true, username: 'flow_test_bot', first_name: 'Flow' })
       case 'getUpdates': {

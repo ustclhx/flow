@@ -18,6 +18,7 @@ import {
   ok,
   type ShowTaskData,
   type TelegramLinkCodeData,
+  type TelegramUnlinkData,
 } from '@flow/core'
 import { type EventInput, openLedger, type RunningHub, runHub } from '../src/index.ts'
 import { drafts, must } from './ledger-helpers.ts'
@@ -67,7 +68,7 @@ async function makeHome(o: { bound?: boolean; channels?: string } = {}) {
 /** 测试里读取的响应体（几种接口的字段合在一起，按需取用）。 */
 interface ApiBody {
   ok: boolean
-  data: HubStatusData & TelegramLinkCodeData & ShowTaskData
+  data: HubStatusData & TelegramLinkCodeData & ShowTaskData & TelegramUnlinkData
   error: { code: string; message: string }
 }
 
@@ -400,6 +401,94 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
   })
 })
 
+describe('改绑与解除绑定（PR #34 审查）', () => {
+  const OTHER_ID = 7002
+
+  test('已绑定时不加 --rebind 拒绝发码；改绑先通知原 chat，记 channel.rebound，状态显示改绑时间；unlink 后原 chat 被忽略', async () => {
+    const fake = await new FakeTelegram().start()
+    cleanups.push(() => fake.close())
+    const h = await makeHome({ bound: true })
+    const { logs, api } = await startHub(h, fake)
+    await until(() => fake.offsets.length > 0, '开始长轮询')
+
+    const plain = await api('/v1/telegram/link-code', { method: 'POST', body: '{}' })
+    expect(plain.body.error.code).toBe('already_bound')
+    expect(plain.body.error.message).toContain('--rebind')
+    // user token 降级声明的 AI 身份：改绑码与解除绑定都被拒绝
+    for (const path of ['/v1/telegram/link-code', '/v1/telegram/unlink']) {
+      const ai = await api(path, {
+        method: 'POST',
+        body: JSON.stringify(path.endsWith('link-code') ? { rebind: true } : {}),
+        actor: 'claude',
+      })
+      expect(ai.status).toBe(403)
+      expect(ai.body.error.code).toBe('user_only')
+    }
+
+    const issued = await api('/v1/telegram/link-code', {
+      method: 'POST',
+      body: JSON.stringify({ rebind: true }),
+    })
+    expect(issued.status).toBe(201)
+    fake.say(`/link ${issued.body.data.code}`, { chat: OTHER_ID })
+    await until(() => fake.to(OTHER_ID).some((m) => m.text.includes('已绑定')), '改绑完成')
+    const notice = fake.sent.findIndex((m) => m.chat_id === USER_ID && m.text.includes('已改绑'))
+    const done = fake.sent.findIndex((m) => m.chat_id === OTHER_ID)
+    expect(notice).toBeGreaterThanOrEqual(0)
+    expect(notice).toBeLessThan(done)
+    expect(fake.sent[notice]?.text).toContain('flow telegram unlink')
+    expect(readFileSync(flowPaths(h).channelsConfig, 'utf8')).toContain(`chat_id: ${OTHER_ID}`)
+    const status = await api('/v1/hub/status')
+    expect(status.body.data.channels[0]?.last_rebound_at).not.toBeNull()
+
+    // 解除绑定：立即生效
+    const unlinked = await api('/v1/telegram/unlink', { method: 'POST', body: '{}' })
+    expect(unlinked.body.data.unlinked).toBe(true)
+    const yaml = readFileSync(flowPaths(h).channelsConfig, 'utf8')
+    expect(yaml).not.toContain('chat_id')
+    expect(
+      execFileSync('git', ['log', '-1', '--format=%s'], { cwd: flowPaths(h).config })
+        .toString()
+        .trim(),
+    ).toBe('channels: 解除 Telegram 绑定')
+    const before = fake.to(OTHER_ID).length
+    const u = fake.say('/inbox', { chat: OTHER_ID })
+    await until(() => fake.offsets.some((x) => x > u), '处理解绑后的消息')
+    expect(fake.to(OTHER_ID)).toHaveLength(before)
+    const again = await api('/v1/telegram/unlink', { method: 'POST', body: '{}' })
+    expect(again.body.data.unlinked).toBe(false)
+
+    await hub?.stop()
+    hub = undefined
+    const ledger = await openLedger(flowPaths(h).ledgerDb)
+    const events = ledger
+      .eventsAfter(0, {}, 10_000)
+      .filter((e) => e.type === 'channel.rebound' || e.type === 'channel.unlinked')
+    ledger.close()
+    expect(events.map((e) => [e.type, e.actor])).toEqual([
+      ['channel.rebound', 'user'],
+      ['channel.unlinked', 'user'],
+    ])
+    expect(JSON.stringify(events)).not.toContain(String(USER_ID))
+    expect(JSON.stringify(events)).not.toContain(String(OTHER_ID))
+    await expectNoToken(h, fake.token, [logs, fake.sent])
+  })
+
+  test('/capture 里粘贴的疑似密钥：写入 raw 前已脱敏', async () => {
+    const fake = await new FakeTelegram().start()
+    cleanups.push(() => fake.close())
+    const h = await makeHome({ bound: true })
+    await startHub(h, fake)
+    const leaked = ['ghp', '_', 'Z9y8X7w6'.repeat(5)].join('')
+    fake.say(`/capture 新 token ${leaked}`)
+    await until(() => fake.to(USER_ID).some((m) => m.text.startsWith('已记下')), '随手记确认')
+    const files = readdirSync(join(flowPaths(h).raw, 'inbox'))
+    const text = readFileSync(join(flowPaths(h).raw, 'inbox', files[0] ?? ''), 'utf8')
+    expect(text).toContain('新 token')
+    expect(text).not.toContain(leaked)
+  })
+})
+
 describe('渠道状态', () => {
   test('401（token 错误）：渠道 disabled，状态报告原因（不含 token），申请绑定码返回 channel_unavailable', async () => {
     const fake = await new FakeTelegram().start()
@@ -410,7 +499,9 @@ describe('渠道状态', () => {
     await until(() => logs.some((l) => l.message.includes('渠道已停用')), '停用')
     const status = await api('/v1/hub/status')
     const tg = status.body.data.channels[0]
-    expect(tg).toMatchObject({ id: 'telegram', state: 'disabled', next_retry_at: null })
+    expect(tg).toMatchObject({ id: 'telegram', state: 'disabled' })
+    // 不再永久停用：30 分钟后重试 getMe
+    expect(tg?.next_retry_at).not.toBeNull()
     expect(tg?.last_error).toContain('401')
     const link = await api('/v1/telegram/link-code', { method: 'POST', body: '{}' })
     expect(link.body.error.code).toBe('channel_unavailable')

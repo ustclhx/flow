@@ -75,4 +75,24 @@ describe('flow telegram link', () => {
     expect(ai.exitCode).toBe(1)
     expect(JSON.parse(ai.stdout || ai.stderr)).toMatchObject({ error: { code: 'user_only' } })
   })
+
+  test('已绑定：不加 --rebind 提示已绑定；--rebind 发码；flow telegram unlink 解除绑定（仅 user）', async () => {
+    const bound = await runCli(['telegram', 'link', '--json'], commands)
+    expect(bound.exitCode).toBe(1)
+    expect(JSON.parse(bound.stdout || bound.stderr)).toMatchObject({
+      error: { code: 'already_bound' },
+    })
+    const rebind = await runCli(['telegram', 'link', '--rebind'], commands)
+    expect(rebind.exitCode).toBe(0)
+    expect(rebind.stdout).toMatch(/\/link [a-z2-9]{16}/)
+
+    const ai = await runCli(['telegram', 'unlink', '--json', '--actor', 'codex'], commands)
+    expect(ai.exitCode).toBe(1)
+    expect(JSON.parse(ai.stdout || ai.stderr)).toMatchObject({ error: { code: 'user_only' } })
+    const un = await runCli(['telegram', 'unlink'], commands)
+    expect(un.exitCode).toBe(0)
+    expect(un.stdout).toContain('已解除 Telegram 绑定')
+    const again = await runCli(['telegram', 'unlink'], commands)
+    expect(again.stdout).toContain('原本就没有绑定')
+  })
 })

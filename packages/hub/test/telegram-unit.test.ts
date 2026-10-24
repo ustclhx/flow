@@ -12,11 +12,14 @@ import {
   createTelegramApi,
   createTelegramLinks,
   escapeHtml,
+  LINK_ATTEMPT_LIMIT,
+  LINK_ATTEMPT_WINDOW_MS,
+  LINK_BLOCK_MS,
   LINK_CODE_TTL_MS,
-  LINK_FAILURE_LIMIT,
   loadTelegramState,
   type OutboundItem,
   parseCallbackData,
+  proxiedFetch,
   renderTelegramMessage,
   saveTelegramState,
   TELEGRAM_TEXT_MAX,
@@ -297,6 +300,7 @@ describe('Bot API 客户端的错误分类', () => {
 })
 
 describe('绑定码', () => {
+  const ME = 7001
   test('随机 ≥64 位、10 分钟过期、一次性、错误的码被拒绝', () => {
     let now = 1_000_000
     const links = createTelegramLinks({ now: () => now })
@@ -305,22 +309,53 @@ describe('绑定码', () => {
     // 31 个字符 × 16 位 ≈ 79 位
     expect(16 * Math.log2(31)).toBeGreaterThan(64)
     expect(links.issue().code).not.toBe(a.code)
-    expect(links.redeem('x'.repeat(16))).toBe(false)
-    expect(links.redeem(a.code.toUpperCase())).toBe(true)
+    expect(links.redeem('x'.repeat(16), ME)).toBe('invalid')
+    expect(links.redeem(a.code.toUpperCase(), ME)).toBe('ok')
     // 一次性
-    expect(links.redeem(a.code)).toBe(false)
+    expect(links.redeem(a.code, ME)).toBe('invalid')
     // 过期
     const b = links.issue()
     now += LINK_CODE_TTL_MS
-    expect(links.redeem(b.code)).toBe(false)
+    expect(links.redeem(b.code, ME)).toBe('invalid')
     expect(new Date(b.expires_at).getTime()).toBe(now)
   })
 
-  test('错误尝试过多时清空所有未使用的码', () => {
-    const links = createTelegramLinks()
+  test('按 chat 限流：一个 chat 刷错误码只会让它自己被忽略，不影响别人、不清掉已发的码', () => {
+    let now = 1_000_000
+    const links = createTelegramLinks({ now: () => now })
     const code = links.issue().code
-    for (let i = 0; i < LINK_FAILURE_LIMIT; i++) links.redeem(`wrong${i}`)
-    expect(links.redeem(code)).toBe(false)
+    const ATTACKER = 9009
+    for (let i = 0; i < LINK_ATTEMPT_LIMIT; i++) {
+      expect(links.redeem('x'.repeat(16), ATTACKER)).toBe('invalid')
+    }
+    // 攻击者被暂时忽略：即使拿到了正确的码也不校验
+    expect(links.redeem(code, ATTACKER)).toBe('limited')
+    // 用户本人照常绑定
+    expect(links.redeem(code, ME)).toBe('ok')
+    // 忽略期过后恢复
+    now += LINK_BLOCK_MS
+    expect(links.redeem('x'.repeat(16), ATTACKER)).toBe('invalid')
+  })
+
+  test('窗口外的错误尝试不累计；格式不合法的码不计数', () => {
+    let now = 1_000_000
+    const links = createTelegramLinks({ now: () => now })
+    const CHAT = 4242
+    for (let i = 0; i < 100; i++) expect(links.redeem(`/start-${i}`, CHAT)).toBe('malformed')
+    for (let i = 0; i < LINK_ATTEMPT_LIMIT - 1; i++) links.redeem('x'.repeat(16), CHAT)
+    now += LINK_ATTEMPT_WINDOW_MS
+    for (let i = 0; i < LINK_ATTEMPT_LIMIT - 1; i++) links.redeem('x'.repeat(16), CHAT)
+    const code = links.issue().code
+    expect(links.redeem(code, CHAT)).toBe('ok')
+  })
+})
+
+describe('Node 的进程级代理', () => {
+  test('没有显式配置 telegram.proxy（只有 HTTPS_PROXY）时不启用全局代理，返回提示', async () => {
+    const r = await proxiedFetch('http://127.0.0.1:9', { runtime: 'node', global: false })
+    expect(r.note).toContain('telegram.proxy')
+    expect(typeof r.fetch).toBe('function')
+    expect((await proxiedFetch(null, { runtime: 'node' })).note).toBeNull()
   })
 })
 

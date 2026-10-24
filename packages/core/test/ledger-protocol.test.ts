@@ -205,6 +205,7 @@ describe('端点清单与 JSON Schema 导出', () => {
       'POST /v1/hub/tokens/:id/revoke',
       'POST /v1/ui/login-code',
       'POST /v1/telegram/link-code',
+      'POST /v1/telegram/unlink',
       'POST /v1/tasks',
       'GET /v1/tasks',
       'GET /v1/tasks/:id',

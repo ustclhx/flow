@@ -17,6 +17,7 @@ import {
   okBody,
   type PolicyCheckRequest,
   type ReplyTaskRequest,
+  type TelegramLinkCodeRequest,
 } from '../ledger/protocol.ts'
 import type { TaskContractInput } from '../ledger/task.ts'
 import { fail, ok, type Result } from '../result.ts'
@@ -166,8 +167,11 @@ export class HubClient {
   uiLoginCode() {
     return this.request('ui-login-code', {})
   }
-  telegramLinkCode() {
-    return this.request('telegram-link-code', {})
+  telegramLinkCode(input: TelegramLinkCodeRequest = {}) {
+    return this.request('telegram-link-code', input)
+  }
+  telegramUnlink() {
+    return this.request('telegram-unlink', {})
   }
 
   /** 旧中枢没有 status 路由时，用 health 加本地文件补足可观测信息。 */

@@ -124,6 +124,10 @@ export interface ChannelPlugin {
 export interface ChannelHealth {
   disabled: string | null
   ignored: number
+  /** 需要用户注意的情况（例如"可能有人在使用同一个 bot token"）。 */
+  warning?: string | null
+  /** 停用时插件自己下一次重试的时间（ISO）。 */
+  retry_at?: string | null
 }
 
 /**
@@ -162,4 +166,8 @@ export interface ChannelStatus {
   failed_items: number
   /** 被忽略的入站访问次数（插件报告）。 */
   ignored_inbound: number
+  /** 插件报告的警告。 */
+  warning: string | null
+  /** 最近一次改绑（`channel.rebound`）的时间。 */
+  last_rebound_at: string | null
 }

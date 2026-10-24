@@ -13,7 +13,8 @@ import { ChannelError, type ChannelErrorKind } from '../types.ts'
  * | 情况 | 分类 |
  * | --- | --- |
  * | 网络错误、超时、代理返回非 JSON | transport（整个渠道退避） |
- * | 5xx、409（另一个实例在轮询） | transport |
+ * | 5xx | transport |
+ * | 409（另一个 getUpdates 在运行 / 设置了 webhook） | transport + `conflict`：可能有人在用同一个 token |
  * | 429 | transport，并带上 `retry_after`：插件在这之前不再请求 |
  * | 401 / 404（token 无效或被吊销） | transport + `unauthorized`：插件停用，状态报告 disabled |
  * | 403（用户屏蔽了 bot 等） | transport：等用户恢复，条目保持 pending |
@@ -42,6 +43,12 @@ export interface TelegramMessage {
   from?: TelegramUser
   text?: string
   reply_to_message?: { message_id: number; chat?: TelegramChat }
+  /** 转发来的消息（Bot API 7.0+；旧字段 forward_from / forward_date）。 */
+  forward_origin?: unknown
+  forward_from?: unknown
+  forward_date?: number
+  /** 经 inline bot 发出的消息。 */
+  via_bot?: TelegramUser
 }
 
 export interface TelegramCallbackQuery {
@@ -75,6 +82,8 @@ export class TelegramApiError extends ChannelError {
     readonly retryAfterMs: number | null = null,
     /** 401 / 404：token 无效或已被吊销。 */
     readonly unauthorized = false,
+    /** 409：`polling` 是另一个 getUpdates 在运行，`webhook` 是 bot 设置了 webhook。 */
+    readonly conflict: 'polling' | 'webhook' | null = null,
   ) {
     super(message, kind)
     this.name = 'TelegramApiError'
@@ -134,6 +143,7 @@ export function createTelegramApi(o: TelegramApiOptions): TelegramApi {
     status: number | null,
     retryAfterMs: number | null = null,
     unauthorized = false,
+    conflict: 'polling' | 'webhook' | null = null,
   ) =>
     new TelegramApiError(
       scrub(`Telegram ${method} ${detail}`).slice(0, 400),
@@ -141,6 +151,7 @@ export function createTelegramApi(o: TelegramApiOptions): TelegramApi {
       status,
       retryAfterMs,
       unauthorized,
+      conflict,
     )
 
   async function call<T>(
@@ -187,6 +198,10 @@ export function createTelegramApi(o: TelegramApiOptions): TelegramApi {
       const after = body.parameters?.retry_after
       const ms = typeof after === 'number' && after > 0 ? Math.min(after, 3600) * 1000 : 1000
       throw fail(method, detail, 'transport', status, ms)
+    }
+    if (status === 409) {
+      const conflict = /webhook/i.test(description) ? 'webhook' : 'polling'
+      throw fail(method, detail, 'transport', status, null, false, conflict)
     }
     if (status === 401 || status === 404) {
       throw fail(method, detail, 'transport', status, null, true)

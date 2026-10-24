@@ -1,5 +1,6 @@
 import {
   appendCapture,
+  chatDigest,
   fail,
   flowPaths,
   type HubConfig,
@@ -115,6 +116,10 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let protocol: NodeProtocol | undefined
   // Web 页面（6.1）：会话只在内存中；Host 校验需要实际监听的端口，启动成功后才填入。
   const uiSessions = createUiSessions({ now: () => clock.now() })
+  const activeLedgerFor = () => {
+    if (!ledger) throw new Error('账本尚未打开')
+    return ledger
+  }
   // Telegram 绑定码（5.1）：只在内存中，HTTP 路由申请、插件兑换。
   const telegramLinks = createTelegramLinks({ now: () => clock.now() })
   let uiPort: number | undefined
@@ -215,6 +220,11 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
           app: createTelegramRoutes({
             links: telegramLinks,
             unavailable: () => telegramUnavailable(inbox?.channels.status() ?? []),
+            isBound: async () => {
+              const loaded = await loadChannelsConfig(options.home)
+              return loaded.ok && loaded.data.telegram?.chat_id !== undefined
+            },
+            unlink: () => unlinkTelegram(options.home, activeLedgerFor(), telegramLinks),
           }),
         },
         {
@@ -296,7 +306,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       overrides: options.inbox?.telegram ?? {},
       deps: {
         ledger: activeLedger,
-        onBound: () => {
+        wake: () => {
           void inbox?.channels.wake(TELEGRAM_CHANNEL_ID)
         },
         status: () =>
@@ -346,6 +356,37 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   return started
 }
 
+/** `flow telegram unlink`：删掉 channels.yaml 中的绑定并提交，插件立即停止接受原 chat，记 `channel.unlinked`。 */
+async function unlinkTelegram(
+  home: string,
+  ledger: LedgerStore,
+  links: TelegramLinks,
+): Promise<Result<{ unlinked: boolean }>> {
+  const loaded = await loadChannelsConfig(home)
+  if (!loaded.ok) return loaded
+  const chat = loaded.data.telegram?.chat_id
+  if (chat === undefined) {
+    links.onUnlinked?.()
+    return ok({ unlinked: false })
+  }
+  const saved = await saveTelegramBinding(home, null)
+  if (!saved.ok) return saved
+  links.onUnlinked?.()
+  const r = ledger.append(
+    {
+      type: 'channel.unlinked',
+      payload: {
+        channel: TELEGRAM_CHANNEL_ID,
+        chat: chatDigest(TELEGRAM_CHANNEL_ID, chat),
+        via: 'cli',
+      },
+    },
+    { actor: 'user' },
+  )
+  if (!r.ok) return r
+  return ok({ unlinked: true })
+}
+
 /** 绑定码路由用：Telegram 渠道不能接收绑定码时的原因。 */
 function telegramUnavailable(
   statuses: readonly {
@@ -377,7 +418,7 @@ async function defaultChannels(o: {
   logger: TelegramDeps['logger']
   links: TelegramLinks
   overrides: Partial<TelegramDeps>
-  deps: Pick<TelegramDeps, 'ledger' | 'onBound' | 'status' | 'ask'>
+  deps: Pick<TelegramDeps, 'ledger' | 'wake' | 'status' | 'ask'>
 }): Promise<ChannelSpec[]> {
   const loaded = await loadChannelsConfig(o.home)
   if (!loaded.ok) {
