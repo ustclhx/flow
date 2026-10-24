@@ -3,6 +3,7 @@ import { scheduleErrorSchema } from '../daemon/schedules.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import { executorInfo, ledgerEvent } from './events.ts'
+import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import {
   activity,
   blockedReason,
@@ -29,6 +30,17 @@ import {
  */
 
 export const PROTOCOL_VERSION = 'v1'
+
+/**
+ * 节点上报的卡住说明与末尾输出的上限（PR #16 复核第 1 条）：超长的请求直接被 zod 拒绝，
+ * 不让任意大小的文本进入中枢的同步写事务。节点上报前用 `clipTail` 截断。
+ */
+const blockedMessage = z.string().min(1).max(PROTOCOL_MESSAGE_MAX)
+const blockedTail = z
+  .array(z.string().max(TAIL_LINE_MAX))
+  .max(200)
+  .optional()
+  .meta({ description: '末尾输出：最多 200 行，每行最多 2000 字符' })
 export const DEFAULT_HUB_PORT = 7477
 export const HUB_HOSTNAME = '127.0.0.1'
 
@@ -303,8 +315,8 @@ export const renewLeaseRequest = z
     blocked: z
       .strictObject({
         reason: blockedReason,
-        message: z.string().min(1),
-        tail: z.array(z.string()).max(200).optional(),
+        message: blockedMessage,
+        tail: blockedTail,
         session: z
           .string()
           .min(1)
@@ -353,8 +365,8 @@ export const completeLeaseRequest = z
       ...token,
       outcome: z.literal('blocked'),
       blocked_reason: blockedReason,
-      message: z.string().min(1),
-      tail: z.array(z.string()).max(200).optional(),
+      message: blockedMessage,
+      tail: blockedTail,
       session: z
         .string()
         .min(1)
@@ -365,7 +377,7 @@ export const completeLeaseRequest = z
     z.strictObject({
       ...token,
       outcome: z.literal('cancelled'),
-      message: z.string().optional(),
+      message: z.string().max(PROTOCOL_MESSAGE_MAX).optional(),
     }),
   ])
   .meta({

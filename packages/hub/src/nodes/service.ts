@@ -158,6 +158,19 @@ export function completionDrafts(
           lease_held: false,
         },
       }
+      // 已请求取消：不论有没有回复，都以 cancelled 结束，不让重新排队覆盖取消（复核第 2 条）。
+      if (task.cancel_requested) {
+        return [
+          {
+            ...base,
+            type: 'task.cancelled',
+            payload: {
+              reason: sanitizeMessage(`已请求取消；worker 结束：${req.message}`),
+              node_id: lease.node_id,
+            },
+          },
+        ]
+      }
       if (task.status === 'blocked' && pendingReply) {
         return [
           blocked,
@@ -244,6 +257,7 @@ export function expiryDrafts(
           ),
           ...(was?.tail ? { tail: was.tail } : {}),
           ...(session ? { session } : {}),
+          ...(was ? { prior_reason: was.prior_reason ?? was.reason } : {}),
           node_id: lease.node_id,
           lease_held: false,
         },
@@ -452,7 +466,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       ledger.renewLease(lease.lease_id, expiresAt)
       ledger.touchNode(lease.node_id)
       const after = ledger.getTask(task.id) ?? task
-      const pending = after.status === 'blocked' ? ledger.pendingReply(task.id) : null
+      // 已请求取消的任务不再送达回复。
+      const pending =
+        after.status === 'blocked' && !after.cancel_requested ? ledger.pendingReply(task.id) : null
       return ok({
         lease_id: lease.lease_id,
         expires_at: expiresAt,
@@ -491,17 +507,24 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       const base = { task_id: task.id, workspace: task.workspace }
       const session = task.blocked?.session
       const draft: EventInput =
-        req.data.outcome === 'delivered'
+        req.data.outcome === 'not_running' && task.cancel_requested
           ? {
+              // 已请求取消：worker 不在了就直接取消，不带着回复重新排队（复核第 2 条）。
               ...base,
-              type: 'task.unblocked',
-              payload: { reply_id: reply.id, note: replyNote(reply) },
+              type: 'task.cancelled',
+              payload: { reason: '已请求取消；送达回复时 worker 已不在', node_id: lease.node_id },
             }
-          : {
-              ...base,
-              type: 'task.requeued_with_reply',
-              payload: { reply_id: reply.id, ...(session ? { session } : {}) },
-            }
+          : req.data.outcome === 'delivered'
+            ? {
+                ...base,
+                type: 'task.unblocked',
+                payload: { reply_id: reply.id, note: replyNote(reply) },
+              }
+            : {
+                ...base,
+                type: 'task.requeued_with_reply',
+                payload: { reply_id: reply.id, ...(session ? { session } : {}) },
+              }
       const written = ledger.append(draft, { actor: `node:${lease.node_id}` })
       if (!written.ok) return written
       ledger.touchNode(lease.node_id)

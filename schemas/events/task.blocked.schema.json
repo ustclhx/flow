@@ -76,6 +76,18 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 512
+        },
+        "prior_reason": {
+          "description": "node_lost 时节点掉线之前的卡住原因，例如 awaiting_approval（仍可 approve / deny）",
+          "type": "string",
+          "enum": [
+            "awaiting_approval",
+            "question",
+            "no_progress",
+            "crashed",
+            "node_lost",
+            "other"
+          ]
         }
       },
       "required": [

@@ -155,6 +155,7 @@ export function createApplier(db: Database): Applier {
           message: p.message,
           ...(p.tail ? { tail: p.tail } : {}),
           ...(p.session ? { session: p.session } : {}),
+          ...(p.prior_reason ? { prior_reason: p.prior_reason } : {}),
         }
         setStatus(e, 'blocked', ', blocked_json = ?', JSON.stringify(blocked))
         return

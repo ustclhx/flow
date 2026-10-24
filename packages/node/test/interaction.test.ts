@@ -227,10 +227,10 @@ describe('送达与恢复', () => {
   })
 
   test('deliver 很慢（超过 TTL）：续约不被阻塞，租约不过期（审查第 9 条）', async () => {
-    const b = await open()
+    const b = await open({}, 30)
     const id = await b.create({
       ...interactive(),
-      inputs: { fake: { ...interactive().inputs.fake, deliver_delay_ms: 150_000 } },
+      inputs: { fake: { ...interactive().inputs.fake, deliver_delay_ms: 50_000 } },
     })
     await b.until(id, (t) => t.status === 'blocked')
     await reply(b, id, { kind: 'text', text: '用 main' })
@@ -289,5 +289,20 @@ describe('送达与恢复', () => {
       session: 'orca-term-3',
       lease_held: true,
     })
+  })
+
+  test('deliver 永不返回：超时后按临时错误重送，任务不会永久卡住（复核第 4 条）', async () => {
+    const b = await open({ deliverTimeoutMs: 60_000 })
+    const id = await b.create({
+      ...interactive(),
+      inputs: { fake: { ...interactive().inputs.fake, deliver_hangs: 1 } },
+    })
+    await b.until(id, (t) => t.status === 'blocked')
+    await reply(b, id, { kind: 'text', text: '用 main' })
+    await b.clock.advance(50_000)
+    expect(b.task(id).status).toBe('blocked')
+    const t = await b.until(id, (t) => t.status === 'done', 5 * 60_000)
+    expect(t.attempt).toBe(1)
+    expect(b.ledger.taskReplies(id)).toMatchObject([{ state: 'delivered' }])
   })
 })

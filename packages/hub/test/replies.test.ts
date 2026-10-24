@@ -462,7 +462,7 @@ describe('回复卡住的任务（task-interaction）', () => {
     const fakeToken = ['gh', 'p_', 'Z'.repeat(36)].join('')
     const tail = [
       `export GH_TOKEN=${fakeToken}`,
-      'x'.repeat(5000),
+      'x'.repeat(2000),
       ...Array.from({ length: 150 }, (_, i) => `${i}:${'y'.repeat(190)}`),
     ]
     ctx.protocol.service.renew(lease.lease_id, {
@@ -477,7 +477,85 @@ describe('回复卡住的任务（task-interaction）', () => {
       16 * 1024,
     )
     expect(blocked?.tail?.at(-1)).toBe(`149:${'y'.repeat(190)}`)
-    expect(blocked?.tail?.every((l) => l.length <= 2001)).toBe(true)
+    expect(blocked?.tail?.every((l) => l.length <= 2000)).toBe(true)
+  })
+
+  test('协议拒绝超长的说明与末尾输出（复核第 1 条）', async () => {
+    const ctx = await setup()
+    await ctx.create()
+    const lease = await grant(ctx)
+    const renew = (blocked: Record<string, unknown>) =>
+      code(ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token, blocked }))
+    expect(renew({ reason: 'question', message: 'm'.repeat(8193) })).toBe('invalid_arguments')
+    expect(renew({ reason: 'question', message: '?', tail: ['t'.repeat(2001)] })).toBe(
+      'invalid_arguments',
+    )
+    expect(
+      renew({ reason: 'question', message: '?', tail: Array.from({ length: 201 }, () => 'x') }),
+    ).toBe('invalid_arguments')
+    const complete = ctx.protocol.service.complete(lease.lease_id, {
+      lease_token: lease.lease_token,
+      outcome: 'blocked',
+      blocked_reason: 'crashed',
+      message: 'm'.repeat(8193),
+    })
+    expect(code(complete)).toBe('invalid_arguments')
+  })
+
+  test('取消不会被"带着回复重新排队"覆盖：ack not_running（复核第 2 条）', async () => {
+    const ctx = await setup()
+    const { id, lease } = await blockedHeld(ctx)
+    ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'user' })
+    ctx.tasks.cancelTask(id, { actor: 'user' })
+    // 已请求取消：续约不再返回回复。
+    const r = ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token })
+    expect(r.ok && r.data).toMatchObject({ cancel_requested: true, reply: null })
+    const ack = ctx.protocol.service.ackReply(lease.lease_id, {
+      lease_token: lease.lease_token,
+      reply_id: 'r-1',
+      outcome: 'not_running',
+    })
+    expect(ack.ok && ack.data.task.status).toBe('cancelled')
+    expect(types(ctx, id)).not.toContain('task.requeued_with_reply')
+  })
+
+  test('取消不会被"带着回复重新排队"覆盖：卡住期间崩溃（复核第 2 条）', async () => {
+    const ctx = await setup()
+    const { id, lease } = await blockedHeld(ctx)
+    ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'user' })
+    ctx.tasks.cancelTask(id, { actor: 'user' })
+    const r = ctx.protocol.service.complete(lease.lease_id, {
+      lease_token: lease.lease_token,
+      outcome: 'blocked',
+      blocked_reason: 'crashed',
+      message: '退出码 137',
+    })
+    expect(r.ok && r.data.task.status).toBe('cancelled')
+    expect(types(ctx, id).slice(-1)).toEqual(['task.cancelled'])
+    expect(ctx.ledger.getReply('r-1')?.state).toBe('dropped')
+  })
+
+  test('等授权时节点掉线：node_lost 保留 prior_reason，仍可 approve（复核第 5 条）', async () => {
+    const ctx = await setup()
+    const { id } = await blockedHeld(ctx, 'awaiting_approval')
+    await ctx.clock.advance((TTL + 5) * 1000)
+    ctx.protocol.sweep()
+    expect(ctx.ledger.getTask(id)?.blocked).toMatchObject({
+      reason: 'node_lost',
+      prior_reason: 'awaiting_approval',
+    })
+    const r = ctx.tasks.replyTask(id, { kind: 'approve' }, { actor: 'user' })
+    expect(r.ok && r.data.requeued).toBe(true)
+    const next = await grant(ctx)
+    expect(next.resume?.reply.kind).toBe('approve')
+
+    const ctx2 = await setup()
+    const q = await blockedHeld(ctx2, 'question')
+    await ctx2.clock.advance((TTL + 5) * 1000)
+    ctx2.protocol.sweep()
+    expect(code(ctx2.tasks.replyTask(q.id, { kind: 'approve' }, { actor: 'user' }))).toBe(
+      'reply_kind_mismatch',
+    )
   })
 })
 

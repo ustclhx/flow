@@ -126,6 +126,7 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
         ? (parsed.data.resume ?? fakeResumeInputs.parse({}))
         : parsed.data
       let deliverFailures = spec.deliver_failures ?? 0
+      let deliverHangs = spec.deliver_hangs ?? 0
       const resumedSummary = resume
         ? `已恢复（会话 ${resume.session ?? '无'}）：${resume.reply.kind}${resume.reply.text ? ` ${resume.reply.text}` : ''}`
         : undefined
@@ -235,6 +236,10 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
         },
         deliver: async (reply): Promise<DeliverResult> => {
           if (finished) return 'not_running'
+          if (deliverHangs > 0) {
+            deliverHangs--
+            return new Promise<DeliverResult>(() => {})
+          }
           if (deliverFailures > 0) {
             deliverFailures--
             throw new Error('fake：模拟送达失败')

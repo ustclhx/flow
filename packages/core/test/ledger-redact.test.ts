@@ -40,6 +40,34 @@ describe('redactSecrets', () => {
     )
   })
 
+  test('环境变量写法（大小写）与其他令牌前缀（复核第 3 条）', () => {
+    const v = j('Vv', '9'.repeat(18))
+    for (const key of [
+      'DB_PASSWORD',
+      'GITHUB_TOKEN',
+      'OPENAI_API_KEY',
+      'AWS_SECRET_ACCESS_KEY',
+      'db_password',
+      'github_token',
+      'openai_api_key',
+      'aws_secret_access_key',
+    ]) {
+      const out = redactSecrets(`export ${key}=${v}`)
+      expect(out).toBe(`export ${key}=[REDACTED:assignment]`)
+    }
+    expect(redactSecrets(`npm ${j('np', 'm_', 'A'.repeat(36))}`)).toBe('npm [REDACTED:npm-token]')
+    expect(redactSecrets(`hf ${j('h', 'f_', 'B'.repeat(34))}`)).toBe(
+      'hf [REDACTED:huggingface-token]',
+    )
+    expect(redactSecrets(`Authorization: Basic ${j('dXNl', 'cjpw', 'YXNz')}`)).toBe(
+      'Authorization: Basic [REDACTED:basic-auth]',
+    )
+    expect(redactSecrets(`mysql --password ${v} db`)).toBe(
+      'mysql --password [REDACTED:cli-flag] db',
+    )
+    expect(redactSecrets(`tool --token=${v}`)).toBe('tool --token=[REDACTED:cli-flag]')
+  })
+
   test('私钥块整体替换', () => {
     const block = j('-----BEGIN ', 'RSA PRIVATE KEY-----\nAAAA\n-----END ', 'RSA PRIVATE KEY-----')
     expect(redactSecrets(`a\n${block}\nb`)).toBe('a\n[REDACTED:private-key]\nb')
@@ -54,7 +82,7 @@ describe('redactSecrets', () => {
 describe('sanitizeTail / sanitizeMessage', () => {
   test('单行截断到 2000 字符', () => {
     const [line] = sanitizeTail(['z'.repeat(TAIL_LINE_MAX + 500)])
-    expect(line).toHaveLength(TAIL_LINE_MAX + 1)
+    expect(line).toHaveLength(TAIL_LINE_MAX)
     expect(line?.endsWith('…')).toBe(true)
   })
 
@@ -69,5 +97,42 @@ describe('sanitizeTail / sanitizeMessage', () => {
   test('说明也会脱敏', () => {
     const secret = j('gh', 'o_', 'b'.repeat(36))
     expect(sanitizeMessage(`用 ${secret}？`)).toBe('用 [REDACTED:github-token]？')
+  })
+})
+
+describe('性能：病态输入不造成回溯爆炸（复核第 1 条）', () => {
+  const MB = 1024 * 1024
+  const patterns = [
+    'a.',
+    'a-',
+    'a+',
+    'eyJ',
+    'ghp_',
+    'sk-',
+    'token',
+    'password:',
+    'a://b:',
+    '-----BEGIN ',
+    'secret_',
+    'Bearer ',
+    '--token ',
+    'Authorization: Basic ',
+  ]
+  const timed = (fn: () => unknown) => {
+    const t0 = performance.now()
+    fn()
+    return performance.now() - t0
+  }
+
+  test.each(patterns)('1MB 的 %p 重复：sanitizeTail / sanitizeMessage 在 100ms 内完成', (p) => {
+    const big = p.repeat(Math.ceil(MB / p.length))
+    expect(timed(() => sanitizeTail([big]))).toBeLessThan(100)
+    expect(timed(() => sanitizeTail(big.match(/.{1,1000}/g) ?? []))).toBeLessThan(100)
+    expect(timed(() => sanitizeMessage(big))).toBeLessThan(100)
+  })
+
+  test.each(patterns)('16KB 的 %p 重复直接脱敏也是线性的', (p) => {
+    const text = p.repeat(Math.ceil(TAIL_TOTAL_MAX_BYTES / p.length))
+    expect(timed(() => redactSecrets(text))).toBeLessThan(50)
   })
 })

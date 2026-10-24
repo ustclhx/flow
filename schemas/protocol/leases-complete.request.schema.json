@@ -319,13 +319,16 @@
         },
         "message": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 8192
         },
         "tail": {
+          "description": "末尾输出：最多 200 行，每行最多 2000 字符",
           "maxItems": 200,
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 2000
           }
         },
         "session": {
@@ -355,7 +358,8 @@
           "const": "cancelled"
         },
         "message": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 8192
         }
       },
       "required": [

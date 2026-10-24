@@ -52,8 +52,13 @@ export const generateReplyId = () => `r-${randomBytes(8).toString('hex')}`
  * 各卡住原因接受的回复类型（task-interaction "审批答复不能用于提问"）：
  * awaiting_approval 接受 approve / deny / 文字，其余原因（question、no_progress、crashed…）只接受文字。
  */
-export function acceptedReplyKinds(reason: string | undefined): readonly ReplyKind[] {
-  return reason === 'awaiting_approval' ? ['approve', 'deny', 'text'] : ['text']
+export function acceptedReplyKinds(
+  reason: string | undefined,
+  priorReason?: string,
+): readonly ReplyKind[] {
+  // 节点掉线（node_lost）前在等授权：仍然可以 approve / deny（PR #16 复核第 5 条）。
+  const effective = reason === 'node_lost' && priorReason ? priorReason : reason
+  return effective === 'awaiting_approval' ? ['approve', 'deny', 'text'] : ['text']
 }
 
 export interface TaskServiceOptions {
@@ -248,7 +253,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         )
       }
       const reason = task.blocked?.reason
-      const accepted = acceptedReplyKinds(reason)
+      const accepted = acceptedReplyKinds(reason, task.blocked?.prior_reason)
       if (!accepted.includes(kind)) {
         return fail(
           'failure',

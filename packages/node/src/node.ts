@@ -7,6 +7,8 @@ import {
   type Activity,
   type BlockedReason,
   type CompleteLeaseRequest,
+  clipTail,
+  clipText,
   DEFAULT_NO_PROGRESS_MINUTES,
   type DeliveredReply,
   fail,
@@ -17,6 +19,7 @@ import {
   loadNodeConfig,
   loadRoles,
   ok,
+  PROTOCOL_MESSAGE_MAX,
   type Result,
   resolveHubUrl,
   type TaskContract,
@@ -91,6 +94,8 @@ export interface StartNodeOptions {
   noProgressMinutes?: NoProgressResolver
   /** 超时后等待执行器响应取消的毫秒数，默认 10 秒。 */
   timeoutGraceMs?: number
+  /** 单次 deliver 的超时毫秒数，默认 60 秒。 */
+  deliverTimeoutMs?: number
   logger?: NodeLogger
 }
 
@@ -148,6 +153,7 @@ interface Env {
   /** 角色设定的无进展阈值（分钟），来自 `config/roles/`。 */
   roleNoProgressMinutes: NoProgressResolver | undefined
   timeoutGraceMs: number
+  deliverTimeoutMs: number
 }
 
 /** 按合同（通常按角色）给出无进展阈值分钟数；返回 undefined 表示没有设定。 */
@@ -172,6 +178,25 @@ export const STUCK_TAIL_LINES = 40
 const TAIL_KEEP = 200
 /** 超时后等待执行器响应取消的宽限时间；过后不再等待，直接提交 failed(timeout)。 */
 export const TIMEOUT_GRACE_MS = 10_000
+/** 单次 deliver 的超时：超时按临时错误处理，下一次续约重送（PR #16 复核第 4 条）。 */
+export const DELIVER_TIMEOUT_MS = 60_000
+
+/** 上报前按协议上限截断说明与末尾输出（超长的请求会被中枢拒绝）。 */
+function clipBlocked<T extends { message: string; tail?: string[] | undefined }>(b: T): T {
+  return {
+    ...b,
+    message: clipText(b.message, PROTOCOL_MESSAGE_MAX),
+    ...(b.tail ? { tail: clipTail(b.tail) } : {}),
+  }
+}
+
+function clipCompletion(req: CompleteLeaseRequest): CompleteLeaseRequest {
+  if (req.outcome === 'blocked') return clipBlocked(req)
+  if (req.outcome === 'cancelled' && req.message !== undefined) {
+    return { ...req, message: clipText(req.message, PROTOCOL_MESSAGE_MAX) }
+  }
+  return req
+}
 
 /**
  * 一个租约的生命周期：执行器、续约循环、卡住检测、回复送达、提交（add-m1-executors 1.2）。
@@ -214,6 +239,10 @@ class LeaseRunner {
   private delivered = new Set<string>()
   /** 已交给执行器、尚未被中枢确认的送达结果。 */
   private unacked: { reply_id: string; outcome: DeliverResult } | undefined
+  /** 进行中的 deliver（后台执行，不阻塞续约）。 */
+  private delivering: Promise<void> | undefined
+  /** 执行器已结束：之后不再重新计时。 */
+  private runEnded = false
   /** 剩余的超时预算（毫秒）与本段开始计时的单调时间。 */
   private timeoutLeftMs: number
   private timeoutArmedAt = 0
@@ -286,7 +315,9 @@ class LeaseRunner {
     const r = await this.env.client.renew(this.grant.lease_id, {
       lease_token: this.grant.lease_token,
       activity: batch,
-      ...(signal ?? {}),
+      ...(signal && 'blocked' in signal
+        ? { blocked: clipBlocked(signal.blocked) }
+        : (signal ?? {})),
     })
     if (this.released) return
     if (!r.ok) {
@@ -323,19 +354,31 @@ class LeaseRunner {
     if (this.delivered.has(reply.reply_id) || this.released) return
     this.delivered.add(reply.reply_id)
     const run = this.run
-    void (async () => {
+    this.delivering = (async () => {
       let outcome: DeliverResult
+      let cancelTimer = () => {}
       try {
-        outcome = run?.deliver ? await run.deliver(reply) : 'not_running'
+        const timeout = new Promise<never>((_, reject) => {
+          cancelTimer = this.env.clock.setTimeout(
+            () => reject(new Error(`deliver 超过 ${this.env.deliverTimeoutMs}ms 未返回`)),
+            this.env.deliverTimeoutMs,
+          )
+        })
+        outcome = run?.deliver ? await Promise.race([run.deliver(reply), timeout]) : 'not_running'
       } catch (err) {
+        // 抛异常或超时都是临时错误：不确认、不取消执行器，下一次续约重送。
         this.env.logger.warn(`回复 ${reply.reply_id} 送达失败，下一次续约重试`, String(err))
         this.delivered.delete(reply.reply_id)
         return
+      } finally {
+        cancelTimer()
       }
       if (this.released) return
       this.unacked = { reply_id: reply.reply_id, outcome }
       void this.renewNow()
-    })()
+    })().finally(() => {
+      this.delivering = undefined
+    })
   }
 
   private async ack() {
@@ -441,6 +484,7 @@ class LeaseRunner {
 
   private enterRunning() {
     this.phase = 'running'
+    if (this.runEnded) return
     this.lastActivityAt = this.mono()
     this.armIdle()
     this.armTimeout()
@@ -521,6 +565,10 @@ class LeaseRunner {
       this.cancelIdle()
       this.cancelGrace()
     }
+    this.runEnded = true
+    // 回复已交给 worker、worker 随即结束：先把送达确认完（写 task.unblocked），回复才不会被当作丢弃。
+    if (this.delivering) await this.delivering
+    if (this.unacked && !this.released) await this.ack()
     if (this.released) return
     const req = this.completion(outcome)
     // 卡住期间执行器完成（例如用户直接在终端里答复后 worker 做完了）：blocked 不能直接转 done，
@@ -613,7 +661,7 @@ class LeaseRunner {
   private async submit(req: CompleteLeaseRequest) {
     for (;;) {
       if (this.released) return
-      const r = await this.env.client.complete(this.grant.lease_id, req)
+      const r = await this.env.client.complete(this.grant.lease_id, clipCompletion(req))
       if (r.ok) break
       if (r.error.kind !== 'retryable') {
         this.env.logger.warn(`租约 ${this.grant.lease_id} 提交被拒绝`, r.error.code)
@@ -683,6 +731,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     defaultCwd: options.defaultCwd ?? home,
     roleNoProgressMinutes: options.noProgressMinutes,
     timeoutGraceMs: options.timeoutGraceMs ?? TIMEOUT_GRACE_MS,
+    deliverTimeoutMs: options.deliverTimeoutMs ?? DELIVER_TIMEOUT_MS,
   }
 
   const runners = new Set<LeaseRunner>()

@@ -80,6 +80,10 @@ export const eventPayloads = {
       .max(512)
       .optional()
       .meta({ description: '执行器的会话 id；带回复重新排队时附到下一次执行（D6）' }),
+    prior_reason: blockedReason.optional().meta({
+      description:
+        'node_lost 时节点掉线之前的卡住原因，例如 awaiting_approval（仍可 approve / deny）',
+    }),
   }),
   'task.unblocked': z.strictObject({
     note: z.string().optional().meta({ description: '解除卡住的说明，例如用户的答复摘要' }),

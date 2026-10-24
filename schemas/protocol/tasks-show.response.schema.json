@@ -354,6 +354,12 @@
                           "minimum": 0,
                           "maximum": 1000000
                         },
+                        "deliver_hangs": {
+                          "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
                         "deliver_delay_ms": {
                           "description": "deliver 耗时（毫秒），模拟缓慢的送达",
                           "type": "integer",
@@ -560,6 +566,12 @@
                               "minimum": 0,
                               "maximum": 1000000
                             },
+                            "deliver_hangs": {
+                              "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
                             "deliver_delay_ms": {
                               "description": "deliver 耗时（毫秒），模拟缓慢的送达",
                               "type": "integer",
@@ -678,6 +690,18 @@
                     "session": {
                       "description": "执行器上报的会话 id（用于恢复）",
                       "type": "string"
+                    },
+                    "prior_reason": {
+                      "description": "node_lost 之前的卡住原因",
+                      "type": "string",
+                      "enum": [
+                        "awaiting_approval",
+                        "question",
+                        "no_progress",
+                        "crashed",
+                        "node_lost",
+                        "other"
+                      ]
                     },
                     "lease_held": {
                       "type": "boolean",
@@ -1269,6 +1293,12 @@
                                     "minimum": 0,
                                     "maximum": 1000000
                                   },
+                                  "deliver_hangs": {
+                                    "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000000
+                                  },
                                   "deliver_delay_ms": {
                                     "description": "deliver 耗时（毫秒），模拟缓慢的送达",
                                     "type": "integer",
@@ -1471,6 +1501,12 @@
                                       },
                                       "deliver_failures": {
                                         "description": "deliver 前 N 次抛出异常（模拟临时送达失败）",
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 1000000
+                                      },
+                                      "deliver_hangs": {
+                                        "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
                                         "type": "integer",
                                         "minimum": 0,
                                         "maximum": 1000000
@@ -2121,6 +2157,18 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 512
+                      },
+                      "prior_reason": {
+                        "description": "node_lost 时节点掉线之前的卡住原因，例如 awaiting_approval（仍可 approve / deny）",
+                        "type": "string",
+                        "enum": [
+                          "awaiting_approval",
+                          "question",
+                          "no_progress",
+                          "crashed",
+                          "node_lost",
+                          "other"
+                        ]
                       }
                     },
                     "required": [

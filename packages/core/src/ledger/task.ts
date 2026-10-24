@@ -189,6 +189,13 @@ const fakeShape = {
     .max(1_000_000)
     .optional()
     .meta({ description: 'deliver 前 N 次抛出异常（模拟临时送达失败）' }),
+  deliver_hangs: z
+    .number()
+    .int()
+    .min(0)
+    .max(1_000_000)
+    .optional()
+    .meta({ description: 'deliver 前 N 次永不返回（模拟卡死的送达）' }),
   deliver_delay_ms: z
     .number()
     .int()
@@ -444,6 +451,7 @@ export const taskView = z
         message: z.string(),
         tail: z.array(z.string()).optional(),
         session: z.string().optional().meta({ description: '执行器上报的会话 id（用于恢复）' }),
+        prior_reason: blockedReason.optional().meta({ description: 'node_lost 之前的卡住原因' }),
         lease_held: z
           .boolean()
           .meta({ description: 'true 表示节点仍持有租约、worker 还活着（交互式执行器，D7a）' }),

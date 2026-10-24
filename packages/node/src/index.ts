@@ -31,6 +31,7 @@ export {
 } from './executor.ts'
 export { classifyFake, createFakeExecutor, type FakeExecutorOptions } from './fake.ts'
 export {
+  DELIVER_TIMEOUT_MS,
   generateNodeId,
   JUMP_THRESHOLD_MS,
   loadOrCreateNodeId,
