@@ -263,10 +263,16 @@ describe('性能：病态输入不造成回溯爆炸（复核第 1 条）', () =
     expect(timed(() => sanitizeMessage(big))).toBeLessThan(HANG_GUARD_MS)
   })
 
-  /** 多次测量取最小值，减少调度抖动。 */
+  /** 批量测量进程 CPU 时间，排除被其他进程抢占的墙钟时间并摊薄计时分辨率误差。 */
   const best = (fn: () => unknown, runs = 5) => {
+    const batch = 32
     let min = Number.POSITIVE_INFINITY
-    for (let i = 0; i < runs; i++) min = Math.min(min, timed(fn))
+    for (let i = 0; i < runs; i++) {
+      const start = process.cpuUsage()
+      for (let j = 0; j < batch; j++) fn()
+      const used = process.cpuUsage(start)
+      min = Math.min(min, (used.user + used.system) / 1000 / batch)
+    }
     return min
   }
 
@@ -274,7 +280,9 @@ describe('性能：病态输入不造成回溯爆炸（复核第 1 条）', () =
     const small = p.repeat(Math.ceil(TAIL_TOTAL_MAX_BYTES / 4 / p.length))
     const text = p.repeat(Math.ceil(TAIL_TOTAL_MAX_BYTES / p.length))
     expect(timed(() => redactSecrets(text))).toBeLessThan(HANG_GUARD_MS)
-    redactSecrets(small) // 预热
+    // 两种长度都先预热，避免 JIT 只影响其中一组。
+    redactSecrets(small)
+    redactSecrets(text)
     const t4 = best(() => redactSecrets(small))
     const t16 = best(() => redactSecrets(text))
     // 计时器分辨率以下的耗时不比较比值（分母取 0.05ms 下限）。

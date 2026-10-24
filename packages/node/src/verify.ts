@@ -86,13 +86,16 @@ function verifyCommand(
       return
     }
     // 独立进程组：子孙进程即使忽略 SIGTERM，也不能在超时/取消后继续运行。
+    let killed = false
     const kill = () => {
-      if (child.pid === undefined) return
+      // 超时与取消可能在 close 回调之前重叠，避免向已经终止的进程组再次发送信号。
+      if (killed || child.pid === undefined) return
       try {
         process.kill(-child.pid, 'SIGKILL')
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ESRCH') throw err
       }
+      killed = true
     }
     // 各流先拼成完整行，再合并；stderr 不能把 stdout 中分块到达的密钥从中间切开。
     child.stdout?.setEncoding('utf8').on('data', (chunk: string) => output('stdout', chunk))

@@ -148,7 +148,8 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
         settle(value)
       }
       const onAbort = () => {
-        if (finished) return
+        // abort 与 cancel 可能在 close 回调之前连续到达，只向进程组发送一次信号。
+        if (finished || cancelled) return
         cancelled = true
         if (!child) {
           finish(ok({ outcome: 'cancelled' }))
