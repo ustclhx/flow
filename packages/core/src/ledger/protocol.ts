@@ -246,6 +246,19 @@ export const revokeTokenData = z
   .meta({ title: 'POST /v1/hub/tokens/:id/revoke' })
 export type RevokeTokenData = z.infer<typeof revokeTokenData>
 
+/**
+ * Web 页面的一次性登录码（add-m1-inbox 6.1，design D5）：`flow ui` 申请后打开
+ * `/ui/login?code=...`。登录码只在内存中以摘要保存，60 秒内有效、只能使用一次；仅 user。
+ */
+export const uiLoginCodeData = z
+  .object({
+    code: z.string().meta({ description: '一次性登录码明文，只在申请时返回这一次' }),
+    login_path: z.string().meta({ description: '登录路径（含登录码），拼在中枢地址之后打开' }),
+    expires_at: timestamp,
+  })
+  .meta({ title: 'POST /v1/ui/login-code 响应' })
+export type UiLoginCodeData = z.infer<typeof uiLoginCodeData>
+
 export const rebuildData = z
   .object({
     events_replayed: z.number().int().min(0),
@@ -610,6 +623,12 @@ export const ENDPOINTS = {
     path: '/v1/hub/tokens/:id/revoke',
     auth: true,
     response: revokeTokenData,
+  },
+  'ui-login-code': {
+    method: 'POST',
+    path: '/v1/ui/login-code',
+    auth: true,
+    response: uiLoginCodeData,
   },
   'tasks-create': {
     method: 'POST',

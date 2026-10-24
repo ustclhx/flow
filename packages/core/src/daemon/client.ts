@@ -162,6 +162,9 @@ export class HubClient {
   revokeToken(id: string) {
     return this.request('hub-tokens-revoke', {}, id)
   }
+  uiLoginCode() {
+    return this.request('ui-login-code', {})
+  }
 
   /** 旧中枢没有 status 路由时，用 health 加本地文件补足可观测信息。 */
   async status(): Promise<Result<HubStatus>> {

@@ -21,6 +21,8 @@ import { redactingLogger } from '../secrets/logger.ts'
 import { SecretRedactor } from '../secrets/redactor.ts'
 import { createHubSecrets, type HubSecretsOptions } from '../secrets/service.ts'
 import { currentRuntime } from '../serve.ts'
+import { createUiApp, createUiLoginCodeRoutes } from '../ui/app.tsx'
+import { createUiSessions } from '../ui/sessions.ts'
 import { systemClock } from './clock.ts'
 import { consoleLogger } from './maintenance.ts'
 import { type RunningHub, type StartHubOptions, startHub } from './start.ts'
@@ -72,6 +74,9 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let ledger: LedgerStore | undefined
   let config: HubConfig | undefined
   let protocol: NodeProtocol | undefined
+  // Web 页面（6.1）：会话只在内存中；Host 校验需要实际监听的端口，启动成功后才填入。
+  const uiSessions = createUiSessions({ now: () => clock.now() })
+  let uiPort: number | undefined
   const leaseHolders = (taskId: string) => {
     const lease = ledger?.activeLease(taskId)
     return lease && Date.parse(lease.expires_at) > clock.now() ? [lease.node_id] : []
@@ -114,6 +119,14 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         onResume: () => scheduler?.resume(),
         ...(options.logger ? { logger: options.logger } : {}),
       })
+      const inboxDeps = {
+        ledger,
+        tasks,
+        home: options.home,
+        scanProposals: async () => {
+          await inbox?.proposals.scan()
+        },
+      }
       const status = new Hono()
       status.get('/v1/hub/status', async (c) => {
         const policies = await loadPoliciesConfig(options.home)
@@ -151,15 +164,18 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       return [
         { path: '/', app: status },
         { path: '/', app: createTaskRoutes({ ledger, tasks }) },
+        { path: '/', app: createInboxRoutes(inboxDeps) },
+        { path: '/', app: createUiLoginCodeRoutes(uiSessions) },
         {
           path: '/',
-          app: createInboxRoutes({
-            ledger,
-            tasks,
-            home: options.home,
-            scanProposals: async () => {
-              await inbox?.proposals.scan()
+          app: createUiApp({
+            sessions: uiSessions,
+            inbox: inboxDeps,
+            port: () => uiPort,
+            settle: async () => {
+              await inbox?.idle()
             },
+            now: () => clock.now(),
           }),
         },
         { path: '/', app: createPolicyRoutes({ home: options.home, ledger, leaseHolders }) },
@@ -196,6 +212,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     unregister()
     return started
   }
+  uiPort = started.data.port
   const marker = ledger.append(
     {
       type: 'hub.started',
