@@ -1,0 +1,68 @@
+{
+  "$id": "https://flow.local/schemas/config/policies.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "scope": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "*"
+          },
+          {
+            "type": "string",
+            "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+            "description": "workspace 标识，形如 ws/<id>"
+          },
+          {
+            "type": "string",
+            "pattern": "^[^\\s/*]+$"
+          }
+        ]
+      },
+      "action": {
+        "type": "string",
+        "pattern": "^[^\\s]+$"
+      },
+      "level": {
+        "type": "string",
+        "enum": [
+          "notify",
+          "draft-approve",
+          "auto-report",
+          "auto"
+        ]
+      },
+      "when": {
+        "type": "object",
+        "properties": {
+          "command_prefix": {
+            "description": "按命令词匹配前缀；串联请求的每段命令都必须满足",
+            "type": "string",
+            "minLength": 1
+          },
+          "paths": {
+            "description": "每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "scope",
+      "action",
+      "level"
+    ],
+    "additionalProperties": false
+  },
+  "title": "Flow policies config",
+  "description": "config/policies.yaml：策略规则数组"
+}
