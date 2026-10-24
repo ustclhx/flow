@@ -1,0 +1,50 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_00000000-0000-4000-8000-000000000002",
+      "status": "running",
+      "tail": [
+        "› 第二轮审查意见（PR #20）：绕过写法都识别出来了，很好。还剩一个语义问题。现在 tool:Bash 和 git.push 每个动作都要命中…",
+        "• CI 重跑仍在进行，目前尚无最终结果。这次修正已推送完毕，工作区保持干净；我会等重跑结束后汇报。",
+        "• 重跑尚未结束。我会继续等待；首轮中枢锁并发用例的失败也会在最终汇报中保留说明。",
+        "• Ran gh run rerun 1000000001 --failed && gh pr checks 20 --watch",
+        "  └ check    pending    0    https://github.com/example-user/flow/actions/runs/1000000001/job/2000000001",
+        "    check    pass    2m18s    https://github.com/example-user/flow/actions/runs/1000000001/job/2000000001",
+        "    check    pass    2m18s    https://github.com/example-user/flow/actions/runs/1000000001/job/2000000001",
+        "    + 41 lines (⌃t to expand)",
+        "• Ran gh run view 1000000001 --json status,conclusion,jobs --jq '{status,conclusion,jobs:[.jobs[] | {databaseId,status…",
+        "  └ {\"conclusion\":\"success\",\"jobs\":[{\"conclusion\":\"success\",\"databaseId\":2000000001,\"startedAt\":\"2026-10-24T17:49:12Z…",
+        "    + 1 line (⌃t to expand)",
+        "• Edited /tmp/flow-policy-fallback.vGIAA1/pr-body.md (+2 -0)",
+        "    16 +最新提交 CI 已通过。首轮唯一失败在未改动的中枢单实例锁并发测试（预期一个持有者，实际两个）；重跑失败 job 后通过",
+        "        ，该并发问题未在本 PR 中修改。",
+        "    17 +",
+        "    + Show details",
+        "• Ran gh pr edit 20 --body-file /tmp/flow-policy-fallback.vGIAA1/pr-body.md && git status --short --branch",
+        "  └ https://github.com/example-user/flow/pull/20",
+        "    ## example-user/m1c-g2a-policy...origin/example-user/m1c-g2a-policy",
+        "• 已推送至 PR #20 (https://github.com/example-user/flow/pull/20)，提交 0000001。CI 已通过，未合并。",
+        "  • tool: 仅作兜底；存在具体动作时标记 level: skipped，不参与判定。",
+        "  • 四个指定场景及 pr.create auto-report 场景已覆盖，README 已更新。",
+        "  • 定向测试 156 项通过；全仓 922 通过、0 失败，本地跳过两项既有 sops 测试；静态检查全部通过。",
+        "  首轮 CI 的既有中枢锁并发测试失败，重跑后通过；该问题未在本次修改中处理。",
+        "  Worked for 7m 58s • 01:51",
+        "› Ask Codex to do anything",
+        "  GPT-6.1-Sol high fast · ~/orca/workspaces/flow/m1c-g2a-policy · 实现策略配置与动作判定算法",
+        "  ? for shortcuts                                                                              ⚠ 1 warning · f2 to view"
+      ],
+      "truncated": true,
+      "limited": false,
+      "oldestCursor": "0",
+      "nextCursor": "1",
+      "latestCursor": "1",
+      "returnedLineCount": 28,
+      "source": "screen"
+    }
+  },
+  "_meta": {
+    "runtimeId": "00000000-0000-4000-8000-000000000003"
+  }
+}

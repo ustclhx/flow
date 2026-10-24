@@ -639,7 +639,10 @@ class LeaseRunner {
       if (this.released) return
       const verify = await verifyTask(
         grant.contract.verify,
-        grant.contract.cwd ?? env.defaultCwd,
+        // 执行器给出的工作目录优先（codex-orca 在 Orca worktree 里工作，不在合同的 cwd）。
+        (outcome.ok && outcome.data.outcome === 'done' ? outcome.data.workdir : undefined) ??
+          grant.contract.cwd ??
+          env.defaultCwd,
         env.clock,
         this.abort.signal,
       )

@@ -60,7 +60,12 @@ export type DeliverResult = 'delivered' | 'not_running'
 
 /** 执行器的最终结果：done / failed 附带结果，blocked 附带原因与说明。 */
 export type ExecutorOutcome =
-  | { outcome: 'done'; result: TaskResult }
+  | {
+      outcome: 'done'
+      result: TaskResult
+      /** worker 实际工作的目录（例如 codex-orca 的 Orca worktree）；验收命令在这里运行，缺省为合同的 cwd。 */
+      workdir?: string
+    }
   | { outcome: 'failed'; result: TaskResult }
   | {
       outcome: 'blocked'

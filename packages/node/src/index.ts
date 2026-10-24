@@ -38,6 +38,54 @@ export {
 } from './client.ts'
 export { type NodeClock, sleep, systemClock } from './clock.ts'
 export {
+  analyzeTail,
+  BUSY_RE,
+  classifyCodexOrca,
+  isBusy,
+  lastMessage,
+  type TailAnalysis,
+  type TailKind,
+} from './codex-orca/classify.ts'
+export {
+  buildCodexCommand,
+  type CodexOrcaLogger,
+  type CodexOrcaOptions,
+  codexOrcaInputs,
+  codexOrcaPermissions,
+  createCodexOrcaExecutor,
+  defaultBaseBranch,
+  resolveTaskRepo,
+  setupWaiter,
+} from './codex-orca/executor.ts'
+export {
+  type CommandOutput,
+  type CommandRunner,
+  createGhCli,
+  createOrcaCli,
+  execRunner,
+  type GhCli,
+  type GhCliOptions,
+  type GhPr,
+  type OrcaCli,
+  type OrcaCliOptions,
+  type OrcaSendResult,
+  type OrcaTerminalRead,
+  type OrcaWorktree,
+  orcaErrorCode,
+  parseOrcaOutput,
+  type TerminalSendInput,
+  type WorktreeCreateInput,
+} from './codex-orca/orca.ts'
+export {
+  type ContextItem,
+  renderTaskSpec,
+  resolveContext,
+  shellQuote,
+  type TaskSpecInput,
+  taskStateDir,
+  writeTaskSpec,
+} from './codex-orca/spec.ts'
+export {
   ActivityQueue,
   createExecutorRegistry,
   type DeliverResult,

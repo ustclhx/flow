@@ -1,0 +1,36 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "ok": true,
+  "result": {
+    "terminals": [
+      {
+        "handle": "term_00000000-0000-4000-8000-000000000002",
+        "ptyId": "00000000-0000-4000-8000-000000000003::/Users/user/orca/workspaces/flow/t-1@@0eb7361a",
+        "incarnationId": "00000000-0000-4000-8000-000000000004",
+        "orphaned": false,
+        "worktreeId": "00000000-0000-4000-8000-000000000003::/Users/user/orca/workspaces/flow/t-1",
+        "worktreePath": "/Users/user/orca/workspaces/flow/t-1",
+        "branch": "refs/heads/example-user/t-1",
+        "title": "⠏ 实现验收运行器 | t-1",
+        "connected": true,
+        "writable": true,
+        "lastOutputAt": 1792861873356,
+        "preview": "• Working (3m 00s • esc to interrupt)",
+        "executionHostId": "local",
+        "agentIdentity": "codex"
+      },
+      {
+        "handle": "term_00000000-0000-4000-8000-000000000005",
+        "worktreeId": "00000000-0000-4000-8000-000000000003::/Users/user/orca/workspaces/flow/t-1",
+        "worktreePath": "/Users/user/orca/workspaces/flow/t-1",
+        "title": "Setup",
+        "connected": true,
+        "preview": "user@host t-1 %",
+        "executionHostId": "local"
+      }
+    ]
+  },
+  "_meta": {
+    "runtimeId": "00000000-0000-4000-8000-000000000006"
+  }
+}
