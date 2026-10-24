@@ -11,6 +11,7 @@ import {
   findExecutable,
 } from '../src/doctor.ts'
 import { initFlowHome } from '../src/init.ts'
+import { doctorOptions } from './doctor-helpers.ts'
 import { tempHome, writeText } from './helpers.ts'
 
 /** 只包含 git 的 PATH，用来模拟未安装 gitleaks。 */
@@ -27,7 +28,7 @@ const reportOf = (r: Awaited<ReturnType<typeof runDoctor>>): DoctorReport =>
 
 const failed = (r: DoctorReport) => r.checks.filter((c) => !c.ok).map((c) => c.id)
 const runDoctor = (home: string, source: DoctorReport['homeSource'], options: DoctorOptions = {}) =>
-  actualDoctor(home, source, { launchAgentsDir: join(home, 'LaunchAgents'), ...options })
+  actualDoctor(home, source, doctorOptions(home, options))
 
 describe('flow doctor', () => {
   test('执行器未知：报告角色文件和 executor，已知执行器全部通过；配置错误带字段', async () => {
