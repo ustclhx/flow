@@ -21,6 +21,7 @@ import {
   type TaskView,
 } from '@flow/core'
 import type { z } from 'zod'
+import { redactDeep } from '../secrets/redactor.ts'
 import { type Applier, createApplier } from './apply.ts'
 import type { EventFilter, LedgerMaintenance, LedgerReader } from './port.ts'
 import {
@@ -82,6 +83,11 @@ export interface OpenLedgerOptions {
   now?: () => number
   /** 每个任务保留的最近活动条数，默认 50。 */
   activityKeep?: number
+  /**
+   * 写入前对事件载荷与活动片段中所有字符串做的替换（secret-hygiene "已知密钥值的脱敏"）。
+   * 中枢传入脱敏名单；重建只重放已写入（已脱敏）的事件，不再替换。
+   */
+  redact?: (text: string) => string
 }
 
 /** 每张投影表按主键排序后的行（JSON 字段保持原文）。 */
@@ -288,6 +294,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
   const nowMs = opts.now ?? Date.now
   const iso = (ms = nowMs()) => new Date(ms).toISOString()
   const activityKeep = opts.activityKeep ?? 50
+  const redact = opts.redact
   const apply: Applier = createApplier(db)
   const listeners = new Set<(event: LedgerEvent) => void>()
 
@@ -440,7 +447,12 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
 
   /** 事务内：校验 → 插入 → apply。不合法时抛出 Abort 让事务回滚。 */
   function writeOne(raw: unknown, ts: string): LedgerEvent {
-    const parsed = parseLedgerEventDraft(raw)
+    // 先替换再校验：替换后的载荷仍须符合 schema。
+    const parsed = parseLedgerEventDraft(
+      redact && raw !== null && typeof raw === 'object' && 'payload' in raw
+        ? { ...raw, payload: redactDeep((raw as { payload: unknown }).payload, redact) }
+        : raw,
+    )
     if (!parsed.ok) throw new Abort(parsed)
     const draft = parsed.data
     const valid = validate(draft)
@@ -713,7 +725,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       )
       if (!row) return false
       if (activities.length === 0) return true
-      const kept = [...(JSON.parse(row.activity_json) as Activity[]), ...activities].slice(
+      const incoming = redact ? activities.map((a) => redactDeep(a, redact)) : activities
+      const kept = [...(JSON.parse(row.activity_json) as Activity[]), ...incoming].slice(
         -activityKeep,
       )
       let last = activities[0]?.ts ?? iso()

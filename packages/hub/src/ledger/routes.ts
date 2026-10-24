@@ -10,6 +10,7 @@ import {
   PROTOCOL_ERRORS,
   type Result,
   rebuildData,
+  redactSecrets,
   replyTaskData,
   showTaskData,
   toJsonDocument,
@@ -140,7 +141,9 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     return respond(c, ledger.rebuild({ actor: actor.data }), rebuildData)
   })
 
-  app.onError((err, c) => respond(c, fail('failure', 'internal_error', err.message), rebuildData))
+  app.onError((err, c) =>
+    respond(c, fail('failure', 'internal_error', redactSecrets(err.message)), rebuildData),
+  )
 
   return app
 }

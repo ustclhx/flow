@@ -38,6 +38,8 @@ const RULES: readonly Rule[] = [
   { id: 'stripe-key', re: /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,255}/g },
   { id: 'google-api-key', re: /\bAIza[0-9A-Za-z_-]{35}/g },
   { id: 'npm-token', re: /\bnpm_[A-Za-z0-9]{30,255}/g },
+  // `flow hub token issue` 签发的绑定 token（明文只输出一次，中枢只存摘要，无法入名单）。
+  { id: 'flow-hub-token', re: /\bfht_[A-Za-z0-9_-]{43}/g },
   { id: 'huggingface-token', re: /\bhf_[A-Za-z0-9]{30,255}/g },
   { id: 'api-key', re: /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,512}/g },
   {
@@ -103,9 +105,44 @@ function redactKeyBodies(text: string): string {
   return out.join('\n')
 }
 
-/** 把文本中疑似密钥的部分替换为 `[REDACTED:<规则>]`。调用方应先截断输入。 */
+/**
+ * 已知密钥值的脱敏名单（secret-hygiene "已知密钥值的脱敏"、design D7）。
+ *
+ * 名单只在中枢进程内存中：中枢启动后注册自己的替换函数，停止时注销。`redactSecrets`
+ * 先套用全部已注册的名单（值 → `[secret:<路径>]`），再跑下面的正则兜底，保证名单优先：
+ * 正则只替换一部分时，密钥剩余部分可能就认不出来了。节点进程不持有密钥，不注册任何名单。
+ */
+const knownSecretRedactors = new Set<(text: string) => string>()
+
+/** 注册一个名单替换函数，返回注销函数。同一进程可以有多个（测试中多个中枢并存）。 */
+export function registerKnownSecrets(redact: (text: string) => string): () => void {
+  const entry = (text: string) => redact(text)
+  knownSecretRedactors.add(entry)
+  return () => {
+    knownSecretRedactors.delete(entry)
+  }
+}
+
+/** 只套用已注册的名单，不跑正则。 */
+export function redactKnownSecrets(text: string): string {
+  let out = text
+  for (const redact of knownSecretRedactors) out = redact(out)
+  return out
+}
+
+/**
+ * 把文本中的已知密钥值替换为 `[secret:<路径>]`，再把疑似密钥的部分替换为 `[REDACTED:<规则>]`。
+ * 调用方应先截断输入。
+ */
 export function redactSecrets(text: string): string {
-  let out = redactKeyBodies(text)
+  // 名单替换出的 `[secret:<路径>]` 本身形如 `secret:xxx`，会被 assignment 规则再次命中；
+  // 正则阶段先换成不会被任何规则匹配的占位符，结束后还原。
+  const labels: string[] = []
+  let out = redactKnownSecrets(text).replace(SECRET_LABEL_RE, (label) => {
+    labels.push(label)
+    return `\uE000${labels.length - 1}\uE001`
+  })
+  out = redactKeyBodies(out)
   for (const rule of RULES) {
     out = out.replace(rule.re, (match: string, ...rest: unknown[]) => {
       if (rule.group === undefined) return `[REDACTED:${rule.id}]`
@@ -118,8 +155,13 @@ export function redactSecrets(text: string): string {
         .join('')
     })
   }
-  return out
+  return labels.length === 0
+    ? out
+    : out.replace(PLACEHOLDER_RE, (m, i: string) => labels[Number(i)] ?? m)
 }
+
+const SECRET_LABEL_RE = /\[secret:[A-Za-z0-9_./-]{1,256}\]/g
+const PLACEHOLDER_RE = /\uE000(\d{1,6})\uE001/g
 
 /** 末尾输出的单行长度上限（字符），协议 schema 也按它拒绝超长行。 */
 export const TAIL_LINE_MAX = 2000
@@ -153,7 +195,8 @@ export function clipTail(lines: readonly string[]): string[] {
  * 再把保留下来的部分整体脱敏（跨行的私钥块也能识别）。
  */
 export function sanitizeTail(lines: readonly string[]): string[] {
-  const kept = clipTail(lines)
+  // 名单在截断之前逐行套用：截断可能把一个已知密钥切成两半，剩下的前缀就认不出来了。
+  const kept = clipTail(knownSecretRedactors.size > 0 ? lines.map(redactKnownSecrets) : lines)
   if (kept.length === 0) return []
   return redactSecrets(kept.join('\n'))
     .split('\n')
@@ -169,7 +212,11 @@ export function redactLines(lines: readonly string[]): string[] {
   return redactSecrets(lines.map((l) => clipText(l, TAIL_LINE_MAX)).join('\n')).split('\n')
 }
 
-/** 卡住说明入账前的处理：先截断，再脱敏。 */
+/** 卡住说明入账前的处理：先替换已知密钥，再截断，再正则脱敏。 */
 export function sanitizeMessage(message: string): string {
-  return clipText(redactSecrets(clipText(message, BLOCKED_MESSAGE_MAX)), BLOCKED_MESSAGE_MAX)
+  // 同 sanitizeTail：已知密钥在截断前替换。
+  return clipText(
+    redactSecrets(clipText(redactKnownSecrets(message), BLOCKED_MESSAGE_MAX)),
+    BLOCKED_MESSAGE_MAX,
+  )
 }

@@ -56,6 +56,13 @@ export const hubStatusCommand = defineCommand({
           '最近一次备份',
           status.last_backup ? `${status.last_backup.at} ${status.last_backup.path}` : '（无）',
         ],
+        ['已解析的密钥', String(status.secrets?.loaded ?? 0)],
+        [
+          '缺少的密钥',
+          status.secrets?.missing.map((m) => `secret://${m.path}（${m.file}）`).join('；') ||
+            '（无）',
+        ],
+        ...(status.secrets?.error ? [['密钥解析错误', status.secrets.error]] : []),
       ],
       [
         { header: '项目', value: (row) => row[0] ?? '' },

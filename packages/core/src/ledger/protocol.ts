@@ -106,6 +106,16 @@ export const healthData = z
   .meta({ title: 'GET /v1/health' })
 export type HealthData = z.infer<typeof healthData>
 
+/** 中枢运行时的密钥解析状态（secret-provider "运行时解析"）：只有个数与缺失的路径，没有值。 */
+export const secretsStatus = z.object({
+  loaded: z.number().int().min(0).meta({ description: '已解析的密钥个数' }),
+  missing: z
+    .array(z.object({ path: z.string(), file: z.string() }))
+    .meta({ description: '配置中引用了但尚未设置的密钥路径；依赖它们的功能不启动' }),
+  error: z.string().nullable().meta({ description: '最近一次解密失败的错误码' }),
+})
+export type SecretsStatusData = z.infer<typeof secretsStatus>
+
 export const hubStatusData = healthData
   .extend({
     pid: z.number().int().positive(),
@@ -117,6 +127,7 @@ export const hubStatusData = healthData
     }),
     schedule_errors: z.array(scheduleErrorSchema).default([]),
     last_backup: z.object({ path: z.string(), at: timestamp }).nullable(),
+    secrets: secretsStatus.default({ loaded: 0, missing: [], error: null }),
   })
   .meta({ title: 'GET /v1/hub/status' })
 export type HubStatusData = z.infer<typeof hubStatusData>

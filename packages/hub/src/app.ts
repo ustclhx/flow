@@ -4,6 +4,7 @@ import {
   type HealthData,
   PROTOCOL_ERRORS,
   type ProtocolErrorCode,
+  redactSecrets,
   toJsonDocument,
   VERSION,
 } from '@flow/core'
@@ -81,7 +82,7 @@ export function createHubApp(deps: HubDeps = {}): Hono {
   for (const { path, app: child } of deps.mount ?? []) app.route(path, child)
 
   app.notFound((c) => errorResponse(c, 'not_found', `没有这个接口：${c.req.method} ${c.req.path}`))
-  app.onError((err, c) => errorResponse(c, 'internal_error', err.message))
+  app.onError((err, c) => errorResponse(c, 'internal_error', redactSecrets(err.message)))
 
   return app
 }

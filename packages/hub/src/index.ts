@@ -2,6 +2,7 @@ export { createHubApp, errorResponse, type HubDeps } from './app.ts'
 export * from './ledger/index.ts'
 export * from './nodes/index.ts'
 export * from './scheduler/index.ts'
+export * from './secrets/index.ts'
 export {
   currentRuntime,
   type FetchHandler,
