@@ -119,7 +119,7 @@ const EFFORT_LEVELS = [
 const SETTING_SOURCES = ['user', 'project', 'local'] as const satisfies readonly SettingSource[]
 
 /**
- * 角色 `permissions` 在 claude-sdk 执行器下的形态（内核只校验它是对象，这里细化）。
+ * 角色 `permissions` 在 claude-sdk 执行器下的形态（这里细化执行器专用配置）。
  *
  * - `permissionMode` 默认 `default`：每一次未被允许列表放行的调用都进 canUseTool、交给 Flow 审批。
  *   `auto` 下分类器有把握的调用根本不会进 canUseTool，等于让模型自己决定，只有角色显式写出才使用；
@@ -942,7 +942,8 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
           hooks: {
             PreToolUse: [
               {
-                matcher: CLAUDE_FILE_WRITE_MATCHER,
+                // 匹配所有工具，未知的非 MCP 路径工具也必须经过 fail-closed 判定。
+                matcher: '.*',
                 hooks: [
                   async (input) => {
                     if (input.hook_event_name !== 'PreToolUse') return {}

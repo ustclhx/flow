@@ -69,6 +69,23 @@ const fx = (name: string) => ({ stdout: fixtureText(name) })
 const HANDLE = 'term_00000000-0000-4000-8000-000000000002'
 
 describe('orca 封装', () => {
+  test('writable_paths 不能误用于 codex-orca，生成命令前报配置错误', () => {
+    expect(
+      buildCodexCommand({
+        codexBin: 'codex',
+        worktreePath: '/repo',
+        specPath: '/spec.md',
+        role: { name: 'dev', permissions: { writable_paths: ['docs/**'] } },
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: 'invalid_permissions',
+        message: expect.stringContaining('仅适用于 claude-sdk'),
+      },
+    })
+  })
+
   test('worktree create：argv 与 result.worktree.path / branch', async () => {
     const f = fakeCli('orca', { 'worktree create': [fx('orca/worktree-create.json')] })
     const orca = createOrcaCli({ bin: f.bin, env: f.env })

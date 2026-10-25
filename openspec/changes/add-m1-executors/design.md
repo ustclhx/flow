@@ -59,7 +59,7 @@
 ### D5 claude-sdk 用流式输入，审批用挂起的 Promise
 - prompt 使用 `AsyncIterable<SDKUserMessage>`：首条消息是任务说明，之后 `deliver(reply)` 时再推入一条用户消息，从而支持运行中的回复和 `interrupt()`。
 - `canUseTool` 被调用时：创建一个待决的审批对象 → 上报 `blocked(awaiting_approval)`，附带 toolName 和输入摘要（经脱敏）→ 返回一个 Promise。`deliver({ approve })` 时 resolve 为 `{ behavior: 'allow', updatedInput: input }`，`deliver({ deny, text })` 时 resolve 为 `{ behavior: 'deny', message: text }`。超时后 resolve 为 deny，并让任务失败。
-- **权限模式**：`permissionMode` 默认取 `'default'`，未被允许列表放行的调用都进 `canUseTool`、交给 Flow 审批。`'auto'` 下分类器有把握的调用不会进 `canUseTool`，等于由模型自己决定，所以只在角色显式写出时使用（`auto`、`bypassPermissions` 照原样传递）。`reviewer` 角色仅禁用 `NotebookEdit`，以 `writable_paths: ["docs/**", "**/*.md", "**/*.mdx"]` 限制文档写入，并开放 `gh pr review` 的 Bash 规则。文件工具在 canUseTool 中直接按路径放行或拒绝，同一校验安装到 PreToolUse，避免 SDK 提前放行绕过限制。
+- **权限模式**：`permissionMode` 默认取 `'default'`，未被允许列表放行的调用都进 `canUseTool`、交给 Flow 审批。`'auto'` 下分类器有把握的调用不会进 `canUseTool`，等于由模型自己决定，所以只在角色显式写出时使用（`auto`、`bypassPermissions` 照原样传递）。`reviewer` 角色仅禁用 `NotebookEdit`，以 `writable_paths`（docs 下的文档和图片扩展名，仓库内的 md、mdx；不支持花括号，模板逐项展开） 限制文档写入，并开放 `gh pr review` 的 Bash 规则。文件工具在 canUseTool 中直接按路径放行或拒绝，同一校验安装到 PreToolUse，避免 SDK 提前放行绕过限制。
 - **设置来源**：角色的 `permissions.setting_sources`，默认 `['project']`。被操作仓库的 `.claude/settings.json` 会随之生效（hooks 直接执行命令、`permissions.allow` 在 `canUseTool` 之前放行），所以审查他人仓库的 `reviewer` 模板设为 `[]`：此时执行器把 cwd 下 `CLAUDE.md`、`AGENTS.md` 的纯文本（限长、脱敏）追加到系统提示词。原因见 spec。
 - **MCP**：注入 `mcpServers: { flow: { command: 'flow', args: ['mcp', '--actor', <role>] } }`。只放行只读与写入边界之内的 flow 工具（`kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、`ws_brief`、`task_list`、`task_show`）；`task_create`（可以借 `dev` 角色提权）、`task_cancel` 等其余工具和以后新增的工具一律走审批。
 - **取消**：`abortController.abort()` 加 `close()`。

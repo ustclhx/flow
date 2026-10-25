@@ -129,7 +129,15 @@ permissions:
   disallowedTools:
     - NotebookEdit
   writable_paths:
-    - "docs/**"
+    - "docs/**/*.md"
+    - "docs/**/*.mdx"
+    - "docs/**/*.txt"
+    - "docs/**/*.png"
+    - "docs/**/*.svg"
+    - "docs/**/*.jpg"
+    - "docs/**/*.jpeg"
+    - "docs/**/*.gif"
+    - "docs/**/*.webp"
     - "**/*.md"
     - "**/*.mdx"
 ```
@@ -142,15 +150,25 @@ permissions:
   或在 Flow 审批前就生效的 `permissions.allow`。不加载项目设置才能避免这些规则影响审查权限。
   不含 `project` 时，Flow 将 cwd 下 `CLAUDE.md`、`AGENTS.md` 作为限长、脱敏的纯文本追加到提示词。
 - `allowedTools` 是 SDK 的免询问工具规则，`disallowedTools` 禁用指定工具，reviewer 保留 `NotebookEdit` 禁令。
-- `writable_paths` 是 Flow 的文件工具路径白名单，适用于 `Write`、`Edit`、`MultiEdit`；`NotebookEdit` 始终拒绝。
-  路径相对合同 cwd，支持 `*`（不跨目录）、`**`（跨目录）、`?`（单字符），其余字符按字面匹配。
-  默认 reviewer 可直接写 `docs/**` 下的文件，以及任意目录（含根目录）的 `*.md`、`*.mdx`。
+- `writable_paths` 仅适用于 `claude-sdk`；其他执行器（包括 `codex-orca`、`codex-exec`）配置它会报配置错误。
+  它是 Flow 的文件工具路径白名单，适用于 `Write`、`Edit`、`MultiEdit`；`NotebookEdit` 始终拒绝。
+  路径相对合同 cwd，支持 `*`（不跨目录）、`**`（跨目录）、`?`（单字符），不支持花括号扩展，其余字符按字面匹配；默认模板已按扩展名展开。
+  默认 reviewer 可直接写 `docs/` 下的 md、mdx、txt、png、svg、jpg、jpeg、gif、webp，
+  以及任意目录（含根目录）的 `*.md`、`*.mdx`。
   原始路径与解析符号链接后的真实路径都必须匹配；允许 cwd 内绝对路径，拒绝任何 `..` 路径段、
-  cwd 外路径、任意层级 `.git`（含大小写变体）及无法确认真实位置的路径。新文件校验最近的已存在祖先。
+  cwd 外路径及无法确认真实位置的路径。新文件校验最近的已存在祖先。
+  不论白名单如何配置，任何隐藏路径段（以 `.` 开头）和任意层级的 `CLAUDE.md`、`CLAUDE.local.md`、
+  `AGENTS.md`、`AGENTS.override.md`、`GEMINI.md`、`copilot-instructions.md` 都硬性禁写，文件名大小写不敏感。
+  这也适用于符号链接目标，避免不可信 PR 诱导 reviewer 改写后续开发代理会加载的指令或命令。
   白名单以外的文件写入直接拒绝，不走 Flow 策略预检或用户审批；`[]` 禁止所有文件工具写入。
   字段缺省不新增写入授权，沿用旧角色的 SDK 权限和 Flow 审批行为；已有 reviewer 的 Edit/Write 禁令仍然生效。
 - `canUseTool` 负责文件工具的直接放行或拒绝；同一校验也安装在 SDK `PreToolUse` hook 中，
   避免 `allowedTools`、权限模式或会话批准提前放行而跳过边界。SDK 的显式禁用规则仍生效。
+  `PreToolUse` 匹配所有工具：非 `mcp__` 前缀的未知工具只要输入包含 `file_path`、`notebook_path` 或 `path`，
+  就直接拒绝，即使字段值不合法；已处理的文件写工具按白名单判定，已知只读工具仍走 SDK 原权限流程。
+  只读清单按 SDK 0.3.310 内置名称列为 Read、Glob、Grep、LSP、ListMcpResourcesTool、ReadMcpResourceTool、
+  ReadMcpResourceDirTool（当前 SDK 无 LS）。MCP 的 path 可能是资源标识，故不套用这个未知文件工具兜底，
+  保留既有允许规则、Flow 策略和用户审批；这不意味着自动放行 MCP 调用。
   只在成功的 `PostToolUse` 后，将文件绝对路径去重列入 result 的 `artifacts`（`kind: file`）；
   仅获授权、被拒绝或执行失败的调用不算产物，不统计 Bash 或其他工具的写入。
 - reviewer 可以评论和提交 PR review，但其他 Bash 调用仍沿用策略预检与审批；不要用 Bash 或其他工具绕过文件白名单。
@@ -167,7 +185,15 @@ permissions:
   disallowedTools:
     - NotebookEdit
   writable_paths:
-    - "docs/**"
+    - "docs/**/*.md"
+    - "docs/**/*.mdx"
+    - "docs/**/*.txt"
+    - "docs/**/*.png"
+    - "docs/**/*.svg"
+    - "docs/**/*.jpg"
+    - "docs/**/*.jpeg"
+    - "docs/**/*.gif"
+    - "docs/**/*.webp"
     - "**/*.md"
     - "**/*.mdx"
 ```
@@ -222,7 +248,9 @@ permissions:
 reviewer 直接在合同 cwd 中写文档，通常就是用户的主检出；不会自动创建独立 worktree，写入会让工作区变脏。
 审查报告类任务建议明确写到 `docs/reviews/` 等目录，合同中说明是否允许提交和推送。
 默认提示词要求不改代码、不提交、不推送（合同明确要求提交或推送时除外），并在最终回复列出写过的文件。
-`docs/**` 按目录允许任意扩展名，目录外只允许 `.md`、`.mdx`；角色提示词仍要求内容属于文档。
+`docs/` 只默认放行上述文档及图片扩展名；目录外只允许 `.md`、`.mdx`，隐藏路径和代理指令文件仍禁止。
+文档目录也可能包含会执行代码的配置，例如 `docs/conf.py`、`docs/.vitepress/config.ts`，不能因它位于 docs 下就信任。
+默认白名单不放行这些配置，角色提示词仍要求内容属于文档。
 路径校验不隔离同一用户下其他进程，无法阻止其他进程在校验后并发替换文件或符号链接。
 
 ## 从 orca-codex 脚本迁移

@@ -1,9 +1,30 @@
 import { lstat, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import type { BUILTIN_TOOL_NAMES } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 
 export const CLAUDE_FILE_WRITE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] as const
 export const CLAUDE_FILE_WRITE_MATCHER = '^(Edit|Write|MultiEdit|NotebookEdit)$'
+/** SDK 0.3.310 的只读文件工具；LS 不在当前内置工具名中。 */
+export const CLAUDE_READ_ONLY_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'LSP',
+  'ListMcpResourcesTool',
+  'ReadMcpResourceTool',
+  'ReadMcpResourceDirTool',
+] as const satisfies readonly (typeof BUILTIN_TOOL_NAMES)[number][]
+
+const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const
+const AGENT_INSTRUCTION_FILES = new Set([
+  'claude.md',
+  'claude.local.md',
+  'agents.md',
+  'agents.override.md',
+  'gemini.md',
+  'copilot-instructions.md',
+])
 
 const fileInput = z.looseObject({ file_path: z.string().min(1) })
 
@@ -26,13 +47,13 @@ function matches(pattern: string, path: string): boolean {
   return new RegExp(`^${source}$`).exec(path)?.[0] === path
 }
 
-/** 同时禁止越界与任意层级的 .git（含大小写变体）。 */
+/** 不受白名单放宽影响：禁止越界、隐藏路径段及代理指令文件（大小写不敏感）。 */
 function insidePath(root: string, path: string): string | undefined {
   const rel = relative(root, path)
   if (
     !rel ||
     isAbsolute(rel) ||
-    rel.split(sep).some((p) => p === '..' || p.toLowerCase() === '.git')
+    rel.split(sep).some((p) => p.startsWith('.') || AGENT_INSTRUCTION_FILES.has(p.toLowerCase()))
   )
     return undefined
   return rel.split(sep).join('/')
@@ -88,8 +109,17 @@ export async function checkWritableTool(
 ): Promise<
   { behavior: 'allow'; path: string } | { behavior: 'deny'; message: string } | undefined
 > {
-  if (patterns === undefined || !CLAUDE_FILE_WRITE_TOOLS.some((t) => t === toolName))
-    return undefined
+  if (patterns === undefined) return undefined
+  if (!CLAUDE_FILE_WRITE_TOOLS.some((t) => t === toolName)) {
+    // MCP 的 path 可能是资源标识而非文件写入；仍交给既有策略与审批，不自动放行。
+    if (toolName.startsWith('mcp__') || CLAUDE_READ_ONLY_TOOLS.some((t) => t === toolName))
+      return undefined
+    return input !== null &&
+      typeof input === 'object' &&
+      PATH_FIELDS.some((p) => Object.hasOwn(input, p))
+      ? { behavior: 'deny', message: '未识别的非只读文件工具，拒绝带路径的调用' }
+      : undefined
+  }
   const parsed = fileInput.safeParse(input)
   const path =
     toolName !== 'NotebookEdit' && parsed.success

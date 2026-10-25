@@ -124,6 +124,7 @@ export const codexOrcaInputs = z.looseObject({
 
 /** 角色 `permissions` 中 codex-orca 使用的字段（D3）。 */
 export const codexOrcaPermissions = z.looseObject({
+  writable_paths: z.never({ error: 'writable_paths 仅适用于 claude-sdk 执行器' }).optional(),
   /** `never` 与 `danger-full-access` 同时出现时使用 `--dangerously-bypass-approvals-and-sandbox`。 */
   approval: z.string().min(1).optional(),
   sandbox: z.string().min(1).optional(),

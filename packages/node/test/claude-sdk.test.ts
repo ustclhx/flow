@@ -486,6 +486,23 @@ describe('结果', () => {
 // ---------------------------------------------------------------------------
 
 describe('工具审批挂起等待', () => {
+  test('带 path 的 MCP 工具仍等待现有审批，不能被未知文件工具兜底拒绝或自动放行', async () => {
+    const { b, state, create } = await sdkBench(
+      async function* (io) {
+        await io.nextUser()
+        await io.ask('mcp__external__read', { path: 'docs/review.md' })
+        yield result()
+      },
+      reviewer({ writable_paths: ['**/*.md'] }),
+    )
+    const id = await create()
+    await b.until(id, (t) => t.status === 'blocked')
+    expect(state.executed).toEqual([])
+    await reply(b, id, { kind: 'approve' })
+    await b.until(id, (t) => t.status === 'done')
+    expect(state.permissions[0]).toMatchObject({ behavior: 'allow' })
+  })
+
   test('writable_paths 先于策略与用户审批：文档直接放行，其余写入直接拒绝', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'flow-reviewer-docs-'))
     let prechecks = 0
@@ -548,6 +565,7 @@ describe('工具审批挂起等待', () => {
         const pre = io.options.hooks?.PreToolUse?.[0]?.hooks[0]
         const post = io.options.hooks?.PostToolUse?.[0]?.hooks[0]
         if (!pre || !post) throw new Error('缺少文件工具 hooks')
+        expect(io.options.hooks?.PreToolUse?.[0]?.matcher).toBe('.*')
         const base = {
           session_id: SID,
           transcript_path: '',
@@ -560,6 +578,8 @@ describe('工具审批挂起等待', () => {
           ['Edit', 'src/code.ts', 'deny'],
           ['MultiEdit', '.git/report.md', 'deny'],
           ['NotebookEdit', 'docs/review.md', 'deny'],
+          ['FutureWrite', 'docs/review.md', 'deny'],
+          ['Write', 'docs/AGENTS.md', 'deny'],
         ]) {
           const r = await pre(
             {
@@ -580,6 +600,20 @@ describe('工具审批挂起等待', () => {
                 },
               },
             })
+        }
+        for (const tool_name of ['Read', 'Glob', 'Grep', 'LSP', 'mcp__external__read']) {
+          expect(
+            await pre(
+              {
+                ...base,
+                hook_event_name: 'PreToolUse',
+                tool_name,
+                tool_input: { path: 'docs/review.md' },
+              },
+              'read-1',
+              opts,
+            ),
+          ).toEqual({})
         }
         const input = {
           ...base,

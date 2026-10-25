@@ -40,9 +40,9 @@
 - **THEN** Claude 运行时不加载该设置文件，`CLAUDE.md` 的文本出现在系统提示词中，权限模式为 `default`
 
 ### Requirement: 文档文件写入边界
-角色 MAY 配置 `permissions.writable_paths`（cwd 相对路径 glob，支持 `*`、`**`、`?`）。配置后，执行器 MUST 对 Write、Edit、MultiEdit 的原路径与符号链接解析后的真实路径都做匹配，并限制在合同 cwd 内；任何 `..` 路径段、cwd 外路径、任意层级 `.git` 与 NotebookEdit MUST 直接拒绝，不进入策略预检或用户审批。新文件 MUST 校验最近已存在祖先；无法可靠解析时拒绝。
+仅 claude-sdk 角色 MAY 配置 `permissions.writable_paths`，其他执行器配置时 MUST 报字段错误；codex-orca、codex-exec 执行器也 MUST 在运行前拒绝该字段。该字段使用 cwd 相对路径 glob，支持 `*`、`**`、`?`，不支持花括号。配置后，执行器 MUST 对 Write、Edit、MultiEdit 的原路径与符号链接解析后的真实路径都做匹配，并限制在合同 cwd 内；任何 `..` 路径段、cwd 外路径、任意层级的隐藏路径段、代理指令文件（CLAUDE.md、CLAUDE.local.md、AGENTS.md、AGENTS.override.md、GEMINI.md、copilot-instructions.md，大小写不敏感）与 NotebookEdit MUST 直接拒绝，不进入策略预检或用户审批。新文件 MUST 校验最近已存在祖先；无法可靠解析时拒绝。
 
-默认 reviewer 白名单 SHALL 为 `docs/**`、`**/*.md`、`**/*.mdx`。空白名单禁止文件工具写入；字段缺省时不新增写入授权，沿用既有 SDK 权限与审批。执行器 SHALL 在 canUseTool 与 PreToolUse hook 中使用同一校验，避免 SDK 权限模式、允许规则或会话批准绕过边界。成功 PostToolUse 的文件路径 SHALL 去重写入 result.artifacts，授权本身不算产物。
+默认 reviewer 白名单 SHALL 为 `docs/**/*.{md,mdx,txt,png,svg,jpg,jpeg,gif,webp}`（模板展开为多条）、`**/*.md`、`**/*.mdx`。空白名单禁止文件工具写入；字段缺省时不新增写入授权，沿用既有 SDK 权限与审批。执行器 SHALL 在 canUseTool 与 PreToolUse hook 中使用同一校验，避免 SDK 权限模式、允许规则或会话批准绕过边界。PreToolUse MUST 匹配所有工具；未知的非 MCP 工具带 file_path、notebook_path 或 path 字段时 MUST 拒绝，已知只读工具和 mcp__ 前缀工具沿用原有权限流程，不因 path 字段直接放行或拒绝。成功 PostToolUse 的文件路径 SHALL 去重写入 result.artifacts，授权本身不算产物。
 
 #### Scenario: 写审查报告
 - **WHEN** reviewer 在合同 cwd 中通过 Write 创建 `docs/reviews/report.md` 或通过 Edit/MultiEdit 修改根目录 Markdown
@@ -51,6 +51,14 @@
 #### Scenario: 禁止代码与越界写入
 - **WHEN** reviewer 请求修改 `src/main.ts`、`.git/report.md`、`../report.md`、指向 cwd 外的符号链接路径或使用 NotebookEdit
 - **THEN** 调用直接拒绝，即使 SDK 允许规则或 Flow 自动策略原本会放行
+
+#### Scenario: 不可信 PR 诱导改写代理指令或执行配置
+- **WHEN** reviewer 请求写入任意层级的隐藏文件、CLAUDE.md 等代理指令文件或指向这些路径的符号链接
+- **THEN** 即使角色将 writable_paths 放宽为 **，也直接拒绝；默认模板另拒绝 docs/conf.py 等可执行配置
+
+#### Scenario: 新增路径工具与 MCP 资源读取
+- **WHEN** 配置 writable_paths 后，一个未知非 MCP 工具携带 file_path、notebook_path 或 path 字段
+- **THEN** 在 PreToolUse 直接拒绝；同样带 path 的 MCP 工具仍走原有策略与审批，不能因兜底误拒绝或直接放行
 
 ### Requirement: 工具审批挂起等待
 工具调用落到需要审批的环节时（即角色的允许列表和 SDK 的权限模式都没有放行），执行器 SHALL 上报 `blocked(awaiting_approval)`，附带工具名和输入摘要，并保持会话等待。

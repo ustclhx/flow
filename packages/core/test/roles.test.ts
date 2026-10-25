@@ -147,8 +147,11 @@ describe('角色配置', () => {
     }
     expect(roleSchema.safeParse({ ...role, permisions: {} }).success).toBe(false)
     expect(
-      roleSchema.safeParse({ ...role, permissions: { writable_paths: ['docs/**', '**/*.md'] } })
-        .success,
+      roleSchema.safeParse({
+        ...role,
+        executor: 'claude-sdk',
+        permissions: { writable_paths: ['docs/**', '**/*.md'] },
+      }).success,
     ).toBe(true)
     expect(
       roleSchema.safeParse({ ...role, permissions: { writable_paths: 'docs/**' } }).success,
@@ -168,6 +171,33 @@ describe('角色配置', () => {
       'no_progress_minutes',
       'creatable_by',
     ])
+  })
+
+  test('writable_paths 只属于 claude-sdk；其他执行器加载时报告字段错误', async () => {
+    const home = tempHome('flow-role-writable-')
+    for (const executor of ['codex-orca', 'codex-exec']) {
+      writeText(
+        join(home, 'config/roles', `${executor}.yaml`),
+        stringify({
+          ...role,
+          name: executor,
+          executor,
+          permissions: { writable_paths: [] },
+        }),
+      )
+    }
+    const loaded = data(await loadRoles(home))
+    expect(loaded.roles).toEqual([])
+    expect(loaded.errors).toEqual(
+      ['codex-exec', 'codex-orca'].map((executor) =>
+        expect.objectContaining({
+          file: `config/roles/${executor}.yaml`,
+          field: 'permissions.writable_paths',
+          code: 'invalid_field',
+          message: '字段 permissions.writable_paths：writable_paths 仅适用于 claude-sdk 执行器',
+        }),
+      ),
+    )
   })
 })
 

@@ -372,6 +372,15 @@ describe('codex-exec 无头执行器', () => {
     expect(s.launched()).toBe(false)
   })
 
+  test('writable_paths 不能误用于 codex-exec，启动前报配置错误', async () => {
+    const s = setup(undefined, { permissions: { writable_paths: ['docs/**'] } })
+    expect((await collect(s.run())).outcome).toMatchObject({
+      outcome: 'failed',
+      result: { reason: 'invalid_role', summary: expect.stringContaining('仅适用于 claude-sdk') },
+    })
+    expect(s.launched()).toBe(false)
+  })
+
   test('二进制不存在时失败并结束活动流', async () => {
     const s = setup()
     expect(

@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkWritableTool } from '../src/claude-writable-paths.ts'
+import { DEFAULT_REVIEWER_WRITABLE_PATHS } from '../../core/src/role-templates.ts'
+import { CLAUDE_READ_ONLY_TOOLS, checkWritableTool } from '../src/claude-writable-paths.ts'
 
-const patterns = ['docs/**', '**/*.md', '**/*.mdx']
+const patterns = DEFAULT_REVIEWER_WRITABLE_PATHS
 let temp: string
 let cwd: string
 beforeEach(() => {
@@ -32,6 +33,12 @@ describe('文档路径边界', () => {
         behavior: 'allow',
       })
     }
+    for (const ext of ['md', 'mdx', 'txt', 'png', 'svg', 'jpg', 'jpeg', 'gif', 'webp']) {
+      for (const path of [`docs/report.${ext}`, `docs/reviews/report.${ext}`])
+        expect(await checkWritableTool('Write', { file_path: path }, cwd, patterns)).toMatchObject({
+          behavior: 'allow',
+        })
+    }
   })
 
   test('拒绝越界、任意 ..、.git、非文档、无效输入与 NotebookEdit', async () => {
@@ -43,6 +50,9 @@ describe('文档路径边界', () => {
       ['Edit', { file_path: '.git/report.md' }],
       ['MultiEdit', { file_path: 'docs/.GIT/report.md' }],
       ['Write', { file_path: 'src/code.ts' }],
+      ['Write', { file_path: 'docs/conf.py' }],
+      ['Write', { file_path: 'docs/config.ts' }],
+      ['Write', { file_path: 'docs/.vitepress/config.ts' }],
       ['Write', { file_path: 'src/README.md.bak' }],
       ['Write', { file_path: 'src/README.md\n' }],
       ['Write', { file_path: 'docs' }],
@@ -57,6 +67,59 @@ describe('文档路径边界', () => {
         behavior: 'deny',
       })
     }
+  })
+
+  test('即使白名单为 **，隐藏路径和任意层级的代理指令文件也不能写入', async () => {
+    const paths = [
+      '.claude/commands/review.md',
+      '.codex/config.md',
+      '.github/copilot-instructions.md',
+      '.cursor/rules/review.md',
+      '.vscode/settings.md',
+      '.git/report.md',
+      'docs/.hidden.md',
+      'docs/.HIDDEN/report.md',
+      ...[
+        'CLAUDE.md',
+        'CLAUDE.local.md',
+        'AGENTS.md',
+        'AGENTS.override.md',
+        'GEMINI.md',
+        'copilot-instructions.md',
+      ].flatMap((name) => [name, `docs/nested/${name.toUpperCase()}`]),
+    ]
+    for (const file_path of paths) {
+      expect(await checkWritableTool('Write', { file_path }, cwd, ['**'])).toMatchObject({
+        behavior: 'deny',
+      })
+    }
+    mkdirSync(join(cwd, '.claude'))
+    symlinkSync(join(cwd, '.claude'), join(cwd, 'docs/hidden'))
+    writeFileSync(join(cwd, 'AGENTS.md'), '不可改的指令')
+    symlinkSync(join(cwd, 'AGENTS.md'), join(cwd, 'docs/ordinary.md'))
+    for (const file_path of ['docs/hidden/report.md', 'docs/ordinary.md'])
+      expect(await checkWritableTool('Edit', { file_path }, cwd, ['**'])).toMatchObject({
+        behavior: 'deny',
+      })
+  })
+
+  test('未知的非 MCP 路径工具拒绝，已知只读工具和 MCP 工具沿用原权限流程', async () => {
+    for (const field of ['file_path', 'notebook_path', 'path']) {
+      for (const value of ['docs/review.md', null])
+        expect(
+          await checkWritableTool('FutureWrite', { [field]: value }, cwd, patterns),
+        ).toMatchObject({ behavior: 'deny' })
+    }
+    for (const tool of [...CLAUDE_READ_ONLY_TOOLS, 'mcp__external__read'])
+      expect(
+        await checkWritableTool(tool, { path: 'docs/report.md' }, cwd, patterns),
+      ).toBeUndefined()
+    expect(
+      await checkWritableTool('FutureWrite', { command: 'read' }, cwd, patterns),
+    ).toBeUndefined()
+    expect(
+      await checkWritableTool('FutureWrite', { path: 'docs/a.md' }, cwd, undefined),
+    ).toBeUndefined()
   })
 
   test('逐段拒绝外部链接、悬空链接、.git 别名，以及伪装成文档的代码链接', async () => {
