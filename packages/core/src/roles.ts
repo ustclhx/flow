@@ -6,9 +6,44 @@ import { flowPaths } from './home.ts'
 import { executorType } from './ledger/common.ts'
 import { fail, ok, type Result } from './result.ts'
 import { formatZodIssues, type ValidationIssue } from './validation-issue.ts'
+import { USER_ACTOR } from './write/policy.ts'
 
 /** 当前内置的执行器类型；角色 schema 不限定此列表，由 doctor 检查可用性。 */
 export const KNOWN_EXECUTORS = ['fake', 'codex-orca', 'claude-sdk', 'codex-exec'] as const
+
+/**
+ * `creatable_by` 中的一项：`*`；`<前缀>:*` 形式的前缀通配（例如 `node:*`、`remote:*`）；
+ * 或精确的操作者标识（与 ACTOR_RE 相同的格式）。写成单个正则，导出的 JSON Schema 也带上同样的约束。
+ */
+const ACTOR_PATTERN_RE =
+  /^(?:\*|[A-Za-z0-9][A-Za-z0-9._:@-]{0,62}:\*|[A-Za-z0-9][A-Za-z0-9._:@-]{0,63})$/
+
+export const actorPattern = z
+  .string()
+  .regex(
+    ACTOR_PATTERN_RE,
+    '应为操作者标识（如 user、node:n-abc）、前缀通配（如 node:*、remote:*）或 *',
+  )
+  .meta({ description: '操作者模式：精确值，或 `*`、`<前缀>:*` 形式的前缀通配' })
+
+/** 操作者是否匹配模式：`*` 匹配全部；`<前缀>:*` 匹配以 `<前缀>:` 开头的身份；其余精确比较（区分大小写）。 */
+export function actorMatches(pattern: string, actor: string): boolean {
+  if (pattern === '*') return true
+  if (pattern.endsWith(':*')) {
+    const prefix = pattern.slice(0, -1)
+    return actor.length > prefix.length && actor.startsWith(prefix)
+  }
+  return pattern === actor
+}
+
+/**
+ * 某身份能否创建该角色的任务：`user` 永远可以；其他身份必须匹配 `creatable_by` 中的某一项。
+ * 字段缺省时只有 `user` 可以创建（默认拒绝 AI 与节点）。
+ */
+export function canCreateRole(role: Pick<Role, 'creatable_by'>, actor: string): boolean {
+  if (actor === USER_ACTOR) return true
+  return (role.creatable_by ?? []).some((p) => actorMatches(p, actor))
+}
 
 export const roleSchema = z
   .strictObject({
@@ -24,6 +59,10 @@ export const roleSchema = z
       .optional()
       .meta({ description: '执行器专用权限设置；内核只校验它是对象' }),
     no_progress_minutes: z.number().int().positive().optional(),
+    creatable_by: z.array(actorPattern).optional().meta({
+      description:
+        '除 user 之外，允许哪些身份创建该角色的任务（精确值或 node:*、remote:*、* 等前缀通配）；缺省时只有 user 可以创建',
+    }),
   })
   .meta({ title: 'Flow role config', description: 'config/roles/<name>.yaml' })
 export type Role = z.infer<typeof roleSchema>

@@ -2,20 +2,24 @@ import { randomBytes } from 'node:crypto'
 import {
   type CancelTaskData,
   type CreateTaskData,
+  canCreateRole,
   checkContractSecrets,
   fail,
   formatZodIssues,
   type InboxVia,
   type ListTasksData,
   listTasksQuery,
+  loadRoles,
   loadWorkspaces,
   ok,
   type ReplyKind,
   type ReplyTaskData,
   type Result,
+  type Role,
   replyTaskRequest,
   type ShowTaskData,
   taskContract,
+  USER_ACTOR,
 } from '@flow/core'
 import type { LedgerStore } from './store.ts'
 
@@ -32,6 +36,23 @@ export function workspaceCheckFromHome(home: string): WorkspaceCheck {
   return async (ref) => {
     const loaded = await loadWorkspaces(home)
     return loaded.ok && loaded.data.workspaces.some((w) => w.ref === ref)
+  }
+}
+
+/** 按名字查角色：不存在（或该角色文件有错、未能加载）时为 null。 */
+export type RoleLookup = (
+  name: string,
+) => Promise<Result<Pick<Role, 'name' | 'creatable_by'> | null>>
+
+/**
+ * 基于 flow-home 的 `config/roles/`（复用 core 的 loadRoles）：与 workspaceCheckFromHome 一样每次调用都重新读取，
+ * 修改 `creatable_by` 后下一次创建请求即生效，无需重启中枢。
+ */
+export function roleLookupFromHome(home: string): RoleLookup {
+  return async (name) => {
+    const loaded = await loadRoles(home)
+    if (!loaded.ok) return loaded
+    return ok(loaded.data.roles.find((r) => r.name === name) ?? null)
   }
 }
 
@@ -66,6 +87,8 @@ export function acceptedReplyKinds(
 export interface TaskServiceOptions {
   ledger: LedgerStore
   workspaceExists: WorkspaceCheck
+  /** 非 user 身份创建任务时用来校验角色存在与 `creatable_by`；中枢里用 `roleLookupFromHome`。 */
+  roles: RoleLookup
   now?: () => number
   /** 生成任务 id，默认 `generateTaskId`。 */
   newTaskId?: (nowMs: number) => string
@@ -143,6 +166,28 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       }
       const key = opts.idempotency_key ?? contract.idempotency_key
       if (key !== undefined) contract.idempotency_key = key
+
+      // 角色创建权限（role-config `creatable_by`）：user 不受限制，也沿用原来不在中枢校验角色存在的行为；
+      // 其他身份必须引用已定义的角色，且匹配 creatable_by，防止 AI 借 dev 等高权限角色提权。
+      // 在幂等命中之前检查：被拒绝的身份不能凭幂等键拿到已有任务。
+      if (opts.actor !== USER_ACTOR) {
+        const found = await o.roles(contract.role)
+        if (!found.ok) return found
+        if (!found.data) {
+          return fail('failure', 'unknown_role', `角色 ${contract.role} 未定义`, {
+            field: 'role',
+            role: contract.role,
+          })
+        }
+        if (!canCreateRole(found.data, opts.actor)) {
+          return fail(
+            'failure',
+            'role_not_allowed',
+            `身份 ${opts.actor} 不能创建角色 ${contract.role} 的任务（config/roles/${contract.role}.yaml 的 creatable_by 不包含该身份）`,
+            { field: 'role', role: contract.role, actor: opts.actor },
+          )
+        }
+      }
 
       const existing = () => (key === undefined ? null : ledger.findTaskByIdempotencyKey(key))
       const hit = existing()

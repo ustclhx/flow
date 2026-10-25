@@ -9,6 +9,7 @@ import {
   type DoctorOptions,
   type DoctorReport,
   findExecutable,
+  formatDoctorReport,
 } from '../src/doctor.ts'
 import { initFlowHome } from '../src/init.ts'
 import { doctorOptions } from './doctor-helpers.ts'
@@ -26,7 +27,9 @@ function pathWithoutGitleaks(): string {
 const reportOf = (r: Awaited<ReturnType<typeof runDoctor>>): DoctorReport =>
   r.ok ? r.data : (r.error.details as DoctorReport)
 
-const failed = (r: DoctorReport) => r.checks.filter((c) => !c.ok).map((c) => c.id)
+/** 未通过且不是 info 提示的检查。 */
+const failed = (r: DoctorReport) =>
+  r.checks.filter((c) => !c.ok && c.severity !== 'info').map((c) => c.id)
 const runDoctor = (home: string, source: DoctorReport['homeSource'], options: DoctorOptions = {}) =>
   actualDoctor(home, source, doctorOptions(home, options))
 
@@ -58,6 +61,25 @@ describe('flow doctor', () => {
     expect(
       report.checks.find((c) => c.id === 'roles.config.config/roles/broken.yaml.executor'),
     ).toMatchObject({ ok: false, message: expect.stringContaining('executor') })
+  })
+
+  test('角色缺少 creatable_by：info 提示（不是错误），已设置的角色不提示', async () => {
+    const home = tempHome('flow-doctor-roles-')
+    await initFlowHome(home)
+    const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    const hints = report.checks.filter((c) => c.id.endsWith('.creatable_by'))
+    // 默认模板：只有 dev 没有 creatable_by（仅 user 可以创建）。
+    expect(hints).toEqual([
+      expect.objectContaining({
+        id: 'role.dev.creatable_by',
+        ok: false,
+        severity: 'info',
+        message: expect.stringContaining('只有 user 可以创建'),
+      }),
+    ])
+    expect(formatDoctorReport(report)).toContain(
+      '[info] config/roles/dev.yaml：未设置 creatable_by',
+    )
   })
 
   test('已安装 plist 的 bun 或入口失效时报错并提示重新安装；有效路径通过', async () => {

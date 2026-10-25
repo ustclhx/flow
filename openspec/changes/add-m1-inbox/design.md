@@ -92,6 +92,7 @@
 - **节点**：本机节点继续使用 `user` token 并声明 `node:<id>`；变更 ⑤ 起，远程节点使用绑定 token。
 - **中枢内部渠道**：Telegram 和 Web 运行在中枢进程内，不经过 HTTP 鉴权，直接以 `user` 身份写事件，并附 `via`。
 - **信任边界**：本机上以同一系统用户运行、能读 `state/hub.token` 的进程，都可以获得 `user` 身份；这一点不变，在 `docs/` 中写明。本设计防的是远程调用方和凭证泄露后的冒充，不防本机同用户进程。
+- **角色创建权限**（后续补充）：角色 YAML 新增可选的 `creatable_by`（精确身份或 `node:*`、`remote:*`、`*` 前缀通配）。中枢在创建任务时对非 `user` 身份校验角色存在（`unknown_role`）与 `creatable_by`（403 `role_not_allowed`）；字段缺省时只有 `user` 可以创建。默认 dev 不写（AI 不能借 dev 提权），reviewer、triage 为 `["*"]`（本机 AI 身份就是 `flow mcp --actor <角色名>` 的角色名，如 `reviewer`）；`POST /v1/tasks` 对 `node:*` 仍为 `scope_denied`。说明见 `docs/hub-auth.md`"角色创建权限"。
 
 ## Risks / Trade-offs
 

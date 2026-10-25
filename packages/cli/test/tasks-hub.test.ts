@@ -24,6 +24,7 @@ import {
   createTaskService,
   openLedger,
   type RunningHub,
+  roleLookupFromHome,
   runHub,
   startHub,
   workspaceCheckFromHome,
@@ -57,9 +58,10 @@ async function start() {
 beforeEach(async () => {
   home = await initTempHome('flow-tasks-hub-')
   // 非默认角色必须显式定义，不能依赖 task_create 跳过角色校验。
+  // 测试用 AI 身份（test-agent、cli-agent）创建，所以允许任意身份。
   await writeFile(
     join(home, 'config/roles/developer.yaml'),
-    'name: developer\nexecutor: fake\nprompt: 完成测试任务\n',
+    'name: developer\nexecutor: fake\nprompt: 完成测试任务\ncreatable_by: ["*"]\n',
   )
   savedHome = process.env.FLOW_HOME
   process.env.FLOW_HOME = home
@@ -95,7 +97,19 @@ describe('任务操作与真实中枢', () => {
 
   test('角色目录缺失或角色配置非法时仍拒绝创建；合同 executor 可以覆盖角色', async () => {
     await start()
-    const created = data(await invokeOperation(taskCreateOp, { ...contract, role: 'dev' }, ctx()))
+    // 默认 dev 没有 creatable_by：AI 身份被中枢拒绝，user 可以创建。
+    const denied = await invokeOperation(taskCreateOp, { ...contract, role: 'dev' }, ctx())
+    expect(toJsonDocument(denied)).toMatchObject({
+      ok: false,
+      error: { code: 'role_not_allowed', details: { role: 'dev', actor: 'test-agent' } },
+    })
+    const created = data(
+      await invokeOperation(
+        taskCreateOp,
+        { ...contract, role: 'dev' },
+        { ...ctx(), actor: 'user' },
+      ),
+    )
     expect(created.task.contract.executor).toBe('fake')
     await writeFile(join(home, 'config/roles/dev.yaml'), 'name: dev\nexecutor: fake\n')
     expect(await invokeOperation(taskCreateOp, { ...contract, role: 'dev' }, ctx())).toMatchObject({
@@ -413,7 +427,11 @@ describe('HubClient 协议边界', () => {
           const ledger = await openLedger(flowPaths(home).ledgerDb)
           routes = createTaskRoutes({
             ledger,
-            tasks: createTaskService({ ledger, workspaceExists: workspaceCheckFromHome(home) }),
+            tasks: createTaskService({
+              ledger,
+              workspaceExists: workspaceCheckFromHome(home),
+              roles: roleLookupFromHome(home),
+            }),
           })
           return ledger
         },

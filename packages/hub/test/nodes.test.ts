@@ -7,7 +7,7 @@ import {
   type LedgerStore,
   type NodeProtocol,
 } from '../src/index.ts'
-import { contractInput, result, tempLedger, WS } from './ledger-helpers.ts'
+import { anyRole, contractInput, result, tempLedger, WS } from './ledger-helpers.ts'
 import { FakeClock, tick } from './server-fixtures.ts'
 
 /** 墙钟与单调时钟分开：`sleep(ms)` 只拨动墙钟，模拟合盖睡眠。 */
@@ -50,7 +50,12 @@ async function setup(): Promise<Ctx> {
     protocol.stop()
     t.cleanup()
   })
-  const tasks = createTaskService({ ledger: t.store, workspaceExists: () => true, now: clock.now })
+  const tasks = createTaskService({
+    ledger: t.store,
+    workspaceExists: () => true,
+    roles: anyRole,
+    now: clock.now,
+  })
   return {
     ledger: t.store,
     clock,
@@ -242,7 +247,11 @@ describe('续约与提交', () => {
     ctx.register('n1')
     const id = await ctx.create()
     const lease = await grant(ctx)
-    const tasks = createTaskService({ ledger: ctx.ledger, workspaceExists: () => true })
+    const tasks = createTaskService({
+      ledger: ctx.ledger,
+      workspaceExists: () => true,
+      roles: anyRole,
+    })
     expect(tasks.cancelTask(id, { actor: 'user' }).ok).toBe(true)
     const r = ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token })
     expect(r.ok && r.data.cancel_requested).toBe(true)

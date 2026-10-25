@@ -37,7 +37,7 @@ import {
 } from '../inbox/index.ts'
 import { createTaskRoutes } from '../ledger/routes.ts'
 import { type LedgerStore, openLedger } from '../ledger/store.ts'
-import { createTaskService, workspaceCheckFromHome } from '../ledger/tasks.ts'
+import { createTaskService, roleLookupFromHome, workspaceCheckFromHome } from '../ledger/tasks.ts'
 import { createNodeProtocol, type NodeProtocol } from '../nodes/protocol.ts'
 import { createPolicyRoutes } from '../policy/routes.ts'
 import { createScheduler, type Scheduler } from '../scheduler/index.ts'
@@ -155,6 +155,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       const tasks = createTaskService({
         ledger,
         workspaceExists: workspaceCheckFromHome(options.home),
+        roles: roleLookupFromHome(options.home),
         now: () => clock.now(),
       })
       protocol = createNodeProtocol({

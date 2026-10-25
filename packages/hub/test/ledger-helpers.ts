@@ -1,15 +1,19 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type TaskContractInput, taskContract } from '@flow/core'
+import { ok, type TaskContractInput, taskContract } from '@flow/core'
 import {
   type EventInput,
   type LedgerStore,
   type OpenLedgerOptions,
   openLedger,
+  type RoleLookup,
 } from '../src/index.ts'
 
 export const WS = 'ws/demo'
+
+/** 与角色权限无关的测试用：任何角色都存在，且任何身份都可以创建。 */
+export const anyRole: RoleLookup = async (name) => ok({ name, creatable_by: ['*'] })
 /** 不像密钥的 SHA-256 占位值。 */
 export const SHA = 'ab'.repeat(32)
 

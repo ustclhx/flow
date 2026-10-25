@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { flowPaths, HUB_TOKEN_ENV, HubClient, type Result } from '@flow/core'
 import { type RunningHub, runHub } from '@flow/hub'
 import { initTempHome } from '../../mcp/test/helpers.ts'
@@ -122,7 +123,30 @@ describe('flow hub token', () => {
         '--actor',
         'user',
       )
-      expect(created.doc).toMatchObject({ ok: true, data: { task: { created_by: 'claude' } } })
+      expect(created.doc).toMatchObject({
+        ok: false,
+        error: { code: 'role_not_allowed', details: { role: 'dev', actor: 'claude' } },
+      })
+      // 角色显式允许 claude 时可以创建，记录的创建者仍是 FLOW_ACTOR 声明的身份。
+      await writeFile(
+        join(home, 'config/roles/helper.yaml'),
+        'name: helper\nexecutor: fake\nprompt: 测试\ncreatable_by: ["claude"]\n',
+      )
+      const allowed = await cli(
+        'task',
+        'create',
+        '--goal',
+        '经 FLOW_ACTOR',
+        '--workspace',
+        'ws/product-res',
+        '--role',
+        'helper',
+        '--executor',
+        'fake',
+        '--actor',
+        'user',
+      )
+      expect(allowed.doc).toMatchObject({ ok: true, data: { task: { created_by: 'claude' } } })
       const rebuilt = await cli('hub', 'rebuild', '--actor', 'user')
       expect(rebuilt.doc).toMatchObject({ ok: false, error: { code: 'user_only' } })
     } finally {
