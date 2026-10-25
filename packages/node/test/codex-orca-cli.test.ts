@@ -298,6 +298,10 @@ describe('仓库必须属于已定义的 workspace', () => {
       data: h.repo,
     })
     expect(await resolveTaskRepo(h.home, contract())).toEqual({ ok: true, data: h.repo })
+    // inputs.repo 选择基础仓库的既有优先级不受节点上下文 cwd 规则影响。
+    expect(
+      await resolveTaskRepo(h.home, contract({ cwd: h.home, inputs: { repo: h.repo } })),
+    ).toEqual({ ok: true, data: h.repo })
   })
 
   test('不在任何 workspace 中的仓库：repo_not_in_workspace', async () => {

@@ -25,7 +25,7 @@ export interface ExecutorContext {
   taskId: string
   /** 第几次尝试，从 1 开始。 */
   attempt: number
-  /** 工作目录：合同的 cwd，缺省时由节点决定。 */
+  /** 工作目录：合同 cwd，其次 inputs.repo，缺省时取 workspace 唯一仓库。 */
   cwd: string
   /** 节点 id，写入结果的 node_id。 */
   nodeId: string
@@ -74,7 +74,7 @@ export type ExecutorOutcome =
   | {
       outcome: 'done'
       result: TaskResult
-      /** worker 实际工作的目录（例如 codex-orca 的 Orca worktree）；验收命令在这里运行，缺省为合同的 cwd。 */
+      /** worker 实际工作的目录（例如 codex-orca 的 Orca worktree）；验收命令在这里运行，缺省为节点解析的合同目录。 */
       workdir?: string
     }
   | { outcome: 'failed'; result: TaskResult }

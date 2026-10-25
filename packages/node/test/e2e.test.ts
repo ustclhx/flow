@@ -89,6 +89,7 @@ const create = async (over: Partial<TaskContractInput>) =>
       workspace: 'ws/demo',
       role: 'dev',
       executor: 'fake',
+      cwd: home,
       ...over,
     })
   ).task.id

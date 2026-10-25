@@ -58,6 +58,7 @@ async function create(script: FakeStep[]): Promise<string> {
     workspace: 'ws/product-res',
     role: 'dev',
     executor: 'fake',
+    cwd: home,
     inputs: { fake: { script } },
   })
   return data(r).task.id

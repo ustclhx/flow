@@ -1,13 +1,11 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import {
   type Activity,
   type DeliveredReply,
   fail,
   loadRoles,
-  loadWorkspaces,
   ok,
   type Result,
   type Role,
@@ -29,6 +27,7 @@ import {
   resumedSignal,
 } from '../executor.ts'
 import { autoApprovedText, needsUserText } from '../precheck.ts'
+import { resolveContractCwd } from '../workdir.ts'
 import {
   analyzeTail,
   approvalForPrecheck,
@@ -154,9 +153,6 @@ const stateSchema = z.object({
 type OrcaTaskState = z.infer<typeof stateSchema>
 
 const quote = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
-const expandHome = (p: string) =>
-  p === '~' ? homedir() : p.startsWith('~/') ? join(homedir(), p.slice(2)) : p
-const normRepo = (p: string) => resolve(expandHome(p)).replace(/\/+$/, '')
 
 /**
  * 确定任务的仓库：`inputs.repo`，其次合同的 cwd；都没有时取合同 workspace 唯一的仓库。
@@ -170,28 +166,12 @@ export async function resolveTaskRepo(
   if (!inputs.success) {
     return fail('usage', 'invalid_inputs', `inputs 不合法：${inputs.error.message}`)
   }
-  const loaded = await loadWorkspaces(home)
-  if (!loaded.ok) return loaded
-  const ws = loaded.data.workspaces.find((w) => w.ref === contract.workspace)
-  const repos = new Set((ws?.repos ?? []).map(normRepo))
-  let repo = inputs.data.repo ?? contract.cwd
-  if (!repo && ws?.repos.length === 1) repo = ws.repos[0]
-  if (!repo) {
-    return fail(
-      'failure',
-      'repo_not_in_workspace',
-      `合同没有指定仓库（inputs.repo 或 cwd），${contract.workspace} 也没有唯一的仓库`,
-    )
-  }
-  const norm = normRepo(repo)
-  if (!repos.has(norm)) {
-    return fail(
-      'failure',
-      'repo_not_in_workspace',
-      `仓库 ${norm} 不属于 ${contract.workspace}（config/workspaces/ 中该 workspace 的 repos）`,
-    )
-  }
-  return ok(norm)
+  // inputs.repo 仍优先选择 Orca 的基础仓库；节点上下文的 cwd 按通用合同规则解析。
+  return resolveContractCwd(
+    home,
+    inputs.data.repo ? { ...contract, cwd: inputs.data.repo } : contract,
+    true,
+  )
 }
 
 /** 由角色参数拼出启动 Codex 的终端命令（与 run-codex.sh 等价；任务说明经文件传入）。 */

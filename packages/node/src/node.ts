@@ -44,6 +44,7 @@ import {
 import { createFakeExecutor } from './fake.ts'
 import { createPolicyPrecheck } from './precheck.ts'
 import { verifyTask } from './verify.ts'
+import { resolveContractCwd } from './workdir.ts'
 
 /**
  * `flow node` 执行节点（tasks.md 4.3；design D6；node-protocol spec）。
@@ -90,8 +91,6 @@ export interface StartNodeOptions {
   retryMs?: number
   /** 时钟跳变阈值，默认 30 秒。 */
   jumpThresholdMs?: number
-  /** 合同没有 cwd 时的工作目录，默认 flow-home。 */
-  defaultCwd?: string
   /**
    * 角色设定的无进展阈值（分钟）。合同的 `no_progress_minutes` 优先，缺省为 15 分钟。
    * 不传时按合同的角色读取 `config/roles/<role>.yaml` 的 `no_progress_minutes`。
@@ -152,13 +151,13 @@ export async function loadOrCreateNodeId(home: string, host: string): Promise<Re
 }
 
 interface Env {
+  home: string
   nodeId: string
   client: NodeHubClient
   clock: NodeClock
   registry: ExecutorRegistry
   logger: NodeLogger
   retryMs: number
-  defaultCwd: string
   /** 角色设定的无进展阈值（分钟），来自 `config/roles/`。 */
   roleNoProgressMinutes: NoProgressResolver | undefined
   timeoutGraceMs: number
@@ -584,8 +583,22 @@ class LeaseRunner {
     this.executor = executor
     let outcome: Result<ExecutorOutcome>
     this.scheduleRenew()
+    const cwd = await resolveContractCwd(env.home, grant.contract)
+    if (this.released) return
     if (!executor) {
       outcome = fail('failure', 'unknown_executor', `节点没有执行器 ${grant.contract.executor}`)
+    } else if (!cwd.ok) {
+      outcome = ok({
+        outcome: 'failed',
+        result: {
+          summary: cwd.error.message,
+          reason: cwd.error.code,
+          artifacts: [],
+          verify: [],
+          executor: grant.contract.executor,
+          node_id: env.nodeId,
+        },
+      })
     } else {
       this.armTimeout()
       this.armIdle()
@@ -593,7 +606,7 @@ class LeaseRunner {
         this.run = executor.run(grant.contract, {
           taskId: grant.task_id,
           attempt: grant.attempt,
-          cwd: grant.contract.cwd ?? env.defaultCwd,
+          cwd: cwd.data,
           nodeId: env.nodeId,
           env: executorEnv(),
           signal: this.abort.signal,
@@ -601,7 +614,7 @@ class LeaseRunner {
           precheck: createPolicyPrecheck({
             client: env.client,
             taskId: grant.task_id,
-            cwd: grant.contract.cwd ?? env.defaultCwd,
+            cwd: cwd.data,
             clock: env.clock,
             signal: this.abort.signal,
             ...(env.precheckTimeoutMs === undefined ? {} : { timeoutMs: env.precheckTimeoutMs }),
@@ -643,7 +656,12 @@ class LeaseRunner {
       if (this.signal && !this.released) await sleep(env.clock, env.retryMs)
     }
     if (this.released) return
-    if (req.outcome === 'done' && grant.contract.verify?.length && !this.cancelRequested) {
+    if (
+      req.outcome === 'done' &&
+      cwd.ok &&
+      grant.contract.verify?.length &&
+      !this.cancelRequested
+    ) {
       this.phase = 'verifying'
       this.signal = { phase: 'verifying' }
       // 中枢确认阶段切换后才启动命令；可重试错误时保留 signal，期间继续续约。
@@ -656,8 +674,7 @@ class LeaseRunner {
         grant.contract.verify,
         // 执行器给出的工作目录优先（codex-orca 在 Orca worktree 里工作，不在合同的 cwd）。
         (outcome.ok && outcome.data.outcome === 'done' ? outcome.data.workdir : undefined) ??
-          grant.contract.cwd ??
-          env.defaultCwd,
+          cwd.data,
         env.clock,
         this.abort.signal,
       )
@@ -819,13 +836,13 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
   })
   const retryMs = options.retryMs ?? 1_000
   const env: Env = {
+    home,
     nodeId,
     client,
     clock,
     registry,
     logger,
     retryMs,
-    defaultCwd: options.defaultCwd ?? home,
     roleNoProgressMinutes: options.noProgressMinutes,
     timeoutGraceMs: options.timeoutGraceMs ?? TIMEOUT_GRACE_MS,
     deliverTimeoutMs: options.deliverTimeoutMs ?? DELIVER_TIMEOUT_MS,

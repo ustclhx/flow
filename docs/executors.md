@@ -178,10 +178,15 @@ permissions:
 ```
 
 3. 运行 `flow task create --file contract.json`，记下返回的任务 id。
-   仓库唯一时从 workspace 推导；多个仓库时在合同中加 `cwd` 或 `inputs.repo` 的绝对路径。
+   三种执行器共用合同工作目录规则：显式 `cwd` 优先；否则使用属于该 workspace repos 的 `inputs.repo`；
+   两者都没有时，取 workspace 唯一仓库。没有仓库或有多个仓库时必须写 `cwd` 或 `inputs.repo`，
+   否则任务以 `failed`（`repo_not_in_workspace`）结束，不再回退到 flow-home。
+   建议填写绝对路径。codex-orca 仍以 `inputs.repo`（其次 `cwd`）选择基础仓库并校验归属，再创建 worktree。
    可加 `inputs.scope: ["README.md"]` 明确修改范围，`context` 引用知识，
    `verify: [{"cmd":["bun","test"]}]` 指定验收命令（应换成该仓库实际的检查）。
    verify 是 argv，不经过 shell；有验收命令时成功后先进入 verifying，全部通过才 done。
+   验收目录依次取单条 verify 的 `cwd`、执行器返回的工作目录（codex-orca 的 worktree）、上述合同工作目录。
+   策略预检的相对路径也按上述合同工作目录解析。
    合同 `executor` 是必填字段且优先于角色值，换角色时应一起检查。
 4. 用返回的 id 替换下面的 `<id>`。仅 blocked 任务能回复；提问必须用文字，批准不能附带文字，拒绝可以附理由：
 
