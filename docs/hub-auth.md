@@ -92,7 +92,8 @@ MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有�
 - 其他身份（实际能到达这个接口的是 user token 降级的 AI 身份）：角色必须已定义且加载成功，否则 422 `unknown_role`
   （语法或字段有错、未能加载的角色文件同样视为未定义，`flow doctor` 会报出错误）；身份必须匹配该角色的 `creatable_by`，
   否则 403 `role_not_allowed`，信息中写明角色与身份，`details` 为 `{ field: "role", role, actor }`。拒绝时不产生事件。
-- `creatable_by` 缺省：只有 user 可以创建（默认拒绝 AI 与节点）。
+- `creatable_by` 缺省或为 `[]`：只有 user 可以创建（默认拒绝 AI 与节点）。
+- 用户在收件箱批准 AI 的 `task_create`（策略审批）不能覆盖 `creatable_by`；身份不匹配时，中枢仍返回 `role_not_allowed`。
 - 模式：精确值（`reviewer`、`agent:claude`、`remote:grok`、`node:n-abc`，区分大小写），`<前缀>:*`（`node:*`、`remote:*`，
   匹配以 `<前缀>:` 开头且后面非空的身份），以及 `*`（任意身份）。写在列表中的 `user` 没有额外作用。
 - 校验在幂等键查找之前：被拒绝的身份不能凭幂等键拿到已有任务。
@@ -101,8 +102,11 @@ MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有�
 
 默认模板中 dev 不写（只有 user），只读的 reviewer、triage 为 `["*"]`。
 
-**本机 AI 的实际身份**：claude-sdk 执行器为任务注入 `flow mcp --actor <角色名>`，所以 reviewer 执行器访问中枢时的
-身份就是 `reviewer`（triage 等其他角色同理用各自的名字）；`flow mcp --actor <name>` 与 `FLOW_ACTOR` 声明的也都是这类普通名字。
+**本机 AI 的实际身份**：claude-sdk、codex-exec 与 codex-orca 执行器均为新启动的 AI 子进程设置
+`FLOW_ACTOR=<角色名>`；claude-sdk 另注入 `flow mcp --actor <角色名>`。所以 reviewer 会话经 MCP 或 Bash 中的 CLI
+访问中枢时，身份都是 `reviewer`（triage 等其他角色同理用各自名字），不能通过 CLI 的 `--actor user` 覆盖。
+角色名必须是合法且可声明的 AI 身份；`user` 等保留身份会使任务失败，不会静默替换名字。
+codex-orca 通过 Flow 生成的 Orca 终端启动命令设置环境变量；升级前已启动并被复用的会话需要重新启动才会获得它。
 它们**不匹配** `node:*`。只想放开特定身份时写精确名字，例如只允许 reviewer 执行器拆出分诊任务：
 
 ```yaml
@@ -117,7 +121,7 @@ creatable_by:
   属于可信计算基，只能走节点协议，创建任务一律 403 `scope_denied`；remote token 在本机端口一律 403 `remote_not_allowed`。
   变更 ⑤ 的远程入口另有自己的能力控制，不因为角色写了 `*` 就能创建任务。`node:*`、`remote:*` 模式先保留，供以后的入口使用。
 - `flow init` 不覆盖已有文件，**已存在的角色文件不会自动获得 `creatable_by`**，升级后这些角色只有 user 能创建；
-  `flow doctor` 对缺少该字段的角色给出 info 提示。需要时手动加上，例如 `creatable_by: ["*"]` 或 `["reviewer"]`。
+  `flow doctor` 对字段缺省或为空数组的角色给出“仅 user 可创建”的 info 提示。需要时手动加上，例如 `creatable_by: ["*"]` 或 `["reviewer"]`。
 - 定时规则（`schedules.yaml` 与中枢内部规则）目前只写 `schedule.fired`（身份 `hub`）或回调收件箱，不创建任务，
   不经过这项校验。以后若由定时规则创建任务，必须经同一个任务服务，并且明确以哪个身份创建。
 - 和其他检查一样，这只约束经中枢创建的任务；能读 `state/hub.token` 的本机同用户进程仍可以 user 身份创建任何角色（见"信任边界"）。
@@ -178,13 +182,15 @@ flow hub token revoke tok_0123456789ab                        # 立即生效
   节点此时声明 `node:<id>`，必须与绑定身份一致。
 - **执行器与 worker 子进程**：节点 spawn 执行器、worker 与验收命令时，环境变量一律经
   `executorEnv()`（`packages/node/src/env.ts`，执行器从 `ExecutorContext.env` 拿到同一份），
-  其中去掉了 `FLOW_HUB_TOKEN`，任务里运行的代码拿不到节点的凭证。
+  其中去掉了 `FLOW_HUB_TOKEN`，任务里运行的代码拿不到节点的凭证。执行器再通过 `executorRoleEnv()`
+  校验角色身份并设置 `FLOW_ACTOR`；codex-orca 在终端启动命令中设置它，同时移除 `FLOW_HUB_TOKEN`。
 - **中枢内部渠道**（Telegram、Web）：运行在中枢进程内，不经过 `/v1` 的 HTTP 鉴权，直接以 user 写事件并附 `via`。
   Web 页面先经过自己的会话与 Origin 校验（见上文"Web 页面"）。
 
 ## 信任边界
 
 **本机上以同一系统用户运行、能读取 `state/hub.token` 的任何进程，都可以获得 `user` 身份。**
+例如，直接读取 `hub.token` 并用 curl 携带该 token、且不声明 AI 身份的进程仍是 `user`。
 这一点是有意保留的：CLI 本身就靠读这个文件工作，同一用户的进程也能读 age 私钥、改配置。
 本设计防的是：
 

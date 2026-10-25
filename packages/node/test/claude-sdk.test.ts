@@ -288,6 +288,7 @@ describe('按角色运行', () => {
     expect(o?.cwd).toBe('/repo/demo')
     // 子进程环境来自节点（executorEnv），不含中枢凭证。
     expect(o?.env?.PATH).toBe(process.env.PATH)
+    expect(o?.env?.FLOW_ACTOR).toBe('reviewer')
     expect(o?.env && 'FLOW_HUB_TOKEN' in o.env).toBe(false)
     expect(o?.model).toBe('claude-opus-5-5')
     expect(o?.settingSources).toEqual(['project'])
@@ -1025,3 +1026,34 @@ function ctx(over: Record<string, unknown> = {}) {
     ...over,
   }
 }
+
+test('SDK 会话覆盖继承的 FLOW_ACTOR，重新过滤 token；user 角色不启动会话', async () => {
+  for (const name of ['reviewer', 'user']) {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/tmp/flow-home-not-used',
+      query,
+      resolveRole: roleResolver({ ...reviewer(), name }),
+    })
+    const run = ex.run(
+      contract({ role: name }),
+      ctx({
+        env: { FLOW_ACTOR: 'user', FLOW_HUB_TOKEN: 'must-not-reach-worker' },
+      }),
+    )
+    const outcome = await run.done
+    if (name === 'user') {
+      expect(outcome).toMatchObject({
+        ok: true,
+        data: { outcome: 'failed', result: { reason: 'invalid_actor' } },
+      })
+      expect(state.calls).toHaveLength(0)
+    } else {
+      expect(outcome.ok && outcome.data.outcome).toBe('done')
+      expect(state.calls[0]?.env).toEqual({ FLOW_ACTOR: 'reviewer' })
+    }
+  }
+})

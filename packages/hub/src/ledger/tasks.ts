@@ -51,7 +51,17 @@ export type RoleLookup = (
 export function roleLookupFromHome(home: string): RoleLookup {
   return async (name) => {
     const loaded = await loadRoles(home)
-    if (!loaded.ok) return loaded
+    if (!loaded.ok) {
+      return fail(
+        'failure',
+        'unknown_role',
+        `角色 ${name} 未定义或加载失败，运行 flow doctor 查看`,
+        {
+          field: 'role',
+          role: name,
+        },
+      )
+    }
     return ok(loaded.data.roles.find((r) => r.name === name) ?? null)
   }
 }
@@ -174,10 +184,15 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         const found = await o.roles(contract.role)
         if (!found.ok) return found
         if (!found.data) {
-          return fail('failure', 'unknown_role', `角色 ${contract.role} 未定义`, {
-            field: 'role',
-            role: contract.role,
-          })
+          return fail(
+            'failure',
+            'unknown_role',
+            `角色 ${contract.role} 未定义或加载失败，运行 flow doctor 查看`,
+            {
+              field: 'role',
+              role: contract.role,
+            },
+          )
         }
         if (!canCreateRole(found.data, opts.actor)) {
           return fail(

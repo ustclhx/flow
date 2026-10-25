@@ -242,3 +242,12 @@ describe('任务视图', () => {
     expect(issuePaths(r)).toContain('blocked.reason')
   })
 })
+
+test('合同 cwd 只接受绝对路径或 ~/ 开头，保留路径供节点展开', () => {
+  for (const cwd of ['.', './repo', '../repo', 'repo', '~', '~other/repo']) {
+    expect(issuePaths(taskContract.safeParse({ ...contract, cwd }))).toEqual(['cwd'])
+  }
+  for (const cwd of ['/', '/tmp/repo', '~/repo']) {
+    expect(taskContract.parse({ ...contract, cwd }).cwd).toBe(cwd)
+  }
+})

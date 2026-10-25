@@ -71,9 +71,9 @@
                   }
                 },
                 "cwd": {
-                  "description": "工作目录（节点上的绝对路径）",
+                  "description": "工作目录（节点上的绝对路径，允许 ~/ 开头并由节点展开）",
                   "type": "string",
-                  "minLength": 1
+                  "pattern": "^(?:\\/|~\\/)"
                 },
                 "context": {
                   "description": "上下文引用：brain 条目 id 或文件路径",
@@ -1445,9 +1445,9 @@
                             }
                           },
                           "cwd": {
-                            "description": "工作目录（节点上的绝对路径）",
+                            "description": "工作目录（节点上的绝对路径，允许 ~/ 开头并由节点展开）",
                             "type": "string",
-                            "minLength": 1
+                            "pattern": "^(?:\\/|~\\/)"
                           },
                           "context": {
                             "description": "上下文引用：brain 条目 id 或文件路径",

@@ -63,22 +63,31 @@ describe('flow doctor', () => {
     ).toMatchObject({ ok: false, message: expect.stringContaining('executor') })
   })
 
-  test('角色缺少 creatable_by：info 提示（不是错误），已设置的角色不提示', async () => {
+  test('角色 creatable_by 缺省或为空：中性 info 提示；非空列表不提示', async () => {
     const home = tempHome('flow-doctor-roles-')
     await initFlowHome(home)
+    writeText(
+      join(home, 'config/roles/empty.yaml'),
+      'name: empty\nexecutor: fake\nprompt: 测试\ncreatable_by: []\n',
+    )
     const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
     const hints = report.checks.filter((c) => c.id.endsWith('.creatable_by'))
-    // 默认模板：只有 dev 没有 creatable_by（仅 user 可以创建）。
+    // 缺省与显式空数组的行为一致。
     expect(hints).toEqual([
       expect.objectContaining({
         id: 'role.dev.creatable_by',
         ok: false,
         severity: 'info',
-        message: expect.stringContaining('只有 user 可以创建'),
+        message: expect.stringContaining('仅 user 可创建'),
+      }),
+      expect.objectContaining({
+        id: 'role.empty.creatable_by',
+        severity: 'info',
+        message: expect.stringContaining('仅 user 可创建'),
       }),
     ])
     expect(formatDoctorReport(report)).toContain(
-      '[info] config/roles/dev.yaml：未设置 creatable_by',
+      '[info] config/roles/dev.yaml：creatable_by 缺省或为空，仅 user 可创建',
     )
   })
 

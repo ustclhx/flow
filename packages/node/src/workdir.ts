@@ -7,7 +7,7 @@ const workdirInputs = z.looseObject({ repo: z.string().min(1).optional() })
 const normalizeRepo = (path: string) => {
   const expanded =
     path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
-  return resolve(expanded).replace(/\/+$/, '')
+  return resolve(expanded)
 }
 
 /**
@@ -19,7 +19,7 @@ export async function resolveContractCwd(
   contract: TaskContract,
   requireWorkspaceRepo = false,
 ): Promise<Result<string>> {
-  if (contract.cwd !== undefined && !requireWorkspaceRepo) return ok(contract.cwd)
+  if (contract.cwd !== undefined && !requireWorkspaceRepo) return ok(normalizeRepo(contract.cwd))
   const inputs = workdirInputs.safeParse(contract.inputs ?? {})
   if (!inputs.success) {
     return fail('usage', 'invalid_inputs', `inputs 不合法：${inputs.error.message}`)
