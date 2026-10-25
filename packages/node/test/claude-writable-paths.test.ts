@@ -82,8 +82,10 @@ describe('文档路径边界', () => {
       ...[
         'CLAUDE.md',
         'CLAUDE.local.md',
+        'AGENT.md',
         'AGENTS.md',
         'AGENTS.override.md',
+        'CONVENTIONS.md',
         'GEMINI.md',
         'copilot-instructions.md',
       ].flatMap((name) => [name, `docs/nested/${name.toUpperCase()}`]),
@@ -101,6 +103,38 @@ describe('文档路径边界', () => {
       expect(await checkWritableTool('Edit', { file_path }, cwd, ['**'])).toMatchObject({
         behavior: 'deny',
       })
+  })
+
+  test('Unicode 折叠不能绕过指令或隐藏路径禁令，中文和其他普通 Unicode 文档名仍可写', async () => {
+    for (const file_path of [
+      'AGENTſ.md',
+      'docs/copilot-instructionſ.md',
+      'docs/ＡＧＥＮＴＳ.md',
+      'docs/ＡＧＥＮＴ．ｍｄ',
+      'docs/ＣＯＮＶＥＮＴＩＯＮＳ．ｍｄ',
+      'docs/．hidden/report.md',
+      'docs/．claude/prompt.md',
+    ]) {
+      expect(await checkWritableTool('Write', { file_path }, cwd, ['**'])).toMatchObject({
+        behavior: 'deny',
+      })
+    }
+    writeFileSync(join(cwd, 'AGENTſ.md'), '不可改的指令')
+    symlinkSync(join(cwd, 'AGENTſ.md'), join(cwd, 'docs/ordinary.md'))
+    expect(
+      await checkWritableTool('Edit', { file_path: 'docs/ordinary.md' }, cwd, ['**']),
+    ).toMatchObject({ behavior: 'deny' })
+    for (const file_path of [
+      'docs/设计说明.md',
+      'docs/审查/中文报告.mdx',
+      '中文笔记.md',
+      'docs/ｅｘａｍｐｌｅ.md',
+    ]) {
+      expect(await checkWritableTool('Write', { file_path }, cwd, patterns)).toEqual({
+        behavior: 'allow',
+        path: join(cwd, file_path),
+      })
+    }
   })
 
   test('未知的非 MCP 路径工具拒绝，已知只读工具和 MCP 工具沿用原权限流程', async () => {

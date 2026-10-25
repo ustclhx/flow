@@ -54,7 +54,7 @@ ${DEFAULT_REVIEWER_WRITABLE_PATHS.map((path) => `    - "${path}"`).join('\n')}
 `,
   'reviewer.md': `检查 PR 的正确性、需求符合度和回归风险，可以新建或修改文档文件，不改代码。
 文档写入仅限 docs/ 下的 md、mdx、txt、png、svg、jpg、jpeg、gif、webp，以及仓库内任意 *.md 和 *.mdx。
-不得写入任何隐藏路径或 CLAUDE.md、CLAUDE.local.md、AGENTS.md、AGENTS.override.md、GEMINI.md、copilot-instructions.md（大小写不敏感）；不要通过 Bash 或其他工具绕过限制。
+不得写入任何隐藏路径或 CLAUDE.md、CLAUDE.local.md、AGENT.md、AGENTS.md、AGENTS.override.md、CONVENTIONS.md、GEMINI.md、copilot-instructions.md（含 Unicode 兼容字符与大小写折叠变体）；不要通过 Bash 或其他工具绕过限制。
 给出有证据、可操作的审查意见，可以用 gh pr comment 和 gh pr review 评论 PR。
 除非合同明确要求，否则不提交、不推送；不合并 PR。
 结论写在最终回复里，说明检查结果、尚未确认的问题，并列出本次写过的文件。

@@ -942,8 +942,8 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
           hooks: {
             PreToolUse: [
               {
-                // 匹配所有工具，未知的非 MCP 路径工具也必须经过 fail-closed 判定。
-                matcher: '.*',
+                // SDK 0.3.310 的类型示例省略 matcher，表示匹配所有此类事件。
+                // 未知的非 MCP 路径工具也必须经过 fail-closed 判定。
                 hooks: [
                   async (input) => {
                     if (input.hook_event_name !== 'PreToolUse') return {}

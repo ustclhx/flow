@@ -20,8 +20,10 @@ const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const
 const AGENT_INSTRUCTION_FILES = new Set([
   'claude.md',
   'claude.local.md',
+  'agent.md',
   'agents.md',
   'agents.override.md',
+  'conventions.md',
   'gemini.md',
   'copilot-instructions.md',
 ])
@@ -47,13 +49,16 @@ function matches(pattern: string, path: string): boolean {
   return new RegExp(`^${source}$`).exec(path)?.[0] === path
 }
 
-/** 不受白名单放宽影响：禁止越界、隐藏路径段及代理指令文件（大小写不敏感）。 */
+/** 禁止越界、隐藏路径段及代理指令文件；比较兼容字符与 Unicode 大小写折叠，但不改写实际路径。 */
 function insidePath(root: string, path: string): string | undefined {
   const rel = relative(root, path)
   if (
     !rel ||
     isAbsolute(rel) ||
-    rel.split(sep).some((p) => p.startsWith('.') || AGENT_INSTRUCTION_FILES.has(p.toLowerCase()))
+    rel.split(sep).some((p) => {
+      const folded = p.normalize('NFKC').toUpperCase().toLowerCase()
+      return folded.startsWith('.') || AGENT_INSTRUCTION_FILES.has(folded)
+    })
   )
     return undefined
   return rel.split(sep).join('/')

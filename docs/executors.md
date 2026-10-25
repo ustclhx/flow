@@ -158,13 +158,15 @@ permissions:
   原始路径与解析符号链接后的真实路径都必须匹配；允许 cwd 内绝对路径，拒绝任何 `..` 路径段、
   cwd 外路径及无法确认真实位置的路径。新文件校验最近的已存在祖先。
   不论白名单如何配置，任何隐藏路径段（以 `.` 开头）和任意层级的 `CLAUDE.md`、`CLAUDE.local.md`、
-  `AGENTS.md`、`AGENTS.override.md`、`GEMINI.md`、`copilot-instructions.md` 都硬性禁写，文件名大小写不敏感。
+  `AGENT.md`、`AGENTS.md`、`AGENTS.override.md`、`CONVENTIONS.md`、`GEMINI.md`、`copilot-instructions.md` 都硬性禁写。
+  每个路径段在比较隐藏名称和指令文件名前，先做 `normalize('NFKC').toUpperCase().toLowerCase()`，
+  防止 `AGENTſ.md`、`copilot-instructionſ.md`、全角字符等 Unicode 折叠变体绕过；实际写入路径保持原样，中文文档名仍允许。
   这也适用于符号链接目标，避免不可信 PR 诱导 reviewer 改写后续开发代理会加载的指令或命令。
   白名单以外的文件写入直接拒绝，不走 Flow 策略预检或用户审批；`[]` 禁止所有文件工具写入。
   字段缺省不新增写入授权，沿用旧角色的 SDK 权限和 Flow 审批行为；已有 reviewer 的 Edit/Write 禁令仍然生效。
 - `canUseTool` 负责文件工具的直接放行或拒绝；同一校验也安装在 SDK `PreToolUse` hook 中，
   避免 `allowedTools`、权限模式或会话批准提前放行而跳过边界。SDK 的显式禁用规则仍生效。
-  `PreToolUse` 匹配所有工具：非 `mcp__` 前缀的未知工具只要输入包含 `file_path`、`notebook_path` 或 `path`，
+  `PreToolUse` 省略 matcher，匹配所有工具：非 `mcp__` 前缀的未知工具只要输入包含 `file_path`、`notebook_path` 或 `path`，
   就直接拒绝，即使字段值不合法；已处理的文件写工具按白名单判定，已知只读工具仍走 SDK 原权限流程。
   只读清单按 SDK 0.3.310 内置名称列为 Read、Glob、Grep、LSP、ListMcpResourcesTool、ReadMcpResourceTool、
   ReadMcpResourceDirTool（当前 SDK 无 LS）。MCP 的 path 可能是资源标识，故不套用这个未知文件工具兜底，
@@ -209,6 +211,9 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
 原生允许规则也不能表达白名单之外一律拒绝的补集，因此使用 Flow 的 `writable_paths`，不生成 SDK 路径允许规则。
 官方 [SDK 权限流程](https://code.claude.com/docs/en/agent-sdk/permissions#how-permissions-are-evaluated)
 说明 hooks 先于权限模式和允许规则，而 `canUseTool` 仅处理前序未决定的请求。
+全工具 hook 使用省略 matcher 的写法：本地 SDK 0.3.310 的 `sdk.d.ts` 中 `HookCallbackMatcher.matcher?: string`
+为可选字段，`Options.hooks` 的 PreToolUse 示例也没有 matcher；官方 [SDK hooks 文档](https://code.claude.com/docs/en/agent-sdk/hooks#matchers)
+明确说明，无 matcher 的 hook 会接收该类型的每个事件。因此不依赖 `.*` 正则来表达全工具匹配。
 以上由类型定义和文档确认，未运行真实 Claude 或调用模型 API。
 
 执行器自动注入 `flow mcp --actor reviewer`（其他角色用各自名字）。Flow MCP 的固定放行清单为：
@@ -251,6 +256,9 @@ reviewer 直接在合同 cwd 中写文档，通常就是用户的主检出；不
 `docs/` 只默认放行上述文档及图片扩展名；目录外只允许 `.md`、`.mdx`，隐藏路径和代理指令文件仍禁止。
 文档目录也可能包含会执行代码的配置，例如 `docs/conf.py`、`docs/.vitepress/config.ts`，不能因它位于 docs 下就信任。
 默认白名单不放行这些配置，角色提示词仍要求内容属于文档。
+指令文件清单是尽力而为的防护，不能完整识别所有代理输入：代理可能经 `@引用` 间接读取普通文档作为指令。
+敏感仓库可将白名单收窄到 `docs/**` 范围内，保留 docs 下逐项展开的文档及图片规则，移除跨目录的 `**/*.md`、`**/*.mdx`；
+这样仍保留扩展名限制，不会重新放行 `docs/conf.py` 等可执行配置。
 路径校验不隔离同一用户下其他进程，无法阻止其他进程在校验后并发替换文件或符号链接。
 
 ## 从 orca-codex 脚本迁移

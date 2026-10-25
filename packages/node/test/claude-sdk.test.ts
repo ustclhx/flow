@@ -565,7 +565,7 @@ describe('工具审批挂起等待', () => {
         const pre = io.options.hooks?.PreToolUse?.[0]?.hooks[0]
         const post = io.options.hooks?.PostToolUse?.[0]?.hooks[0]
         if (!pre || !post) throw new Error('缺少文件工具 hooks')
-        expect(io.options.hooks?.PreToolUse?.[0]?.matcher).toBe('.*')
+        expect(io.options.hooks?.PreToolUse?.[0]).not.toHaveProperty('matcher')
         const base = {
           session_id: SID,
           transcript_path: '',

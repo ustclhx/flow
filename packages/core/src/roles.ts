@@ -48,7 +48,7 @@ export function canCreateRole(role: Pick<Role, 'creatable_by'>, actor: string): 
 
 export const writablePaths = z.array(z.string().min(1)).meta({
   description:
-    '仅 claude-sdk 可配置，其他执行器报配置错误；cwd 相对路径 glob（*、**、?，不支持花括号）；原路径与真实路径都须匹配，硬性禁止 ..、越界、隐藏路径、代理指令文件及 NotebookEdit；[] 禁止全部，缺省沿用原有审批',
+    '仅 claude-sdk 可配置，其他执行器报配置错误；cwd 相对路径 glob（*、**、?，不支持花括号）；原路径与真实路径都须匹配，硬性禁止 ..、越界、隐藏路径、代理指令文件及 NotebookEdit，禁写名称按 NFKC 和 Unicode 大小写折叠比较；[] 禁止全部，缺省沿用原有审批',
 })
 
 export const roleSchema = z
