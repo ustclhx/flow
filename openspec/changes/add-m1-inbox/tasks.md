@@ -37,5 +37,5 @@
 
 ## 7. 真实环境上线
 
-- [ ] 7.1 用户完成：安装 sops、`flow secrets init`、离线备份 age 私钥、通过 @BotFather 创建 bot、`flow secrets set telegram/bot-token`、`flow telegram link`。协调者把实际步骤写入 `docs/inbox.md`
-- [ ] 7.2 端到端验证：用 fake 执行器制造一个 `blocked(question)` 的任务，手机收到推送 → 在 Telegram 中回复 → 任务恢复并完成 → 消息被改为已处理；再用 `/capture` 记一条随手记；在 Web 页面批准一个审批条目，同时观察手机上的消息同步更新
+- [x] 7.1 用户完成：安装 sops、`flow secrets init`、离线备份 age 私钥、通过 @BotFather 创建 bot、`flow secrets set telegram/bot-token`、`flow telegram link`。协调者把实际步骤写入 `docs/inbox.md`
+- [x] 7.2 端到端验证：用 fake 执行器制造一个 `blocked(question)` 的任务，手机收到推送 → 在 Telegram 中回复 → 任务恢复并完成 → 消息被改为已处理；再用 `/capture` 记一条随手记；在 Web 页面批准一个审批条目，同时观察手机上的消息同步更新
