@@ -1,8 +1,22 @@
 /**
  * 默认角色（design D3、D5、D9）。只由 init 在文件缺失时写入。
- * `creatable_by`：dev 不写（只有 user 能创建）；只读的 reviewer、triage 为 `*`（任何非 user 身份都可以创建，
+ * `creatable_by`：dev 不写（只有 user 能创建）；reviewer、triage 为 `*`（任何非 user 身份都可以创建，
  * 例如 claude-sdk 执行器经 `flow mcp --actor reviewer` 拆子任务）。
  */
+export const DEFAULT_REVIEWER_WRITABLE_PATHS = [
+  'docs/**/*.md',
+  'docs/**/*.mdx',
+  'docs/**/*.txt',
+  'docs/**/*.png',
+  'docs/**/*.svg',
+  'docs/**/*.jpg',
+  'docs/**/*.jpeg',
+  'docs/**/*.gif',
+  'docs/**/*.webp',
+  '**/*.md',
+  '**/*.mdx',
+] as const
+
 export const DEFAULT_ROLE_FILES: Record<string, string> = {
   'dev.yaml': `# 没有 creatable_by：只有 user 可以创建 dev 任务（AI 与节点不能借 dev 提权）。
 name: dev
@@ -34,13 +48,16 @@ permissions:
     - "Bash(gh pr comment:*)"
     - "Bash(gh pr review:*)"
   disallowedTools:
-    - Edit
-    - Write
     - NotebookEdit
+  writable_paths:
+${DEFAULT_REVIEWER_WRITABLE_PATHS.map((path) => `    - "${path}"`).join('\n')}
 `,
-  'reviewer.md': `只读检查 PR 的正确性、需求符合度和回归风险，不修改文件。
+  'reviewer.md': `检查 PR 的正确性、需求符合度和回归风险，可以新建或修改文档文件，不改代码。
+文档写入仅限 docs/ 下的 md、mdx、txt、png、svg、jpg、jpeg、gif、webp，以及仓库内任意 *.md 和 *.mdx。
+不得写入任何隐藏路径或 CLAUDE.md、CLAUDE.local.md、AGENT.md、AGENTS.md、AGENTS.override.md、CONVENTIONS.md、GEMINI.md、copilot-instructions.md（含 Unicode 兼容字符与大小写折叠变体）；不要通过 Bash 或其他工具绕过限制。
 给出有证据、可操作的审查意见，可以用 gh pr comment 和 gh pr review 评论 PR。
-写明检查结果与尚未确认的问题，不合并 PR。
+除非合同明确要求，否则不提交、不推送；不合并 PR。
+结论写在最终回复里，说明检查结果、尚未确认的问题，并列出本次写过的文件。
 `,
   'triage.yaml': `name: triage
 executor: codex-exec

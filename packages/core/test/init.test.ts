@@ -6,6 +6,7 @@ import { findExecutable } from '../src/doctor.ts'
 import { flowAuthor, git, gitCommit } from '../src/git.ts'
 import { resolveFlowHome } from '../src/home.ts'
 import { formatInitReport, initFlowHome } from '../src/init.ts'
+import { DEFAULT_REVIEWER_WRITABLE_PATHS } from '../src/role-templates.ts'
 import { loadRoles } from '../src/roles.ts'
 import { fakeStripeKey, snapshot, tempHome, writeText } from './helpers.ts'
 
@@ -106,7 +107,8 @@ describe('flow init', () => {
           permissionMode: 'default',
           setting_sources: [],
           allowedTools: ['Read', 'Glob', 'Grep', 'Bash(gh pr comment:*)', 'Bash(gh pr review:*)'],
-          disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
+          disallowedTools: ['NotebookEdit'],
+          writable_paths: [...DEFAULT_REVIEWER_WRITABLE_PATHS],
         },
       }),
       expect.objectContaining({

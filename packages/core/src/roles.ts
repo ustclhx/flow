@@ -46,6 +46,11 @@ export function canCreateRole(role: Pick<Role, 'creatable_by'>, actor: string): 
   return (role.creatable_by ?? []).some((p) => actorMatches(p, actor))
 }
 
+export const writablePaths = z.array(z.string().min(1)).meta({
+  description:
+    '仅 claude-sdk 可配置，其他执行器报配置错误；cwd 相对路径 glob（*、**、?，不支持花括号）；原路径与真实路径都须匹配，硬性禁止 ..、越界、隐藏路径、代理指令文件及 NotebookEdit，禁写名称按 NFKC 和 Unicode 大小写折叠比较；[] 禁止全部，缺省沿用原有审批',
+})
+
 export const roleSchema = z
   .strictObject({
     name: z
@@ -62,14 +67,23 @@ export const roleSchema = z
     model: z.string().min(1).optional(),
     effort: z.string().min(1).optional(),
     permissions: z
-      .record(z.string(), z.unknown())
+      .looseObject({ writable_paths: writablePaths.optional() })
       .optional()
-      .meta({ description: '执行器专用权限设置；内核只校验它是对象' }),
+      .meta({ description: '执行器专用权限设置；其余字段由执行器校验' }),
     no_progress_minutes: z.number().int().positive().optional(),
     creatable_by: z.array(actorPattern).optional().meta({
       description:
         '除 user 之外，允许哪些身份创建该角色的任务（精确值或 node:*、remote:*、* 等前缀通配）；缺省时只有 user 可以创建',
     }),
+  })
+  .superRefine((role, ctx) => {
+    if (role.permissions?.writable_paths !== undefined && role.executor !== 'claude-sdk') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['permissions', 'writable_paths'],
+        message: 'writable_paths 仅适用于 claude-sdk 执行器',
+      })
+    }
   })
   .meta({ title: 'Flow role config', description: 'config/roles/<name>.yaml' })
 export type Role = z.infer<typeof roleSchema>

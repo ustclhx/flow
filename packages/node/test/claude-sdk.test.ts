@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
@@ -344,9 +344,10 @@ describe('按角色运行', () => {
         'Bash(gh pr review:*)',
         ...FLOW_MCP_AUTO_ALLOWED.map((n) => `mcp__flow__${n}`),
       ])
-      expect(rev?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit'])
+      expect(rev?.disallowedTools).toEqual(['NotebookEdit'])
+      expect(rev?.hooks?.PreToolUse).toHaveLength(1)
       expect(String((rev?.systemPrompt as { append?: string } | undefined)?.append)).toContain(
-        '只读检查 PR',
+        '可以新建或修改文档文件',
       )
       expect(rev?.mcpServers?.flow).toEqual({
         type: 'stdio',
@@ -485,6 +486,169 @@ describe('结果', () => {
 // ---------------------------------------------------------------------------
 
 describe('工具审批挂起等待', () => {
+  test('带 path 的 MCP 工具仍等待现有审批，不能被未知文件工具兜底拒绝或自动放行', async () => {
+    const { b, state, create } = await sdkBench(
+      async function* (io) {
+        await io.nextUser()
+        await io.ask('mcp__external__read', { path: 'docs/review.md' })
+        yield result()
+      },
+      reviewer({ writable_paths: ['**/*.md'] }),
+    )
+    const id = await create()
+    await b.until(id, (t) => t.status === 'blocked')
+    expect(state.executed).toEqual([])
+    await reply(b, id, { kind: 'approve' })
+    await b.until(id, (t) => t.status === 'done')
+    expect(state.permissions[0]).toMatchObject({ behavior: 'allow' })
+  })
+
+  test('writable_paths 先于策略与用户审批：文档直接放行，其余写入直接拒绝', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'flow-reviewer-docs-'))
+    let prechecks = 0
+    try {
+      const { query, state } = mockSdk(async function* (io) {
+        await io.nextUser()
+        for (const path of [
+          'docs/reviews/new.md',
+          'src/design.mdx',
+          'src/code.ts',
+          '../outside.md',
+        ]) {
+          await io.ask('Write', { file_path: path })
+        }
+        await io.ask('NotebookEdit', { notebook_path: 'docs/review.ipynb' })
+        yield result()
+      })
+      const ex = createClaudeSdkExecutor({
+        home: repo,
+        query,
+        resolveRole: roleResolver(
+          reviewer({
+            disallowedTools: ['NotebookEdit'],
+            writable_paths: ['docs/**', '**/*.md', '**/*.mdx'],
+          }),
+        ),
+      })
+      const run = ex.run(
+        contract(),
+        ctx({
+          cwd: repo,
+          precheck: async () => {
+            prechecks++
+            return { allow: true, level: 'auto', actions: ['file.write'] }
+          },
+        }),
+      )
+      const r = await run.done
+      expect(r.ok && r.data.outcome).toBe('done')
+      expect(state.permissions.map((p) => p?.behavior)).toEqual([
+        'allow',
+        'allow',
+        'deny',
+        'deny',
+        'deny',
+      ])
+      expect(prechecks).toBe(0)
+      // 允许工具不等于实际写入，不能据此生成产物。
+      expect(r.ok && 'result' in r.data && r.data.result?.artifacts).toEqual([])
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test('SDK 提前放行时 PreToolUse 仍执行边界；只将成功的文件操作去重写入 artifacts', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'flow-reviewer-hooks-'))
+    try {
+      const { query } = mockSdk(async function* (io) {
+        await io.nextUser()
+        const pre = io.options.hooks?.PreToolUse?.[0]?.hooks[0]
+        const post = io.options.hooks?.PostToolUse?.[0]?.hooks[0]
+        if (!pre || !post) throw new Error('缺少文件工具 hooks')
+        expect(io.options.hooks?.PreToolUse?.[0]).not.toHaveProperty('matcher')
+        const base = {
+          session_id: SID,
+          transcript_path: '',
+          cwd: '/sdk-changed-cwd',
+          tool_use_id: 'write-1',
+        }
+        const opts = { signal: new AbortController().signal }
+        for (const [name, path, decision] of [
+          ['Write', 'docs/review.md', 'allow'],
+          ['Edit', 'src/code.ts', 'deny'],
+          ['MultiEdit', '.git/report.md', 'deny'],
+          ['NotebookEdit', 'docs/review.md', 'deny'],
+          ['FutureWrite', 'docs/review.md', 'deny'],
+          ['Write', 'docs/AGENTS.md', 'deny'],
+        ]) {
+          const r = await pre(
+            {
+              ...base,
+              hook_event_name: 'PreToolUse',
+              tool_name: name as string,
+              tool_input: { file_path: path },
+            },
+            'write-1',
+            opts,
+          )
+          expect(r).toMatchObject({ hookSpecificOutput: { permissionDecision: decision } })
+          if (decision === 'allow')
+            expect(r).toMatchObject({
+              hookSpecificOutput: {
+                updatedInput: {
+                  file_path: join(realpathSync(repo), 'docs/review.md'),
+                },
+              },
+            })
+        }
+        for (const tool_name of ['Read', 'Glob', 'Grep', 'LSP', 'mcp__external__read']) {
+          expect(
+            await pre(
+              {
+                ...base,
+                hook_event_name: 'PreToolUse',
+                tool_name,
+                tool_input: { path: 'docs/review.md' },
+              },
+              'read-1',
+              opts,
+            ),
+          ).toEqual({})
+        }
+        const input = {
+          ...base,
+          hook_event_name: 'PostToolUse' as const,
+          tool_name: 'Write',
+          tool_input: { file_path: join(realpathSync(repo), 'docs/review.md') },
+          tool_response: { success: true },
+        }
+        // 模拟成功工具的 PostToolUse；拒绝、失败及仅批准的调用没有此事件。
+        await post(input, 'write-1', opts)
+        await post(input, 'write-1', opts)
+        yield result()
+      })
+      const ex = createClaudeSdkExecutor({
+        home: repo,
+        query,
+        resolveRole: roleResolver(
+          reviewer({
+            permissionMode: 'bypassPermissions',
+            allowedTools: ['Edit', 'Write'],
+            disallowedTools: ['NotebookEdit'],
+            writable_paths: ['docs/**', '**/*.md', '**/*.mdx'],
+          }),
+        ),
+      })
+      const r = await ex.run(contract(), ctx({ cwd: repo })).done
+      expect(r.ok && r.data.outcome).toBe('done')
+      expect(r.ok && 'result' in r.data && r.data.result?.artifacts).toEqual([
+        { kind: 'file', ref: join(realpathSync(repo), 'docs/review.md') },
+      ])
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
   test('审批后继续：不在允许列表的 Bash 命令 → blocked(awaiting_approval) → --approve → 命令执行、回到 running', async () => {
     const { b, state, create } = await sdkBench(async function* (io) {
       await io.nextUser()

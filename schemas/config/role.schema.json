@@ -27,10 +27,17 @@
       "minLength": 1
     },
     "permissions": {
-      "description": "执行器专用权限设置；内核只校验它是对象",
+      "description": "执行器专用权限设置；其余字段由执行器校验",
       "type": "object",
-      "propertyNames": {
-        "type": "string"
+      "properties": {
+        "writable_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "仅 claude-sdk 可配置，其他执行器报配置错误；cwd 相对路径 glob（*、**、?，不支持花括号）；原路径与真实路径都须匹配，硬性禁止 ..、越界、隐藏路径、代理指令文件及 NotebookEdit，禁写名称按 NFKC 和 Unicode 大小写折叠比较；[] 禁止全部，缺省沿用原有审批"
+        }
       },
       "additionalProperties": {}
     },
