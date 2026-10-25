@@ -146,6 +146,13 @@ describe('角色配置', () => {
       expect(roleSchema.safeParse({ ...role, ...invalid }).success).toBe(false)
     }
     expect(roleSchema.safeParse({ ...role, permisions: {} }).success).toBe(false)
+    expect(
+      roleSchema.safeParse({ ...role, permissions: { writable_paths: ['docs/**', '**/*.md'] } })
+        .success,
+    ).toBe(true)
+    expect(
+      roleSchema.safeParse({ ...role, permissions: { writable_paths: 'docs/**' } }).success,
+    ).toBe(false)
     const exported = jsonSchemas()['config/role.schema.json'] as {
       required: string[]
       properties: Record<string, unknown>

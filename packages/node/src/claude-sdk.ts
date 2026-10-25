@@ -28,8 +28,10 @@ import {
   type TaskContract,
   type TaskCost,
   type TaskResult,
+  writablePaths,
 } from '@flow/core'
 import { z } from 'zod'
+import { CLAUDE_FILE_WRITE_MATCHER, checkWritableTool } from './claude-writable-paths.ts'
 import { type NodeClock, systemClock } from './clock.ts'
 import { executorRoleEnv } from './env.ts'
 import {
@@ -130,6 +132,7 @@ export const claudeSdkPermissions = z.strictObject({
   permissionMode: z.enum(PERMISSION_MODES).default('default'),
   allowedTools: z.array(z.string().min(1)).default([]),
   disallowedTools: z.array(z.string().min(1)).default([]),
+  writable_paths: writablePaths.optional(),
   maxTurns: z.number().int().positive().optional(),
   approval_timeout_minutes: z
     .number()
@@ -401,6 +404,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
       const pending: PendingApproval[] = []
       const seenReplies = new Set<string>()
       const stderrTail: string[] = []
+      const writtenFiles = new Set<string>()
       let q: ClaudeQueryHandle | undefined
       let finished = false
       let session = ctx.resume?.session
@@ -438,7 +442,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         })
       const result = (summary: string, extra: Partial<TaskResult> = {}): TaskResult => ({
         summary: safe(summary.trim() || '（没有输出）', SUMMARY_MAX),
-        artifacts: [],
+        artifacts: [...writtenFiles].sort().map((ref) => ({ kind: 'file', ref })),
         verify: [],
         executor: CLAUDE_SDK_EXECUTOR,
         node_id: ctx.nodeId,
@@ -527,6 +531,12 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         (perms: ClaudeSdkPermissions): CanUseTool =>
         async (toolName, toolInput, opts) => {
           if (finished) return { behavior: 'deny', message: '任务已结束', interrupt: true }
+          const write = await checkWritableTool(toolName, toolInput, ctx.cwd, perms.writable_paths)
+          if (finished || opts.signal.aborted)
+            return { behavior: 'deny', message: '任务或工具调用已中止', interrupt: true }
+          if (write?.behavior === 'deny') return write
+          if (write?.behavior === 'allow')
+            return { behavior: 'allow', updatedInput: { ...toolInput, file_path: write.path } }
           const summary = summarizeToolInput(toolName, toolInput)
           // ---- 策略预检（add-m1-inbox 2.3）：交给用户之前先问策略引擎。 ----
           // 只有中枢明确判定 auto / auto-report 才放行；其余结果与调用失败一律交给用户。
@@ -743,6 +753,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           flowCommand,
           canUseTool: makeCanUseTool(perms.data),
           abortController,
+          writtenFiles,
           stderr: (data) => {
             for (const line of data.split('\n')) if (line.trim()) stderrTail.push(line)
             if (stderrTail.length > STDERR_KEEP)
@@ -882,6 +893,8 @@ interface BuildOptionsInput {
   canUseTool: CanUseTool
   abortController: AbortController
   stderr: (data: string) => void
+  /** 只由成功的 PostToolUse 记录，审批放行本身不算文件产物。 */
+  writtenFiles: Set<string>
   /** setting_sources 不含 project 时读到的项目约定纯文本（已脱敏、限长）。 */
   projectInstructions?: string
 }
@@ -923,6 +936,62 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     disallowedTools: i.perms.disallowedTools,
     ...(i.perms.maxTurns ? { maxTurns: i.perms.maxTurns } : {}),
     canUseTool: i.canUseTool,
+    // canUseTool 可能被 SDK 权限模式、允许规则或会话批准跳过；每次文件调用仍要经过本地边界。
+    ...(i.perms.writable_paths !== undefined
+      ? {
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: CLAUDE_FILE_WRITE_MATCHER,
+                hooks: [
+                  async (input) => {
+                    if (input.hook_event_name !== 'PreToolUse') return {}
+                    const write = await checkWritableTool(
+                      input.tool_name,
+                      input.tool_input,
+                      i.ctx.cwd,
+                      i.perms.writable_paths,
+                    )
+                    if (!write) return {}
+                    return {
+                      hookSpecificOutput: {
+                        hookEventName: 'PreToolUse',
+                        permissionDecision: write.behavior,
+                        ...(write.behavior === 'deny'
+                          ? { permissionDecisionReason: write.message }
+                          : {
+                              updatedInput: {
+                                ...(input.tool_input as Record<string, unknown>),
+                                file_path: write.path,
+                              },
+                            }),
+                      },
+                    }
+                  },
+                ],
+              },
+            ],
+            PostToolUse: [
+              {
+                matcher: CLAUDE_FILE_WRITE_MATCHER,
+                hooks: [
+                  async (input) => {
+                    if (input.hook_event_name !== 'PostToolUse') return {}
+                    const write = await checkWritableTool(
+                      input.tool_name,
+                      input.tool_input,
+                      i.ctx.cwd,
+                      i.perms.writable_paths,
+                    )
+                    if (write?.behavior === 'allow') i.writtenFiles.add(write.path)
+                    return {}
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      : {}),
     abortController: i.abortController,
     ...(i.ctx.resume?.session ? { resume: i.ctx.resume.session } : {}),
     stderr: i.stderr,

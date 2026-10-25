@@ -106,7 +106,8 @@ describe('flow init', () => {
           permissionMode: 'default',
           setting_sources: [],
           allowedTools: ['Read', 'Glob', 'Grep', 'Bash(gh pr comment:*)', 'Bash(gh pr review:*)'],
-          disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
+          disallowedTools: ['NotebookEdit'],
+          writable_paths: ['docs/**', '**/*.md', '**/*.mdx'],
         },
       }),
       expect.objectContaining({

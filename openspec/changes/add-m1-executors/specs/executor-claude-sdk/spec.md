@@ -16,7 +16,7 @@
 ### Requirement: 注入 Flow MCP
 执行器 SHALL 为每次运行注入 `flow` MCP 服务（`flow mcp --actor <角色名>`），使 worker 可以检索知识库、写 journal、提交提案，且受 AI 写入边界约束。
 
-只有一份固定清单中的 flow 工具不经审批放行：`kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、`ws_brief`、`task_list`、`task_show`。其余 flow 工具 MUST 走工具审批，包括 `task_create`、`task_cancel` 和以后新增的工具。原因是 `task_create` 可以创建其他角色的任务（例如 `dev` 角色以 `danger-full-access` 运行），只读角色借此就能提权。
+只有一份固定清单中的 flow 工具不经审批放行：`kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、`ws_brief`、`task_list`、`task_show`。其余 flow 工具 MUST 走工具审批，包括 `task_create`、`task_cancel` 和以后新增的工具。原因是 `task_create` 可以创建其他角色的任务（例如 `dev` 角色以 `danger-full-access` 运行），受限角色借此就能提权。
 
 #### Scenario: worker 写 journal
 - **WHEN** reviewer 任务中的 Claude 调用 `kb_journal`
@@ -38,6 +38,19 @@
 #### Scenario: 审查不受被审查仓库的设置影响
 - **WHEN** reviewer 任务的工作目录中有 `.claude/settings.json`（含 hooks 与 `permissions.allow`）和 `CLAUDE.md`
 - **THEN** Claude 运行时不加载该设置文件，`CLAUDE.md` 的文本出现在系统提示词中，权限模式为 `default`
+
+### Requirement: 文档文件写入边界
+角色 MAY 配置 `permissions.writable_paths`（cwd 相对路径 glob，支持 `*`、`**`、`?`）。配置后，执行器 MUST 对 Write、Edit、MultiEdit 的原路径与符号链接解析后的真实路径都做匹配，并限制在合同 cwd 内；任何 `..` 路径段、cwd 外路径、任意层级 `.git` 与 NotebookEdit MUST 直接拒绝，不进入策略预检或用户审批。新文件 MUST 校验最近已存在祖先；无法可靠解析时拒绝。
+
+默认 reviewer 白名单 SHALL 为 `docs/**`、`**/*.md`、`**/*.mdx`。空白名单禁止文件工具写入；字段缺省时不新增写入授权，沿用既有 SDK 权限与审批。执行器 SHALL 在 canUseTool 与 PreToolUse hook 中使用同一校验，避免 SDK 权限模式、允许规则或会话批准绕过边界。成功 PostToolUse 的文件路径 SHALL 去重写入 result.artifacts，授权本身不算产物。
+
+#### Scenario: 写审查报告
+- **WHEN** reviewer 在合同 cwd 中通过 Write 创建 `docs/reviews/report.md` 或通过 Edit/MultiEdit 修改根目录 Markdown
+- **THEN** 调用无需审批，成功后结果产物包含该文件的绝对路径
+
+#### Scenario: 禁止代码与越界写入
+- **WHEN** reviewer 请求修改 `src/main.ts`、`.git/report.md`、`../report.md`、指向 cwd 外的符号链接路径或使用 NotebookEdit
+- **THEN** 调用直接拒绝，即使 SDK 允许规则或 Flow 自动策略原本会放行
 
 ### Requirement: 工具审批挂起等待
 工具调用落到需要审批的环节时（即角色的允许列表和 SDK 的权限模式都没有放行），执行器 SHALL 上报 `blocked(awaiting_approval)`，附带工具名和输入摘要，并保持会话等待。

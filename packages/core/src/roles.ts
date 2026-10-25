@@ -46,6 +46,11 @@ export function canCreateRole(role: Pick<Role, 'creatable_by'>, actor: string): 
   return (role.creatable_by ?? []).some((p) => actorMatches(p, actor))
 }
 
+export const writablePaths = z.array(z.string().min(1)).meta({
+  description:
+    'claude-sdk 文件工具可写的 cwd 相对路径 glob（*、**、?）；原路径与真实路径都须匹配，禁止 ..、越界、.git 和 NotebookEdit；[] 禁止全部，缺省沿用原有审批',
+})
+
 export const roleSchema = z
   .strictObject({
     name: z
@@ -62,9 +67,9 @@ export const roleSchema = z
     model: z.string().min(1).optional(),
     effort: z.string().min(1).optional(),
     permissions: z
-      .record(z.string(), z.unknown())
+      .looseObject({ writable_paths: writablePaths.optional() })
       .optional()
-      .meta({ description: '执行器专用权限设置；内核只校验它是对象' }),
+      .meta({ description: '执行器专用权限设置；其余字段由执行器校验' }),
     no_progress_minutes: z.number().int().positive().optional(),
     creatable_by: z.array(actorPattern).optional().meta({
       description:
