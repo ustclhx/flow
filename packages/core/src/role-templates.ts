@@ -1,6 +1,7 @@
 /**
  * 默认角色（design D3、D5、D9）。只由 init 在文件缺失时写入。
- * `creatable_by`：dev 不写（只有 user 能创建）；只读的 reviewer、triage 允许 `node:*` 拆子任务。
+ * `creatable_by`：dev 不写（只有 user 能创建）；只读的 reviewer、triage 为 `*`（任何非 user 身份都可以创建，
+ * 例如 claude-sdk 执行器经 `flow mcp --actor reviewer` 拆子任务）。
  */
 export const DEFAULT_ROLE_FILES: Record<string, string> = {
   'dev.yaml': `# 没有 creatable_by：只有 user 可以创建 dev 任务（AI 与节点不能借 dev 提权）。
@@ -22,7 +23,7 @@ executor: claude-sdk
 model: claude-opus-5-5
 prompt: reviewer.md
 creatable_by:
-  - "node:*"
+  - "*"
 permissions:
   permissionMode: default
   setting_sources: []
@@ -45,7 +46,7 @@ permissions:
 executor: codex-exec
 prompt: triage.md
 creatable_by:
-  - "node:*"
+  - "*"
 permissions:
   sandbox: read-only
 `,

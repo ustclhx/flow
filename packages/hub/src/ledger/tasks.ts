@@ -7,7 +7,6 @@ import {
   fail,
   formatZodIssues,
   type InboxVia,
-  isNodeActor,
   type ListTasksData,
   listTasksQuery,
   loadRoles,
@@ -191,13 +190,8 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       }
 
       const existing = () => (key === undefined ? null : ledger.findTaskByIdempotencyKey(key))
-      // 节点身份只能看到自己持有租约的任务：幂等键命中别人创建的任务时不返回它。
-      const reuse = (task: NonNullable<ReturnType<typeof existing>>) =>
-        isNodeActor(opts.actor) && task.created_by !== opts.actor
-          ? fail('failure', 'scope_denied', `幂等键已被其他身份创建的任务使用`)
-          : ok({ task, created: false })
       const hit = existing()
-      if (hit) return reuse(hit)
+      if (hit) return ok({ task: hit, created: false })
 
       if (!(await o.workspaceExists(contract.workspace))) {
         return fail('failure', 'unknown_workspace', `workspace ${contract.workspace} 未定义`, {
@@ -208,7 +202,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
 
       // await 之后重新检查幂等键：从这里到 append 都是同步代码，不会与其他请求交错。
       const raced = existing()
-      if (raced) return reuse(raced)
+      if (raced) return ok({ task: raced, created: false })
 
       let id = newTaskId(now())
       for (let i = 0; ledger.getTask(id) !== null; i++) {

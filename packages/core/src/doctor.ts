@@ -398,7 +398,7 @@ export async function runDoctor(
           ok: false,
           severity: 'info',
           message: `config/roles/${role.name}.yaml：未设置 creatable_by，只有 user 可以创建该角色的任务`,
-          hint: '需要允许 AI 或节点创建时，加上 creatable_by（例如 ["node:*"]）；见 docs/executors.md',
+          hint: '需要允许本机 AI 身份创建时，加上 creatable_by（例如 ["*"] 或 ["reviewer"]）；见 docs/executors.md',
         })
       }
     }

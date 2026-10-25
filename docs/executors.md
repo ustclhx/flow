@@ -56,14 +56,17 @@ macOS 登录可能仅在 Keychain 中：没有上述来源、但存在系统 sec
 
 ```yaml
 creatable_by:
-  - "node:*"        # 前缀通配：所有节点身份
+  - reviewer        # 精确值：reviewer 执行器（flow mcp --actor reviewer）的身份
   - "agent:claude"  # 精确值
-# - "*"            # 任意身份
+# - "*"            # 任意非 user 身份
 ```
 
 - `user` 永远可以创建；字段缺省时只有 `user` 可以创建，AI 和节点会得到 403 `role_not_allowed`。
-- 默认模板：dev 不写（只有 user 能派发开发任务，AI 不能借 dev 跳过审批和沙箱）；只读的 reviewer、triage 为 `["node:*"]`，
-  允许节点拆出审查、分诊子任务。
+- 默认模板：dev 不写（只有 user 能派发开发任务，AI 不能借 dev 跳过审批和沙箱）；只读的 reviewer、triage 为 `["*"]`，
+  任何非 user 身份都可以拆出审查、分诊子任务。
+- 本机 AI 的身份就是执行器注入的 `flow mcp --actor <角色名>`：reviewer 执行器的身份是 `reviewer`，不是 `node:*`。
+  要只放开某个执行器，写它的角色名，例如 `creatable_by: [reviewer]`。
+- 节点 token 和 remote token 在本机端口都不能创建任务（`scope_denied`、`remote_not_allowed`），`*` 不会放开它们。
 - `flow init` 不覆盖已有角色文件，升级前创建的 reviewer、triage 没有这个字段（只有 user 能创建），
   需要时手动补上；`flow doctor` 会对缺少字段的角色给出 info 提示（不是错误，不影响退出码）。
 - 给高权限角色（例如跳过审批的 dev）加 `creatable_by` 等于允许这些身份间接取得该权限，应和 `permissions` 一起审查。
@@ -113,7 +116,7 @@ executor: claude-sdk
 model: claude-opus-5-5
 prompt: reviewer.md
 creatable_by:
-  - "node:*"
+  - "*"
 permissions:
   permissionMode: default
   setting_sources: []
@@ -154,7 +157,7 @@ name: triage
 executor: codex-exec
 prompt: triage.md
 creatable_by:
-  - "node:*"
+  - "*"
 permissions:
   sandbox: read-only
 ```

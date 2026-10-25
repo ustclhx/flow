@@ -197,7 +197,7 @@ describe('creatable_by（角色创建权限）', () => {
     expect(roleSchema.safeParse({ ...role, creatable_by: 'node:*' }).success).toBe(false)
   })
 
-  test('默认模板：dev 不写 creatable_by，reviewer 与 triage 为 ["node:*"]', async () => {
+  test('默认模板：dev 不写 creatable_by，reviewer 与 triage 为 ["*"]', async () => {
     const home = tempHome('flow-roles-')
     for (const [name, text] of Object.entries(DEFAULT_ROLE_FILES)) {
       writeText(join(home, 'config/roles', name), text)
@@ -205,6 +205,6 @@ describe('creatable_by（角色创建权限）', () => {
     const loaded = data(await loadRoles(home))
     expect(loaded.errors).toEqual([])
     const by = Object.fromEntries(loaded.roles.map((r) => [r.name, r.creatable_by]))
-    expect(by).toEqual({ dev: undefined, reviewer: ['node:*'], triage: ['node:*'] })
+    expect(by).toEqual({ dev: undefined, reviewer: ['*'], triage: ['*'] })
   })
 })
