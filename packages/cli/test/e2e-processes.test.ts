@@ -65,7 +65,14 @@ function createFake(goal: string, fake: Record<string, unknown>): string {
   const file = join(home, `${goal}.json`)
   writeFileSync(
     file,
-    JSON.stringify({ goal, workspace: 'ws/demo', role: 'dev', executor: 'fake', inputs: { fake } }),
+    JSON.stringify({
+      goal,
+      workspace: 'ws/demo',
+      role: 'dev',
+      executor: 'fake',
+      cwd: home,
+      inputs: { fake },
+    }),
   )
   const r = flow('task', 'create', '--file', file)
   expect(r.code).toBe(0)

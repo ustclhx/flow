@@ -168,7 +168,14 @@ export async function bench(
     },
     async create(over = {}) {
       const r = await tasks.createTask(
-        { goal: '卡住检测', workspace: 'ws/demo', role: 'dev', executor: 'fake', ...over },
+        {
+          goal: '卡住检测',
+          workspace: 'ws/demo',
+          role: 'dev',
+          executor: 'fake',
+          cwd: home,
+          ...over,
+        },
         { actor: 'user' },
       )
       if (!r.ok) throw new Error(r.error.message)

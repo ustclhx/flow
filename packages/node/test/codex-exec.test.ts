@@ -186,7 +186,6 @@ describe('codex-exec 无头执行器', () => {
     )
     const executor = createCodexExecExecutor(s.options)
     const b = await bench({
-      defaultCwd: s.dir,
       executors: [
         {
           ...executor,
