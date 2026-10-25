@@ -30,6 +30,7 @@ flow doctor --json
 | `tool.claude-sdk` | 能 import `@anthropic-ai/claude-agent-sdk`、存在 query 导出、包版本可解析；从 `@flow/node` 的 package.json 位置解析 SDK，并读取其中声明的期望版本 |
 | `tool.claude` | SDK 默认使用的当前平台原生 CLI 文件存在且可执行；PATH 上另装的 claude 不会替代缺失的 SDK 原生包 |
 | `claude.credentials` | `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN` 之一非空，或 Claude 配置目录下存在 `.credentials.json` |
+| `role.<name>.creatable_by` | 角色没有 `creatable_by` 时给 info 提示：只有 user 可以创建该角色的任务（见下文） |
 
 Claude 配置目录取 `CLAUDE_CONFIG_DIR`，否则取用户目录的 `.claude`。凭证只查存在性，
 不读取文件内容、不输出变量值、不运行 claude、不发起 API 调用；不能确认过期、权限或订阅额度。
@@ -41,19 +42,39 @@ macOS 登录可能仅在 Keychain 中：没有上述来源、但存在系统 sec
 - 被引用的执行器缺少依赖、版本命令失败或输出无法解析：`error`，doctor 退出码 1；
 - Codex / Orca 低于最低验证版本：`warning`，建议升级，不单独导致非零退出；这一下限来自现有实测 fixture，不代表历史版本一定不可用；
 - 没有角色引用的执行器：`info` 并跳过探测；Codex 被 `codex-orca` 或 `codex-exec` 任一角色引用就需要检查；
+- 角色缺少 `creatable_by`：`info`，不影响退出码；
 - 原有的目录、git、gitleaks、角色配置错误仍为 `error`。只有 info / warning 时退出码为 0。
 
 `flow init` 默认生成三个真实角色，所以刚初始化的环境会要求全部依赖。
 仅用 fake 的测试环境可以移除临时目录中的默认角色 YAML，改为 fake 角色。
 每条外部探测命令有 10 秒超时；测试通过注入命令执行、二进制查找与 SDK 探测来运行，不依赖 CI 安装这些工具。
 
-## 默认角色与权限
+## 谁能创建该角色的任务：`creatable_by`
+
+角色 YAML 可选字段 `creatable_by` 列出除 `user` 之外允许创建该角色任务的身份，中枢在创建任务时校验
+（规则、错误码和生效时机见 [中枢鉴权的角色创建权限](hub-auth.md#角色创建权限creatable_by)）：
+
+```yaml
+creatable_by:
+  - "node:*"        # 前缀通配：所有节点身份
+  - "agent:claude"  # 精确值
+# - "*"            # 任意身份
+```
+
+- `user` 永远可以创建；字段缺省时只有 `user` 可以创建，AI 和节点会得到 403 `role_not_allowed`。
+- 默认模板：dev 不写（只有 user 能派发开发任务，AI 不能借 dev 跳过审批和沙箱）；只读的 reviewer、triage 为 `["node:*"]`，
+  允许节点拆出审查、分诊子任务。
+- `flow init` 不覆盖已有角色文件，升级前创建的 reviewer、triage 没有这个字段（只有 user 能创建），
+  需要时手动补上；`flow doctor` 会对缺少字段的角色给出 info 提示（不是错误，不影响退出码）。
+- 给高权限角色（例如跳过审批的 dev）加 `creatable_by` 等于允许这些身份间接取得该权限，应和 `permissions` 一起审查。
+
 
 ### dev：codex-orca
 
 `config/roles/dev.yaml`（提示词来自同目录 `dev.md`）：
 
 ```yaml
+# 没有 creatable_by：只有 user 可以创建 dev 任务（AI 与节点不能借 dev 提权）。
 name: dev
 executor: codex-orca
 model: gpt-6.1-sol
@@ -91,6 +112,8 @@ name: reviewer
 executor: claude-sdk
 model: claude-opus-5-5
 prompt: reviewer.md
+creatable_by:
+  - "node:*"
 permissions:
   permissionMode: default
   setting_sources: []
@@ -120,7 +143,7 @@ permissions:
 执行器自动注入 `flow mcp --actor reviewer`（其他角色用各自名字）。Flow MCP 的固定放行清单为：
 `kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、`ws_brief`、`task_list`、`task_show`，
 工具全名带 `mcp__flow__` 前缀。这些写入仍受 AI 写入边界限制，提交提案不等于接受提案。
-`task_create` 可借 dev 角色扩大权限，`task_cancel`、`task_reply` 可干预任务，
+`task_create` 可借 dev 角色扩大权限（中枢另按 `creatable_by` 拒绝，见上文），`task_cancel`、`task_reply` 可干预任务，
 接受/拒绝提案、转移资源及以后新增的工具也不在固定清单中。不要用宽泛的 allowedTools 绕过这层审批。
 `task_reply` 另有用户身份限制：worker 不能代替用户批准自己。
 
@@ -130,6 +153,8 @@ permissions:
 name: triage
 executor: codex-exec
 prompt: triage.md
+creatable_by:
+  - "node:*"
 permissions:
   sandbox: read-only
 ```

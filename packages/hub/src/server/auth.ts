@@ -36,8 +36,13 @@ export interface HubAuthOptions {
   leaseHolders?: (taskId: string) => readonly string[]
 }
 
-/** node:* 身份可以访问的接口；任务详情与策略检查还要校验任务级 scope。 */
+/**
+ * node:* 身份可以访问的接口；任务详情与策略检查还要校验任务级 scope。
+ * 创建任务（`POST /v1/tasks`）允许节点拆子任务，但只能创建 `creatable_by` 匹配该节点的角色，
+ * 由任务服务校验（403 `role_not_allowed`）；列出任务等其他 `/v1/tasks` 接口仍然拒绝。
+ */
 const NODE_ENDPOINTS: readonly EndpointName[] = [
+  'tasks-create',
   'policy-check',
   'nodes-register',
   'leases-acquire',
@@ -113,7 +118,7 @@ async function checkNodeScope(
  * | user token             | 其他合法身份                     | 该身份（只能降级）        |
  * | 绑定 token             | 与绑定身份不一致（含 user）       | 403 actor_mismatch      |
  * | 绑定 token（remote）    | 缺省或一致                       | 403 remote_not_allowed  |
- * | 绑定 token（node:<id>） | 缺省或一致                       | node:<id>，限节点协议    |
+ * | 绑定 token（node:<id>） | 缺省或一致                       | node:<id>，限节点协议与创建任务 |
  *
  * 摘要用常数时间比较；错误响应不包含凭证或账本信息。健康检查不鉴权，身份记为 `unknown`。
  */

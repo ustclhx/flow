@@ -12,7 +12,7 @@ import {
   openLedger,
   type TaskService,
 } from '../src/index.ts'
-import { contractInput, tempLedger } from './ledger-helpers.ts'
+import { anyRole, contractInput, tempLedger } from './ledger-helpers.ts'
 import { FakeClock } from './server-fixtures.ts'
 
 /**
@@ -49,6 +49,7 @@ async function setup(): Promise<Ctx> {
   const tasks = createTaskService({
     ledger: t.store,
     workspaceExists: () => true,
+    roles: anyRole,
     now: clock.now,
     newReplyId: () => `r-${++n}`,
   })

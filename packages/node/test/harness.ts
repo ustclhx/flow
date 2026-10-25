@@ -106,7 +106,12 @@ export async function bench(
     writeFileSync(join(home, 'config', 'policies.yaml'), JSON.stringify(policies))
   }
   const ledger = await openLedger(':memory:', { now: clock.now })
-  const tasks = createTaskService({ ledger, workspaceExists: () => true, now: clock.now })
+  const tasks = createTaskService({
+    ledger,
+    workspaceExists: () => true,
+    roles: async (name) => ({ ok: true, data: { name, creatable_by: ['*'] } }),
+    now: clock.now,
+  })
   const protocol = createNodeProtocol({ ledger, clock, leaseTtlS, leaseWaitMaxS: 30 })
   const leaseHolders = (taskId: string) => {
     const lease = ledger.activeLease(taskId)

@@ -29,6 +29,8 @@ export {
   generateReplyId,
   generateTaskId,
   type ReplyTaskOptions,
+  type RoleLookup,
+  roleLookupFromHome,
   type TaskService,
   type TaskServiceOptions,
   type WorkspaceCheck,

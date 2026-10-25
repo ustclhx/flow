@@ -21,6 +21,7 @@ import {
   workspaceCheckFromHome,
 } from '../src/index.ts'
 import {
+  anyRole,
   contractInput,
   drafts,
   must,
@@ -45,6 +46,7 @@ async function setup() {
   const tasks = createTaskService({
     ledger: l.store,
     workspaceExists: (ref) => ref === WS || ref === 'ws/global',
+    roles: anyRole,
     newTaskId: () => `t-test-${++n}`,
   })
   // 经过真实的鉴权中间件：身份由 user token 决定，X-Flow-Actor 只能降级。

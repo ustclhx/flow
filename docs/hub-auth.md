@@ -51,7 +51,7 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | user token | 其他合法身份 | 该 AI 身份（只能降级） |
 | 绑定 token | 与绑定身份不一致（包括 `user`） | 403 `actor_mismatch` |
 | 绑定 token（remote） | 不带或一致 | 403 `remote_not_allowed` |
-| 绑定 token（`node:<id>`） | 不带或一致 | `node:<id>`，限节点权限范围 |
+| 绑定 token（`node:<id>`） | 不带或一致 | `node:<id>`，限节点权限范围（含按角色创建任务） |
 
 摘要比较为常数时间：user token 与每一条绑定记录都比较，不提前退出。
 
@@ -64,7 +64,8 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | `POST /v1/leases/:id/renew`、`complete`、`ack-reply` | ✓ | ✓ | ✓（凭 lease_token） | 403 |
 | `GET /v1/tasks/:id` | ✓ | ✓ | 仅自己持有活动租约的任务 | 403 |
 | `POST /v1/policy/check` | ✓（人工调试） | 403 `scope_denied` | 仅自己持有未过期活动租约的任务 | 403 |
-| `GET/POST /v1/tasks`、`POST /v1/tasks/:id/cancel`、`GET /v1/events`、`GET /v1/nodes`、`GET /v1/hub/status` | ✓ | ✓ | 403 `scope_denied` | 403 |
+| `POST /v1/tasks`（创建任务） | ✓（任意角色） | 仅 `creatable_by` 匹配的角色，否则 403 `role_not_allowed` | 仅 `creatable_by` 匹配的角色，否则 403 `role_not_allowed` | 403 |
+| `GET /v1/tasks`、`POST /v1/tasks/:id/cancel`、`GET /v1/events`、`GET /v1/nodes`、`GET /v1/hub/status` | ✓ | ✓ | 403 `scope_denied` | 403 |
 | `GET /v1/inbox` | ✓ | ✓ | 403 `scope_denied` | 403 |
 | `POST /v1/inbox/:id/act` | 全部操作 | 仅 dismiss 且条目 `created_by` 为自己；其余 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/tasks/:id/reply` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
@@ -80,6 +81,37 @@ CLI 固定传 cli。读取密钥等只有用户能做的接口使用 `userOnly`�
 传 true 返回 400 `invalid_arguments`，不产生事件。CLI 默认 dry run，只有 `--record` 才入账。
 所有权限拒绝均不产生事件。任务不存在时，策略检查返回 404 `not_found`。
 MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有读取密钥的工具）保留，作为第一道防线。
+
+## 角色创建权限（`creatable_by`）
+
+任务合同的 `role` 决定节点用哪个角色配置执行（`config/roles/<role>.yaml`）。dev 默认跳过 Codex 审批和沙箱，
+如果只读的 reviewer / triage 能创建 `role: dev` 的任务，就等于借 dev 提权。所以中枢在**创建任务时**按身份校验角色：
+
+- `user` 永远可以创建任何角色的任务，`creatable_by` 不影响 user；中枢也沿用原来的做法，不替 user 校验角色是否存在
+  （`flow task create` 与 MCP 的 `task_create` 在本机先查角色，未定义时返回 `unknown_role`）。
+- 其他身份（user token 降级的 AI 身份、`node:<id>`）：角色必须已定义且加载成功，否则 422 `unknown_role`
+  （语法或字段有错、未能加载的角色文件同样视为未定义，`flow doctor` 会报出错误）；身份必须匹配该角色的 `creatable_by`，
+  否则 403 `role_not_allowed`，信息中写明角色与身份，`details` 为 `{ field: "role", role, actor }`。拒绝时不产生事件。
+- `creatable_by` 缺省：只有 user 可以创建（默认拒绝 AI 与节点）。
+- 模式：精确值（`user`、`node:n-abc`、`agent:claude`、`remote:grok`，区分大小写），`<前缀>:*`（`node:*`、`remote:*`，
+  匹配以 `<前缀>:` 开头且后面非空的身份），以及 `*`（任意身份）。写在列表中的 `user` 没有额外作用。
+- 校验在幂等键查找之前：被拒绝的身份不能凭幂等键拿到已有任务。节点身份的幂等键命中**别人**创建的任务时返回
+  403 `scope_denied`，不返回那个任务（节点只能看到自己持有租约的任务）；命中自己创建的任务时照常返回。
+- 生效时机：中枢在每次创建请求时用 core 的 `loadRoles` 重新读取 `config/roles/`（与 workspace 检查一样），
+  改完角色文件后下一次请求即生效，不需要重启中枢。
+
+为了让节点拆子任务，`POST /v1/tasks` 对 `node:*` 开放（列出、取消任务等其他接口仍然 `scope_denied`），
+能创建什么完全由 `creatable_by` 决定。默认模板中 reviewer、triage 为 `["node:*"]`，dev 不写。
+
+注意：
+
+- `flow init` 不覆盖已有文件，**已存在的角色文件不会自动获得 `creatable_by`**，升级后这些角色只有 user 能创建；
+  `flow doctor` 对缺少该字段的角色给出 info 提示。需要时手动加上，例如 `creatable_by: ["node:*"]`。
+- 本机 `flow mcp --actor <name>` 与 `FLOW_ACTOR` 声明的身份是普通名字（如 `reviewer`、`claude`），不匹配 `node:*`。
+  要允许它们创建某个角色，需要在 `creatable_by` 中写出这个名字或用 `*`。
+- 定时规则（`schedules.yaml` 与中枢内部规则）目前只写 `schedule.fired`（身份 `hub`）或回调收件箱，不创建任务，
+  不经过这项校验。以后若由定时规则创建任务，必须经同一个任务服务，并且明确以哪个身份创建。
+- 和其他检查一样，这只约束经中枢创建的任务；能读 `state/hub.token` 的本机同用户进程仍可以 user 身份创建任何角色（见"信任边界"）。
 
 ## Web 页面（`/ui`）
 

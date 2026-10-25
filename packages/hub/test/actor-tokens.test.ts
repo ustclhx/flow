@@ -124,12 +124,16 @@ describe('Token 认证（hub-daemon 增量）', () => {
   })
 
   test('user token：不声明为 user，可降级声明 AI 身份', async () => {
-    const { call } = await start()
+    const { call, home } = await start()
+    writeFileSync(
+      join(home, 'config', 'roles', 'helper.yaml'),
+      'name: helper\nexecutor: fake\nprompt: 测试\ncreatable_by: ["codex"]\n',
+    )
     const a = await call('/v1/tasks', { body: contract })
     expect(a.body.data).toMatchObject({ task: { created_by: 'user' } })
     const b = await call('/v1/tasks', {
       actor: 'codex',
-      body: { ...contract, idempotency_key: 'k2' },
+      body: { ...contract, role: 'helper', idempotency_key: 'k2' },
     })
     expect(b.body.data).toMatchObject({ task: { created_by: 'codex' } })
   })
@@ -329,9 +333,11 @@ describe('节点身份的权限范围', () => {
     const peek = await call(`/v1/tasks/${theirs.taskId}`, as)
     expect(peek).toMatchObject({ status: 403, body: { error: { code: 'scope_denied' } } })
     const before = await seq()
+    // 创建任务对节点开放，但默认 dev 不允许节点创建（见"角色创建权限"）。
+    const dev = await call('/v1/tasks', { ...as, body: contract })
+    expect(dev).toMatchObject({ status: 403, body: { error: { code: 'role_not_allowed' } } })
     for (const [path, body] of [
       ['/v1/tasks', undefined],
-      ['/v1/tasks', contract],
       [`/v1/tasks/${theirs.taskId}/cancel`, {}],
       [`/v1/tasks/${mine.taskId}/reply`, { kind: 'approve' }],
       ['/v1/hub/rebuild', {}],
@@ -358,6 +364,157 @@ describe('节点身份的权限范围', () => {
       events: Array<{ type: string; actor: string }>
     }
     expect(events.events.find((e) => e.type === 'lease.granted')?.actor).toBe('node:local-1')
+  })
+})
+
+describe('角色创建权限（config/roles 的 creatable_by）', () => {
+  const writeRole = (home: string, name: string, extra = '') =>
+    writeFileSync(
+      join(home, 'config', 'roles', `${name}.yaml`),
+      `name: ${name}\nexecutor: fake\nprompt: 测试\n${extra}`,
+    )
+  const denied = (actor: string, role: string) => ({
+    status: 403,
+    body: {
+      error: {
+        code: 'role_not_allowed',
+        message: expect.stringContaining(`身份 ${actor} 不能创建角色 ${role} 的任务`),
+        details: { role, actor },
+      },
+    },
+  })
+  let n = 0
+  const body = (role: string) => ({ ...contract, role, idempotency_key: `k-role-${++n}` })
+
+  test('user 可以创建 dev；节点不能创建 dev，但能创建模板允许 node:* 的 reviewer 与 triage', async () => {
+    const { call, issue, seq } = await start()
+    const user = await call('/v1/tasks', { body: body('dev') })
+    expect(user).toMatchObject({ status: 201, body: { data: { task: { created_by: 'user' } } } })
+    const node = { token: (await issue('node:n1')).secret }
+    const before = await seq()
+    expect(await call('/v1/tasks', { ...node, body: body('dev') })).toMatchObject(
+      denied('node:n1', 'dev'),
+    )
+    expect(await seq()).toBe(before)
+    for (const role of ['reviewer', 'triage']) {
+      const r = await call('/v1/tasks', { ...node, body: body(role) })
+      expect(r).toMatchObject({
+        status: 201,
+        body: { data: { task: { created_by: 'node:n1', contract: { role } } } },
+      })
+    }
+    // 节点仍然不能列出任务。
+    expect((await call('/v1/tasks', node)).status).toBe(403)
+  })
+
+  test('只允许 node:* 的角色：remote:* 与本机 AI 身份都被拒绝，不产生事件', async () => {
+    const { call, issue, seq } = await start()
+    const remote = (await issue('remote:grok', { remote: true })).secret
+    const before = await seq()
+    for (const actor of ['remote:grok', 'codex']) {
+      expect(await call('/v1/tasks', { actor, body: body('reviewer') })).toMatchObject(
+        denied(actor, 'reviewer'),
+      )
+    }
+    // 绑定的 remote token 在本机端口更早被拒绝。
+    expect(await call('/v1/tasks', { token: remote, body: body('reviewer') })).toMatchObject({
+      status: 403,
+      body: { error: { code: 'remote_not_allowed' } },
+    })
+    expect(await seq()).toBe(before)
+  })
+
+  test('* 通配、精确匹配、前缀通配与字段缺省', async () => {
+    const { home, call, issue } = await start()
+    writeRole(home, 'open', 'creatable_by: ["*"]\n')
+    writeRole(home, 'exact', 'creatable_by: ["node:n-abc", "agent:claude"]\n')
+    writeRole(home, 'remotes', 'creatable_by: ["remote:*"]\n')
+    writeRole(home, 'plain')
+    const abc = { token: (await issue('node:n-abc')).secret }
+    const n1 = { token: (await issue('node:n1')).secret }
+    for (const who of [abc, { actor: 'codex' }, { actor: 'remote:grok' }]) {
+      expect((await call('/v1/tasks', { ...who, body: body('open') })).status).toBe(201)
+    }
+    expect((await call('/v1/tasks', { ...abc, body: body('exact') })).status).toBe(201)
+    expect((await call('/v1/tasks', { actor: 'agent:claude', body: body('exact') })).status).toBe(
+      201,
+    )
+    expect(await call('/v1/tasks', { ...n1, body: body('exact') })).toMatchObject(
+      denied('node:n1', 'exact'),
+    )
+    expect(await call('/v1/tasks', { actor: 'agent:codex', body: body('exact') })).toMatchObject(
+      denied('agent:codex', 'exact'),
+    )
+    expect((await call('/v1/tasks', { actor: 'remote:grok', body: body('remotes') })).status).toBe(
+      201,
+    )
+    expect(await call('/v1/tasks', { ...n1, body: body('remotes') })).toMatchObject(
+      denied('node:n1', 'remotes'),
+    )
+    // 字段缺省：只有 user。
+    expect(await call('/v1/tasks', { ...n1, body: body('plain') })).toMatchObject(
+      denied('node:n1', 'plain'),
+    )
+    expect(await call('/v1/tasks', { actor: 'codex', body: body('plain') })).toMatchObject(
+      denied('codex', 'plain'),
+    )
+    expect((await call('/v1/tasks', { body: body('plain') })).status).toBe(201)
+  })
+
+  test('未知角色：非 user 返回 422 unknown_role；user 沿用中枢不校验角色的原有行为', async () => {
+    const { home, call, issue, seq } = await start()
+    writeRole(home, 'broken', 'creatable_by: "node:*"\n')
+    const node = { token: (await issue('node:n1')).secret }
+    const before = await seq()
+    for (const role of ['designer', 'broken']) {
+      for (const who of [node, { actor: 'codex' }]) {
+        expect(await call('/v1/tasks', { ...who, body: body(role) })).toMatchObject({
+          status: 422,
+          body: { error: { code: 'unknown_role', details: { role } } },
+        })
+      }
+    }
+    expect(await seq()).toBe(before)
+    expect((await call('/v1/tasks', { body: body('designer') })).status).toBe(201)
+  })
+
+  test('修改角色文件后下一次请求即生效，无需重启中枢', async () => {
+    const { home, call } = await start()
+    writeRole(home, 'later')
+    expect(await call('/v1/tasks', { actor: 'codex', body: body('later') })).toMatchObject(
+      denied('codex', 'later'),
+    )
+    writeRole(home, 'later', 'creatable_by: ["codex"]\n')
+    expect((await call('/v1/tasks', { actor: 'codex', body: body('later') })).status).toBe(201)
+  })
+
+  test('幂等键：被拒绝的身份拿不到已有任务；节点不能借幂等键读取别人创建的任务', async () => {
+    const { call, issue } = await start()
+    const key = 'k-shared'
+    const first = await call('/v1/tasks', {
+      body: { ...contract, role: 'reviewer', idempotency_key: key },
+    })
+    expect(first.status).toBe(201)
+    expect(
+      await call('/v1/tasks', {
+        actor: 'codex',
+        body: { ...contract, role: 'reviewer', idempotency_key: key },
+      }),
+    ).toMatchObject(denied('codex', 'reviewer'))
+    const node = { token: (await issue('node:n1')).secret }
+    expect(
+      await call('/v1/tasks', {
+        ...node,
+        body: { ...contract, role: 'reviewer', idempotency_key: key },
+      }),
+    ).toMatchObject({ status: 403, body: { error: { code: 'scope_denied' } } })
+    // 节点重试自己创建的任务：返回已有任务（200）。
+    const mine = { ...contract, role: 'triage', idempotency_key: 'k-node' }
+    expect((await call('/v1/tasks', { ...node, body: mine })).status).toBe(201)
+    expect(await call('/v1/tasks', { ...node, body: mine })).toMatchObject({
+      status: 200,
+      body: { data: { created: false } },
+    })
   })
 })
 

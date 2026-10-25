@@ -392,6 +392,15 @@ export async function runDoctor(
         message: `config/roles/${role.name}.yaml：executor ${role.executor}${known ? '' : ' 不存在'}`,
         ...(known ? {} : { hint: `将 executor 改为 ${KNOWN_EXECUTORS.join('、')} 之一` }),
       })
+      if (role.creatable_by === undefined) {
+        checks.push({
+          id: `role.${role.name}.creatable_by`,
+          ok: false,
+          severity: 'info',
+          message: `config/roles/${role.name}.yaml：未设置 creatable_by，只有 user 可以创建该角色的任务`,
+          hint: '需要允许 AI 或节点创建时，加上 creatable_by（例如 ["node:*"]）；见 docs/executors.md',
+        })
+      }
     }
   }
 

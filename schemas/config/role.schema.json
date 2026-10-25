@@ -38,6 +38,15 @@
       "type": "integer",
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991
+    },
+    "creatable_by": {
+      "description": "除 user 之外，允许哪些身份创建该角色的任务（精确值或 node:*、remote:*、* 等前缀通配）；缺省时只有 user 可以创建",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(?:\\*|[A-Za-z0-9][A-Za-z0-9._:@-]{0,62}:\\*|[A-Za-z0-9][A-Za-z0-9._:@-]{0,63})$",
+        "description": "操作者模式：精确值，或 `*`、`<前缀>:*` 形式的前缀通配"
+      }
     }
   },
   "required": [

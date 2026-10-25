@@ -11,7 +11,7 @@ import {
   createProposalWatcher,
   createTaskService,
 } from '../src/index.ts'
-import { contractInput, must, tempLedger } from './ledger-helpers.ts'
+import { anyRole, contractInput, must, tempLedger } from './ledger-helpers.ts'
 import { authHeaders, FakeClock, testToken } from './server-fixtures.ts'
 
 const cleanups: (() => void)[] = []
@@ -22,7 +22,12 @@ afterEach(() => {
 async function setup() {
   const clock = new FakeClock(Date.parse('2026-10-25T08:00:00Z'))
   const { store, dir, cleanup } = await tempLedger({ now: clock.now })
-  const tasks = createTaskService({ ledger: store, workspaceExists: () => true, now: clock.now })
+  const tasks = createTaskService({
+    ledger: store,
+    workspaceExists: () => true,
+    roles: anyRole,
+    now: clock.now,
+  })
   const protocol = createNodeProtocol({ ledger: store, clock, leaseTtlS: 60, leaseWaitMaxS: 30 })
   const reactor = createInboxReactor({ ledger: store })
   reactor.start()

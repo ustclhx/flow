@@ -3,7 +3,8 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { exitCodeOf, type Result } from '../src/result.ts'
-import { loadRoles, roleSchema } from '../src/roles.ts'
+import { DEFAULT_ROLE_FILES } from '../src/role-templates.ts'
+import { actorMatches, canCreateRole, loadRoles, roleSchema } from '../src/roles.ts'
 import { jsonSchemas } from '../src/schema/index.ts'
 import { tempHome, writeText } from './helpers.ts'
 
@@ -158,6 +159,52 @@ describe('角色配置', () => {
       'effort',
       'permissions',
       'no_progress_minutes',
+      'creatable_by',
     ])
+  })
+})
+
+describe('creatable_by（角色创建权限）', () => {
+  test('精确值、前缀通配与 *；user 永远可以创建', () => {
+    expect(actorMatches('*', 'node:n1')).toBe(true)
+    expect(actorMatches('node:*', 'node:n-abc')).toBe(true)
+    expect(actorMatches('node:*', 'node:')).toBe(false)
+    expect(actorMatches('node:*', 'remote:grok')).toBe(false)
+    expect(actorMatches('node:*', 'nodex:n1')).toBe(false)
+    expect(actorMatches('node:n-abc', 'node:n-abc')).toBe(true)
+    expect(actorMatches('node:n-abc', 'node:n-abd')).toBe(false)
+    expect(actorMatches('claude', 'Claude')).toBe(false)
+
+    expect(canCreateRole({}, 'user')).toBe(true)
+    expect(canCreateRole({ creatable_by: [] }, 'user')).toBe(true)
+    expect(canCreateRole({}, 'node:n1')).toBe(false)
+    expect(canCreateRole({ creatable_by: [] }, 'claude')).toBe(false)
+    expect(canCreateRole({ creatable_by: ['node:*'] }, 'node:n1')).toBe(true)
+    expect(canCreateRole({ creatable_by: ['node:*'] }, 'remote:grok')).toBe(false)
+    expect(canCreateRole({ creatable_by: ['remote:grok'] }, 'remote:grok')).toBe(true)
+    expect(canCreateRole({ creatable_by: ['*'] }, 'codex')).toBe(true)
+  })
+
+  test('schema：接受精确值与通配，拒绝不合法的模式', () => {
+    const accepted = roleSchema.safeParse({
+      ...role,
+      creatable_by: ['user', 'node:n-abc', 'node:*', 'remote:*', '*', 'agent:claude'],
+    })
+    expect(accepted.success).toBe(true)
+    for (const bad of ['', 'node*', ':*', 'a b', '**', 'node:**']) {
+      expect(roleSchema.safeParse({ ...role, creatable_by: [bad] }).success).toBe(false)
+    }
+    expect(roleSchema.safeParse({ ...role, creatable_by: 'node:*' }).success).toBe(false)
+  })
+
+  test('默认模板：dev 不写 creatable_by，reviewer 与 triage 为 ["node:*"]', async () => {
+    const home = tempHome('flow-roles-')
+    for (const [name, text] of Object.entries(DEFAULT_ROLE_FILES)) {
+      writeText(join(home, 'config/roles', name), text)
+    }
+    const loaded = data(await loadRoles(home))
+    expect(loaded.errors).toEqual([])
+    const by = Object.fromEntries(loaded.roles.map((r) => [r.name, r.creatable_by]))
+    expect(by).toEqual({ dev: undefined, reviewer: ['node:*'], triage: ['node:*'] })
   })
 })
