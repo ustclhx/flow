@@ -2,9 +2,14 @@ import { z } from 'zod'
 import { HubClient } from '../daemon/client.ts'
 import { renderTable } from '../format/table.ts'
 import { taskId } from '../ledger/common.ts'
-import { cancelTaskRequest, listTasksQuery, type ReplyTaskRequest } from '../ledger/protocol.ts'
+import {
+  cancelTaskRequest,
+  createTaskRequest,
+  listTasksQuery,
+  type ReplyTaskRequest,
+} from '../ledger/protocol.ts'
 import { checkContractSecrets } from '../ledger/redact.ts'
-import { type TaskContractInput, type TaskView, taskContract } from '../ledger/task.ts'
+import type { TaskContractInput, TaskView } from '../ledger/task.ts'
 import { fail } from '../result.ts'
 import { loadRoles } from '../roles.ts'
 import { USER_ACTOR } from '../write/policy.ts'
@@ -18,7 +23,7 @@ export const taskCreateOp = defineOperation({
   name: 'task_create',
   cli: 'task create',
   summary: '向中枢提交任务合同',
-  input: taskContract,
+  input: createTaskRequest,
   fileInput: true,
   run: async (input: TaskContractInput, ctx) => {
     const loaded = await loadRoles(ctx.home)

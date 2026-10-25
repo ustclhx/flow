@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { ok } from '@flow/core'
+import { homedir } from 'node:os'
+import { join, relative } from 'node:path'
+import { ok, taskContract } from '@flow/core'
 import { ActivityQueue, type ExecutorContext, type ExecutorPlugin } from '../src/executor.ts'
+import { resolveContractCwd } from '../src/workdir.ts'
 import { type Bench, bench } from './harness.ts'
 
 let current: Bench | undefined
@@ -143,4 +145,23 @@ test('workspace 不存在：沿用 repo_not_in_workspace', async () => {
     result: { reason: 'repo_not_in_workspace' },
   })
   expect(contexts).toHaveLength(0)
+})
+
+test('inputs.repo 与显式 cwd 的 ~/ 路径在节点展开；根目录保持为 /', async () => {
+  const { b } = await setup()
+  const repo = join(b.home, '..', 'repo')
+  workspace(b, [repo, '/'])
+  const base = taskContract.parse({
+    goal: '目录测试',
+    workspace: 'ws/demo',
+    role: 'triage',
+    executor: 'codex-exec',
+  })
+  const tildeRepo = `~/${relative(homedir(), repo)}`
+  expect(await resolveContractCwd(b.home, { ...base, inputs: { repo: tildeRepo } })).toEqual(
+    ok(repo),
+  )
+  expect(await resolveContractCwd(b.home, { ...base, cwd: tildeRepo })).toEqual(ok(repo))
+  expect(await resolveContractCwd(b.home, { ...base, inputs: { repo: '/' } })).toEqual(ok('/'))
+  expect(await resolveContractCwd(b.home, { ...base, cwd: '/' }, true)).toEqual(ok('/'))
 })

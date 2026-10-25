@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Activity, ok, type Result, type TaskResume, taskContract } from '@flow/core'
 import { createCodexOrcaExecutor } from '../src/codex-orca/executor.ts'
@@ -142,6 +142,7 @@ describe('启动', () => {
       worktreePath: string
     }
     expect(created.worktreePath).toBe(h?.worktree ?? '')
+    expect(created.command).toContain('exec env -u FLOW_HUB_TOKEN FLOW_ACTOR=dev codex')
     expect(created.command).toContain('--dangerously-bypass-approvals-and-sandbox')
     expect(created.command).toContain(`"$(cat ${specPath})"`)
     const statePath = join(h?.home ?? '', 'state/tasks/t-orca-1/orca.json')
@@ -806,4 +807,19 @@ describe('脱敏', () => {
     expect(out).not.toContain(token)
     await s.run.cancel()
   })
+})
+
+test('user 角色在创建 worktree 或接管旧终端前失败', async () => {
+  h = orcaHome()
+  writeFileSync(
+    join(h.home, 'config/roles/user.yaml'),
+    'name: user\nexecutor: codex-orca\nprompt: 测试\n',
+  )
+  const s = await start({ role: 'user' }, undefined, { home: h })
+  await ready(s)
+  expect(await s.run.done).toMatchObject({
+    ok: true,
+    data: { outcome: 'failed', result: { reason: 'unknown_role' } },
+  })
+  expect(s.orca.calls).toEqual([])
 })

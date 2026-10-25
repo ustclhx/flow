@@ -1,4 +1,4 @@
-import { HUB_TOKEN_ENV } from '@flow/core'
+import { fail, HUB_TOKEN_ENV, isDeclarableActor, isValidActor, ok, type Result } from '@flow/core'
 
 /**
  * 节点 spawn 执行器、worker 与验收命令时使用的环境变量（design D9）。
@@ -12,4 +12,15 @@ export function executorEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Proce
   const env: NodeJS.ProcessEnv = { ...base }
   for (const key of CHILD_ENV_DENYLIST) delete env[key]
   return env
+}
+
+/** 执行器角色只能声明普通 AI 身份；不能回退为 user 或替换成其他名字。 */
+export function executorRoleEnv(
+  actor: string,
+  base: NodeJS.ProcessEnv = process.env,
+): Result<NodeJS.ProcessEnv> {
+  if (actor === 'user' || !isValidActor(actor) || !isDeclarableActor(actor)) {
+    return fail('usage', 'invalid_actor', `角色 ${actor} 不能声明为执行器的 AI 身份`)
+  }
+  return ok({ ...executorEnv(base), FLOW_ACTOR: actor })
 }

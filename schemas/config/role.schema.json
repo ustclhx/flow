@@ -6,7 +6,7 @@
     "name": {
       "type": "string",
       "minLength": 1,
-      "description": "角色名，与 YAML 文件名（不含扩展名）一致"
+      "description": "可声明的 AI 角色名，与 YAML 文件名（不含扩展名）一致"
     },
     "executor": {
       "type": "string",

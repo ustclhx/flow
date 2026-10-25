@@ -31,7 +31,7 @@ import {
 } from '@flow/core'
 import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
-import { executorEnv } from './env.ts'
+import { executorRoleEnv } from './env.ts'
 import {
   ActivityQueue,
   type DeliverResult,
@@ -689,6 +689,16 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           )
           return
         }
+        const env = executorRoleEnv(role.data.name, ctx.env)
+        if (!env.ok) {
+          finish(
+            ok({
+              outcome: 'failed',
+              result: result(env.error.message, { reason: env.error.code }),
+            }),
+          )
+          return
+        }
         const perms = claudeSdkPermissions.safeParse(role.data.permissions ?? {})
         if (!perms.success) {
           finish(
@@ -726,6 +736,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         const options_ = buildOptions({
           ...(instructions ? { projectInstructions: instructions } : {}),
           role: role.data,
+          env: env.data,
           perms: perms.data,
           ctx,
           home: options.home,
@@ -862,6 +873,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
 }
 
 interface BuildOptionsInput {
+  env: NodeJS.ProcessEnv
   role: Role
   perms: ClaudeSdkPermissions
   ctx: ExecutorContext
@@ -896,7 +908,7 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
   return {
     cwd: i.ctx.cwd,
     // SDK 默认把 process.env 整个传给 Claude Code 子进程；改用去掉中枢凭证的 env（design D9）。
-    env: i.ctx.env ?? executorEnv(),
+    env: i.env,
     model: i.role.model ?? DEFAULT_CLAUDE_MODEL,
     ...(i.role.effort ? { effort: i.role.effort as EffortLevel } : {}),
     systemPrompt: { type: 'preset', preset: 'claude_code', append },

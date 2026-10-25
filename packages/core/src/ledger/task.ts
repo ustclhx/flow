@@ -270,7 +270,7 @@ export const taskContract = z
     requires: z.array(capability).default([]).meta({
       description: '所需节点能力；匹配时 executor:<executor> 视为隐含必需，不必重复写出',
     }),
-    cwd: z.string().min(1).optional().meta({ description: '工作目录（节点上的绝对路径）' }),
+    cwd: z.string().min(1).optional().meta({ description: '工作目录（兼容历史合同的路径）' }),
     context: z
       .array(z.string().min(1))
       .optional()

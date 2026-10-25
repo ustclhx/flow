@@ -677,6 +677,7 @@ class LeaseRunner {
           cwd.data,
         env.clock,
         this.abort.signal,
+        grant.contract.role,
       )
       if (this.released) return
       const failed = !this.cancelRequested && verify.some((v) => v.exit_code !== 0 || v.timed_out)

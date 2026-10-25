@@ -340,8 +340,16 @@ export type RebuildData = z.infer<typeof rebuildData>
 // tasks
 // ---------------------------------------------------------------------------
 
-/** `POST /v1/tasks` 请求体即任务合同（调用方形态）。 */
+/** 创建入口要求绝对 cwd；读路径的 taskContract 兼容历史合同。 */
 export const createTaskRequest = taskContract
+  .safeExtend({
+    cwd: z
+      .string()
+      .regex(/^(?:\/|~\/)/, 'cwd 必须是绝对路径或以 ~/ 开头')
+      .optional()
+      .meta({ description: '工作目录（节点上的绝对路径，允许 ~/ 开头并由节点展开）' }),
+  })
+  .meta({ title: 'Flow task contract', description: '创建任务时提交的合同' })
 export const createTaskData = z
   .object({
     task: taskView,

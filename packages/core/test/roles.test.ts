@@ -208,3 +208,26 @@ describe('creatable_by（角色创建权限）', () => {
     expect(by).toEqual({ dev: undefined, reviewer: ['*'], triage: ['*'] })
   })
 })
+
+test('角色名只接受可声明的 AI 身份，拒绝 user、保留身份和非法格式', () => {
+  for (const name of ['dev', 'reviewer', 'agent:claude']) {
+    expect(roleSchema.safeParse({ ...role, name }).success).toBe(true)
+  }
+  for (const name of [
+    'user',
+    'User',
+    'hub',
+    'POLICY',
+    'scheduler',
+    'unknown',
+    'node:n1',
+    'NODE:n1',
+    'bad name',
+    'a'.repeat(65),
+  ]) {
+    expect(roleSchema.safeParse({ ...role, name })).toMatchObject({
+      success: false,
+      error: { issues: [expect.objectContaining({ path: ['name'] })] },
+    })
+  }
+})

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { tmpdir } from 'node:os'
 import { HUB_TOKEN_ENV } from '@flow/core'
 import { execRunner } from '../src/codex-orca/orca.ts'
+import { executorRoleEnv } from '../src/env.ts'
 import { createFakeExecutor, type ExecutorContext, executorEnv, systemClock } from '../src/index.ts'
 import { verifyTask } from '../src/verify.ts'
 import { bench, fake } from './harness.ts'
@@ -24,16 +25,17 @@ describe('子进程环境不继承中枢凭证（design D9）', () => {
     expect(base[HUB_TOKEN_ENV]).toBe(fakeToken())
   })
 
-  test('验收命令的子进程看不到 FLOW_HUB_TOKEN', async () => {
+  test('验收命令使用角色身份，且看不到 FLOW_HUB_TOKEN', async () => {
     process.env[HUB_TOKEN_ENV] = fakeToken()
     const [outcome] = await verifyTask(
-      [{ cmd: ['sh', '-c', `echo "token=\${${HUB_TOKEN_ENV}:-absent}"`] }],
+      [{ cmd: ['sh', '-c', `echo "token=\${${HUB_TOKEN_ENV}:-absent} actor=$FLOW_ACTOR"`] }],
       tmpdir(),
       systemClock,
       new AbortController().signal,
+      'reviewer',
     )
     expect(outcome?.exit_code).toBe(0)
-    expect(outcome?.output_tail.join('\n')).toContain('token=absent')
+    expect(outcome?.output_tail.join('\n')).toContain('token=absent actor=reviewer')
   })
 })
 
@@ -69,5 +71,30 @@ test('codex-orca 的命令执行（orca、gh）不继承 FLOW_HUB_TOKEN', async 
       ...(env ? { env } : {}),
     })
     expect(out.stdout.trim()).toBe('token=absent')
+  }
+})
+
+test('执行器身份覆盖继承值，并拒绝 user、保留身份与非法格式', () => {
+  const base = { FLOW_ACTOR: 'user', FLOW_HUB_TOKEN: fakeToken(), KEEP: '1' }
+  expect(executorRoleEnv('reviewer', base)).toEqual({
+    ok: true,
+    data: { FLOW_ACTOR: 'reviewer', KEEP: '1' },
+  })
+  expect(base.FLOW_ACTOR).toBe('user')
+  for (const actor of [
+    'user',
+    'User',
+    'hub',
+    'POLICY',
+    'scheduler',
+    'unknown',
+    'node:n1',
+    'bad name',
+    '',
+  ]) {
+    expect(executorRoleEnv(actor, base)).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_actor' },
+    })
   }
 })

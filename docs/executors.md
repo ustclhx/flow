@@ -30,7 +30,7 @@ flow doctor --json
 | `tool.claude-sdk` | 能 import `@anthropic-ai/claude-agent-sdk`、存在 query 导出、包版本可解析；从 `@flow/node` 的 package.json 位置解析 SDK，并读取其中声明的期望版本 |
 | `tool.claude` | SDK 默认使用的当前平台原生 CLI 文件存在且可执行；PATH 上另装的 claude 不会替代缺失的 SDK 原生包 |
 | `claude.credentials` | `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN` 之一非空，或 Claude 配置目录下存在 `.credentials.json` |
-| `role.<name>.creatable_by` | 角色没有 `creatable_by` 时给 info 提示：只有 user 可以创建该角色的任务（见下文） |
+| `role.<name>.creatable_by` | 角色的 `creatable_by` 缺省或为 `[]` 时给 info 提示：仅 user 可创建该角色的任务（见下文） |
 
 Claude 配置目录取 `CLAUDE_CONFIG_DIR`，否则取用户目录的 `.claude`。凭证只查存在性，
 不读取文件内容、不输出变量值、不运行 claude、不发起 API 调用；不能确认过期、权限或订阅额度。
@@ -42,7 +42,7 @@ macOS 登录可能仅在 Keychain 中：没有上述来源、但存在系统 sec
 - 被引用的执行器缺少依赖、版本命令失败或输出无法解析：`error`，doctor 退出码 1；
 - Codex / Orca 低于最低验证版本：`warning`，建议升级，不单独导致非零退出；这一下限来自现有实测 fixture，不代表历史版本一定不可用；
 - 没有角色引用的执行器：`info` 并跳过探测；Codex 被 `codex-orca` 或 `codex-exec` 任一角色引用就需要检查；
-- 角色缺少 `creatable_by`：`info`，不影响退出码；
+- 角色的 `creatable_by` 缺省或为空数组：`info`，不影响退出码；
 - 原有的目录、git、gitleaks、角色配置错误仍为 `error`。只有 info / warning 时退出码为 0。
 
 `flow init` 默认生成三个真实角色，所以刚初始化的环境会要求全部依赖。
@@ -64,7 +64,7 @@ creatable_by:
 - `user` 永远可以创建；字段缺省时只有 `user` 可以创建，AI 和节点会得到 403 `role_not_allowed`。
 - 默认模板：dev 不写（只有 user 能派发开发任务，AI 不能借 dev 跳过审批和沙箱）；只读的 reviewer、triage 为 `["*"]`，
   任何非 user 身份都可以拆出审查、分诊子任务。
-- 本机 AI 的身份就是执行器注入的 `flow mcp --actor <角色名>`：reviewer 执行器的身份是 `reviewer`，不是 `node:*`。
+- 本机 AI 的身份由执行器设置的 `FLOW_ACTOR=<角色名>` 声明（claude-sdk 另注入 `flow mcp --actor <角色名>`）：reviewer 执行器的身份是 `reviewer`，不是 `node:*`。
   要只放开某个执行器，写它的角色名，例如 `creatable_by: [reviewer]`。
 - 节点 token 和 remote token 在本机端口都不能创建任务（`scope_denied`、`remote_not_allowed`），`*` 不会放开它们。
 - `flow init` 不覆盖已有角色文件，升级前创建的 reviewer、triage 没有这个字段（只有 user 能创建），
@@ -209,7 +209,7 @@ permissions:
    三种执行器共用合同工作目录规则：显式 `cwd` 优先；否则使用属于该 workspace repos 的 `inputs.repo`；
    两者都没有时，取 workspace 唯一仓库。没有仓库或有多个仓库时必须写 `cwd` 或 `inputs.repo`，
    否则任务以 `failed`（`repo_not_in_workspace`）结束，不再回退到 flow-home。
-   建议填写绝对路径。codex-orca 仍以 `inputs.repo`（其次 `cwd`）选择基础仓库并校验归属，再创建 worktree。
+   合同 `cwd` 必须是绝对路径，允许 `~/` 开头并由节点展开；相对路径在合同校验时拒绝。codex-orca 仍以 `inputs.repo`（其次 `cwd`）选择基础仓库并校验归属，再创建 worktree。
    可加 `inputs.scope: ["README.md"]` 明确修改范围，`context` 引用知识，
    `verify: [{"cmd":["bun","test"]}]` 指定验收命令（应换成该仓库实际的检查）。
    verify 是 argv，不经过 shell；有验收命令时成功后先进入 verifying，全部通过才 done。

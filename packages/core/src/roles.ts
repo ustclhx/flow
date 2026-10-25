@@ -4,9 +4,10 @@ import { parse } from 'yaml'
 import { z } from 'zod'
 import { flowPaths } from './home.ts'
 import { executorType } from './ledger/common.ts'
+import { isDeclarableActor } from './ledger/protocol.ts'
 import { fail, ok, type Result } from './result.ts'
 import { formatZodIssues, type ValidationIssue } from './validation-issue.ts'
-import { USER_ACTOR } from './write/policy.ts'
+import { isValidActor, USER_ACTOR } from './write/policy.ts'
 
 /** 当前内置的执行器类型；角色 schema 不限定此列表，由 doctor 检查可用性。 */
 export const KNOWN_EXECUTORS = ['fake', 'codex-orca', 'claude-sdk', 'codex-exec'] as const
@@ -47,7 +48,13 @@ export function canCreateRole(role: Pick<Role, 'creatable_by'>, actor: string): 
 
 export const roleSchema = z
   .strictObject({
-    name: z.string().min(1).meta({ description: '角色名，与 YAML 文件名（不含扩展名）一致' }),
+    name: z
+      .string()
+      .min(1)
+      .refine((name) => name !== USER_ACTOR && isValidActor(name) && isDeclarableActor(name), {
+        message: '角色名必须是合法且可声明的 AI 身份，不能使用 user、保留身份或 node: 前缀',
+      })
+      .meta({ description: '可声明的 AI 角色名，与 YAML 文件名（不含扩展名）一致' }),
     executor: executorType,
     prompt: z.string().min(1).meta({
       description: '内联提示词；同目录的 .md 文件名视为文件引用，文件必须存在',

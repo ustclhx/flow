@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  acquireLeaseData,
   cancelTaskData,
   createTaskData,
   errorBody,
@@ -11,9 +12,11 @@ import {
   okBody,
   rebuildData,
   showTaskData,
+  taskContract,
 } from '@flow/core'
 import {
   createHubApp,
+  createNodeProtocol,
   createTaskRoutes,
   createTaskService,
   generateTaskId,
@@ -408,4 +411,51 @@ describe('POST /v1/hub/rebuild（投影可重建）', () => {
     expect(pick(must(tasks.listTasks()).tasks)).toEqual(before)
     expect(store.eventsAfter(seq)).toMatchObject([{ type: 'hub.rebuilt', actor: 'user' }])
   })
+})
+
+test('旧账本中的相对 cwd 合同仍可 list、show、读取事件及领取租约', async () => {
+  const { store, app, call } = await setup()
+  const protocol = createNodeProtocol({ ledger: store, leaseTtlS: 60, leaseWaitMaxS: 30 })
+  cleanups.push(() => protocol.stop())
+  app.route('/', protocol.routes)
+  const contract = taskContract.parse(contractInput({ cwd: './legacy-repo' }))
+  must(
+    store.append(
+      {
+        type: 'task.created',
+        task_id: 't-legacy',
+        workspace: WS,
+        payload: { contract },
+      },
+      { actor: 'user' },
+    ),
+  )
+  const listed = okBody(listTasksData).parse(await (await call('GET', '/v1/tasks')).json())
+  expect(listed.data.tasks[0]?.contract.cwd).toBe('./legacy-repo')
+  const shown = okBody(showTaskData).parse(await (await call('GET', '/v1/tasks/t-legacy')).json())
+  expect(shown.data.task.contract.cwd).toBe('./legacy-repo')
+  expect(shown.data.events[0]).toMatchObject({
+    type: 'task.created',
+    payload: { contract: { cwd: './legacy-repo' } },
+  })
+  expect(
+    (
+      await call('POST', '/v1/nodes', {
+        node_id: 'n-legacy',
+        hostname: 'legacy',
+        version: 'test',
+        capabilities: ['executor:fake'],
+      })
+    ).status,
+  ).toBe(200)
+  const granted = okBody(acquireLeaseData).parse(
+    await (
+      await call('POST', '/v1/leases', {
+        node_id: 'n-legacy',
+        capabilities: ['executor:fake'],
+        wait_s: 0,
+      })
+    ).json(),
+  )
+  expect(granted.data.lease?.contract.cwd).toBe('./legacy-repo')
 })

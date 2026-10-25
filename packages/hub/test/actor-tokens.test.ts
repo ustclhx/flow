@@ -466,11 +466,47 @@ describe('角色创建权限（config/roles 的 creatable_by）', () => {
     for (const role of ['designer', 'broken']) {
       expect(await call('/v1/tasks', { actor: 'codex', body: body(role) })).toMatchObject({
         status: 422,
-        body: { error: { code: 'unknown_role', details: { role } } },
+        body: {
+          error: {
+            code: 'unknown_role',
+            message: `角色 ${role} 未定义或加载失败，运行 flow doctor 查看`,
+            details: { role },
+          },
+        },
       })
     }
     expect(await seq()).toBe(before)
     expect((await call('/v1/tasks', { body: body('designer') })).status).toBe(201)
+  })
+
+  test('角色目录读取失败：返回 422 unknown_role，拒绝时不产生事件', async () => {
+    const { home, call, seq } = await start()
+    const roles = join(home, 'config/roles')
+    rmSync(roles, { recursive: true })
+    writeFileSync(roles, '用普通文件模拟无法读取目录')
+    const before = await seq()
+    expect(await call('/v1/tasks', { actor: 'reviewer', body: body('dev') })).toMatchObject({
+      status: 422,
+      body: {
+        error: {
+          code: 'unknown_role',
+          message: '角色 dev 未定义或加载失败，运行 flow doctor 查看',
+        },
+      },
+    })
+    expect(await seq()).toBe(before)
+  })
+
+  test('相对 cwd 在合同校验时返回 invalid_arguments，不产生事件', async () => {
+    const { call, seq } = await start()
+    const before = await seq()
+    expect(await call('/v1/tasks', { body: { ...body('dev'), cwd: './repo' } })).toMatchObject({
+      status: 400,
+      body: {
+        error: { code: 'invalid_arguments', details: [{ field: 'cwd', code: 'invalid_field' }] },
+      },
+    })
+    expect(await seq()).toBe(before)
   })
 
   test('修改角色文件后下一次请求即生效，无需重启中枢', async () => {

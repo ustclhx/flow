@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { taskContract } from '@flow/core'
 import { buildCodexCommand, resolveTaskRepo } from '../src/codex-orca/executor.ts'
-import { createGhCli, createOrcaCli, orcaErrorCode } from '../src/codex-orca/orca.ts'
+import { createGhCli, createOrcaCli, execRunner, orcaErrorCode } from '../src/codex-orca/orca.ts'
+import { CHILD_ENV_DENYLIST } from '../src/env.ts'
 import { fixtureText, orcaHome } from './codex-orca-helpers.ts'
 
 /**
@@ -340,6 +341,7 @@ describe('启动 Codex 的命令', () => {
       worktreePath: '/wt/t 1',
       specPath: '/home/state/tasks/t-1/spec.md',
       role: {
+        name: 'dev',
         model: 'gpt-6.1-sol',
         effort: 'high',
         permissions: {
@@ -352,7 +354,7 @@ describe('启动 Codex 的命令', () => {
     expect(r).toEqual({
       ok: true,
       data:
-        "cd '/wt/t 1' && exec codex -m gpt-6.1-sol -c model_reasoning_effort=high " +
+        "cd '/wt/t 1' && exec env -u FLOW_HUB_TOKEN FLOW_ACTOR=dev codex -m gpt-6.1-sol -c model_reasoning_effort=high " +
         '-c service_tier=priority --dangerously-bypass-approvals-and-sandbox ' +
         '"$(cat /home/state/tasks/t-1/spec.md)"',
     })
@@ -363,10 +365,46 @@ describe('启动 Codex 的命令', () => {
       codexBin: 'codex',
       worktreePath: '/wt',
       specPath: '/s.md',
-      role: { permissions: { approval: 'on-request', sandbox: 'workspace-write' } },
+      role: { name: 'dev', permissions: { approval: 'on-request', sandbox: 'workspace-write' } },
     })
     expect(r.ok && r.data).toBe(
-      'cd /wt && exec codex -a on-request -s workspace-write "$(cat /s.md)"',
+      'cd /wt && exec env -u FLOW_HUB_TOKEN FLOW_ACTOR=dev codex -a on-request -s workspace-write "$(cat /s.md)"',
     )
   })
+})
+
+test('Orca 启动命令把角色身份传给实际子进程，并覆盖终端继承值', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flow-orca-env-'))
+  roots.push(dir)
+  const bin = join(dir, 'fake-codex')
+  const specPath = join(dir, 'spec.md')
+  writeFileSync(bin, '#!/bin/sh\nprintf "%s" "$FLOW_ACTOR"\n')
+  chmodSync(bin, 0o755)
+  writeFileSync(specPath, '临时任务')
+  const command = buildCodexCommand({
+    codexBin: bin,
+    worktreePath: dir,
+    specPath,
+    role: { name: 'dev' },
+  })
+  if (!command.ok) throw new Error(command.error.message)
+  const out = await execRunner('sh', ['-c', command.data], {
+    timeoutMs: 5000,
+    env: { ...process.env, FLOW_ACTOR: 'user' },
+  })
+  expect(out.code).toBe(0)
+  expect(out.stdout).toBe('dev')
+})
+
+test('Orca 启动命令移除完整 denylist，并拒绝包含 = 的 codexBin', () => {
+  const base = { codexBin: 'codex', worktreePath: '/wt', specPath: '/s.md', role: { name: 'dev' } }
+  const command = buildCodexCommand(base)
+  if (!command.ok) throw new Error(command.error.message)
+  for (const key of CHILD_ENV_DENYLIST) expect(command.data).toContain(`-u ${key}`)
+  for (const codexBin of ['FLOW_ACTOR=user', '/tmp/codex=custom']) {
+    expect(buildCodexCommand({ ...base, codexBin })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_codex_bin' },
+    })
+  }
 })

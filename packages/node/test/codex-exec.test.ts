@@ -49,7 +49,7 @@ const { spawn } = require('node:child_process')
 const question = ${JSON.stringify(question)}
 const resumed = ${JSON.stringify(resumed)}
 const args = process.argv.slice(2)
-fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ args, cwd: process.cwd(), token: process.env.FLOW_HUB_TOKEN, home: process.env.FLOW_HOME }))
+fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ args, cwd: process.cwd(), token: process.env.FLOW_HUB_TOKEN, home: process.env.FLOW_HOME, actor: process.env.FLOW_ACTOR }))
 // 故意逐 7 字节输出，覆盖 UTF-8、多行和 JSON 跨 chunk；最后一行没有换行。
 const send = text => { const b = Buffer.from(text.trimEnd()); for (let i = 0; i < b.length; i += 7) fs.writeSync(1, b.subarray(i, i + 7)) }
 ${body}
@@ -62,7 +62,7 @@ ${body}
     nodeId: 'n-test',
     cwd: dir,
     signal: abort.signal,
-    env: { FLOW_HOME: home, FLOW_HUB_TOKEN: 'must-not-reach-worker' },
+    env: { FLOW_HOME: home, FLOW_HUB_TOKEN: 'must-not-reach-worker', FLOW_ACTOR: 'user' },
   }
   const contract = taskContract.parse({
     goal: '只读分诊',
@@ -99,6 +99,7 @@ ${body}
         args: string[]
         cwd: string
         token?: string
+        actor: string
         home: string
       },
     launched: () => existsSync(report),
@@ -139,6 +140,7 @@ describe('codex-exec 无头执行器', () => {
     expect(report.cwd).toBe(realpathSync(s.dir))
     expect(report.home).toBe(s.home)
     expect(report.token).toBeUndefined()
+    expect(report.actor).toBe('triage')
     expect(activities.some((a) => a.text?.includes('/bin/zsh -lc pwd'))).toBe(true)
     expect(activities.some((a) => a.text?.includes('/Users/user/flow-codex-fixture/work'))).toBe(
       true,
@@ -166,6 +168,7 @@ describe('codex-exec 无头执行器', () => {
       outcome: 'done',
       result: { summary: '5', session: SID },
     })
+    expect(s.report().actor).toBe('triage')
     const args = s.report().args
     expect(args.slice(0, 7)).toEqual([
       'exec',
@@ -411,4 +414,14 @@ describe('codex-exec 无头执行器', () => {
       result: { reason: 'unknown_role' },
     })
   })
+})
+
+test('角色 user 在启动 Codex 前失败，不回退身份', async () => {
+  const s = setup(undefined, { name: 'user' })
+  s.contract.role = 'user'
+  expect((await collect(s.run())).outcome).toMatchObject({
+    outcome: 'failed',
+    result: { reason: 'invalid_actor' },
+  })
+  expect(s.launched()).toBe(false)
 })

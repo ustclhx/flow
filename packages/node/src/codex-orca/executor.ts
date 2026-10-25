@@ -16,6 +16,7 @@ import {
 } from '@flow/core'
 import { z } from 'zod'
 import { type NodeClock, sleep, systemClock } from '../clock.ts'
+import { CHILD_ENV_DENYLIST, executorRoleEnv } from '../env.ts'
 import {
   ActivityQueue,
   type DeliverResult,
@@ -179,8 +180,13 @@ export function buildCodexCommand(input: {
   codexBin: string
   worktreePath: string
   specPath: string
-  role: Pick<Role, 'model' | 'effort' | 'permissions'>
+  role: Pick<Role, 'name' | 'model' | 'effort' | 'permissions'>
 }): Result<string> {
+  if (input.codexBin.includes('=')) {
+    return fail('usage', 'invalid_codex_bin', 'codexBin 不能包含 =，避免被 env 当作环境变量赋值')
+  }
+  const env = executorRoleEnv(input.role.name, {})
+  if (!env.ok) return env
   const perms = codexOrcaPermissions.safeParse(input.role.permissions ?? {})
   if (!perms.success) {
     return fail('usage', 'invalid_permissions', `角色 permissions 不合法：${perms.error.message}`)
@@ -197,7 +203,10 @@ export function buildCodexCommand(input: {
     if (p.sandbox) argv.push('-s', p.sandbox)
   }
   const cmd = argv.map(quote).join(' ')
-  return ok(`cd ${quote(input.worktreePath)} && exec ${cmd} "$(cat ${quote(input.specPath)})"`)
+  const unset = CHILD_ENV_DENYLIST.flatMap((key) => ['-u', quote(key)]).join(' ')
+  return ok(
+    `cd ${quote(input.worktreePath)} && exec env ${unset} ${quote(`FLOW_ACTOR=${env.data.FLOW_ACTOR}`)} ${cmd} "$(cat ${quote(input.specPath)})"`,
+  )
 }
 
 /** 默认的基准分支：`git symbolic-ref --short refs/remotes/origin/HEAD`，取不到时 `origin/main`。 */
@@ -715,6 +724,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (!roles.ok) return finish(roles)
         const role = roles.data.roles.find((r) => r.name === contract.role)
         if (!role) return failed('unknown_role', `节点上没有角色 ${contract.role}（config/roles/）`)
+        const actorEnv = executorRoleEnv(role.name, ctx.env)
+        if (!actorEnv.ok) return failed(actorEnv.error.code, actorEnv.error.message)
         const repoR = await resolveTaskRepo(options.home, contract)
         if (!repoR.ok) return failed(repoR.error.code, repoR.error.message)
         const repo = repoR.data

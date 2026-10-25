@@ -4,6 +4,7 @@ import {
   type CreateTaskData,
   canCreateRole,
   checkContractSecrets,
+  createTaskRequest,
   fail,
   formatZodIssues,
   type InboxVia,
@@ -18,7 +19,6 @@ import {
   type Role,
   replyTaskRequest,
   type ShowTaskData,
-  taskContract,
   USER_ACTOR,
 } from '@flow/core'
 import type { LedgerStore } from './store.ts'
@@ -51,7 +51,17 @@ export type RoleLookup = (
 export function roleLookupFromHome(home: string): RoleLookup {
   return async (name) => {
     const loaded = await loadRoles(home)
-    if (!loaded.ok) return loaded
+    if (!loaded.ok) {
+      return fail(
+        'failure',
+        'unknown_role',
+        `角色 ${name} 未定义或加载失败，运行 flow doctor 查看`,
+        {
+          field: 'role',
+          role: name,
+        },
+      )
+    }
     return ok(loaded.data.roles.find((r) => r.name === name) ?? null)
   }
 }
@@ -149,7 +159,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
 
   return {
     async createTask(contractInput, opts) {
-      const parsed = taskContract.safeParse(contractInput)
+      const parsed = createTaskRequest.safeParse(contractInput)
       if (!parsed.success) return invalidArguments('任务合同', parsed.error.issues, contractInput)
       const contract = parsed.data
       // 合同入账时只做已知值的名单替换，不跑正则；高置信度的疑似密钥在这里直接拒绝。
@@ -174,10 +184,15 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         const found = await o.roles(contract.role)
         if (!found.ok) return found
         if (!found.data) {
-          return fail('failure', 'unknown_role', `角色 ${contract.role} 未定义`, {
-            field: 'role',
-            role: contract.role,
-          })
+          return fail(
+            'failure',
+            'unknown_role',
+            `角色 ${contract.role} 未定义或加载失败，运行 flow doctor 查看`,
+            {
+              field: 'role',
+              role: contract.role,
+            },
+          )
         }
         if (!canCreateRole(found.data, opts.actor)) {
           return fail(

@@ -2,8 +2,8 @@ import type { z } from 'zod'
 import { hubConfigSchema, nodeConfigSchema } from '../daemon/config.ts'
 import { schedulesConfigSchema } from '../daemon/schedules.ts'
 import { EVENT_TYPES, eventSchemas, ledgerEvent } from './events.ts'
-import { ENDPOINTS, errorBody, okBody } from './protocol.ts'
-import { activity, taskContract, taskResult, taskStatus, taskView } from './task.ts'
+import { createTaskRequest, ENDPOINTS, errorBody, okBody } from './protocol.ts'
+import { activity, taskResult, taskStatus, taskView } from './task.ts'
 
 export * from './common.ts'
 export * from './events.ts'
@@ -20,7 +20,7 @@ type SchemaEntry = { schema: z.ZodType; io: 'input' | 'output' }
  */
 export function ledgerSchemaEntries(): Record<string, SchemaEntry> {
   const out: Record<string, SchemaEntry> = {
-    'tasks/contract.schema.json': { schema: taskContract, io: 'input' },
+    'tasks/contract.schema.json': { schema: createTaskRequest, io: 'input' },
     'tasks/result.schema.json': { schema: taskResult, io: 'input' },
     'tasks/task.schema.json': { schema: taskView, io: 'output' },
     'tasks/status.schema.json': { schema: taskStatus, io: 'output' },

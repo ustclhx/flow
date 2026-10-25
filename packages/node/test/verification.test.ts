@@ -313,3 +313,17 @@ test('验收超时字段拒绝非正数', () => {
     }).success,
   ).toBe(false)
 })
+
+test('节点把合同角色身份传给验收命令', async () => {
+  const b = await open()
+  const cmd = command(b, 'actor', 'console.log(process.env.FLOW_ACTOR)')
+  const id = await b.create({
+    ...fake({ delay_ms: 0 }),
+    role: 'reviewer',
+    cwd: join(b.home, 'work'),
+    verify: [{ cmd }],
+  })
+  await finished(b, id)
+  expect(b.task(id).status).toBe('done')
+  expect(b.task(id).result?.verify[0]?.output_tail).toEqual(['reviewer'])
+})

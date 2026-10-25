@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
 import { questionMessage } from './codex-orca/classify.ts'
 import { resolveContext } from './codex-orca/spec.ts'
-import { executorEnv } from './env.ts'
+import { executorRoleEnv } from './env.ts'
 import {
   ActivityQueue,
   type ExecutorOutcome,
@@ -214,6 +214,11 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
           finish(ok({ outcome: 'failed', result: result(role.error.message, role.error.code) }))
           return
         }
+        const env = executorRoleEnv(role.data.name, ctx.env)
+        if (!env.ok) {
+          finish(ok({ outcome: 'failed', result: result(env.error.message, env.error.code) }))
+          return
+        }
         const perms = permissionsSchema.safeParse(role.data.permissions ?? {})
         if (!perms.success) {
           finish(
@@ -239,7 +244,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
         args.push('--', prompt)
         child = spawn(command[0] ?? 'codex', args, {
           cwd: ctx.cwd,
-          env: executorEnv(ctx.env),
+          env: env.data,
           shell: false,
           detached: true,
           stdio: ['ignore', 'pipe', 'pipe'],

@@ -4,6 +4,7 @@ import {
   BLOCKED_REASONS,
   canTransition,
   capabilitiesSatisfy,
+  createTaskRequest,
   fakeInputs,
   isTerminalStatus,
   requiredCapabilities,
@@ -241,4 +242,13 @@ describe('任务视图', () => {
     const r = taskView.safeParse({ ...view, blocked: { reason: 'sleepy', message: 'x' } })
     expect(issuePaths(r)).toContain('blocked.reason')
   })
+})
+
+test('创建合同 cwd 只接受绝对路径或 ~/ 开头，保留路径供节点展开', () => {
+  for (const cwd of ['.', './repo', '../repo', 'repo', '~', '~other/repo']) {
+    expect(issuePaths(createTaskRequest.safeParse({ ...contract, cwd }))).toEqual(['cwd'])
+  }
+  for (const cwd of ['/', '/tmp/repo', '~/repo']) {
+    expect(createTaskRequest.parse({ ...contract, cwd }).cwd).toBe(cwd)
+  }
 })

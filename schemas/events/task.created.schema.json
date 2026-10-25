@@ -72,7 +72,7 @@
               }
             },
             "cwd": {
-              "description": "工作目录（节点上的绝对路径）",
+              "description": "工作目录（兼容历史合同的路径）",
               "type": "string",
               "minLength": 1
             },
