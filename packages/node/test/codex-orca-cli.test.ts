@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { taskContract } from '@flow/core'
 import { buildCodexCommand, resolveTaskRepo } from '../src/codex-orca/executor.ts'
 import { createGhCli, createOrcaCli, execRunner, orcaErrorCode } from '../src/codex-orca/orca.ts'
+import { CHILD_ENV_DENYLIST } from '../src/env.ts'
 import { fixtureText, orcaHome } from './codex-orca-helpers.ts'
 
 /**
@@ -393,4 +394,17 @@ test('Orca 启动命令把角色身份传给实际子进程，并覆盖终端继
   })
   expect(out.code).toBe(0)
   expect(out.stdout).toBe('dev')
+})
+
+test('Orca 启动命令移除完整 denylist，并拒绝包含 = 的 codexBin', () => {
+  const base = { codexBin: 'codex', worktreePath: '/wt', specPath: '/s.md', role: { name: 'dev' } }
+  const command = buildCodexCommand(base)
+  if (!command.ok) throw new Error(command.error.message)
+  for (const key of CHILD_ENV_DENYLIST) expect(command.data).toContain(`-u ${key}`)
+  for (const codexBin of ['FLOW_ACTOR=user', '/tmp/codex=custom']) {
+    expect(buildCodexCommand({ ...base, codexBin })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_codex_bin' },
+    })
+  }
 })

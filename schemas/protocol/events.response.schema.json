@@ -395,9 +395,9 @@
                   }
                 },
                 "cwd": {
-                  "description": "工作目录（节点上的绝对路径，允许 ~/ 开头并由节点展开）",
+                  "description": "工作目录（兼容历史合同的路径）",
                   "type": "string",
-                  "pattern": "^(?:\\/|~\\/)"
+                  "minLength": 1
                 },
                 "context": {
                   "description": "上下文引用：brain 条目 id 或文件路径",

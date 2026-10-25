@@ -192,3 +192,27 @@ test('compareVersions', () => {
   expect(compareVersions('2.39.5', '2.40.0')).toBeLessThan(0)
   expect(compareVersions('2.28', '2.28.0')).toBe(0)
 })
+
+test('非法角色身份在配置阶段报 error，不作为可执行角色加载', async () => {
+  const home = tempHome('flow-doctor-role-actors-')
+  await initFlowHome(home)
+  for (const name of ['user', 'POLICY', 'node:n1', 'bad name']) {
+    writeText(
+      join(home, 'config/roles', `${name}.yaml`),
+      JSON.stringify({ name, executor: 'fake', prompt: '测试' }),
+    )
+  }
+  const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
+  expect(report.ok).toBe(false)
+  for (const name of ['user', 'POLICY', 'node:n1', 'bad name']) {
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        id: `roles.config.config/roles/${name}.yaml.name`,
+        ok: false,
+        severity: 'error',
+        message: expect.stringContaining('角色名必须是合法且可声明的 AI 身份'),
+      }),
+    )
+    expect(report.checks.some((c) => c.id === `role.${name}.executor`)).toBe(false)
+  }
+})

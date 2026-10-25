@@ -105,7 +105,8 @@ MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有�
 **本机 AI 的实际身份**：claude-sdk、codex-exec 与 codex-orca 执行器均为新启动的 AI 子进程设置
 `FLOW_ACTOR=<角色名>`；claude-sdk 另注入 `flow mcp --actor <角色名>`。所以 reviewer 会话经 MCP 或 Bash 中的 CLI
 访问中枢时，身份都是 `reviewer`（triage 等其他角色同理用各自名字），不能通过 CLI 的 `--actor user` 覆盖。
-角色名必须是合法且可声明的 AI 身份；`user` 等保留身份会使任务失败，不会静默替换名字。
+执行器内进程若 unset `FLOW_ACTOR` 或将它改写为 `user`，CLI 会回到 user 身份；这是默认身份，不是强制隔离，见下文“信任边界”。
+角色名必须是合法且可声明的 AI 身份；`user` 等保留身份在角色加载时拒绝，doctor 报 error，执行器也会在启动前校验，不会静默替换名字。
 codex-orca 通过 Flow 生成的 Orca 终端启动命令设置环境变量；升级前已启动并被复用的会话需要重新启动才会获得它。
 它们**不匹配** `node:*`。只想放开特定身份时写精确名字，例如只允许 reviewer 执行器拆出分诊任务：
 
@@ -183,7 +184,7 @@ flow hub token revoke tok_0123456789ab                        # 立即生效
 - **执行器与 worker 子进程**：节点 spawn 执行器、worker 与验收命令时，环境变量一律经
   `executorEnv()`（`packages/node/src/env.ts`，执行器从 `ExecutorContext.env` 拿到同一份），
   其中去掉了 `FLOW_HUB_TOKEN`，任务里运行的代码拿不到节点的凭证。执行器再通过 `executorRoleEnv()`
-  校验角色身份并设置 `FLOW_ACTOR`；codex-orca 在终端启动命令中设置它，同时移除 `FLOW_HUB_TOKEN`。
+  校验角色身份并设置 `FLOW_ACTOR`，验收命令也使用合同的角色身份；codex-orca 在终端启动命令中设置它，同时移除 `FLOW_HUB_TOKEN`。
 - **中枢内部渠道**（Telegram、Web）：运行在中枢进程内，不经过 `/v1` 的 HTTP 鉴权，直接以 user 写事件并附 `via`。
   Web 页面先经过自己的会话与 Origin 校验（见上文"Web 页面"）。
 

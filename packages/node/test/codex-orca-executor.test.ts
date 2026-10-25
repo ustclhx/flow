@@ -819,7 +819,7 @@ test('user 角色在创建 worktree 或接管旧终端前失败', async () => {
   await ready(s)
   expect(await s.run.done).toMatchObject({
     ok: true,
-    data: { outcome: 'failed', result: { reason: 'invalid_actor' } },
+    data: { outcome: 'failed', result: { reason: 'unknown_role' } },
   })
   expect(s.orca.calls).toEqual([])
 })

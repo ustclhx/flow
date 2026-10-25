@@ -4,6 +4,7 @@ import {
   type CreateTaskData,
   canCreateRole,
   checkContractSecrets,
+  createTaskRequest,
   fail,
   formatZodIssues,
   type InboxVia,
@@ -18,7 +19,6 @@ import {
   type Role,
   replyTaskRequest,
   type ShowTaskData,
-  taskContract,
   USER_ACTOR,
 } from '@flow/core'
 import type { LedgerStore } from './store.ts'
@@ -159,7 +159,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
 
   return {
     async createTask(contractInput, opts) {
-      const parsed = taskContract.safeParse(contractInput)
+      const parsed = createTaskRequest.safeParse(contractInput)
       if (!parsed.success) return invalidArguments('任务合同', parsed.error.issues, contractInput)
       const contract = parsed.data
       // 合同入账时只做已知值的名单替换，不跑正则；高置信度的疑似密钥在这里直接拒绝。

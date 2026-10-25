@@ -9,7 +9,7 @@ import {
   type VerifyStep,
 } from '@flow/core'
 import type { NodeClock } from './clock.ts'
-import { executorEnv } from './env.ts'
+import { executorRoleEnv } from './env.ts'
 
 const DEFAULT_VERIFY_TIMEOUT_S = 600
 
@@ -19,11 +19,12 @@ export async function verifyTask(
   cwd: string,
   clock: NodeClock,
   signal: AbortSignal,
+  actor: string,
 ): Promise<VerifyOutcome[]> {
   const outcomes: VerifyOutcome[] = []
   for (const step of steps) {
     if (signal.aborted) break
-    const outcome = await verifyCommand(step, cwd, clock, signal)
+    const outcome = await verifyCommand(step, cwd, clock, signal, actor)
     outcomes.push(outcome)
     if (outcome.exit_code !== 0 || outcome.timed_out) break
   }
@@ -35,6 +36,7 @@ function verifyCommand(
   taskCwd: string,
   clock: NodeClock,
   signal: AbortSignal,
+  actor: string,
 ): Promise<VerifyOutcome> {
   return new Promise((finish) => {
     const cwd = resolve(taskCwd, step.cwd ?? '.')
@@ -73,9 +75,15 @@ function verifyCommand(
     }
     let child: ReturnType<typeof spawn>
     try {
+      const env = executorRoleEnv(actor)
+      if (!env.ok) {
+        output('stderr', env.error.message)
+        complete(null)
+        return
+      }
       child = spawn(step.cmd[0] ?? '', step.cmd.slice(1), {
         cwd,
-        env: executorEnv(),
+        env: env.data,
         shell: false,
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],

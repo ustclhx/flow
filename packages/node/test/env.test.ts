@@ -25,16 +25,17 @@ describe('子进程环境不继承中枢凭证（design D9）', () => {
     expect(base[HUB_TOKEN_ENV]).toBe(fakeToken())
   })
 
-  test('验收命令的子进程看不到 FLOW_HUB_TOKEN', async () => {
+  test('验收命令使用角色身份，且看不到 FLOW_HUB_TOKEN', async () => {
     process.env[HUB_TOKEN_ENV] = fakeToken()
     const [outcome] = await verifyTask(
-      [{ cmd: ['sh', '-c', `echo "token=\${${HUB_TOKEN_ENV}:-absent}"`] }],
+      [{ cmd: ['sh', '-c', `echo "token=\${${HUB_TOKEN_ENV}:-absent} actor=$FLOW_ACTOR"`] }],
       tmpdir(),
       systemClock,
       new AbortController().signal,
+      'reviewer',
     )
     expect(outcome?.exit_code).toBe(0)
-    expect(outcome?.output_tail.join('\n')).toContain('token=absent')
+    expect(outcome?.output_tail.join('\n')).toContain('token=absent actor=reviewer')
   })
 })
 

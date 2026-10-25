@@ -16,7 +16,7 @@ import {
 } from '@flow/core'
 import { z } from 'zod'
 import { type NodeClock, sleep, systemClock } from '../clock.ts'
-import { executorRoleEnv } from '../env.ts'
+import { CHILD_ENV_DENYLIST, executorRoleEnv } from '../env.ts'
 import {
   ActivityQueue,
   type DeliverResult,
@@ -182,6 +182,9 @@ export function buildCodexCommand(input: {
   specPath: string
   role: Pick<Role, 'name' | 'model' | 'effort' | 'permissions'>
 }): Result<string> {
+  if (input.codexBin.includes('=')) {
+    return fail('usage', 'invalid_codex_bin', 'codexBin 不能包含 =，避免被 env 当作环境变量赋值')
+  }
   const env = executorRoleEnv(input.role.name, {})
   if (!env.ok) return env
   const perms = codexOrcaPermissions.safeParse(input.role.permissions ?? {})
@@ -200,8 +203,9 @@ export function buildCodexCommand(input: {
     if (p.sandbox) argv.push('-s', p.sandbox)
   }
   const cmd = argv.map(quote).join(' ')
+  const unset = CHILD_ENV_DENYLIST.flatMap((key) => ['-u', quote(key)]).join(' ')
   return ok(
-    `cd ${quote(input.worktreePath)} && exec env -u FLOW_HUB_TOKEN ${quote(`FLOW_ACTOR=${env.data.FLOW_ACTOR}`)} ${cmd} "$(cat ${quote(input.specPath)})"`,
+    `cd ${quote(input.worktreePath)} && exec env ${unset} ${quote(`FLOW_ACTOR=${env.data.FLOW_ACTOR}`)} ${cmd} "$(cat ${quote(input.specPath)})"`,
   )
 }
 
