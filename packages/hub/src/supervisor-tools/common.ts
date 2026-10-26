@@ -17,6 +17,7 @@ import type {
   WorkspaceLookup,
 } from '../ledger/tasks.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
+import type { DelegationService } from '../supervisor/delegation.ts'
 
 /**
  * supervisor 的提问、任务提案与决策回看（add-m1-supervisor design D7、D11；tasks 4.4–4.7）共用的依赖与身份核对。
@@ -38,6 +39,8 @@ export interface SupervisorToolsDeps {
   supervisorActive: (workspace: string) => Promise<boolean>
   repoCheck?: RepoCheckOptions
   now: () => number
+  /** 代回复（D15）：`task_respond` 由它在同一事务里核对并写入；未注入时该接口不可用。 */
+  delegation?: Pick<DelegationService, 'respond'>
 }
 
 /** 鉴权中间件认定的唤醒调用方；其他认证方式返回 null。 */

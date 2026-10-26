@@ -3552,6 +3552,12 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 16384
+                      },
+                      "reason": {
+                        "description": "supervisor 代回复时给出的理由（D15，只用于 via: supervisor）；只进用户可见的每日摘要，不进简报",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000
                       }
                     },
                     "required": [

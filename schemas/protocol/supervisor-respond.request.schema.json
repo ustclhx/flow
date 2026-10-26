@@ -1,0 +1,48 @@
+{
+  "$id": "https://flow.local/schemas/protocol/supervisor-respond.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "委托给本次 reply 唤醒的任务"
+    },
+    "block_seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "这次卡住的 task.blocked seq（inputs.wake 中委托事件的 block_seq）"
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "deny",
+        "answer",
+        "escalate"
+      ],
+      "description": "approve / deny 只用于授权请求（awaiting_approval）；answer 只用于提问（question）；escalate 两者都可，转交用户"
+    },
+    "text": {
+      "description": "answer 必填：回答全文；deny 可选：拒绝理由（交给 worker）；approve 与 escalate 不接受",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "为什么这样决定；escalate 时作为转交说明给用户看"
+    }
+  },
+  "required": [
+    "task_id",
+    "block_seq",
+    "decision",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/supervisor/respond 请求体"
+}

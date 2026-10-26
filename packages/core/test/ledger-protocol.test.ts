@@ -274,6 +274,7 @@ describe('端点清单与 JSON Schema 导出', () => {
       'POST /v1/supervisor/questions',
       'POST /v1/task-proposals',
       'POST /v1/decisions/review',
+      'POST /v1/supervisor/respond',
       'POST /v1/leases/:id/ack-reply',
     ])
     expect(Object.values(ENDPOINTS).filter((d) => !d.auth)).toHaveLength(1)

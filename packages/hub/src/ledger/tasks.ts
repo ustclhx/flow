@@ -687,7 +687,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
     replyTask(id, body, opts) {
       // 防止 AI 自批：只接受 actor=user 的回复（与 task_reply 操作一致）。
       // 身份由鉴权中间件按 token 决定（add-m1-inbox D9），路由层的 userOnly 先拒绝；
-      // 这里保留同样的检查作为服务层的第二道防线。supervisor 代为答复留到变更 ④。
+      // 这里保留同样的检查作为服务层的第二道防线。supervisor 代为答复只能走 task_respond（D15）。
       if (opts.actor !== 'user') {
         return fail(
           'failure',
@@ -728,8 +728,20 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       // 没有节点持有该任务（无头执行器已结束这一轮、或节点掉线）：带着回复重新排队（D7、D7a）。
       const requeue = ledger.activeLease(id) === null
       const session = task.blocked?.session
+      // D15 "用户优先"：这次卡住仍委托给 supervisor 时，在同一次追加里先结束委托（user_replied）。
+      // 在同一同步流程里读取委托（与 append 之间没有 await），没有委托时用户回复照常写入。
+      const delegation = ledger.activeDelegation(id)
       const written = ledger.appendMany(
         [
+          ...(delegation
+            ? [
+                {
+                  ...base,
+                  type: 'task.reply_escalated' as const,
+                  payload: { reason: 'user_replied' as const, block_seq: delegation.block_seq },
+                },
+              ]
+            : []),
           {
             ...base,
             type: 'task.replied',

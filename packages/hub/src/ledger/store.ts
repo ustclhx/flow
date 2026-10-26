@@ -71,6 +71,11 @@ export type EventInput = {
 export interface AppendOptions {
   /** 操作者，写入事件信封的 `actor`。 */
   actor: string
+  /**
+   * 写入前在**同一事务**里执行的额外核对（只读投影，不写任何东西）：失败时整体不写。
+   * 用于必须与写入原子完成的核对，例如 `task_respond` 对调用方唤醒、委托与卡住序号的核对（D15）。
+   */
+  check?: () => Result<null>
 }
 
 export interface RebuildOptions {
@@ -476,6 +481,9 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
 /** 由用户操作结束委托的转交原因：与用户的 task_reply / 忽略同一次 append 写入，actor 为 user。 */
 const ESCALATION_BY_USER: ReadonlySet<string> = new Set(['user_replied', 'user_dismissed'])
 
+/** supervisor 保留身份（与 core 的 SUPERVISOR_ACTOR 相同）。 */
+const SUPERVISOR = 'supervisor'
+
 const invalidEvent = (message: string, details?: unknown) =>
   fail('failure', 'invalid_event', message, details)
 
@@ -518,19 +526,29 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       : invalidEvent(`回复 ${draft.payload.reply_id} 不是该任务待送达的回复`)
   }
 
-  const taskEventsOf = (taskId: string) =>
-    all<EventRow>('SELECT * FROM events WHERE task_id = ? ORDER BY seq', taskId).map(rowToEvent)
+  /**
+   * 账本位置上界：写入新事件时为无穷大；重建重放时为被校验事件自身的 seq——此时 events 表里已有
+   * 全部事件，按事件查询的核对必须只看它之前的事件，否则会被"未来"的事件误导。
+   */
+  let before = Number.MAX_SAFE_INTEGER
+  const taskEventsOf = (taskId: string, upto = Number.MAX_SAFE_INTEGER) =>
+    all<EventRow>(
+      'SELECT * FROM events WHERE task_id = ? AND seq < ? ORDER BY seq',
+      taskId,
+      upto,
+    ).map(rowToEvent)
   const currentDelegation = (taskId: string | undefined) => {
     const t = taskId === undefined ? undefined : taskState(taskId)
-    return t && taskId !== undefined ? activeDelegation(t, taskEventsOf(taskId)) : null
+    return t && taskId !== undefined ? activeDelegation(t, taskEventsOf(taskId, before)) : null
   }
 
   /** 该任务最近一次 task.blocked（即当前或最后一次卡住）。 */
   const lastBlocked = (taskId: string | undefined) => {
     const row = get<{ seq: number; payload_json: string }>(
       `SELECT seq, payload_json FROM events WHERE task_id = ? AND type = 'task.blocked'
-       ORDER BY seq DESC LIMIT 1`,
+         AND seq < ? ORDER BY seq DESC LIMIT 1`,
       taskId ?? null,
+      before,
     )
     return row
       ? { seq: row.seq, payload: JSON.parse(row.payload_json) as EventPayload<'task.blocked'> }
@@ -544,10 +562,11 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
   ) =>
     !!get(
       `SELECT 1 FROM events WHERE task_id = ? AND type = ?
-         AND json_extract(payload_json, '$.block_seq') = ? LIMIT 1`,
+         AND json_extract(payload_json, '$.block_seq') = ? AND seq < ? LIMIT 1`,
       taskId ?? null,
       type,
       blockSeq,
+      before,
     )
 
   const notDelegable = (why: string) => fail('failure', 'not_delegable', why)
@@ -582,9 +601,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           ...DELEGATION_ENDING_EVENTS,
         ]
           .map((t) => `'${t}'`)
-          .join(', ')}) LIMIT 1`,
+          .join(', ')}) AND seq < ? LIMIT 1`,
         draft.task_id ?? null,
         p.block_seq,
+        before,
       )
     ) {
       return notDelegable('任务已离开这次卡住（例如租约过期），不能委托')
@@ -632,8 +652,43 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     return ok(null)
   }
 
+  /**
+   * `task.replied` 与代回复委托（D15）：
+   * - supervisor 的回复必须 `via: supervisor`，且只能落在当前这次卡住上仍有效的委托上；
+   * - 其他身份不能声称 `via: supervisor`；
+   * - 委托仍有效时，用户的回复必须在同一次追加里先写 `task.reply_escalated{reason: user_replied}`
+   *   结束委托（"用户优先"），否则拒绝，避免委托在用户回复后仍被当作有效。
+   */
+  function validateReplyDelegation(draft: Extract<LedgerEventDraft, { type: 'task.replied' }>) {
+    const viaSupervisor = draft.payload.via === 'supervisor'
+    if (draft.actor === SUPERVISOR) {
+      if (!viaSupervisor) return invalidEvent('supervisor 的回复必须记为 via: supervisor')
+      const active = currentDelegation(draft.task_id)
+      if (!active || active.block_seq !== lastBlocked(draft.task_id)?.seq) {
+        return fail('failure', 'not_delegated', '这次卡住没有仍有效的 supervisor 委托')
+      }
+      return ok(null)
+    }
+    if (viaSupervisor) return invalidEvent('只有 supervisor 的回复可以记为 via: supervisor')
+    if (currentDelegation(draft.task_id)) {
+      return invalidEvent(
+        '这次卡住仍委托给 supervisor：用户回复必须在同一次追加中先写 task.reply_escalated（user_replied）',
+      )
+    }
+    return ok(null)
+  }
+
   /** 写入前的校验：信封、状态机与投影一致性。只读投影，不写任何东西。 */
   function validate(draft: LedgerEventDraft): Result<null> {
+    before = (draft as { seq?: number }).seq ?? Number.MAX_SAFE_INTEGER
+    try {
+      return validateAt(draft)
+    } finally {
+      before = Number.MAX_SAFE_INTEGER
+    }
+  }
+
+  function validateAt(draft: LedgerEventDraft): Result<null> {
     const allowed = EVENT_ACTORS[draft.type]
     if (allowed && !allowed.includes(draft.actor)) {
       return fail(
@@ -726,7 +781,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
             reply_id: pending.id,
           })
         }
-        return ok(null)
+        return validateReplyDelegation(draft)
       }
       case 'task.requeued_with_reply':
         return pendingReplyOf(draft)
@@ -869,8 +924,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           return invalidEvent('supervisor.wake_started 的 task_id、workspace 必须与信封一致')
         }
         const dup = get<{ seq: number }>(
-          `SELECT seq FROM events WHERE type = 'supervisor.wake_started' AND task_id = ? LIMIT 1`,
+          `SELECT seq FROM events WHERE type = 'supervisor.wake_started' AND task_id = ?
+             AND seq < ? LIMIT 1`,
           draft.task_id ?? null,
+          before,
         )
         if (dup) {
           return fail('failure', 'duplicate_wake', '该任务已记录为唤醒任务', { seq: dup.seq })
@@ -884,8 +941,9 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         const max = get<{ g: number | null }>(
           `SELECT MAX(json_extract(payload_json, '$.generation')) AS g FROM events
-           WHERE type = 'supervisor.wake_started' AND workspace = ?`,
+           WHERE type = 'supervisor.wake_started' AND workspace = ? AND seq < ?`,
           draft.workspace ?? null,
+          before,
         )?.g
         if (max != null && p.generation <= max) {
           return fail(
@@ -1006,7 +1064,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
   function appendMany(drafts: readonly EventInput[], o: AppendOptions): Result<LedgerEvent[]> {
     if (drafts.length === 0) return ok([])
     const ts = iso()
-    const result = inTransaction(() => drafts.map((d) => writeOne({ ...d, actor: o.actor }, ts)))
+    const result = inTransaction(() => {
+      if (o.check) {
+        const checked = o.check()
+        if (!checked.ok) throw new Abort(checked)
+      }
+      return drafts.map((d) => writeOne({ ...d, actor: o.actor }, ts))
+    })
     if (result.ok) notify(result.data)
     return result
   }

@@ -24,10 +24,10 @@
 ## 3. 中枢：唤醒调度器
 
 - [x] 3.1 识别唤醒事件（D3），包括 `blocked` 原因过滤与"同一任务同一原因只一次"；排除唤醒任务自身
-- [ ] 3.2 workspace × origin 三条队列（instruction、autonomous、reply）、instruction 优先、每次唤醒递增的代数与幂等键；队列由账本投影；重启恢复测试；只允许一个 `kind: supervisor` 角色；第三条 reply 队列：可与一个普通唤醒并行、失败不重试直接转交、不暂停、无 `--release`（G10 已完成：三条队列与账本投影、instruction 优先、代数与幂等键、重启恢复、唯一 supervisor 角色核对；reply 队列可并行、开始前按 `activeDelegation` 剔除失效委托、失败不重试不暂停、无 `--release`；失败或配额用尽时的转交属于 3.5，调度器只留 `onReplyUnavailable` 钩子）
+- [x] 3.2 workspace × origin 三条队列（instruction、autonomous、reply）、instruction 优先、每次唤醒递增的代数与幂等键；队列由账本投影；重启恢复测试；只允许一个 `kind: supervisor` 角色；第三条 reply 队列：可与一个普通唤醒并行、失败不重试直接转交、不暂停、无 `--release`（G10 已完成：三条队列与账本投影、instruction 优先、代数与幂等键、重启恢复、唯一 supervisor 角色核对；reply 队列可并行、开始前按 `activeDelegation` 剔除失效委托、失败不重试不暂停、无 `--release`；失败或配额用尽时的转交属于 3.5，调度器只留 `onReplyUnavailable` 钩子）（G12 补齐：reply 唤醒失败 `wake_failed`、结束仍未回复 `wake_ended`、卡住与配额用尽 `wake_unavailable` 的转交，见 `packages/hub/src/supervisor/delegation.ts`）
 - [x] 3.3 每日唤醒上限（总数与 autonomous 分别计）与"已达上限"条目；失败重试、Interrupt 条目、队列暂停与指数退避
 - [x] 3.4 `flow ask`、`flow supervisor wake [--release <queue>]|status`（user-only 路由）；Telegram `/ask` 返回唤醒编号、排队说明或未启用
-- [ ] 3.5 代回复调度（D15）：委托判定（question；`lease_held` 且 `decision_id` 绑定本任务、晚于上次离开 blocked、请求一致的 `supervisor` 档位审批；排除唤醒、merge、审查任务与 `node_lost` 遗留卡住）；reply 队列（不合并、开始前剔除失效事件、单独配额）；`reply_only_wake` 限制；条目不推送；转交（超时、唤醒不可用或 blocked 时立即、唤醒失败或结束、离开该次卡住时隐式失效（`activeDelegation`，不写事件）、用户忽略、用户回复同次追加结束委托）；竞态测试（用户先回复、supervisor 先回复、超时与回复并发）与重启恢复；中枢侧对 `no_delegate` 做独立兜底：同一 running 区间内出现过被拒收（dropped）的 supervisor 批准，之后的卡住一律不委托（不只依赖节点上报的 `no_delegate`）；没有 `command` 的请求（`blocked.request.command` 缺失）一律不委托
+- [x] 3.5 代回复调度（D15）：委托判定（question；`lease_held` 且 `decision_id` 绑定本任务、晚于上次离开 blocked、请求一致的 `supervisor` 档位审批；排除唤醒、merge、审查任务与 `node_lost` 遗留卡住）；reply 队列（不合并、开始前剔除失效事件、单独配额）；`reply_only_wake` 限制；条目不推送；转交（超时、唤醒不可用或 blocked 时立即、唤醒失败或结束、离开该次卡住时隐式失效（`activeDelegation`，不写事件）、用户忽略、用户回复同次追加结束委托）；竞态测试（用户先回复、supervisor 先回复、超时与回复并发）与重启恢复；中枢侧对 `no_delegate` 做独立兜底：同一 running 区间内出现过被拒收（dropped）的 supervisor 批准，之后的卡住一律不委托（不只依赖节点上报的 `no_delegate`）；没有 `command` 的请求（`blocked.request.command` 缺失）一律不委托
 
 ## 4. 操作与写入
 
@@ -39,7 +39,7 @@
 - [x] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；（Telegram 的 Web 链接按审查决定改为注明“Web 页面仅本机可用”，外部访问见 4.10）接受时写决策条目并在合同 context 引用；接受提案建任务时不能借 user 身份跳过 verify 判定：以 hub 身份按 D5 与 verify 规则照常判定，或把 verify 命令完整展示给用户确认后再建
 - [x] 4.7 决策回看：每日扫描的内部规则、补发去重、无 workspace 时 Digest；`decision_review` 窄例外（只追加回看一节、只改 status 与 last_verified、只限关联决策、由中枢代写）
 - [ ] 4.8 `pr_merge_request`：资格核对（D10 第 4 步，且 `review_task` 必须是该 PR 最新一次可信审查——用 core 的 `latestTrustedReview`，pr-merge 执行器合并前同样核对；merger 合同填 `inputs.merge = {pr, review_task}`，`timeout_s` 不小于 2400）；按 `auto_merge` 建 merger 任务或生成 `merge_request` 条目；merger 由 hub 创建、`parent` 为审查任务、origin 取自 PR 的 dev 任务
-- [ ] 4.9 `task_respond`（只限 `kind: supervisor` 会话，经中枢，核对放在 store 同一事务）：调用方是被分配该委托、持活动租约的唤醒任务；workspace、卡住序号、委托状态、无待送达回复与决定类型的核对；写 `task.replied`（actor supervisor）并送达节点；`escalate`；加入 MCP 自动放行清单；每日摘要列出代回复；`task_reply` 对 supervisor 仍返回 `user_only` 的测试
+- [x] 4.9 `task_respond`（只限 `kind: supervisor` 会话，经中枢，核对放在 store 同一事务）：调用方是被分配该委托、持活动租约的唤醒任务；workspace、卡住序号、委托状态、无待送达回复与决定类型的核对；写 `task.replied`（actor supervisor）并送达节点；`escalate`；加入 MCP 自动放行清单；每日摘要列出代回复；`task_reply` 对 supervisor 仍返回 `user_only` 的测试
 - [ ] 4.10 从手机访问 Web 页面（后续任务，需用户先决定对外暴露的安全前提）：可选的 `ui.public_url`、Web 端接受对应的 Host / Origin 与鉴权，渠道消息据此附条目链接（例如任务提案改目标后接受）
 
 ## 5. 执行器与节点

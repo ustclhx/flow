@@ -106,6 +106,9 @@ export const replyEscalationReason = z.enum(REPLY_ESCALATION_REASONS).meta({
     'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复',
 })
 
+/** supervisor 代回复（task_respond）的理由上限。 */
+export const REPLY_REASON_MAX = 2000
+
 /** 可委托给 supervisor 的卡住原因（D15）。 */
 export const DELEGABLE_BLOCKED_REASONS = ['question', 'awaiting_approval'] as const
 export const delegableBlockedReason = z.enum(DELEGABLE_BLOCKED_REASONS)
@@ -237,10 +240,18 @@ export const eventPayloads = {
       kind: replyKind,
       via: replyVia.optional(),
       text: z.string().min(1).max(16_384).optional().meta({ description: '回复文字或拒绝理由' }),
+      reason: z.string().min(1).max(REPLY_REASON_MAX).optional().meta({
+        description:
+          'supervisor 代回复时给出的理由（D15，只用于 via: supervisor）；只进用户可见的每日摘要，不进简报',
+      }),
     })
     .refine((p) => p.kind !== 'text' || p.text !== undefined, {
       message: '文字回复必须带 text',
       path: ['text'],
+    })
+    .refine((p) => p.reason === undefined || p.via === 'supervisor', {
+      message: '只有 supervisor 代回复（via: supervisor）可以带 reason',
+      path: ['reason'],
     }),
   'task.requeued_with_reply': z.strictObject({
     reply_id: replyId,

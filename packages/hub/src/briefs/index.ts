@@ -24,8 +24,8 @@ import type { LedgerStore } from '../ledger/store.ts'
  * - `GET /v1/briefs/context`：`ws_brief` 的中枢部分——未结束的任务、未关闭的收件箱条目，以及由账本
  *   确定性生成的代回复记录（只含任务 id、决定、时间与回答长度）。回答原文由 reply 唤醒中的 supervisor
  *   写出，若进入简报就会进入后续（有建任务权限的）唤醒的上下文，违反 D15 "reply 唤醒不能写入会进入后续
- *   上下文的内容"，因此不收录；原文只进用户可见的每日摘要（TODO(4.9 / 每日摘要)：摘要直接读
- *   `task.replied` 的 text，不经这里）。
+ *   上下文的内容"，因此不收录；原文只进用户可见的每日摘要（`inbox/pusher.ts` 直接读
+ *   `task.replied` 的 text 与 reason，不经这里）。
  */
 
 /** supervisor 调用方的绑定信息（design D6：由中枢按唤醒绑定 token 认定）。 */

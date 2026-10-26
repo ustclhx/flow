@@ -91,13 +91,33 @@ export async function actOnInbox(
   const { action, text } = input
   const via = input.via ?? 'cli'
   if (action === 'dismiss') {
-    const result = ledger.append(
-      {
-        type: 'inbox.item_closed',
-        ...(item.task_id ? { task_id: item.task_id } : {}),
-        ...(item.workspace ? { workspace: item.workspace } : {}),
-        payload: { item_id: item.id, reason: 'dismissed', cause_actor: actor, via },
-      },
+    // D15：用户忽略仍委托给 supervisor 的卡住条目即结束委托（同一次追加写 user_dismissed，之后不再推送）。
+    const delegation =
+      actor === 'user' && item.source === 'task' && item.task_id !== null
+        ? ledger.activeDelegation(item.task_id)
+        : null
+    const result = ledger.appendMany(
+      [
+        ...(delegation &&
+        item.task_id &&
+        item.workspace &&
+        item.id === `blk.${delegation.block_seq}`
+          ? [
+              {
+                type: 'task.reply_escalated' as const,
+                task_id: item.task_id,
+                workspace: item.workspace,
+                payload: { reason: 'user_dismissed' as const, block_seq: delegation.block_seq },
+              },
+            ]
+          : []),
+        {
+          type: 'inbox.item_closed',
+          ...(item.task_id ? { task_id: item.task_id } : {}),
+          ...(item.workspace ? { workspace: item.workspace } : {}),
+          payload: { item_id: item.id, reason: 'dismissed', cause_actor: actor, via },
+        },
+      ],
       { actor },
     )
     if (!result.ok) return result
