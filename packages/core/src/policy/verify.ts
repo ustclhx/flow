@@ -37,15 +37,51 @@ export interface VerifyVerdict {
 }
 
 /**
- * 参数中的路径（以 `/`、`~` 开头或含 `..` 的词；`--x=<值>` 的值同样检查）：验收命令可借它们读写或加载
- * 仓库外的文件（`pnpm test --preload=/tmp/x.js`、`pnpm test ../../other`），一律不放行。
+ * 相对路径段的形态：每个 `/` 分隔段都以字母数字或 `_` 开头和结尾，中间只含字母数字与 `_ . + -`
+ * （段尾不能是 `-`、`+`、`.`，挡住 `a-/tmp`、`a+/tmp` 这类在某些工具里会被拆开的写法）。
+ * 因此不能以 `/` 开头、不能有空段（`a//b`）或 `.` 开头的段（`a/./b`、`.hidden`），不能含 `:`、`@`、`~`、`%`、
+ * 空白、`,`、`=` 等字符；另外不能含 `..`。
  */
-export function verifyPathArgument(cmd: readonly string[]): string | undefined {
-  return cmd.find((word) =>
-    [word, word.includes('=') ? word.slice(word.indexOf('=') + 1) : ''].some(
-      (w) => w.startsWith('/') || w.startsWith('~') || w.includes('..'),
-    ),
-  )
+export const VERIFY_PATH_RE =
+  /^[A-Za-z0-9_](?:[A-Za-z0-9_.+-]*[A-Za-z0-9_])?(?:\/[A-Za-z0-9_](?:[A-Za-z0-9_.+-]*[A-Za-z0-9_])?)*$/
+/** 选项名：点分隔的段（`--coverage.enabled`），每段以字母数字开头、只含字母数字与 `-`。 */
+const OPTION_NAME = '[A-Za-z0-9][A-Za-z0-9-]*(?:\\.[A-Za-z0-9][A-Za-z0-9-]*)*'
+/** 不带值的选项：`-u`、`-rfoo`、`--fix`、`--coverage.enabled`（值不能直接拼在后面，例如 `-r/tmp/x.js`）。 */
+export const VERIFY_OPTION_RE = new RegExp(`^(?:-[A-Za-z0-9][A-Za-z0-9-]*|--${OPTION_NAME})$`)
+/** `--name=值`：值按普通词校验。 */
+const VERIFY_OPTION_VALUE_RE = new RegExp(`^--${OPTION_NAME}=(.*)$`, 's')
+
+/** 一个相对路径：允许开头的 `./`，去掉后按 VERIFY_PATH_RE 校验，且不含 `..`。 */
+const relativePath = (part: string) => {
+  const rest = part.startsWith('./') ? part.slice(2) : part
+  return VERIFY_PATH_RE.test(rest) && !rest.includes('..')
+}
+
+/**
+ * 普通词（可执行文件、前缀词、位置参数、`--name=` 的值）：先按 `,` 与 `=` 切段，每段都必须是相对路径。
+ * 很多工具会按逗号拆值（mocha `--require=a,/tmp/x.js`），也会把 `k=v` 的值当路径，所以每段单独校验。
+ */
+export function verifyPlainWord(word: string): boolean {
+  return word.split(/[,=]/).every(relativePath)
+}
+
+/** 单个词是否在白名单内。 */
+export function verifyWordAllowed(word: string): boolean {
+  // 单独的 `--`：参数分隔符（`pnpm test -- --watch=false`），其后的词照样逐个校验。
+  if (word === '--') return true
+  if (VERIFY_OPTION_RE.test(word)) return true
+  const withValue = VERIFY_OPTION_VALUE_RE.exec(word)
+  if (withValue) return verifyPlainWord(withValue[1] ?? '')
+  return verifyPlainWord(word)
+}
+
+/**
+ * 第一个不符合白名单的词；全部符合时为 undefined。选项与它的值分成两个词写时（`--reporter ./x.js`）
+ * 两个词分别校验。词法检查拦不住仓库内指向仓库外的符号链接（例如 `src/link-to-outside`），
+ * 也拦不住引用仓库内相对路径执行代码（`--reporter=x.js`），这些是已接受的风险（design D15）。
+ */
+export function verifyRejectedWord(cmd: readonly string[]): string | undefined {
+  return cmd.find((word) => !verifyWordAllowed(word))
 }
 
 /** 逐条判定；`allowed` 只在 auto / auto-report 时为 true。 */
@@ -59,9 +95,9 @@ export function decideVerifySteps(
     const command = verifyCommandText(step.cmd)
     const actions = classifyAction({ tool: VERIFY_TOOL, command }, undefined, opts)
     const { level } = decide(rules, { scope, actions, command })
-    const pathArg = verifyPathArgument(step.cmd)
-    if (pathArg !== undefined) {
-      return { index, command, level, allowed: false, reason: `参数含路径 ${pathArg}` }
+    const rejected = verifyRejectedWord(step.cmd)
+    if (rejected !== undefined) {
+      return { index, command, level, allowed: false, reason: `参数不在白名单内：${rejected}` }
     }
     return { index, command, level, allowed: level === 'auto' || level === 'auto-report' }
   })
