@@ -1221,3 +1221,162 @@ test('SDK 会话覆盖继承的 FLOW_ACTOR，重新过滤 token；user 角色不
     }
   }
 })
+
+describe('读边界 read_scope: cwd', () => {
+  test('PreToolUse 覆盖全部工具：越界与 Bash 拒绝、路径改写、与 writable_paths 同时生效、Flow MCP 按来源豁免', async () => {
+    const temp = realpathSync(mkdtempSync(join(tmpdir(), 'flow-read-scope-sdk-')))
+    const repo = join(temp, 'repo')
+    const priv = join(temp, 'private')
+    const home = join(temp, 'flow-home')
+    mkdirSync(join(repo, 'docs'), { recursive: true })
+    mkdirSync(priv)
+    mkdirSync(join(home, 'state'), { recursive: true })
+    writeFileSync(join(repo, 'README.md'), '说明')
+    writeFileSync(join(priv, 'pr.diff'), 'diff')
+    writeFileSync(join(home, 'state', 'hub.token'), 'placeholder')
+    try {
+      const { query, state } = mockSdk(async function* (io) {
+        await io.nextUser()
+        const pre = io.options.hooks?.PreToolUse?.[0]?.hooks[0]
+        if (!pre) throw new Error('缺少 PreToolUse hook')
+        expect(io.options.hooks?.PreToolUse?.[0]).not.toHaveProperty('matcher')
+        const opts = { signal: new AbortController().signal }
+        const call = (
+          tool_name: string,
+          tool_input: unknown,
+          extra: Record<string, unknown> = {},
+        ) =>
+          pre(
+            {
+              session_id: SID,
+              transcript_path: '',
+              cwd: repo,
+              hook_event_name: 'PreToolUse',
+              tool_name,
+              tool_input,
+              tool_use_id: 'tu',
+              ...extra,
+            },
+            'tu',
+            opts,
+          )
+        type Out = {
+          hookSpecificOutput?: {
+            permissionDecision?: string
+            updatedInput?: Record<string, unknown>
+          }
+        }
+        const decision = (r: unknown) => (r as Out).hookSpecificOutput?.permissionDecision
+        const updated = (r: unknown) => (r as Out).hookSpecificOutput?.updatedInput
+        // Spec 场景：读取中枢 token、用 Glob 越界。
+        for (const [tool, input] of [
+          ['Read', { file_path: join(home, 'state/hub.token') }],
+          ['Read', { file_path: '~/flow-home/state/hub.token' }],
+          ['Glob', { pattern: '/Users/x/.ssh/*' }],
+          ['Glob', { pattern: '*', path: '~' }],
+          ['Bash', { command: 'cat ~/.ssh/id_rsa' }],
+          ['WebFetch', { url: 'https://example.com', prompt: 'x' }],
+          ['FutureRead', { source_path: 'README.md' }],
+          ['Write', { file_path: join(temp, 'x.md'), content: '' }],
+          ['Write', { file_path: 'src/a.ts', content: '' }],
+        ] as const)
+          expect(decision(await call(tool, input))).toBe('deny')
+        expect(decision(await call('Read', { file_path: 'README.md' }, { cwd: temp }))).toBe('deny')
+        // 检查出错（这里是读取输入时抛错）按拒绝处理。
+        const hostile = new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error('boom')
+            },
+          },
+        )
+        expect(decision(await call('Read', hostile))).toBe('deny')
+        // 写白名单内写入：放行，路径为真实绝对路径。
+        const w = await call('Write', { file_path: 'docs/r.md', content: '' })
+        expect(decision(w)).toBe('allow')
+        expect(updated(w)?.file_path).toBe(join(repo, 'docs/r.md'))
+        // 读边界通过时不作决定，只改写输入，交还 SDK 权限流程。
+        const r = await call('Read', { file_path: 'README.md' })
+        expect(decision(r)).toBeUndefined()
+        expect(updated(r)).toEqual({ file_path: join(repo, 'README.md') })
+        expect(updated(await call('Read', { file_path: join(priv, 'pr.diff') }))?.file_path).toBe(
+          join(priv, 'pr.diff'),
+        )
+        expect(updated(await call('Grep', { pattern: 'x' }))).toEqual({
+          pattern: 'x',
+          path: repo,
+          glob: '!.*',
+        })
+        // Flow MCP：名称与来源都对得上才豁免。
+        const token = { path: join(home, 'state/hub.token') }
+        expect(
+          await call('mcp__flow__kb_get', token, {
+            mcp_server: { name: 'flow', source: 'dynamic' },
+          }),
+        ).toEqual({})
+        expect(decision(await call('mcp__flow__kb_get', token))).toBe('deny')
+        expect(
+          decision(
+            await call('mcp__flow__kb_get', token, {
+              mcp_server: { name: 'flow', source: 'project' },
+            }),
+          ),
+        ).toBe('deny')
+        // canUseTool 同样兜底拒绝；缺少 mcpServer 的 Flow 工具也不豁免。
+        expect(await io.ask('Read', { file_path: join(home, 'state/hub.token') })).toMatchObject({
+          behavior: 'deny',
+        })
+        expect(await io.ask('mcp__flow__kb_get', token)).toMatchObject({ behavior: 'deny' })
+        yield result()
+      })
+      const ex = createClaudeSdkExecutor({
+        home,
+        query,
+        resolveRole: roleResolver(
+          reviewer({
+            allowedTools: ['Read', 'Glob', 'Grep'],
+            disallowedTools: ['NotebookEdit'],
+            read_scope: 'cwd',
+            writable_paths: ['docs/**'],
+          }),
+        ),
+      })
+      const r = await ex.run(contract(), ctx({ cwd: repo, readScope: { privateDir: priv } })).done
+      expect(r.ok && r.data.outcome).toBe('done')
+      expect(state.calls[0]?.hooks?.PreToolUse).toHaveLength(1)
+      expect(state.calls[0]?.env).toMatchObject({
+        CLAUDE_CODE_GLOB_HIDDEN: 'false',
+        CLAUDE_CODE_GLOB_NO_IGNORE: 'false',
+      })
+    } finally {
+      rmSync(temp, { recursive: true, force: true })
+    }
+  })
+
+  test('只设 read_scope 时也安装 PreToolUse；不设任何边界时不安装 hooks、不改 env；非法取值使任务 failed', async () => {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    for (const perms of [{ read_scope: 'cwd' }, {}]) {
+      const ex = createClaudeSdkExecutor({
+        home: '/nonexistent',
+        query,
+        resolveRole: roleResolver(reviewer(perms)),
+      })
+      const r = await ex.run(contract(), ctx()).done
+      expect(r.ok && r.data.outcome).toBe('done')
+    }
+    expect(state.calls[0]?.hooks?.PreToolUse).toHaveLength(1)
+    expect(state.calls[1]?.hooks).toBeUndefined()
+    expect(state.calls[1]?.env).not.toHaveProperty('CLAUDE_CODE_GLOB_HIDDEN')
+    const bad = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(reviewer({ read_scope: 'home' })),
+    })
+    const r = await bad.run(contract(), ctx()).done
+    expect(r.ok && r.data.outcome === 'failed' && r.data.result.reason).toBe('invalid_role')
+  })
+})

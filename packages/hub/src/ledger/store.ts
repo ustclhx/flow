@@ -805,7 +805,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       case 'supervisor.wake_started': {
         // 必须与唤醒任务的 task.created 在同一次 appendMany 中写入（D1：唤醒身份以本事件为准，
         // 不能留下"已建但没有 wake_started"的窗口）；这里要求任务创建后还没有其他任务事件。
-        // TODO(G3)：effectiveRoleKind 合入后校验任务角色的有效类别为 supervisor。
+        // TODO(3.2)：G3 的 effectiveRoleKind 已合入，但 store 不读角色配置；唤醒调度在 createTask
+        // 前用 findSupervisorRole / effectiveRoleKind 确认角色有效类别为 supervisor。
         const p = draft.payload
         if (p.task_id !== draft.task_id || p.workspace !== draft.workspace) {
           return invalidEvent('supervisor.wake_started 的 task_id、workspace 必须与信封一致')
