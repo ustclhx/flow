@@ -24,7 +24,7 @@ async function home() {
 
 /** 记录请求的假中枢：任何请求都返回一个 403 错误体（MCP 只需要把请求发出去）。 */
 async function recordingHub(h: string) {
-  const requests: { method: string; url: string; body: unknown }[] = []
+  const requests: { method: string; url: string; body: unknown; auth?: string }[] = []
   const server: Server = createServer((req, res) => {
     let text = ''
     req.on('data', (c) => {
@@ -34,6 +34,7 @@ async function recordingHub(h: string) {
       requests.push({
         method: req.method ?? '',
         url: req.url ?? '',
+        ...(req.headers.authorization ? { auth: req.headers.authorization } : {}),
         body: text ? JSON.parse(text) : null,
       })
       res.writeHead(403, { 'Content-Type': 'application/json' })
@@ -236,5 +237,34 @@ describe('reply 唤醒（--reply-only）', () => {
         'ws_resources',
       ].sort(),
     )
+  })
+})
+
+describe('FLOW_HUB_TOKEN_FILE（add-m1-supervisor D6）', () => {
+  test('优先于 FLOW_HUB_TOKEN 与 state/hub.token；文件不存在时失败，不回退到 user token', async () => {
+    const h = await home()
+    const requests = await recordingHub(h)
+    const file = join(h, '..', 'wake.token')
+    writeFileSync(file, `${'f'.repeat(43)}\n`, { mode: 0o600 })
+    const saved = { file: process.env.FLOW_HUB_TOKEN_FILE, token: process.env.FLOW_HUB_TOKEN }
+    try {
+      process.env.FLOW_HUB_TOKEN_FILE = file
+      process.env.FLOW_HUB_TOKEN = 'e'.repeat(43)
+      const client = await connect({ actor: 'supervisor', home: h })
+      await callJson(client, 'task_create', contract())
+      expect(requests.at(-1)?.auth).toBe(`Bearer ${'f'.repeat(43)}`)
+      rmSync(file)
+      const { doc } = await callJson(client, 'task_create', contract())
+      expect(doc).toMatchObject({ ok: false, error: { code: 'token_file_missing' } })
+      expect(requests).toHaveLength(1)
+    } finally {
+      for (const [k, v] of [
+        ['FLOW_HUB_TOKEN_FILE', saved.file],
+        ['FLOW_HUB_TOKEN', saved.token],
+      ] as const) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
   })
 })

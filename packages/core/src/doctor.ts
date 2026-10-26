@@ -573,14 +573,14 @@ function checkRoleKinds(roles: Role[]): DoctorCheck[] {
   }
   const supervisor = findSupervisorRole(roles)
   if (!supervisor.ok) {
-    const writable = supervisor.error.code === 'supervisor_role_writable'
+    const writable = supervisor.error.code === 'supervisor_role_not_read'
     checks.push({
       id: 'roles.supervisor',
       ok: false,
       severity: 'error',
       message: `${supervisor.error.message}；中枢不会唤醒 supervisor`,
       hint: writable
-        ? `supervisor 只应有 Read、Grep、Glob 与 Flow MCP（参考 flow init 生成的 supervisor.yaml）；${claudeReadHint}`
+        ? `supervisor 只应有 Read、Grep、Glob 与 Flow MCP，并设 read_scope: cwd（参考 flow init 生成的 supervisor.yaml）；${claudeReadHint}`
         : '只保留一个 kind: supervisor 角色',
     })
     if (!writable) return checks

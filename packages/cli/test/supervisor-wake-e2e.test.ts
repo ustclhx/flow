@@ -1,15 +1,25 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   defaultSupervisorConfig,
   flowPaths,
-  HUB_TOKEN_ENV,
+  HUB_TOKEN_FILE_ENV,
   initFlowHome,
   ok,
   type Role,
   type TaskView,
+  type WakeOrigin,
 } from '@flow/core'
 import {
   createHubApp,
@@ -28,6 +38,7 @@ import {
   createClaudeSdkExecutor,
   type RunningNode,
   startNode,
+  wakeTokenDir,
 } from '@flow/node'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -39,7 +50,7 @@ import { createPolicyRoutes } from '../../hub/src/policy/routes.ts'
  * 真实中枢路由（任务、策略、节点协议、唤醒绑定 token）经 HTTP 提供服务 + 真实节点 + claude-sdk 执行器
  * （SDK 的 `query` 换成桩，绝不调用真实的 Claude）。桩按 SDK 的方式先经 canUseTool 申请 `task_create`，
  * 放行后按执行器给出的 MCP 配置（命令、参数、环境）**真实启动** `flow mcp` 子进程并调用 `task_create`，
- * 子进程以注入的唤醒 token 访问中枢建出子任务。
+ * 子进程从 `FLOW_HUB_TOKEN_FILE` 读取唤醒 token 访问中枢建出子任务。
  */
 
 const MAIN = join(import.meta.dir, '..', 'src', 'main.ts')
@@ -47,7 +58,6 @@ const USER_TOKEN = 'u'.repeat(43)
 const WS = 'ws/demo'
 const RULE = '# - scope: supervisor\n#   action: task.create\n#   level: auto\n'
 
-const quiet = { info() {}, warn() {} }
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c()
@@ -60,7 +70,13 @@ const SUPERVISOR: Role = {
   kind: 'supervisor',
   executor: 'claude-sdk',
   prompt: '你是 supervisor。',
-  permissions: { setting_sources: [], read_scope: 'cwd' },
+  permissions: {
+    permissionMode: 'default',
+    setting_sources: [],
+    read_scope: 'cwd',
+    allowedTools: ['Read', 'Grep', 'Glob'],
+    disallowedTools: ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
+  },
 }
 
 const HUB_ROLES: RoleLookup = async (name) =>
@@ -77,17 +93,32 @@ const HUB_ROLES: RoleLookup = async (name) =>
         : null,
   )
 
+type Doc = { ok: boolean; data?: { task: TaskView }; error?: { code: string } }
+
 interface McpCall {
   args: string[]
   env: Record<string, string>
-  result?: { ok: boolean; data?: { task: TaskView }; error?: { code: string } }
+  /** 会话（Claude 进程）的 env。 */
+  sessionEnv: Record<string, string | undefined>
+  result?: Doc
+  /** 运行中 token 文件与目录的权限位。 */
+  fileMode?: number
+  dirMode?: number
+  /** reply 唤醒：绕过本地检查直接用 token 调中枢的结果。 */
+  direct?: Doc
 }
 
-/** SDK `query` 的桩：申请 task_create，放行后真实启动 flow mcp 子进程调用它。 */
-function stubQuery(repo: string, calls: McpCall[]): ClaudeQueryFn {
+/**
+ * SDK `query` 的桩。`approve: true` 时按 SDK 的方式先经 canUseTool 申请 task_create；
+ * 放行（或 reply 唤醒直接调用）后真实启动 flow mcp 子进程调用它。
+ */
+function stubQuery(repo: string, calls: McpCall[], hubUrl: () => string): ClaudeQueryFn {
   return ({ prompt, options }) => {
     const gen = (async function* () {
       await prompt[Symbol.asyncIterator]().next()
+      const reply = (options.mcpServers?.flow as { args?: string[] } | undefined)?.args?.includes(
+        '--reply-only',
+      )
       const input = {
         goal: '收集证据',
         workspace: WS,
@@ -95,15 +126,19 @@ function stubQuery(repo: string, calls: McpCall[]): ClaudeQueryFn {
         executor: 'codex-exec',
         cwd: repo,
       }
-      const canUseTool = options.canUseTool
-      if (!canUseTool) throw new Error('没有 canUseTool')
-      const decision = await canUseTool('mcp__flow__task_create', input, {
-        signal: options.abortController?.signal ?? new AbortController().signal,
-        toolUseID: 'tu-1',
-        requestId: 'rq-1',
-        mcpServer: { name: 'flow', source: 'dynamic' },
-      } as never)
-      if (decision?.behavior === 'allow') {
+      let allowed = reply === true
+      if (!reply) {
+        const canUseTool = options.canUseTool
+        if (!canUseTool) throw new Error('没有 canUseTool')
+        const decision = await canUseTool('mcp__flow__task_create', input, {
+          signal: options.abortController?.signal ?? new AbortController().signal,
+          toolUseID: 'tu-1',
+          requestId: 'rq-1',
+          mcpServer: { name: 'flow', source: 'dynamic' },
+        } as never)
+        allowed = decision?.behavior === 'allow'
+      }
+      if (allowed) {
         const flow = options.mcpServers?.flow as {
           command: string
           args: string[]
@@ -115,6 +150,14 @@ function stubQuery(repo: string, calls: McpCall[]): ClaudeQueryFn {
             (e): e is [string, string] => e[1] !== undefined,
           ),
         )
+        const tokenFile = flow.env[HUB_TOKEN_FILE_ENV] as string
+        const call: McpCall = {
+          args: flow.args,
+          env: flow.env,
+          sessionEnv: { ...options.env },
+          fileMode: statSync(tokenFile).mode & 0o777,
+          dirMode: statSync(dirname(tokenFile)).mode & 0o777,
+        }
         const transport = new StdioClientTransport({
           command: flow.command,
           args: flow.args,
@@ -123,15 +166,25 @@ function stubQuery(repo: string, calls: McpCall[]): ClaudeQueryFn {
         })
         const client = new Client({ name: 'stub-claude', version: '0.0.0' })
         await client.connect(transport)
-        const call: McpCall = { args: flow.args, env: flow.env }
         try {
-          const res = await client.callTool({
-            name: 'task_create',
-            arguments: decision.updatedInput ?? input,
-          })
+          const res = await client.callTool({ name: 'task_create', arguments: input })
           call.result = JSON.parse((res.content as { text: string }[])[0]?.text ?? '{}')
         } finally {
           await client.close()
+        }
+        if (reply) {
+          // 绕过 MCP 本地检查：直接以唤醒 token 调中枢，中枢同样拒绝。
+          const token = readFileSync(tokenFile, 'utf8').trim()
+          const res = await fetch(`${hubUrl()}/v1/tasks`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'X-Flow-Actor': 'supervisor',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ ...input, parent: undefined }),
+          })
+          call.direct = (await res.json()) as Doc
         }
         calls.push(call)
       }
@@ -163,7 +216,10 @@ function stubQuery(repo: string, calls: McpCall[]): ClaudeQueryFn {
   }
 }
 
-async function setup(policiesYaml: (template: string) => string) {
+async function setup(
+  policiesYaml: (template: string) => string,
+  origin: WakeOrigin = 'instruction',
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-sup-e2e-')))
   cleanups.push(() => rmSync(root, { recursive: true, force: true }))
   const home = join(root, 'home')
@@ -176,6 +232,10 @@ async function setup(policiesYaml: (template: string) => string) {
   writeFileSync(policiesFile, policiesYaml(readFileSync(policiesFile, 'utf8')))
   mkdirSync(paths.state, { recursive: true })
   writeFileSync(paths.hubToken, `${USER_TOKEN}\n`)
+  // 上次运行残留的唤醒 token 文件：节点启动时清理。
+  const stale = join(wakeTokenDir(home), 't-stale.token')
+  mkdirSync(dirname(stale), { recursive: true })
+  writeFileSync(stale, 'stale\n')
 
   const ledger: LedgerStore = await openLedger(':memory:')
   const wakeTokens = createWakeTokenAuthority({ ledger: () => ledger })
@@ -213,9 +273,14 @@ async function setup(policiesYaml: (template: string) => string) {
   writeFileSync(paths.hubConfig, `port: ${server.port}\n`)
 
   const calls: McpCall[] = []
+  const logs: string[] = []
+  const logger = {
+    info: (...a: unknown[]) => logs.push(JSON.stringify(a)),
+    warn: (...a: unknown[]) => logs.push(JSON.stringify(a)),
+  }
   const executor = createClaudeSdkExecutor({
     home,
-    query: stubQuery(repo, calls),
+    query: stubQuery(repo, calls, () => server.url),
     resolveRole: async (name) =>
       name === 'supervisor'
         ? ok(SUPERVISOR)
@@ -230,12 +295,13 @@ async function setup(policiesYaml: (template: string) => string) {
     executors: [executor],
     nodeId: 'n-e2e',
     hostname: 'e2e',
-    logger: quiet,
+    logger,
     waitS: 1,
     retryMs: 100,
     noProgressMinutes: () => undefined,
   })
   if (!started.ok) throw new Error(started.error.message)
+  expect(existsSync(stale)).toBe(false)
   const node: RunningNode = started.data
   cleanups.push(async () => {
     await node.stop()
@@ -247,23 +313,23 @@ async function setup(policiesYaml: (template: string) => string) {
   // 中枢以 hub 建唤醒任务（调度器由 G10 实现；这里直接写 task.created 与 supervisor.wake_started）。
   const created = await tasks.createTask(
     {
-      goal: '用户指令：拆任务',
+      goal: origin === 'reply' ? '代回复委托的卡住' : '用户指令：拆任务',
       workspace: WS,
       role: 'supervisor',
       executor: 'claude-sdk',
       cwd: repo,
       idempotency_key: `supervisor:${WS}:1`,
-      inputs: { wake: { origin: 'instruction', generation: 1, events: [] } },
+      inputs: { wake: { origin, generation: 1, events: [] } },
     },
     {
       actor: 'hub',
-      origin: 'instruction',
+      ...(origin === 'reply' ? {} : { origin }),
       withCreated: (id) => [
         {
           task_id: id,
           workspace: WS,
           type: 'supervisor.wake_started',
-          payload: { task_id: id, workspace: WS, origin: 'instruction', events: [], generation: 1 },
+          payload: { task_id: id, workspace: WS, origin, events: [], generation: 1 },
         },
       ],
     },
@@ -296,25 +362,45 @@ async function setup(policiesYaml: (template: string) => string) {
     })
     return (await res.json()) as { ok: boolean }
   }
-  return { ledger, wakeId, calls, until, reply }
+  return { home, ledger, wakeId, calls, logs, until, reply }
 }
 
-/** 唤醒结束后核对：经唤醒 token 建出的子任务、绑定参数，以及 token 没有进入账本。 */
-function checkChild(s: Awaited<ReturnType<typeof setup>>) {
+/** 唤醒结束后核对：绑定参数、token 只以文件交给 MCP，文件已删除，日志、结果、活动、账本都不含 token。 */
+function checkSecrecy(s: Awaited<ReturnType<typeof setup>>, extraArgs: string[] = []) {
   expect(s.calls).toHaveLength(1)
   const call = s.calls[0] as McpCall
-  expect(call.args.slice(-6)).toEqual([
+  expect(call.args.slice(-6 - extraArgs.length)).toEqual([
     '--actor',
     'supervisor',
     '--workspace',
     WS,
     '--task',
     s.wakeId,
+    ...extraArgs,
   ])
   expect(call.env.FLOW_WORKSPACE).toBe(WS)
   expect(call.env.FLOW_TASK_ID).toBe(s.wakeId)
-  const token = call.env[HUB_TOKEN_ENV] as string
-  expect(token.startsWith('fwk_')).toBe(true)
+  const tokenFile = call.env[HUB_TOKEN_FILE_ENV] as string
+  expect(tokenFile).toBe(join(wakeTokenDir(s.home), `${s.wakeId}.token`))
+  expect(call.fileMode).toBe(0o600)
+  expect(call.dirMode).toBe(0o700)
+  // 任务结束后文件已删除。
+  expect(existsSync(tokenFile)).toBe(false)
+  // argv、MCP env、会话 env 都不含 token 与 token 变量。
+  expect(JSON.stringify([call.args, call.env, call.sessionEnv])).not.toContain('fwk_')
+  expect(call.env).not.toHaveProperty('FLOW_HUB_TOKEN')
+  expect(call.sessionEnv).not.toHaveProperty('FLOW_HUB_TOKEN')
+  expect(call.sessionEnv).not.toHaveProperty(HUB_TOKEN_FILE_ENV)
+  // 节点日志、唤醒任务的结果与活动（账本事件）都不含 token。
+  expect(s.logs.join('\n')).not.toContain('fwk_')
+  const ledgerText = JSON.stringify([s.ledger.taskEvents(s.wakeId), s.ledger.getTask(s.wakeId)])
+  expect(ledgerText).not.toContain('fwk_')
+  return call
+}
+
+/** 经唤醒 token 建出的子任务。 */
+function checkChild(s: Awaited<ReturnType<typeof setup>>) {
+  const call = checkSecrecy(s)
   expect(call.result?.ok).toBe(true)
   const child = call.result?.data?.task as TaskView
   // 子任务由 supervisor（中枢按唤醒 token 认定）创建，parent 由 MCP 自动填为唤醒任务，origin 继承 instruction。
@@ -322,14 +408,7 @@ function checkChild(s: Awaited<ReturnType<typeof setup>>) {
   expect(child.contract.parent).toBe(s.wakeId)
   expect(child.origin).toBe('instruction')
   expect(s.ledger.getTask(child.id)?.workspace).toBe(WS)
-  // token 只在 MCP 进程环境中：不进账本（唤醒任务与子任务的全部事件、结果）。
-  const ledgerText = JSON.stringify([
-    s.ledger.taskEvents(s.wakeId),
-    s.ledger.taskEvents(child.id),
-    s.ledger.getTask(s.wakeId),
-  ])
-  expect(ledgerText).not.toContain(token)
-  expect(ledgerText).not.toContain('fwk_')
+  expect(JSON.stringify(s.ledger.taskEvents(child.id))).not.toContain('fwk_')
 }
 
 describe('supervisor 唤醒经 wake token 建子任务（2.6、4.1、5.3）', () => {
@@ -351,5 +430,13 @@ describe('supervisor 唤醒经 wake token 建子任务（2.6、4.1、5.3）', ()
     expect((await s.reply({ kind: 'approve' })).ok).toBe(true)
     await s.until(() => s.ledger.getTask(s.wakeId)?.status === 'done', 'done')
     checkChild(s)
+  }, 30_000)
+
+  test('reply 唤醒：MCP 本地以 --reply-only 拒绝 task_create，绕过本地直接调中枢也返回 reply_only_wake', async () => {
+    const s = await setup((t) => t, 'reply')
+    await s.until(() => s.ledger.getTask(s.wakeId)?.status === 'done', 'done')
+    const call = checkSecrecy(s, ['--reply-only'])
+    expect(call.result).toMatchObject({ ok: false, error: { code: 'reply_only_wake' } })
+    expect(call.direct).toMatchObject({ ok: false, error: { code: 'reply_only_wake' } })
   }, 30_000)
 })

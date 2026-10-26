@@ -326,8 +326,8 @@ export function effectiveRoleKind(role: Pick<Role, 'executor' | 'permissions' | 
 
 /**
  * 在角色集合中找唯一的 supervisor 角色（按有效类别）：没有返回 null；多于一个返回
- * `multiple_supervisor_roles`；它按配置推断为 write（有写工具、未禁用写工具或加载项目设置）返回
- * `supervisor_role_writable`。失败时中枢不唤醒 supervisor，doctor 报错。
+ * `multiple_supervisor_roles`；不满足 `supervisorRoleProblem`（必须是只读配置且设 `read_scope: cwd`）返回
+ * `supervisor_role_not_read`。失败时中枢不唤醒 supervisor，doctor 报错。
  */
 export function findSupervisorRole(roles: readonly Role[]): Result<Role | null> {
   const found = roles.filter((r) => effectiveRoleKind(r) === 'supervisor')
@@ -339,15 +339,38 @@ export function findSupervisorRole(roles: readonly Role[]): Result<Role | null> 
     )
   }
   const role = found[0]
-  if (role && inferRoleKind(role) !== 'read') {
+  const problem = role ? supervisorRoleProblem(role) : undefined
+  if (role && problem) {
     return fail(
       'failure',
-      'supervisor_role_writable',
-      `supervisor 角色 ${role.name} 的配置可以写文件或执行命令（writable_paths、写工具或 Bash 允许规则、宽松的权限模式、未禁用 ${CLAUDE_READ_REQUIRED_DISALLOWED.join('/')}，或 setting_sources 不是 []）`,
-      { role: role.name },
+      'supervisor_role_not_read',
+      `supervisor 角色 ${role.name} 不是只读配置：${problem}`,
+      { role: role.name, problem },
     )
   }
   return ok(role ?? null)
+}
+
+/**
+ * supervisor 角色必须是只读配置（add-m1-supervisor D6、D14，fail-closed）：执行器为 claude-sdk、
+ * 按配置推断的类别为 read（声明的 `kind: supervisor` 不放宽它）、`setting_sources` 显式为 `[]`、
+ * `read_scope` 为 `cwd`（会话读不到 `state/` 下的唤醒 token 文件与 `hub.token`）。
+ * 返回第一条不满足的原因；满足时返回 undefined。`findSupervisorRole`、doctor 与节点执行器
+ * （`failed(supervisor_role_not_read)`）共用。
+ */
+export function supervisorRoleProblem(
+  role: Pick<Role, 'executor' | 'permissions' | 'kind'>,
+): string | undefined {
+  if (role.executor !== 'claude-sdk')
+    return `执行器为 ${role.executor}，supervisor 只能用 claude-sdk`
+  const inferred = inferRoleKind(role)
+  if (inferred !== 'read')
+    return `按配置推断的类别为 ${inferred}（writable_paths、写工具或 Bash 允许规则、宽松的权限模式，或未禁用 ${CLAUDE_READ_REQUIRED_DISALLOWED.join('/')}），必须是 read`
+  const p = role.permissions ?? {}
+  const sources = stringList(p.setting_sources)
+  if (!sources || sources.length > 0) return 'permissions.setting_sources 必须显式写成 []'
+  if (p.read_scope !== 'cwd') return 'permissions.read_scope 必须是 cwd'
+  return undefined
 }
 
 /**

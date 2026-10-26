@@ -142,7 +142,9 @@ describe('启动', () => {
       worktreePath: string
     }
     expect(created.worktreePath).toBe(h?.worktree ?? '')
-    expect(created.command).toContain('exec env -u FLOW_HUB_TOKEN FLOW_ACTOR=dev codex')
+    expect(created.command).toContain(
+      'exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev codex',
+    )
     expect(created.command).toContain('--dangerously-bypass-approvals-and-sandbox')
     expect(created.command).toContain(`"$(cat ${specPath})"`)
     const statePath = join(h?.home ?? '', 'state/tasks/t-orca-1/orca.json')

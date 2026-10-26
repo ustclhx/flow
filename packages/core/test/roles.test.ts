@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { stringify } from 'yaml'
+import { parse, stringify } from 'yaml'
 import { exitCodeOf, type Result } from '../src/result.ts'
 import { DEFAULT_ROLE_FILES } from '../src/role-templates.ts'
 import {
@@ -14,6 +14,7 @@ import {
   loadRoles,
   type Role,
   roleSchema,
+  supervisorRoleProblem,
 } from '../src/roles.ts'
 import { jsonSchemas } from '../src/schema/index.ts'
 import { tempHome, writeText } from './helpers.ts'
@@ -504,7 +505,8 @@ describe('角色有效类别（D9）', () => {
   })
 
   test('findSupervisorRole：没有返回 null；唯一且只读返回该角色；多个或可写时报错', () => {
-    const sup = (name: string, permissions: Record<string, unknown> = readOnly) =>
+    const supRead = { ...readOnly, read_scope: 'cwd' }
+    const sup = (name: string, permissions: Record<string, unknown> = supRead) =>
       ({ ...of('claude-sdk', permissions, 'supervisor'), name }) as Role
     expect(data(findSupervisorRole([of('codex-orca')]))).toBeNull()
     expect(data(findSupervisorRole([of('codex-orca'), sup('supervisor')]))?.name).toBe('supervisor')
@@ -517,11 +519,30 @@ describe('角色有效类别（D9）', () => {
       { ...readOnly, writable_paths: ['docs/**'] },
       { ...readOnly, setting_sources: ['project'] },
       { setting_sources: [] },
+      // 只读但没有 read_scope（会话可以读 state/ 下的 token 文件）。
+      readOnly,
+      { ...supRead, setting_sources: undefined },
     ]) {
       expect(findSupervisorRole([sup('supervisor', permissions)])).toMatchObject({
         ok: false,
-        error: { code: 'supervisor_role_writable' },
+        error: { code: 'supervisor_role_not_read' },
       })
     }
+  })
+
+  test('supervisorRoleProblem：claude-sdk、推断为 read、setting_sources: []、read_scope: cwd', () => {
+    const supRead = { ...readOnly, read_scope: 'cwd' }
+    expect(supervisorRoleProblem(of('claude-sdk', supRead, 'supervisor'))).toBeUndefined()
+    expect(supervisorRoleProblem(of('codex-exec', {}, 'supervisor'))).toContain('claude-sdk')
+    expect(supervisorRoleProblem(of('claude-sdk', readOnly, 'supervisor'))).toContain('read_scope')
+    expect(
+      supervisorRoleProblem(of('claude-sdk', { ...supRead, read_scope: 'home' }, 'supervisor')),
+    ).toContain('read_scope')
+    expect(
+      supervisorRoleProblem(of('claude-sdk', { ...supRead, allowedTools: ['Bash'] }, 'supervisor')),
+    ).toContain('read')
+    // flow init 的 supervisor 模板满足要求。
+    const tpl = parse(DEFAULT_ROLE_FILES['supervisor.yaml'] ?? '') as Role
+    expect(supervisorRoleProblem(tpl)).toBeUndefined()
   })
 })

@@ -31,7 +31,9 @@ export {
   renderTaskPrompt,
   reviewOutputJsonSchema,
   STRUCTURED_OUTPUT_TOOL,
+  SUPERVISOR_MCP_AUTO_ALLOWED,
   summarizeToolInput,
+  supervisorSession,
 } from './claude-sdk.ts'
 export {
   createNodeHubClient,
@@ -190,3 +192,9 @@ export {
   reviewRef,
   reviewRoot,
 } from './review-prep.ts'
+export {
+  cleanWakeTokenDir,
+  removeWakeTokenFile,
+  wakeTokenDir,
+  writeWakeTokenFile,
+} from './wake-token.ts'

@@ -136,6 +136,8 @@ claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor -
 - 节点身份被信任：领到唤醒租约的节点获得该唤醒的 supervisor token（与节点本身就能以 `node:*` 身份执行任务的信任边界一致）。token 只存于中枢内存，中枢重启即失效。
 - 经中枢的写（建任务、提案、提问、合并请求、简报、决策回看）由中枢独立校验（D5、D8）。
 - `kb_journal` 仍在本地经写入层执行（只追加），**只有 MCP 绑定这一层检查**；风险是写错 workspace 的 journal，可接受。
+- 绑定的 supervisor 仍可以对其他 workspace 的条目提交 `kb_propose`（输入不含 workspace，本地与中枢都不按绑定拦截）：提案需要用户接受才生效，属于已接受风险。
+- 唤醒 token 不经 argv 或 env 传递：节点写入 `state/wake/<task>.token`（0700/0600），MCP 进程以 `FLOW_HUB_TOKEN_FILE` 读取，任务结束即删除（见 `docs/hub-auth.md`）。
 
 读边界：claude-sdk 新增权限字段 `read_scope: cwd`。设置后 PreToolUse 钩子（匹配全部工具，与 `writable_paths` 共用路径判定）只允许读合同工作目录与任务私有目录（见 D10 的 diff 文件）内的路径，拒绝 `.` 开头的路径段、`..`、符号链接越界。检查的字段包括 `file_path`、`path`、`notebook_path`，以及 Glob 的 `pattern`、Grep 的 `glob`（这两个不得是绝对路径、不得含 `..`）；输入中含其他路径类字段的非 MCP 工具一律拒绝。Flow MCP 不受影响。supervisor 与 pr-reviewer 模板都设 `read_scope: cwd`，防止读取 `state/hub.token`、密钥存储、`~/.config/gh`、`~/.ssh` 后经任务目标外传。
 
@@ -333,3 +335,4 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - `changes_requested` 后的修改任务复用原分支的方式，实现时以 codex-orca 现有能力为准。
 - 修改任务的推送是否限定到该 PR 的 head 分支（目前审查轮数只约束建任务，不约束修改任务推到哪里）：留作后续问题。
 - 其他 AI 身份借 parent 继承 instruction origin 的根治：要求建任务的调用方就是 parent 任务当前租约的执行者（例如执行器会话持有按租约签发的任务绑定 token），而不是任意持有绑定 token 的 AI；目前只限制 parent 未结束，残余风险写在 `docs/hub-auth.md`。
+- 唤醒 token 目前以文件交给 stdio 的 Flow MCP 子进程，同 uid 进程仍可读。以后可改为 Agent SDK 的进程内 MCP（`type: 'sdk'`，在节点进程内实现 Flow 工具），token 只留在节点内存中。

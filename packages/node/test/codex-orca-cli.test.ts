@@ -371,7 +371,7 @@ describe('启动 Codex 的命令', () => {
     expect(r).toEqual({
       ok: true,
       data:
-        "cd '/wt/t 1' && exec env -u FLOW_HUB_TOKEN FLOW_ACTOR=dev codex -m gpt-6.1-sol -c model_reasoning_effort=high " +
+        "cd '/wt/t 1' && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev codex -m gpt-6.1-sol -c model_reasoning_effort=high " +
         '-c service_tier=priority --dangerously-bypass-approvals-and-sandbox ' +
         '"$(cat /home/state/tasks/t-1/spec.md)"',
     })
@@ -385,7 +385,7 @@ describe('启动 Codex 的命令', () => {
       role: { name: 'dev', permissions: { approval: 'on-request', sandbox: 'workspace-write' } },
     })
     expect(r.ok && r.data).toBe(
-      'cd /wt && exec env -u FLOW_HUB_TOKEN FLOW_ACTOR=dev codex -a on-request -s workspace-write "$(cat /s.md)"',
+      'cd /wt && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev codex -a on-request -s workspace-write "$(cat /s.md)"',
     )
   })
 })
