@@ -143,6 +143,22 @@ export interface RunningNode {
 }
 
 export const JUMP_THRESHOLD_MS = 30_000
+/**
+ * 中枢的 `invalid_arguments` 是否因为某个字段（旧中枢的 strict 校验不认识它）：只看 `details`
+ * 中逐字段的问题是否提到该字段，其他原因的参数错误不当作"旧中枢"。
+ */
+export function rejectsField(error: { code: string; details?: unknown }, field: string): boolean {
+  if (error.code !== 'invalid_arguments' || !Array.isArray(error.details)) return false
+  const re = new RegExp(`(^|[^A-Za-z0-9_])${field}([^A-Za-z0-9_]|$)`)
+  return error.details.some((d) => {
+    if (!d || typeof d !== 'object') return false
+    // `field` 是 `formatZodIssues` 给出的点分路径；未知字段（unrecognized_keys）没有路径，只在 message 中。
+    const { message, field: at } = d as { message?: unknown; field?: unknown }
+    if (typeof at === 'string' && (at === field || at.startsWith(`${field}.`))) return true
+    return typeof message === 'string' && re.test(message)
+  })
+}
+
 /** 中枢拒绝 slots 后预留槽循环的重试间隔。 */
 export const SLOTS_RETRY_MS = 5 * 60_000
 const JUMP_CHECK_MS = 1_000
@@ -1320,7 +1336,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
         // 中枢丢失了注册（例如重建）：重新注册；多个循环同时发现时只重置一次。
         if (r.error.code === 'node_not_registered') {
           if (registration === current) registration = undefined
-        } else if (slots && r.error.code === 'invalid_arguments') {
+        } else if (slots && rejectsField(r.error, 'slots')) {
           // 旧中枢不认识 slots：只告警一次，长退避后再试（中枢升级后自动恢复）。
           if (!slotsRejected.has(kind)) {
             slotsRejected.add(kind)

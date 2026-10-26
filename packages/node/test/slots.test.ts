@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { TaskContractInput, WakeOrigin } from '@flow/core'
+import { rejectsField } from '../src/node.ts'
 import { type Bench, bench, fake, type Intercept } from './harness.ts'
 
 /**
@@ -162,8 +163,10 @@ describe('中枢不接受 slots（旧中枢）', () => {
         error: {
           kind: 'usage',
           code: 'invalid_arguments',
-          message: '领取请求不合法：未知字段 slots',
+          message: '领取请求不合法：Unrecognized key: "slots"',
           retryable: false,
+          // 与旧中枢 `parse` 的 details 相同：逐字段问题，未知字段没有 field，只在 message 中。
+          details: [{ code: 'invalid_field', message: 'Unrecognized key: "slots"' }],
         },
       },
       { status: 400 },
@@ -195,5 +198,27 @@ describe('中枢不接受 slots（旧中枢）', () => {
     const w2 = await wake(b, 'instruction')
     await b.until(w2, (t) => t.status === 'done', 10 * 60_000)
     expect(warns).toHaveLength(2)
+  })
+})
+
+describe('rejectsField：只有 details 提到 slots 才当作旧中枢', () => {
+  test.each([
+    [[{ code: 'invalid_field', message: 'Unrecognized key: "slots"' }], true],
+    [[{ code: 'invalid_field', field: 'slots.general', message: '字段 slots.general：类型错误' }], true],
+    [[{ code: 'invalid_field', field: 'wait_s', message: '字段 wait_s：类型错误' }], false],
+    [[{ code: 'invalid_field', message: 'Unrecognized key: "reserved_slots"' }], false],
+    [undefined, false],
+    ['slots', false],
+  ] as const)('%j → %p', (details, expected) => {
+    expect(rejectsField({ code: 'invalid_arguments', details }, 'slots')).toBe(expected)
+  })
+
+  test('错误码不是 invalid_arguments 时不当作旧中枢', () => {
+    expect(
+      rejectsField(
+        { code: 'node_not_registered', details: [{ message: 'Unrecognized key: "slots"' }] },
+        'slots',
+      ),
+    ).toBe(false)
   })
 })
