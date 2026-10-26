@@ -235,6 +235,8 @@ describe('任务视图', () => {
     lease: null,
     result: null,
     created_by: 'agent:supervisor',
+    origin: null,
+    branch: null,
     last_activity_at: null,
   }
   test('合法', () => expect(taskView.safeParse(view).success).toBe(true))

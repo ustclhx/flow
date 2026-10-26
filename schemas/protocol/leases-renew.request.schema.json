@@ -92,6 +92,22 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 512
+        },
+        "decision_id": {
+          "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "diff_stat": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并注明）"
+        },
+        "no_delegate": {
+          "description": "true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）",
+          "type": "boolean"
         }
       },
       "required": [

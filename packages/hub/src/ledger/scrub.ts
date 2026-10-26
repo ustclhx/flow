@@ -1,5 +1,6 @@
 import {
   clipText,
+  DIFF_STAT_MAX,
   type EventType,
   INBOX_BODY_MAX,
   INBOX_NOTE_MAX,
@@ -45,7 +46,11 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task.done': RESULT_TEXT,
   'task.failed': [...RESULT_TEXT, ['message']],
   'task.cancelled': [...RESULT_TEXT, ['reason']],
-  'task.blocked': [['message'], ['tail', '*']],
+  'task.blocked': [['message'], ['tail', '*'], ['diff_stat']],
+  'task.reply_escalated': [['note']],
+  'supervisor.answered': [['text']],
+  'task_proposal.created': [['reason']],
+  'task_proposal.rejected': [['note']],
   'task.unblocked': [['note']],
   'task.replied': [['text']],
   'task.requeued': [['note']],
@@ -62,6 +67,11 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
  * 保证脱敏后的载荷仍不超过 schema 的上限。未列出的字段由各自的协议 / 写入方限长。
  */
 export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string, number>>>> = {
+  'task.blocked': { diff_stat: DIFF_STAT_MAX },
+  'task.reply_escalated': { note: 2000 },
+  'supervisor.answered': { text: INBOX_BODY_MAX },
+  'task_proposal.created': { reason: 2000 },
+  'task_proposal.rejected': { note: 2000 },
   'inbox.item_created': { title: INBOX_TITLE_MAX, body: INBOX_BODY_MAX },
   'inbox.item_updated': { title: INBOX_TITLE_MAX, body: INBOX_BODY_MAX },
   'inbox.item_closed': { note: INBOX_NOTE_MAX },

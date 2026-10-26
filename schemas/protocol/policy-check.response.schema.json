@@ -231,6 +231,12 @@
             ],
             "additionalProperties": false
           }
+        },
+        "decision_id": {
+          "description": "本次判定的 id（对应 policy.decided 的 seq）；节点上报 supervisor 档位的卡住时带上。dry_run 不入账，没有该字段",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
         }
       },
       "required": [

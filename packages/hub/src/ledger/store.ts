@@ -226,6 +226,8 @@ interface TaskRow {
   blocked_json: string | null
   result_json: string | null
   created_by: string
+  origin: TaskView['origin']
+  branch: string | null
   last_activity_at: string | null
   lease_id: string | null
   lease_node_id: string | null
@@ -373,6 +375,8 @@ function rowToTask(r: TaskRow): TaskView {
         : { lease_id: r.lease_id, node_id: r.lease_node_id, expires_at: r.lease_expires_at },
     result: r.result_json === null ? null : JSON.parse(r.result_json),
     created_by: r.created_by,
+    origin: r.origin ?? null,
+    branch: r.branch ?? null,
     last_activity_at: r.last_activity_at,
   }
 }
@@ -578,6 +582,70 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           return fail('failure', 'item_closed', `收件箱条目 ${draft.payload.item_id} 已关闭`, {
             item_id: draft.payload.item_id,
           })
+        }
+        return ok(null)
+      }
+      case 'task.reply_delegated': {
+        if (draft.payload.task_id !== draft.task_id) {
+          return invalidEvent('task.reply_delegated 的 task_id 必须与信封一致')
+        }
+        // block_seq 必须是该任务当前这次卡住（最近一次 task.blocked）的 seq。
+        const last = get<{ seq: number; payload_json: string }>(
+          `SELECT seq, payload_json FROM events WHERE task_id = ? AND type = 'task.blocked'
+           ORDER BY seq DESC LIMIT 1`,
+          draft.task_id ?? null,
+        )
+        if (!last || last.seq !== draft.payload.block_seq) {
+          return invalidEvent(`block_seq ${draft.payload.block_seq} 不是该任务当前的卡住`)
+        }
+        const reason = (JSON.parse(last.payload_json) as { reason?: string }).reason
+        if (reason !== draft.payload.kind) {
+          return invalidEvent(`委托的 kind ${draft.payload.kind} 与卡住原因 ${reason} 不一致`)
+        }
+        return ok(null)
+      }
+      case 'task.branch_reported': {
+        // D15：只接受持有该任务活动租约的节点写入；每个任务只写一次、不可更改。
+        const lease = get<{ node_id: string }>(
+          "SELECT node_id FROM leases WHERE task_id = ? AND state = 'active'",
+          draft.task_id ?? null,
+        )
+        if (!lease || draft.actor !== `node:${lease.node_id}`) {
+          return fail(
+            'failure',
+            'invalid_lease_token',
+            '只有持有该任务活动租约的节点能上报任务分支',
+            { task_id: draft.task_id },
+          )
+        }
+        if (get('SELECT 1 FROM tasks WHERE id = ? AND branch IS NOT NULL', draft.task_id ?? null)) {
+          return fail('failure', 'invalid_transition', '任务分支已上报，不能更改', {
+            from: task?.status ?? null,
+            type: draft.type,
+          })
+        }
+        return ok(null)
+      }
+      case 'supervisor.wake_started': {
+        const p = draft.payload
+        if (p.task_id !== draft.task_id || p.workspace !== draft.workspace) {
+          return invalidEvent('supervisor.wake_started 的 task_id、workspace 必须与信封一致')
+        }
+        const dup = get<{ seq: number }>(
+          `SELECT seq FROM events WHERE type = 'supervisor.wake_started'
+             AND (task_id = ? OR (workspace = ? AND json_extract(payload_json, '$.generation') = ?))
+           LIMIT 1`,
+          draft.task_id ?? null,
+          draft.workspace ?? null,
+          p.generation,
+        )
+        if (dup) {
+          return fail(
+            'failure',
+            'duplicate_wake',
+            `该唤醒任务或 workspace 的第 ${p.generation} 代唤醒已记录`,
+            { seq: dup.seq },
+          )
         }
         return ok(null)
       }

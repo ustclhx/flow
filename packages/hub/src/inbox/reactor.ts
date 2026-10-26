@@ -247,7 +247,8 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
       ...closeTaskDrafts(task, reason, {
         seq: e.seq,
         actor: by ?? e.actor,
-        ...(via ? { via } : {}),
+        // supervisor 代回复不是收件箱渠道：关闭记录只留 cause_actor（supervisor），不写 via。
+        ...(via && via !== 'supervisor' ? { via } : {}),
       }),
     )
   }

@@ -51,7 +51,7 @@ export function createPolicyRoutes(deps: {
         policyCheckData,
       )
     }
-    const { task_id, tool, command, paths, dry_run = false } = parsed.data
+    const { task_id, tool, command, paths, dry_run = false, push_env_ok, gh_env_ok } = parsed.data
     if (dry_run && isNodeActor(c.get('actor'))) {
       return errorResponse(
         c,
@@ -95,12 +95,17 @@ export function createPolicyRoutes(deps: {
         policyCheckData,
       )
     }
+    // 节点上报的环境检查结果（D15）只随判定入账供审计；push_to / gh_scope 条件的判定由策略引擎接入。
+    const env = {
+      ...(push_env_ok === undefined ? {} : { push_env_ok }),
+      ...(gh_env_ok === undefined ? {} : { gh_env_ok }),
+    }
     const recorded = deps.ledger.append(
       {
         type: 'policy.decided',
         workspace: task.contract.workspace,
         task_id,
-        payload: { task_id, request: { ...request, actions }, ...decision },
+        payload: { task_id, request: { ...request, actions, ...env }, ...decision },
       },
       { actor: 'policy' },
     )
@@ -109,7 +114,11 @@ export function createPolicyRoutes(deps: {
     const { level, matched_rules, actions: details } = recorded.data.payload as typeof decision
     return respond(
       c,
-      { ok: true, data: { level, matched_rules, actions: details } },
+      // decision_id 即 policy.decided 的 seq：节点上报 supervisor 档位的卡住时带上（D15）。
+      {
+        ok: true,
+        data: { level, matched_rules, actions: details, decision_id: recorded.data.seq },
+      },
       policyCheckData,
     )
   })

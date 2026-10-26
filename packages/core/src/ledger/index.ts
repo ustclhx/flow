@@ -3,7 +3,7 @@ import { hubConfigSchema, nodeConfigSchema } from '../daemon/config.ts'
 import { schedulesConfigSchema } from '../daemon/schedules.ts'
 import { EVENT_TYPES, eventSchemas, ledgerEvent } from './events.ts'
 import { createTaskRequest, ENDPOINTS, errorBody, okBody } from './protocol.ts'
-import { activity, taskResult, taskStatus, taskView } from './task.ts'
+import { activity, reviewOutput, taskResult, taskStatus, taskView } from './task.ts'
 
 export * from './common.ts'
 export * from './events.ts'
@@ -25,6 +25,8 @@ export function ledgerSchemaEntries(): Record<string, SchemaEntry> {
     'tasks/task.schema.json': { schema: taskView, io: 'output' },
     'tasks/status.schema.json': { schema: taskStatus, io: 'output' },
     'tasks/activity.schema.json': { schema: activity, io: 'input' },
+    // 审查会话的结构化输出（SDK outputFormat: json_schema，add-m1-supervisor D10）。
+    'tasks/review-output.schema.json': { schema: reviewOutput, io: 'input' },
     'events/event.schema.json': { schema: ledgerEvent, io: 'output' },
     'protocol/error.schema.json': { schema: errorBody, io: 'output' },
     'config/hub.schema.json': { schema: hubConfigSchema, io: 'input' },

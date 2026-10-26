@@ -100,7 +100,9 @@ test('具体规则优先：合同 scope 决定 draft-approve，事件可查询�
     payload: {
       task_id: task.id,
       request: { tool: request.tool, command: request.command, actions: ['tool:Bash', 'git.push'] },
-      ...checked,
+      level: checked.level,
+      matched_rules: checked.matched_rules,
+      actions: checked.actions,
     },
   })
   // 客户端不能通过伪造 workspace / role 影响结果。
@@ -144,8 +146,9 @@ test('user dry_run：auto-report 只返回脱敏明细、不入账；false 入�
   expect(JSON.stringify(dry)).not.toContain(fake)
   expect(dry.matched_rules[0]?.rule.when?.command_prefix).toContain('[REDACTED:github-token]')
   expect(must(await user.showTask(task.id))).toEqual(before)
-  const recorded = must(await user.checkPolicy({ ...input, dry_run: false }))
+  const { decision_id, ...recorded } = must(await user.checkPolicy({ ...input, dry_run: false }))
   expect(recorded).toEqual(dry)
+  expect(decision_id).toBeGreaterThan(0)
   const after = must(await user.showTask(task.id))
   // auto-report 随后由收件箱反应器在任务上开一个 Digest 条目（inbox.*），这里只看策略审计事件。
   const audited = after.events.filter((e) => !e.type.startsWith('inbox.'))
@@ -287,4 +290,25 @@ test('不存在的任务返回 404，非法或超长请求返回 400；文件级
     errors: [{ code: 'invalid_config' }],
   })
   expect(must(await user.showTask(task.id)).events).toHaveLength(before)
+})
+
+test('policy/check 返回 decision_id（policy.decided 的 seq），记录节点上报的环境检查；dry_run 没有 decision_id', async () => {
+  const { user, task, request } = await setup([
+    { scope: 'ws/xuanxue-saas', action: 'git.push', level: 'draft-approve' },
+  ])
+  const checked = must(await user.checkPolicy({ ...request, push_env_ok: true, gh_env_ok: false }))
+  const shown = must(await user.showTask(task.id))
+  const decided = shown.events.at(-1)
+  expect(decided?.type).toBe('policy.decided')
+  expect(checked.decision_id).toBe(decided?.seq as number)
+  expect(decided?.payload).toMatchObject({ request: { push_env_ok: true, gh_env_ok: false } })
+  // 旧节点不带新字段时照常判定，请求里没有这两个键
+  const legacy = must(await user.checkPolicy(request))
+  const last = must(await user.showTask(task.id)).events.at(-1)
+  expect(legacy.decision_id).toBe(last?.seq as number)
+  expect((last?.payload as { request?: object } | undefined)?.request).not.toHaveProperty(
+    'push_env_ok',
+  )
+  const dry = must(await user.checkPolicy({ ...request, dry_run: true }))
+  expect(dry).not.toHaveProperty('decision_id')
 })

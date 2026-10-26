@@ -52,6 +52,8 @@ const view = {
   lease: null,
   result: null,
   created_by: 'user',
+  origin: null,
+  branch: null,
   last_activity_at: null,
 }
 
@@ -271,7 +273,7 @@ describe('守护进程配置', () => {
     })
     expect(await loadNodeConfig(home)).toEqual({
       ok: true,
-      data: { capabilities: [], concurrency: 1 },
+      data: { capabilities: [], concurrency: 1, reserved: { supervisor: 1, reply: 1 } },
     })
   })
 
@@ -298,6 +300,8 @@ describe('守护进程配置', () => {
     ['hub.yaml', 'lease_tll_s: 30\n', ''],
     ['node.yaml', 'capabilities: [Browser]\n', 'capabilities.0'],
     ['node.yaml', 'concurrency: 0\n', 'concurrency'],
+    ['node.yaml', 'reserved: { supervisor: -1 }\n', 'reserved.supervisor'],
+    ['node.yaml', 'reserved: { supervisr: 1 }\n', 'reserved'],
   ])('非法 %s：%s 错误带字段路径', async (file, content, field) => {
     const home = setup({ [file]: content })
     const r = file === 'hub.yaml' ? await loadHubConfig(home) : await loadNodeConfig(home)

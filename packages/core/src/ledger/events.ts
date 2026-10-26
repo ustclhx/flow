@@ -8,6 +8,7 @@ import {
   INBOX_NOTE_MAX,
   INBOX_PUSH_REASON_MAX,
   INBOX_TITLE_MAX,
+  INBOX_VIA,
   inboxAction,
   inboxCloseReason,
   inboxItemId,
@@ -17,16 +18,23 @@ import {
 } from '../inbox/schema.ts'
 import { policyDecisionSchema } from '../policy/decide.ts'
 import { fail, ok, type Result } from '../result.ts'
-import { workspaceRef } from '../schema/common.ts'
+import { dateString, workspaceRef } from '../schema/common.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import {
+  blockedDelegationShape,
   blockedReason,
   canTransition,
+  policyDecisionId,
+  prUrl,
   replyId,
   replyKind,
   type TaskStatus,
+  taskBranch,
   taskContract,
+  taskOrigin,
   taskResult,
+  wakeGeneration,
+  wakeOrigin,
 } from './task.ts'
 
 /**
@@ -66,6 +74,66 @@ export const executorInfo = z
   })
   .meta({ title: 'Executor info' })
 
+/**
+ * `task.replied` 的渠道：收件箱渠道之外多一个 `supervisor`（D15：supervisor 代用户回复）。
+ * 只用于回复事件，不扩大收件箱其他事件的 via。
+ */
+export const REPLY_VIA = [...INBOX_VIA, 'supervisor'] as const
+export type ReplyVia = (typeof REPLY_VIA)[number]
+export const replyVia = z.enum(REPLY_VIA).meta({
+  description: '回复发起的渠道；supervisor 表示 supervisor 代用户回复',
+})
+
+/** 代回复委托结束的原因（D15 "转交与竞态"）。 */
+export const REPLY_ESCALATION_REASONS = [
+  'supervisor',
+  'timeout',
+  'wake_unavailable',
+  'wake_failed',
+  'wake_ended',
+  'superseded',
+  'user_dismissed',
+  'user_replied',
+] as const
+export type ReplyEscalationReason = (typeof REPLY_ESCALATION_REASONS)[number]
+export const replyEscalationReason = z.enum(REPLY_ESCALATION_REASONS).meta({
+  description:
+    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；superseded 任务进入新的卡住；user_dismissed 用户忽略；user_replied 用户已回复',
+})
+
+/** 可委托给 supervisor 的卡住原因（D15）。 */
+export const DELEGABLE_BLOCKED_REASONS = ['question', 'awaiting_approval'] as const
+export const delegableBlockedReason = z.enum(DELEGABLE_BLOCKED_REASONS)
+
+/** 普通唤醒队列（`supervisor.release` 只能放行这两条；reply 队列不暂停、不放行）。 */
+export const SUPERVISOR_QUEUES = ['instruction', 'autonomous'] as const
+export const supervisorQueue = z.enum(SUPERVISOR_QUEUES)
+
+/** 任务提案 id：`tp-<随机串>`。 */
+export const taskProposalId = z
+  .string()
+  .regex(/^tp-[A-Za-z0-9_.-]{1,64}$/, '任务提案 id 形如 tp-<随机串>')
+  .meta({ description: '任务提案 id，由中枢在提交时分配' })
+
+/** brain 中决策条目的路径（相对 brain/），例如 `decisions/2026-10-26-cache.md`。 */
+export const decisionPath = z
+  .string()
+  .max(256)
+  .regex(/^decisions\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$/, '决策路径应形如 decisions/<名称>.md')
+  .meta({ description: '决策条目路径（相对 brain/）' })
+
+/** 任务提案附带的决策（D11）：接受时写入 brain/decisions/，到回看日期唤醒 supervisor 回看。 */
+export const taskProposalDecision = z
+  .strictObject({
+    title: z.string().trim().min(1).max(200),
+    expected_outcome: z.string().trim().min(1).max(2000),
+    metric: z.string().trim().min(1).max(2000),
+    review_date: dateString.meta({
+      description: '回看日期（YYYY-MM-DD），晚于当天且不超过 180 天',
+    }),
+  })
+  .meta({ title: 'Task proposal decision' })
+
 export const eventPayloads = {
   'policy.decided': policyDecisionSchema.extend({
     task_id: taskId,
@@ -74,9 +142,22 @@ export const eventPayloads = {
       actions: z.array(z.string().min(1)),
       command: z.string().max(2000).optional(),
       paths: z.array(z.string().max(2000)).max(200).optional(),
+      push_env_ok: z
+        .boolean()
+        .optional()
+        .meta({ description: '节点上报的推送环境检查结果（D15）；缺失视为不满足' }),
+      gh_env_ok: z
+        .boolean()
+        .optional()
+        .meta({ description: '节点上报的 gh 仓库解析检查结果（D15）；缺失视为不满足' }),
     }),
   }),
-  'task.created': z.strictObject({ contract: taskContract }),
+  'task.created': z.strictObject({
+    contract: taskContract,
+    origin: taskOrigin.optional().meta({
+      description: '中枢计算的来源（D2），创建时写入、之后不变；不在 supervisor 链上的任务省略',
+    }),
+  }),
   'task.started': z.strictObject({
     node_id: nodeId,
     lease_id: leaseId,
@@ -115,6 +196,7 @@ export const eventPayloads = {
       description:
         'node_lost 时节点掉线之前的卡住原因，例如 awaiting_approval（仍可 approve / deny）',
     }),
+    ...blockedDelegationShape,
   }),
   'task.unblocked': z.strictObject({
     note: z.string().optional().meta({ description: '解除卡住的说明，例如用户的答复摘要' }),
@@ -129,7 +211,7 @@ export const eventPayloads = {
     .strictObject({
       reply_id: replyId,
       kind: replyKind,
-      via: inboxVia.optional(),
+      via: replyVia.optional(),
       text: z.string().min(1).max(16_384).optional().meta({ description: '回复文字或拒绝理由' }),
     })
     .refine((p) => p.kind !== 'text' || p.text !== undefined, {
@@ -163,6 +245,33 @@ export const eventPayloads = {
     expired_at: timestamp,
     attempt: z.number().int().min(1),
   }),
+  /**
+   * 卡住委托给 supervisor 代回复（D15）。`block_seq` 是该次 `task.blocked` 的 seq；
+   * 委托期间条目不推送，到 `deadline` 仍未回复则转交用户。
+   */
+  'task.reply_delegated': z.strictObject({
+    task_id: taskId,
+    block_seq: z.number().int().min(1).meta({ description: '被委托的那次 task.blocked 的 seq' }),
+    kind: delegableBlockedReason.meta({ description: '卡住原因：question 或 awaiting_approval' }),
+    decision_id: policyDecisionId.optional(),
+    deadline: timestamp.meta({ description: '超过此时间仍未回复即转交用户（reply_timeout_s）' }),
+  }),
+  /** 代回复委托结束、转交用户（D15）；除 user_replied、user_dismissed 外按条目原级别推送。 */
+  'task.reply_escalated': z.strictObject({
+    reason: replyEscalationReason,
+    block_seq: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .meta({ description: '被结束的委托对应的 task.blocked seq' }),
+    note: z.string().max(2000).optional().meta({ description: '说明，例如 supervisor 转交的理由' }),
+  }),
+  /**
+   * 执行器创建的任务分支（D15，codex-orca 开始时上报）：只接受持有该任务活动租约的节点写入，
+   * 每个任务只写一次、不可更改。`when.push_to: task_branch` 以它为准。
+   */
+  'task.branch_reported': z.strictObject({ branch: taskBranch }),
   'lease.granted': z.strictObject({
     lease_id: leaseId,
     node_id: nodeId,
@@ -313,6 +422,69 @@ export const eventPayloads = {
     text: z.string().min(1).max(INBOX_BODY_MAX).meta({ description: '指令原文' }),
     via: inboxVia.meta({ description: '指令来自哪个渠道' }),
   }),
+  /**
+   * supervisor 唤醒开始（D1、D3）：中枢以 hub 身份创建唤醒任务后立即写入。
+   * **判断某任务是不是唤醒任务、它的 origin 是什么，都以这条事件为准**，不看角色名或 inputs。
+   * `events` 是这次唤醒合并的账本事件 seq。
+   */
+  'supervisor.wake_started': z.strictObject({
+    task_id: taskId.meta({ description: '唤醒任务 id' }),
+    workspace: workspaceRef,
+    origin: wakeOrigin,
+    events: z
+      .array(z.number().int().min(1))
+      .max(200)
+      .meta({ description: '这次唤醒合并的账本事件 seq（按顺序）' }),
+    generation: wakeGeneration,
+  }),
+  /** 用户回答了 supervisor 的提问（D11）：条目关闭为 answered，并唤醒 supervisor。 */
+  'supervisor.answered': z.strictObject({
+    item_id: inboxItemId,
+    text: z.string().min(1).max(INBOX_BODY_MAX).meta({ description: '答复原文或所选选项' }),
+    via: inboxVia.optional(),
+  }),
+  /** 用户手动放行一条普通唤醒队列（`flow supervisor wake <ws> --release <queue>`，D3）。 */
+  'supervisor.release': z.strictObject({ queue: supervisorQueue }),
+  /** supervisor 提交任务提案（D11）：`draft` 是接受后要建的任务合同。 */
+  'task_proposal.created': z.strictObject({
+    proposal_id: taskProposalId,
+    wake_task_id: taskId.meta({ description: '提交提案的唤醒任务' }),
+    draft: taskContract,
+    decision: taskProposalDecision.optional(),
+    reason: z.string().max(2000).optional().meta({ description: '提案理由' }),
+  }),
+  /** 用户接受任务提案：中枢以 user 身份建任务（origin instruction），有决策时写入 brain。 */
+  'task_proposal.accepted': z.strictObject({
+    proposal_id: taskProposalId,
+    task_id: taskId.meta({ description: '据此创建的任务' }),
+    goal: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .meta({ description: '用户在 Web 上修改后的目标；没有修改时省略' }),
+    decision_path: decisionPath.optional(),
+    via: inboxVia.optional(),
+  }),
+  'task_proposal.rejected': z.strictObject({
+    proposal_id: taskProposalId,
+    note: z.string().max(2000).optional(),
+    via: inboxVia.optional(),
+  }),
+  /** 决策到回看日期（D11）：同一决策只写一次，停机错过的在下一次扫描补发。 */
+  'decision.review_due': z.strictObject({
+    path: decisionPath,
+    review_date: dateString,
+    missed: z.boolean().default(false).meta({ description: '停机期间错过、恢复后补发' }),
+  }),
+  /** 用户批准了 supervisor 的合并请求（D10）：中枢随后以 hub 身份建 merger 任务。 */
+  'merge_request.approved': z.strictObject({
+    item_id: inboxItemId.optional().meta({ description: '合并请求的收件箱条目' }),
+    pr: prUrl,
+    review_task: taskId.meta({ description: '给出 approve 结论的审查任务' }),
+    approved_by: actor.meta({ description: '批准者' }),
+    via: inboxVia.optional(),
+  }),
 } as const
 
 export type EventType = keyof typeof eventPayloads
@@ -336,6 +508,9 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task.cancel_requested': 'task',
   'task.cancelled': 'task',
   'task.lease_expired': 'task',
+  'task.reply_delegated': 'task',
+  'task.reply_escalated': 'task',
+  'task.branch_reported': 'task',
   'lease.granted': 'task',
   'node.registered': 'none',
   'schedule.fired': 'workspace',
@@ -351,6 +526,16 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'channel.rebound': 'none',
   'channel.unlinked': 'none',
   'user.instruction': 'workspace',
+  // 唤醒事件带唤醒任务 id 与 workspace；唤醒任务刚创建（queued）时写入。
+  'supervisor.wake_started': 'task',
+  'supervisor.answered': 'workspace',
+  'supervisor.release': 'workspace',
+  'task_proposal.created': 'workspace',
+  'task_proposal.accepted': 'workspace',
+  'task_proposal.rejected': 'workspace',
+  // 决策可能没有 workspace（此时只生成 Digest 条目）。
+  'decision.review_due': 'none',
+  'merge_request.approved': 'workspace',
 }
 
 const scopeShape = (scope: Scope) =>
@@ -444,6 +629,11 @@ export const TASK_EVENT_RULES: Readonly<
       | `inbox.${string}`
       | `user.${string}`
       | `channel.${string}`
+      | `task_proposal.${string}`
+      | `decision.${string}`
+      | `merge_request.${string}`
+      | 'supervisor.answered'
+      | 'supervisor.release'
       | 'schedule.fired'
     >,
     TransitionRule
@@ -469,6 +659,13 @@ export const TASK_EVENT_RULES: Readonly<
   'task.cancel_requested': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   'task.cancelled': { from: ['queued', 'running', 'verifying', 'blocked'], to: 'cancelled' },
   'task.lease_expired': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
+  // 代回复委托与转交只发生在卡住期间（D15）。
+  'task.reply_delegated': { from: ['blocked'], to: 'unchanged' },
+  'task.reply_escalated': { from: ['blocked'], to: 'unchanged' },
+  // codex-orca 开始执行后上报一次（持有活动租约，见 store 的校验）。
+  'task.branch_reported': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
+  // 唤醒任务创建后立即写入（同一事务或紧随其后），此时任务仍在排队。
+  'supervisor.wake_started': { from: ['queued'], to: 'unchanged' },
 }
 
 export const isTaskEventType = (type: EventType): type is keyof typeof TASK_EVENT_RULES =>

@@ -77,7 +77,11 @@ test('policy check 默认只判定 auto-report，--record 才入账；支持重�
   expect(dry.data).toEqual(before.data)
   const recorded = await runCli([...args, '--record'], commands)
   expect(recorded.exitCode).toBe(0)
-  expect(JSON.parse(recorded.stdout)).toEqual(JSON.parse(checked.stdout))
+  // --record 入账后多一个 decision_id（policy.decided 的 seq），其余与只判定一致。
+  const out = JSON.parse(recorded.stdout)
+  const { decision_id, ...data } = out.data
+  expect({ ...out, data }).toEqual(JSON.parse(checked.stdout))
+  expect(decision_id).toBeGreaterThan(0)
   const shown = await client.showTask(taskId)
   if (!shown.ok) throw new Error(shown.error.message)
   // auto-report 随后由收件箱反应器在任务上开一个 Digest 条目（inbox.*），这里只看策略审计事件。

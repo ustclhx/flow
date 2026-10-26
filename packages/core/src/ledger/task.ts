@@ -256,6 +256,219 @@ export const fakeInputs = z
 export type FakeInputs = z.infer<typeof fakeInputs>
 export type FakeResumeInputs = z.infer<typeof fakeResumeInputs>
 
+// ---------------------------------------------------------------------------
+// supervisor（add-m1-supervisor D1、D2、D10、D15）
+// ---------------------------------------------------------------------------
+
+/**
+ * 任务的来源（D2）：`instruction` 用户的决定直接或间接引出的工作；`autonomous` 巡检、决策回看等
+ * supervisor 自发的工作。由中枢在创建任务时计算并写入 `task.created`，之后不可变；
+ * **不取自合同或任何调用方可填写的字段**。不在 supervisor 链上的任务没有 origin。
+ */
+export const TASK_ORIGINS = ['instruction', 'autonomous'] as const
+export type TaskOrigin = (typeof TASK_ORIGINS)[number]
+export const taskOrigin = z.enum(TASK_ORIGINS).meta({
+  description:
+    '任务来源（中枢计算并固化）：instruction 用户指令链；autonomous 巡检、回看等自发工作',
+})
+
+/** 唤醒的来源：在任务来源之外多一个只能回复的 `reply`（D15），它不会出现在任何任务上。 */
+export const WAKE_ORIGINS = [...TASK_ORIGINS, 'reply'] as const
+export type WakeOrigin = (typeof WAKE_ORIGINS)[number]
+export const wakeOrigin = z.enum(WAKE_ORIGINS).meta({
+  description: '唤醒来源：instruction、autonomous，或只能代回复卡住的 reply',
+})
+
+/** 唤醒代数：每创建一次唤醒加一（D3）。 */
+export const wakeGeneration = z.number().int().min(1).meta({ description: '唤醒代数，从 1 开始' })
+
+export const WAKE_EVENTS_MAX = 200
+export const WAKE_EVENT_SUMMARY_MAX = 4000
+
+/** 一次唤醒合并的一条事件（只供提示词使用）。 */
+export const wakeEventInput = z
+  .strictObject({
+    seq: z.number().int().min(1).meta({ description: '账本事件的 seq' }),
+    type: z.string().min(1).max(64).meta({ description: '事件类型，例如 user.instruction' }),
+    ts: timestamp.optional(),
+    task_id: taskId.optional().meta({ description: '相关任务' }),
+    summary: z
+      .string()
+      .max(WAKE_EVENT_SUMMARY_MAX)
+      .optional()
+      .meta({ description: '中枢生成的事件说明，例如指令原文、任务结果摘要、卡住说明' }),
+    data: z.record(z.string(), z.unknown()).optional().meta({
+      description:
+        '中枢附上的结构化上下文，例如代回复时的 block_seq、请求的命令、终端末尾、diff_stat、目标与角色',
+    }),
+  })
+  .meta({ title: 'Wake event', description: '唤醒合并的一条账本事件' })
+export type WakeEventInput = z.infer<typeof wakeEventInput>
+
+/**
+ * 唤醒任务的 `inputs.wake`（D1）：描述唤醒原因与事件，**只供提示词使用，不作为权限依据**；
+ * 唤醒任务的身份以账本中的 `supervisor.wake_started` 为准。
+ */
+export const wakeInputs = z
+  .strictObject({
+    origin: wakeOrigin,
+    generation: wakeGeneration,
+    events: z.array(wakeEventInput).max(WAKE_EVENTS_MAX).default([]),
+    note: z
+      .string()
+      .max(WAKE_EVENT_SUMMARY_MAX)
+      .optional()
+      .meta({ description: '附加说明，例如手动放行队列时的提示' }),
+  })
+  .meta({ title: 'Wake inputs', description: 'supervisor 唤醒任务的 inputs.wake（只供提示词）' })
+export type WakeInputs = z.infer<typeof wakeInputs>
+
+/** 审查关注点的上限（D10）。 */
+export const REVIEW_FOCUS_MAX = 500
+
+/** PR 链接：`https://<host>/<owner>/<repo>/pull/<n>`。 */
+export const PR_URL_RE =
+  /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*$/
+export const prUrl = z
+  .string()
+  .max(512)
+  .regex(PR_URL_RE, 'PR 链接应形如 https://github.com/<owner>/<repo>/pull/<n>')
+  .meta({ description: 'PR 链接，例如 https://github.com/owner/repo/pull/12' })
+
+/** 审查任务的 `inputs.review`（D10）：中枢据此用固定模板重写目标，`focus` 不改变判定标准。 */
+export const reviewInputs = z
+  .strictObject({
+    pr: prUrl,
+    focus: z
+      .string()
+      .trim()
+      .min(1)
+      .max(REVIEW_FOCUS_MAX)
+      .optional()
+      .meta({ description: '补充关注点（不超过 500 字），不改变判定标准' }),
+  })
+  .meta({ title: 'Review inputs', description: '审查任务的 inputs.review' })
+export type ReviewInputs = z.infer<typeof reviewInputs>
+
+export const REVIEW_VERDICTS = ['approve', 'changes_requested'] as const
+export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number]
+export const reviewVerdict = z.enum(REVIEW_VERDICTS).meta({
+  description: 'approve 没有阻塞问题；changes_requested 需要修改',
+})
+
+export const REVIEW_BLOCKING_MAX = 50
+export const REVIEW_ITEM_MAX = 2000
+export const REVIEW_NOTES_MAX = 16_384
+
+/**
+ * 审查会话的结构化输出（SDK `outputFormat: json_schema`，D10）：只含模型给出的部分。
+ * `approve` 时 `blocking` 必须为空。
+ */
+export const reviewOutput = z
+  .strictObject({
+    verdict: reviewVerdict,
+    blocking: z
+      .array(z.string().trim().min(1).max(REVIEW_ITEM_MAX))
+      .max(REVIEW_BLOCKING_MAX)
+      .default([])
+      .meta({ description: '阻塞合并的问题，每条一句；approve 时为空' }),
+    notes: z
+      .string()
+      .max(REVIEW_NOTES_MAX)
+      .default('')
+      .meta({ description: '其他说明与非阻塞建议' }),
+  })
+  .refine((r) => r.verdict !== 'approve' || r.blocking.length === 0, {
+    message: 'verdict 为 approve 时 blocking 必须为空',
+    path: ['blocking'],
+  })
+  .meta({ title: 'Review output', description: '审查会话的结构化输出（模型部分）' })
+export type ReviewOutput = z.infer<typeof reviewOutput>
+
+/** git 提交 sha（SHA-1 40 位或 SHA-256 64 位小写十六进制）。 */
+export const gitSha = z
+  .string()
+  .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, '应为 40 或 64 位小写十六进制的提交 sha')
+  .meta({ description: '提交 sha' })
+
+/**
+ * 任务结果的 `review`（D10）：`verdict`、`blocking`、`notes` 取自结构化输出，
+ * `reviewed_sha` 由执行器填入会话开始前记录的 PR head，**不取自模型**。
+ * 中枢只采信 `supervisor.reviewer_roles` 角色、claude-sdk 执行器任务的 `result.review`。
+ */
+export const reviewResult = z
+  .strictObject({
+    verdict: reviewVerdict,
+    blocking: z
+      .array(z.string().trim().min(1).max(REVIEW_ITEM_MAX))
+      .max(REVIEW_BLOCKING_MAX)
+      .default([]),
+    notes: z.string().max(REVIEW_NOTES_MAX).default(''),
+    reviewed_sha: gitSha.meta({ description: '审查时 PR 的 head（执行器记录）' }),
+  })
+  .refine((r) => r.verdict !== 'approve' || r.blocking.length === 0, {
+    message: 'verdict 为 approve 时 blocking 必须为空',
+    path: ['blocking'],
+  })
+  .meta({ title: 'Review result', description: '审查任务结果的 result.review' })
+export type ReviewResult = z.infer<typeof reviewResult>
+
+/** 卡住时附带的改动摘要上限（node-protocol "卡住时附带改动摘要"）。 */
+export const DIFF_STAT_MAX = 2000
+const DIFF_STAT_TRUNCATED = '\n…（已截断）'
+
+/** 把 `git diff --stat` 摘要截断到 2000 字符以内，超出时在末尾注明。 */
+export function clipDiffStat(text: string): string {
+  if (text.length <= DIFF_STAT_MAX) return text
+  return text.slice(0, DIFF_STAT_MAX - DIFF_STAT_TRUNCATED.length) + DIFF_STAT_TRUNCATED
+}
+
+export const diffStat = z.string().min(1).max(DIFF_STAT_MAX).meta({
+  description: '相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并注明）',
+})
+
+/** 本次卡住对应的策略判定（`policy.decided` 的 seq，D15）。 */
+export const policyDecisionId = z
+  .number()
+  .int()
+  .min(1)
+  .meta({ description: '策略判定 id，即对应 policy.decided 事件的 seq' })
+
+/**
+ * 卡住上报（续约 / 提交 / 事件）共用的代回复相关字段（D15）。旧节点不带时保持原有行为。
+ */
+export const blockedDelegationShape = {
+  decision_id: policyDecisionId.optional().meta({
+    description: '策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq',
+  }),
+  diff_stat: diffStat.optional(),
+  no_delegate: z.boolean().optional().meta({
+    description: 'true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）',
+  }),
+}
+
+/**
+ * 任务分支名（`task.branch_reported`，D15）：git ref 的保守子集，
+ * 不允许 `..`、`//`、`@{`、以 `-`、`/`、`.` 开头或以 `/`、`.`、`.lock` 结尾。
+ */
+export const taskBranch = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/, '分支名只能包含字母、数字、`_`、`.`、`/`、`-`')
+  .refine(
+    (b) =>
+      !b.includes('..') &&
+      !b.includes('//') &&
+      !b.includes('/.') &&
+      !b.endsWith('/') &&
+      !b.endsWith('.') &&
+      !b.endsWith('.lock') &&
+      b !== 'HEAD',
+    { message: '不是合法的分支名' },
+  )
+  .meta({ description: '执行器创建的任务分支，例如 ustclhx/t-1' })
+
 /** 无进展阈值的默认分钟数（stuck-detection "无进展超时"）。 */
 export const DEFAULT_NO_PROGRESS_MINUTES = 15
 
@@ -305,9 +518,18 @@ export const taskContract = z
       .optional()
       .meta({ description: '幂等键：同一个键再次提交时返回已有任务' }),
     inputs: z
-      .looseObject({ fake: fakeInputs.optional() })
+      .looseObject({
+        fake: fakeInputs.optional(),
+        wake: wakeInputs.optional().meta({
+          description: 'supervisor 唤醒任务的唤醒原因与事件（只供提示词，不作为权限依据）',
+        }),
+        review: reviewInputs.optional().meta({ description: '审查任务要审查的 PR 与补充关注点' }),
+      })
       .optional()
-      .meta({ description: '执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用' }),
+      .meta({
+        description:
+          '执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review 见 supervisor',
+      }),
   })
   .superRefine((c, ctx) => {
     if (c.inputs?.fake !== undefined && c.executor !== 'fake') {
@@ -401,6 +623,9 @@ export const taskResult = z
       description: '执行器会话 id（例如 Claude Agent SDK 的 session_id），便于事后查看或恢复',
     }),
     cost: taskCost.optional(),
+    review: reviewResult.optional().meta({
+      description: '审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信',
+    }),
   })
   .meta({ title: 'Flow task result', description: '任务结束（done / failed）时的结果' })
 export type TaskResult = z.infer<typeof taskResult>
@@ -482,6 +707,7 @@ export const taskView = z
         tail: z.array(z.string()).optional(),
         session: z.string().optional().meta({ description: '执行器上报的会话 id（用于恢复）' }),
         prior_reason: blockedReason.optional().meta({ description: 'node_lost 之前的卡住原因' }),
+        ...blockedDelegationShape,
         lease_held: z
           .boolean()
           .meta({ description: 'true 表示节点仍持有租约、worker 还活着（交互式执行器，D7a）' }),
@@ -494,6 +720,12 @@ export const taskView = z
       .meta({ description: '当前有效的租约' }),
     result: taskResult.nullable(),
     created_by: z.string().meta({ description: '创建者（task.created 的 actor）' }),
+    origin: taskOrigin
+      .nullable()
+      .meta({ description: '中枢在创建时写入的来源；不在 supervisor 链上的任务为 null' }),
+    branch: taskBranch
+      .nullable()
+      .meta({ description: '执行器上报的任务分支（task.branch_reported）；没有上报时为 null' }),
     last_activity_at: timestamp
       .nullable()
       .meta({ description: '最近一次活动（续约上报）时间；非事件派生，重建后为 null' }),

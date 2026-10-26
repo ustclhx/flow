@@ -25,6 +25,32 @@
       "description": "中枢地址；缺省为 http://127.0.0.1:<hub.yaml 的 port>",
       "type": "string",
       "format": "uri"
+    },
+    "reserved": {
+      "default": {
+        "supervisor": 1,
+        "reply": 1
+      },
+      "description": "在 concurrency 之外为 supervisor 预留的执行槽（add-m1-supervisor D12）：普通槽满时仍为它们领取任务",
+      "type": "object",
+      "properties": {
+        "supervisor": {
+          "default": 1,
+          "description": "只给普通 supervisor 唤醒（instruction / autonomous）的槽位数，默认 1",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "reply": {
+          "default": 1,
+          "description": "只给代回复（reply）唤醒的槽位数，默认 1",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        }
+      },
+      "additionalProperties": false,
+      "title": "Node reserved slots"
     }
   },
   "additionalProperties": false,

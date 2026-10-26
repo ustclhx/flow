@@ -127,6 +127,22 @@ const WAKING: ReadonlySet<LedgerEvent['type']> = new Set([
 ])
 
 /**
+ * 卡住上报中与代回复相关的可选字段（D15）：原样带入 `task.blocked`；旧节点不带时省略。
+ * `diff_stat` 是自由文本，入账前由 scrub 脱敏。
+ */
+function delegationFields(b: {
+  decision_id?: number | undefined
+  diff_stat?: string | undefined
+  no_delegate?: boolean | undefined
+}) {
+  return {
+    ...(b.decision_id !== undefined ? { decision_id: b.decision_id } : {}),
+    ...(b.diff_stat !== undefined ? { diff_stat: b.diff_stat } : {}),
+    ...(b.no_delegate !== undefined ? { no_delegate: b.no_delegate } : {}),
+  }
+}
+
+/**
  * 提交结束对应的事件（纯函数）。
  * 任务已处于 blocked（交互式卡住期间 worker 崩溃或这一轮直接以 blocked 结束）时，
  * 写 blocked → blocked（lease_held=false）；此时若有待送达的回复，同一事务带着回复重新排队，
@@ -154,6 +170,7 @@ export function completionDrafts(
           message: sanitizeMessage(req.message),
           ...(req.tail ? { tail: sanitizeTail(req.tail) } : {}),
           ...(session ? { session } : {}),
+          ...delegationFields(req),
           node_id: lease.node_id,
           lease_held: false,
         },
@@ -618,6 +635,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
             message: sanitizeMessage(req.blocked.message),
             ...(req.blocked.tail ? { tail: sanitizeTail(req.blocked.tail) } : {}),
             ...(req.blocked.session ? { session: req.blocked.session } : {}),
+            ...delegationFields(req.blocked),
             node_id: lease.node_id,
             lease_held: true,
           },

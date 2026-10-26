@@ -8,8 +8,10 @@ import { executorInfo, ledgerEvent } from './events.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import {
   activity,
+  blockedDelegationShape,
   blockedReason,
   deliveredReply,
+  policyDecisionId,
   replyId,
   replyKind,
   replyView,
@@ -368,10 +370,24 @@ export const policyCheckRequest = z
     dry_run: z.boolean().optional().meta({
       description: '默认 false；user 可设为 true 只判定不入账，节点传 true 返回 400',
     }),
+    push_env_ok: z.boolean().optional().meta({
+      description:
+        'git push 的推送环境检查（D15）：push 地址与登记仓库一致、没有会执行命令或改写目标的 git 配置、没有启用的 hook；缺失视为不满足',
+    }),
+    gh_env_ok: z.boolean().optional().meta({
+      description: 'gh 命令的仓库检查（D15）：gh 实际解析出的仓库与登记仓库一致；缺失视为不满足',
+    }),
   })
   .meta({ title: 'POST /v1/policy/check' })
 export type PolicyCheckRequest = z.infer<typeof policyCheckRequest>
-export const policyCheckData = policyDecisionSchema.meta({ title: 'POST /v1/policy/check 响应' })
+export const policyCheckData = policyDecisionSchema
+  .extend({
+    decision_id: policyDecisionId.optional().meta({
+      description:
+        '本次判定的 id（对应 policy.decided 的 seq）；节点上报 supervisor 档位的卡住时带上。dry_run 不入账，没有该字段',
+    }),
+  })
+  .meta({ title: 'POST /v1/policy/check 响应' })
 export type PolicyCheckData = z.infer<typeof policyCheckData>
 
 export const listTasksQuery = z
@@ -553,6 +569,7 @@ export const renewLeaseRequest = z
           .max(512)
           .optional()
           .meta({ description: '执行器会话 id；重新排队时随 resume 带给下一次执行' }),
+        ...blockedDelegationShape,
       })
       .optional()
       .meta({
@@ -603,6 +620,7 @@ export const completeLeaseRequest = z
         .max(512)
         .optional()
         .meta({ description: '执行器会话 id，回复后下一次执行据此恢复' }),
+      ...blockedDelegationShape,
     }),
     z.strictObject({
       ...token,

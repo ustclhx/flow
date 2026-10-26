@@ -4,12 +4,12 @@
 
 ## 1. 协议与配置
 
-- [ ] 1.1 账本事件与 schema：`supervisor.wake_started`、`supervisor.answered`、`task_proposal.created|accepted|rejected`、`decision.review_due`；任务投影增加 origin；`schemas:check` 覆盖新事件；`supervisor.wake_started.origin` 枚举加 `reply`
-- [ ] 1.2 workspace 配置 `supervisor: {enabled, auto_merge, merge_method, allow_no_checks, reviewer_roles, limits}`（schema、默认值、doctor 显示）；`node.yaml` 的 `reserved.supervisor`；`limits.reply_wakes_per_day`；`reserved.supervisor` 默认 1 与 `reserved.reply` 默认 1
+- [x] 1.1 账本事件与 schema：`supervisor.wake_started`、`supervisor.answered`、`task_proposal.created|accepted|rejected`、`decision.review_due`；任务投影增加 origin；`schemas:check` 覆盖新事件；`supervisor.wake_started.origin` 枚举加 `reply`
+- [x] 1.2 workspace 配置 `supervisor: {enabled, auto_merge, merge_method, allow_no_checks, reviewer_roles, limits}`（schema、默认值、doctor 显示）；`node.yaml` 的 `reserved.supervisor`；`limits.reply_wakes_per_day`；`reserved.supervisor` 默认 1 与 `reserved.reply` 默认 1
 - [ ] 1.3 角色 `kind` 与有效类别（D9：声明只能收紧、Bash 规则计为 write），doctor 显示与警告
 - [ ] 1.4 角色模板：`supervisor`、`pr-reviewer`、`merger` 及提示词；`dev` 模板 `creatable_by: [supervisor]`；doctor 对缺少该值的已有 `dev.yaml` 给出片段
-- [ ] 1.5 合同 `inputs.wake`、`inputs.review` 与结果 `result.review` 的 schema
-- [ ] 1.6 策略档位 `supervisor`（合并次序；受保护动作含 `task.respond` 提升为 `draft-approve` 并标 `guarded`；通配规则不能给出）；`when.push_to: task_branch`（core 纯函数 `parsePushTarget`：单段、无 git 全局选项、登记 remote 名、单一显式 refspec、禁用选项清单、无启用的 hook，不确定即不满足）与 `when.gh_scope: workspace_repo`；`policy/check` 响应加 `decision_id`；`policies.yaml` 模板加入注释掉的代回复白名单，每个前缀写法有测试；`FLOW_TOOL_ACTIONS` 与 CLI 映射加 `task_respond` → `task.respond`；账本事件 `task.reply_delegated`、`task.reply_escalated`、`task.branch_reported`，`task.blocked` 加 `decision_id`、`diff_stat`、`no_delegate`，`policy/check` 请求加 `push_env_ok`、`gh_env_ok`，`task.replied.via` 加 `supervisor`；workspace 配置 `supervisor.delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；`supervisor` 列为保留 actor（角色加载与 doctor 报错）
+- [x] 1.5 合同 `inputs.wake`、`inputs.review` 与结果 `result.review` 的 schema
+- [ ] 1.6 策略档位 `supervisor`（合并次序；受保护动作含 `task.respond` 提升为 `draft-approve` 并标 `guarded`；通配规则不能给出）；`when.push_to: task_branch`（core 纯函数 `parsePushTarget`：单段、无 git 全局选项、登记 remote 名、单一显式 refspec、禁用选项清单、无启用的 hook，不确定即不满足）与 `when.gh_scope: workspace_repo`；`policy/check` 响应加 `decision_id`；`policies.yaml` 模板加入注释掉的代回复白名单，每个前缀写法有测试；`FLOW_TOOL_ACTIONS` 与 CLI 映射加 `task_respond` → `task.respond`；账本事件 `task.reply_delegated`、`task.reply_escalated`、`task.branch_reported`，`task.blocked` 加 `decision_id`、`diff_stat`、`no_delegate`，`policy/check` 请求加 `push_env_ok`、`gh_env_ok`，`task.replied.via` 加 `supervisor`；workspace 配置 `supervisor.delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；`supervisor` 列为保留 actor（角色加载与 doctor 报错）。（G1 已完成账本/协议部分：`task.reply_delegated`、`task.reply_escalated`、`task.branch_reported` 事件与写入校验，`task.blocked` 的 `decision_id`/`diff_stat`/`no_delegate`，`policy/check` 请求的 `push_env_ok`/`gh_env_ok` 与响应的 `decision_id`，`task.replied.via` 的 `supervisor`，workspace `delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；策略档位、`push_to`/`gh_scope`、模板、`FLOW_TOOL_ACTIONS` 映射与保留 actor 由其他组完成）
 
 ## 2. 中枢：任务创建的校验
 

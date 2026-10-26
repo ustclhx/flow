@@ -4,6 +4,7 @@ import { join, relative } from 'node:path'
 import { parse } from 'yaml'
 import { flowPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
+import { defaultSupervisorConfig, type SupervisorConfig } from './schema/supervisor.ts'
 import { workspaceSchema } from './schema/workspace.ts'
 import { formatZodIssues, type ValidationIssue } from './validation-issue.ts'
 
@@ -20,6 +21,8 @@ export interface Workspace {
   repos: string[]
   /** 定义文件（相对 flow-home）；`ws/global` 为 null。 */
   file: string | null
+  /** supervisor 设置（已补默认值；add-m1-supervisor 1.2）。 */
+  supervisor: SupervisorConfig
 }
 
 export interface WorkspaceSet {
@@ -37,6 +40,7 @@ export const GLOBAL_WORKSPACE: Workspace = {
   description: '隐式存在的全局 workspace，不需要定义文件',
   repos: [],
   file: null,
+  supervisor: defaultSupervisorConfig(),
 }
 
 /**
@@ -88,6 +92,7 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
       description: ws.description,
       repos: ws.repos ?? [],
       file,
+      supervisor: ws.supervisor,
     })
   }
   return ok({ workspaces: [GLOBAL_WORKSPACE, ...workspaces], issues })

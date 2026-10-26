@@ -19,6 +19,7 @@ import {
   type Role,
   replyTaskRequest,
   type ShowTaskData,
+  type TaskOrigin,
   USER_ACTOR,
 } from '@flow/core'
 import type { LedgerStore } from './store.ts'
@@ -110,6 +111,12 @@ export interface CreateTaskOptions {
   actor: string
   /** 幂等键；也可以写在合同的 `idempotency_key` 中（两处都给时必须一致）。 */
   idempotency_key?: string
+  /**
+   * 中枢计算出的任务来源（add-m1-supervisor D2），写入 `task.created`、之后不变。
+   * **只供中枢内部调用方传入**（调度器、提案接受等）；HTTP 路由与 MCP 不得从请求中取值。
+   * 计算规则见 D2，由后续任务（2.3）实现；缺省表示不在 supervisor 链上。
+   */
+  origin?: TaskOrigin
 }
 
 export interface CancelTaskOptions {
@@ -225,7 +232,12 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         id = newTaskId(now())
       }
       const written = ledger.append(
-        { type: 'task.created', task_id: id, workspace: contract.workspace, payload: { contract } },
+        {
+          type: 'task.created',
+          task_id: id,
+          workspace: contract.workspace,
+          payload: { contract, ...(opts.origin === undefined ? {} : { origin: opts.origin }) },
+        },
         { actor: opts.actor },
       )
       if (!written.ok) return written
