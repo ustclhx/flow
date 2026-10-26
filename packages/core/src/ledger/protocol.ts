@@ -84,11 +84,9 @@ export const PROTOCOL_ERRORS = {
   secret_suspected: { status: 400, kind: 'usage' },
   // add-m1-supervisor：任务创建的校验（D2、D4、D5）与唤醒、委托（G1 的账本校验也对外暴露）
   parent_not_found: { status: 422, kind: 'failure' },
-  workspace_mismatch: { status: 403, kind: 'failure' },
   reserved_idempotency_key: { status: 403, kind: 'failure' },
   parent_required: { status: 403, kind: 'failure' },
   proposal_required: { status: 403, kind: 'failure' },
-  reply_only_wake: { status: 403, kind: 'failure' },
   repo_not_in_workspace: { status: 403, kind: 'failure' },
   verify_not_allowed: { status: 403, kind: 'failure' },
   limit_exceeded: { status: 429, kind: 'failure' },
