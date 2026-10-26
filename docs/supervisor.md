@@ -234,7 +234,9 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 - **不能直接建写类任务**：autonomous 唤醒建写类任务一律 `proposal_required`（第 3 节），只能提案等你接受。
 - **日报通道 `patrol_report`**：supervisor 调用它提交日报（最多 3500 字符）。中枢只接受**合并了巡检触发的非 reply 唤醒**
   （否则 `not_patrol_wake` / `reply_only_wake`），每次唤醒一份（再交 `patrol_already_reported`）；接受后
-  1. 以 supervisor 身份追加一条 journal（`brain/journal/<日期>.md`，标题"巡检日报（唤醒 <id>）"）；
+  1. 正文先脱敏（已登记的密钥值显示为 `[secret:<路径>]`，疑似密钥按规则替换），行首的 `#` 标题标记前加 `\`
+     （正文不能伪造 journal 记录的标题），再以 supervisor 身份追加一条 journal（`brain/journal/<日期>.md`，首行
+     "巡检日报（唤醒 <id>）"；中枢写条目失败后 supervisor 重试，按唤醒 id 去重，不会重复追加）；
   2. 生成一条 Digest 级、没有任何动作的收件箱条目 `patrol.<唤醒任务 id>`，**不推送**；
   3. 下一份每日摘要的"supervisor 巡检日报"一节列出它（每份最多展示 600 字符，全文在 journal 与条目里），随后条目以 `digested` 关闭。
 
@@ -307,9 +309,9 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 每次唤醒是一次 Opus 级别的 claude-sdk 会话；代回复唤醒、巡检、审查任务也各自是会话。claude-sdk 执行器在结果里记录
 `result.cost.usd`（SDK 给出的**估算值，不是账单**），Flow 据此汇总 supervisor 的花费：
 
-- **每日摘要**的"supervisor 花费（估算）"一节：昨天**结束**的唤醒任务（含 reply 唤醒）按 workspace 列出次数、代回复次数、金额，
+- **每日摘要**的"supervisor 花费（估算）"一节：昨天**开始**、且已结束的唤醒任务（含 reply 唤醒）按 workspace 列出次数、代回复次数、金额，
   以及没有上报费用的次数（例如被取消的唤醒）；
-- **`flow supervisor status`** 的"今日花费（估算）"：今天（中枢时区）已结束的唤醒任务的金额与次数。
+- **`flow supervisor status`** 的"今日花费（估算）"：今天（中枢时区）开始、且已结束的唤醒任务的金额与次数（`--json` 中 `today.cost_usd` 保留 6 位小数）。
 
 只统计唤醒任务本身；supervisor 建的 dev、审查等任务不计入，未结束的唤醒也不计入。实际账单以 Anthropic 控制台为准。
 控制费用的手段：
@@ -389,14 +391,20 @@ flow supervisor status [product-res]                    # 当前唤醒、各队�
    - 可选：代回复白名单（第 8 节）。**先升级所有节点，再写带 `push_to` / `gh_scope` 的规则**，旧节点不认识这些条件。
 4. **按需调整 workspace**：在 `config/workspaces/<id>.yaml` 增加 `supervisor` 段（第 1 节）。想先观察就写 `enabled: false`。
    要自动合并再写 `auto_merge: true`，建议先在 `false` 下完整跑过几次。
-5. **按需启用巡检**：在 `config/schedules.yaml` 取消注释巡检示例（第 7 节）；已有 `schedules.yaml` 时 `flow init` 不改它，照第 7 节手动加规则。
-6. **重启，先中枢后节点**：
+5. **补上提示词里的巡检段**：`flow init` 不覆盖已有的 `config/roles/supervisor.md`，所以升级前就有这个文件的 home
+   拿不到新增的"巡检"一段（读简报 → 检查 → `patrol_report` 提交日报 → 只能提案 → 更新简报），supervisor 也就不会调用 `patrol_report`。
+   请把新模板中以"巡检（inputs.wake.events 中有 type 为 schedule.fired"开头的一段复制进你的 `supervisor.md`。新模板可在
+   `packages/core/src/role-templates.ts` 的 `DEFAULT_ROLE_FILES['supervisor.md']` 查看；也可以在临时目录里初始化一个新 home 后查看：
+   `export FLOW_HOME=$(mktemp -d)/home && flow init`，打开 `$FLOW_HOME/config/roles/supervisor.md`，看完 `unset FLOW_HOME`
+   （别在这个终端里继续操作真实的 home）。
+6. **按需启用巡检**：在 `config/schedules.yaml` 取消注释巡检示例（第 7 节）；已有 `schedules.yaml` 时 `flow init` 不改它，照第 7 节手动加规则。
+7. **重启，先中枢后节点**：
    - 用 launchd 常驻（**前提是之前执行过 `flow daemon install`**）：`launchctl kickstart -k gui/$(id -u)/dev.flow.hub`，
      再 `launchctl kickstart -k gui/$(id -u)/dev.flow.node`（或重新运行 `flow daemon install`）；
    - 没有用 launchd 常驻、在前台运行的：先停掉并重新运行 `flow hub start`，再停掉并重新运行 `flow node start`。
 
    新旧节点协议兼容；`node.yaml` 的 `reserved` 要等所有节点升级后才能写（见 [daemon.md](daemon.md)）。
-7. **检查**：`flow doctor` 应没有 supervisor 相关的 fail；`flow supervisor status` 应列出各 workspace 的启用状态；
+8. **检查**：`flow doctor` 应没有 supervisor 相关的 fail；`flow supervisor status` 应列出各 workspace 的启用状态；
    用 `flow ask <ws> "说明一下当前状态"` 做一次冒烟。
 
 **回滚**：把对应 workspace 的 `supervisor.enabled` 设为 `false`（或删除 supervisor 角色）即停止唤醒与代回复；已建的任务不受影响，

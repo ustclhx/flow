@@ -1,6 +1,6 @@
 import type { z } from 'zod'
 import { hubConfigSchema, nodeConfigSchema } from '../daemon/config.ts'
-import { schedulesConfigSchema } from '../daemon/schedules.ts'
+import { schedulesConfigSchema } from '../daemon/schedule-schema.ts'
 import { EVENT_TYPES, eventSchemas, ledgerEvent } from './events.ts'
 import { createTaskRequest, ENDPOINTS, errorBody, okBody } from './protocol.ts'
 import { activity, reviewOutput, taskResult, taskStatus, taskView } from './task.ts'

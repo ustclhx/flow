@@ -1065,7 +1065,12 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         }
         const limits = ws.supervisor.limits
         const todayKey = dayKey(now)
-        const cost = wakeCosts(ledger, (at) => dayKey(at) === todayKey, ws.ref)[0]
+        // 今天的唤醒：先按 36 小时窗口查询，再按 dayKey 精确筛选（dayKey 可注入，不假定时区）。
+        const cost = wakeCosts(
+          ledger,
+          { from: now - 36 * 3600_000, to: now + 1, include: (at) => dayKey(at) === todayKey },
+          ws.ref,
+        )[0]
         out.push({
           workspace: ws.ref,
           enabled: a.ok,

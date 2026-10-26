@@ -1,3 +1,4 @@
+import { loadSchedulesConfig } from './daemon/schedules.ts'
 import type { DoctorCheck } from './doctor.ts'
 import { effectiveRoleKind, type Role } from './roles.ts'
 import { loadWorkspaces } from './workspaces.ts'
@@ -16,9 +17,6 @@ export async function checkPatrolRules(home: string, roles?: Role[]): Promise<Do
   if (roles && !roles.some((r) => effectiveRoleKind(r) === 'supervisor')) return []
   const workspaces = await loadWorkspaces(home)
   if (!workspaces.ok) return []
-  // 动态导入：daemon/schedules.ts 与 ledger/protocol.ts 互相引用，静态导入会让直接加载 doctor.ts 的入口
-  // 在 protocol 初始化前访问 scheduleErrorSchema（经 index.ts 加载时没有这个问题）。
-  const { loadSchedulesConfig } = await import('./daemon/schedules.ts')
   const schedules = await loadSchedulesConfig(home)
   if (!schedules.ok) return []
   const patrolled = new Set(

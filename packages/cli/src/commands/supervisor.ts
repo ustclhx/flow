@@ -1,5 +1,6 @@
 import {
   fail,
+  formatUsd,
   HubClient,
   resolveFlowHome,
   SUPERVISOR_QUEUES,
@@ -114,7 +115,7 @@ export const supervisorStatusCommand = defineCommand<SupervisorStatusData>({
         if (t.cost_usd !== undefined) {
           const missing = t.cost_unreported ? `，${t.cost_unreported} 次未上报` : ''
           lines.push(
-            `  今日花费（估算）：$${t.cost_usd.toFixed(2)}（已结束的唤醒 ${t.cost_wakes ?? 0} 次，含代回复${missing}）`,
+            `  今日花费（估算）：${formatUsd(t.cost_usd)}（已结束的唤醒 ${t.cost_wakes ?? 0} 次，含代回复${missing}）`,
           )
         }
         lines.push(`  最近一次：${w.last ? wakeLine(w.last) : '无'}`)

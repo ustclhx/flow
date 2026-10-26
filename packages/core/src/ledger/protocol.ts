@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { scheduleErrorSchema } from '../daemon/schedules.ts'
+import { scheduleErrorSchema } from '../daemon/schedule-schema.ts'
 import {
   inboxActData,
   inboxActRequest,

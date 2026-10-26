@@ -1,5 +1,6 @@
 import {
   clipText,
+  formatUsd,
   INBOX_BODY_MAX,
   INBOX_TITLE_MAX,
   type InboxCadence,
@@ -8,6 +9,7 @@ import {
   inboxCadence,
   type LedgerEvent,
   resolveInboxLevel,
+  roundUsd,
   SUPERVISOR_ACTOR,
   type TaskView,
 } from '@flow/core'
@@ -15,7 +17,7 @@ import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import type { Scheduler } from '../scheduler/index.ts'
 import type { HubClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
-import { costLine, formatUsd, wakeCosts } from '../supervisor/cost.ts'
+import { costLine, wakeCosts } from '../supervisor/cost.ts'
 import { isPatrolItem } from '../supervisor-tools/patrol.ts'
 import {
   dailyCron,
@@ -248,10 +250,10 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
         ),
       )
     }
-    // supervisor 花费（D13）：昨天结束的唤醒任务（含 reply 唤醒）按 workspace 汇总 result.cost.usd。
-    const costs = wakeCosts(ledger, (at) => at >= from && at < to)
+    // supervisor 花费（D13）：昨天开始的唤醒任务（含 reply 唤醒）中已结束的，按 workspace 汇总 result.cost.usd。
+    const costs = wakeCosts(ledger, { from, to })
     if (costs.length > 0) {
-      const total = costs.reduce((n, c) => n + c.usd, 0)
+      const total = roundUsd(costs.reduce((n, c) => n + c.usd, 0))
       lines.push(`supervisor 花费（估算）${formatUsd(total)}：`)
       lines.push(...listLines(costs, costLine))
     }
