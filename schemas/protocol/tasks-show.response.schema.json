@@ -158,7 +158,7 @@
                   "maxLength": 200
                 },
                 "inputs": {
-                  "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review 见 supervisor",
+                  "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review、inputs.merge 见 supervisor",
                   "type": "object",
                   "properties": {
                     "fake": {
@@ -784,6 +784,29 @@
                       "type": "string",
                       "maxLength": 512,
                       "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$"
+                    },
+                    "merge": {
+                      "description": "merger 任务要合并的 PR 与审查任务（pr-merge 执行器会重新核对）",
+                      "type": "object",
+                      "properties": {
+                        "pr": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+                          "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+                        },
+                        "review_task": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                          "description": "给出 approve 结论的审查任务（merger 的 parent）"
+                        }
+                      },
+                      "required": [
+                        "pr",
+                        "review_task"
+                      ],
+                      "additionalProperties": false,
+                      "title": "Merge inputs"
                     }
                   },
                   "additionalProperties": {}
@@ -1770,7 +1793,7 @@
                             "maxLength": 200
                           },
                           "inputs": {
-                            "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review 见 supervisor",
+                            "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review、inputs.merge 见 supervisor",
                             "type": "object",
                             "properties": {
                               "fake": {
@@ -2396,6 +2419,29 @@
                                 "type": "string",
                                 "maxLength": 512,
                                 "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$"
+                              },
+                              "merge": {
+                                "description": "merger 任务要合并的 PR 与审查任务（pr-merge 执行器会重新核对）",
+                                "type": "object",
+                                "properties": {
+                                  "pr": {
+                                    "type": "string",
+                                    "maxLength": 512,
+                                    "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+                                    "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+                                  },
+                                  "review_task": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                                    "description": "给出 approve 结论的审查任务（merger 的 parent）"
+                                  }
+                                },
+                                "required": [
+                                  "pr",
+                                  "review_task"
+                                ],
+                                "additionalProperties": false,
+                                "title": "Merge inputs"
                               }
                             },
                             "additionalProperties": {}
@@ -5819,7 +5865,7 @@
                             "maxLength": 200
                           },
                           "inputs": {
-                            "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review 见 supervisor",
+                            "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review、inputs.merge 见 supervisor",
                             "type": "object",
                             "properties": {
                               "fake": {
@@ -6445,6 +6491,29 @@
                                 "type": "string",
                                 "maxLength": 512,
                                 "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$"
+                              },
+                              "merge": {
+                                "description": "merger 任务要合并的 PR 与审查任务（pr-merge 执行器会重新核对）",
+                                "type": "object",
+                                "properties": {
+                                  "pr": {
+                                    "type": "string",
+                                    "maxLength": 512,
+                                    "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+                                    "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+                                  },
+                                  "review_task": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                                    "description": "给出 approve 结论的审查任务（merger 的 parent）"
+                                  }
+                                },
+                                "required": [
+                                  "pr",
+                                  "review_task"
+                                ],
+                                "additionalProperties": false,
+                                "title": "Merge inputs"
                               }
                             },
                             "additionalProperties": {}

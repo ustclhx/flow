@@ -1,9 +1,15 @@
 import { type ChildProcess, spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { lstat, mkdir, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import {
   clipTail,
   clipText,
+  effectiveRoleKind,
   fail,
+  flowPaths,
   loadRoles,
   ok,
   type Result,
@@ -26,8 +32,13 @@ import {
   resumedSignal,
 } from './executor.ts'
 
-/** permissions.config 与 codex-orca 使用相同的标量约定。 */
-const permissionsSchema = z.strictObject({
+/**
+ * codex-exec 角色的 `permissions`（permissions.config 与 codex-orca 使用相同的标量约定）。
+ * 导出供防漂移测试：可用的键必须与 core 推断有效类别时认识的键（`CODEX_EXEC_KNOWN_PERMISSION_KEYS`）一致。
+ */
+/** 只适用于 claude-sdk 的键：写在 codex-exec 角色上时报配置错误，而不是被静默忽略。 */
+export const CODEX_EXEC_REJECTED_PERMISSION_KEYS = ['writable_paths', 'read_scope'] as const
+export const codexExecPermissions = z.strictObject({
   writable_paths: z.never({ error: 'writable_paths 仅适用于 claude-sdk 执行器' }).optional(),
   read_scope: z.never({ error: 'read_scope 仅适用于 claude-sdk 执行器' }).optional(),
   sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('read-only'),
@@ -56,6 +67,11 @@ const eventSchema = z.looseObject({
 
 export interface CodexExecOptions {
   home: string
+  /**
+   * 只读角色隔离 CODEX_HOME 时，`auth.json` 链接到这个目录中的同名文件（用户平时的 CODEX_HOME）。
+   * 缺省取 worker 环境的 `CODEX_HOME`，再缺省为 `~/.codex`。测试用临时目录。
+   */
+  codexAuthSource?: string
   /** argv 前缀；测试可用 [process.execPath, 假脚本路径]，缺省 ['codex']。 */
   codexCommand?: readonly [string, ...string[]]
   resolveRole?: (name: string) => Promise<Result<Role>>
@@ -89,6 +105,43 @@ async function taskPrompt(home: string, role: Role, contract: TaskContract, resu
     ...(resume ? [replyPrompt(resume)] : []),
     convention,
   ].join('\n\n')
+}
+
+/** 只读角色专用的 CODEX_HOME（由 Flow 管理，所有只读 codex-exec 任务共用，会话记录也保存在这里以便 resume）。 */
+export const readCodexHome = (home: string) => join(flowPaths(home).state, 'codex-read-home')
+
+const READ_HOME_CONFIG = `# 由 Flow 生成，每次运行只读 codex-exec 角色前覆盖（add-m1-supervisor tasks 5.7）。
+# 不含 mcp_servers、notify 与项目信任：用户级与项目级 .codex/config.toml 都不会生效，
+# 角色需要的设置写在角色的 permissions.config 中（经 -c 传入）。
+`
+
+/**
+ * 有效类别为 read 的角色由执行器强制只读（design D9；tasks 5.7）：以隔离的 CODEX_HOME 运行。
+ *
+ * 实测 Codex 0.164：`-c mcp_servers={}` 与用户级 config.toml 的表是合并而不是替换，用户级的 MCP 服务器照样启动，
+ * 因此 `-c` 覆盖不可靠；改用 Flow 管理的 CODEX_HOME：其中的 config.toml 只有注释，没有任何项目信任记录，
+ * 项目级 `.codex/config.toml` 也不会加载。凭证：`auth.json` 是指向用户 CODEX_HOME 中同名文件的符号链接
+ * （Codex 原地改写 auth.json 时会写回用户的文件）；用户的 CODEX_HOME 没有 auth.json（例如凭证存在钥匙串）时不创建链接，
+ * Codex 会因未登录而失败（不会回退到用户配置）。
+ */
+export async function prepareReadCodexHome(home: string, authSource: string): Promise<string> {
+  const dir = readCodexHome(home)
+  await mkdir(dir, { recursive: true, mode: 0o700 })
+  await writeFile(join(dir, 'config.toml'), READ_HOME_CONFIG, { mode: 0o600 })
+  const link = join(dir, 'auth.json')
+  const target = join(authSource, 'auth.json')
+  let current: string | undefined
+  try {
+    const st = await lstat(link)
+    current = st.isSymbolicLink() ? await readlink(link) : '\0not-a-link'
+  } catch {
+    current = undefined
+  }
+  if (current !== target) {
+    if (current !== undefined) await rm(link, { force: true })
+    if (existsSync(target)) await symlink(target, link)
+  }
+  return dir
 }
 
 /**
@@ -221,7 +274,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
           finish(ok({ outcome: 'failed', result: result(env.error.message, env.error.code) }))
           return
         }
-        const perms = permissionsSchema.safeParse(role.data.permissions ?? {})
+        const perms = codexExecPermissions.safeParse(role.data.permissions ?? {})
         if (!perms.success) {
           finish(
             ok({
@@ -230,6 +283,32 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
             }),
           )
           return
+        }
+        // 有效类别为 read：隔离 CODEX_HOME，用户级与项目级配置里的 MCP 服务器、notify 等都不生效（tasks 5.7）。
+        let childEnv = env.data
+        if (effectiveRoleKind(role.data) === 'read') {
+          const source =
+            options.codexAuthSource ??
+            env.data.CODEX_HOME ??
+            process.env.CODEX_HOME ??
+            join(homedir(), '.codex')
+          let isolated: string
+          try {
+            isolated = await prepareReadCodexHome(options.home, source)
+          } catch (err) {
+            finish(
+              ok({
+                outcome: 'failed',
+                result: result(
+                  `无法准备只读角色的 CODEX_HOME：${(err as Error).message}`,
+                  'codex_home_failed',
+                ),
+              }),
+            )
+            return
+          }
+          if (finished) return
+          childEnv = { ...env.data, CODEX_HOME: isolated }
         }
         const prompt = ctx.resume?.session
           ? replyPrompt(ctx.resume)
@@ -246,7 +325,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
         args.push('--', prompt)
         child = spawn(command[0] ?? 'codex', args, {
           cwd: ctx.cwd,
-          env: env.data,
+          env: childEnv,
           shell: false,
           detached: true,
           stdio: ['ignore', 'pipe', 'pipe'],

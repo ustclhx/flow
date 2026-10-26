@@ -179,7 +179,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 **非 user 身份**建的任务只要合同带 `verify`，有效类别至少为 write（验收命令在沙箱外执行，D5 第 5 步另做策略判定）；user 建的任务不受此影响。
 
-推断只是配置层判断，不能覆盖执行器之外的配置来源（用户级或项目级 `.codex/config.toml`、未在 `disallowedTools` 中的工具等）；有效类别为 read 的角色最终由执行器强制只读（tasks 5.7）：codex-exec 用 `-c` 覆盖 `mcp_servers={}`、`notify=[]` 或使用隔离的 `CODEX_HOME`；claude-sdk 用 SDK `tools` 选项把可用工具限定为 Read/Grep/Glob 与 Flow MCP，canUseTool 对非只读工具一律拒绝、不进审批。
+推断只是配置层判断，不能覆盖执行器之外的配置来源（用户级或项目级 `.codex/config.toml`、未在 `disallowedTools` 中的工具等）；有效类别为 read 的角色最终由执行器强制只读（tasks 5.7）：codex-exec 使用隔离的 `CODEX_HOME`（实测 Codex 0.164 的 `-c mcp_servers={}` 与用户级配置的表合并，不能阻止其中的 MCP 服务器启动，故不用 `-c`；`auth.json` 链接到用户凭证，见 `docs/executors.md`）；claude-sdk 用 SDK `tools` 选项把可用工具限定为 Read/Grep/Glob 与 Flow MCP，canUseTool 对非只读工具一律拒绝、不进审批。
 
 因此默认 reviewer 是 write（它能写文档、能评论 PR），triage 是 read。PR 验收链使用新的只读模板 `pr-reviewer`（D10）。doctor 显示每个角色的有效类别。
 

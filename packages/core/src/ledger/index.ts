@@ -10,6 +10,7 @@ export * from './delegation.ts'
 export * from './events.ts'
 export * from './protocol.ts'
 export * from './redact.ts'
+export * from './review.ts'
 export * from './task.ts'
 
 type SchemaEntry = { schema: z.ZodType; io: 'input' | 'output' }

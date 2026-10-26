@@ -323,7 +323,20 @@ describe('工具类别', () => {
     }
     await passed('TodoWrite', { todos: [{ content: '读 README', status: 'pending' }] })
     await passed('ToolSearch', { query: 'select:mcp__flow__ws_brief', max_results: 5 })
-    await passed('StructuredOutput', { verdict: 'approve', summary: '好' })
+    await passed('WaitForMcpServers', { servers: ['flow'] })
+    await passed('WaitForMcpServers', {})
+    expect(
+      await checkReadScope('WaitForMcpServers', { servers: ['flow'], path: '/' }, scope),
+    ).toMatchObject(denied)
+  })
+
+  test('StructuredOutput 只在配置了结构化输出时放行（#47 审查遗留）', async () => {
+    const input = { verdict: 'approve', blocking: [], notes: '' }
+    expect(await checkReadScope('StructuredOutput', input, scope)).toMatchObject(denied)
+    expect(
+      await checkReadScope('StructuredOutput', input, { ...scope, structuredOutput: false }),
+    ).toMatchObject(denied)
+    await passed('StructuredOutput', input, { ...scope, structuredOutput: true })
   })
 
   test('Flow MCP 只在名称与来源都对得上时豁免；缺少来源、其他来源或其他 MCP 一律拒绝', async () => {

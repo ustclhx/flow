@@ -177,8 +177,9 @@ permissions:
   设置后同一个省略 matcher 的 `PreToolUse` hook 覆盖全部工具（`canUseTool` 中也做同样的兜底，检查出错一律拒绝），
   与 `writable_paths` 共用路径判定（`packages/node/src/claude-path-scope.ts`），用于防止读取
   `state/hub.token`、密钥存储、`~/.config/gh`、`~/.ssh` 后经任务目标外传：
-  - 只认白名单工具并按字段白名单校验：Read、NotebookRead、Glob、Grep、Edit、MultiEdit、Write、NotebookEdit、TodoWrite、ToolSearch
-    （以及只产生输出的 StructuredOutput）；带白名单外字段（包括 `FILE_PATH`、`filePath` 之类的变体）即拒绝。
+  - 只认白名单工具并按字段白名单校验：Read、NotebookRead、Glob、Grep、Edit、MultiEdit、Write、NotebookEdit、TodoWrite、ToolSearch、
+    WaitForMcpServers（只有服务器名列表 `servers`，按不涉及路径的值放行）；只产生输出的 StructuredOutput 只在会话配置了
+    结构化输出（审查任务的 `outputFormat`）时放行，否则拒绝；带白名单外字段（包括 `FILE_PATH`、`filePath` 之类的变体）即拒绝。
     其他工具一律拒绝，包括 Bash、PowerShell、Monitor、Agent、WebFetch、WebSearch、LSP、Skill、MCP 资源工具和非 Flow 的 MCP 工具；
   - 路径字段只能落在合同 cwd（相对路径相对它解析，cwd 自身可读）或节点注入的任务私有目录（只按绝对路径匹配）内；
     拒绝以 `~` 开头（CLI 会展开为 home）、首尾有空白、含 `..` 段或 NUL、以 `.` 开头的路径段（按 NFKC 折叠比较）、越界，
@@ -200,7 +201,8 @@ permissions:
   残余风险（以 CLI 2.1.310 的实现为依据，未运行真实 Claude）：
   - Glob 的 `pattern` 本身作为 rg 的正向 `--glob` 传入，正向 override 优先于隐藏过滤，所以 `**/*` 这类模式仍可能列出 cwd 内隐藏文件的**名称**
     （读取其内容会被拒绝）；
-  - `/.github` 按 rg 的锚定语义相对搜索根匹配，若 CLI 的 rg 工作目录不是搜索根，`.github` 可能搜不到（只会更严）；
+  - `/.github` 按 rg 的锚定语义相对搜索根匹配，依赖 CLI 运行 rg 时的工作目录就是搜索根；若不是，`.github` 可能搜不到（只会更严），
+    这一残余依赖保留，未改为绝对锚定；
   - 检查之后同一用户的其他进程仍可能并发替换文件或符号链接；这同样不是操作系统级隔离。
 - reviewer 可以评论和提交 PR review，但其他 Bash 调用仍沿用策略预检与审批；不要用 Bash 或其他工具绕过文件白名单。
   这不是操作系统级文件隔离，任意命令、MCP 工具和外部进程的间接写入仍应结合沙箱与授权范围约束。
@@ -252,6 +254,50 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
 接受/拒绝提案、转移资源及以后新增的工具也不在固定清单中。不要用宽泛的 allowedTools 绕过这层审批。
 `task_reply` 另有用户身份限制：worker 不能代替用户批准自己。
 
+### pr-reviewer：审查准备与结构化输出（add-m1-supervisor D10）
+
+模板见 `flow init` 生成的 `pr-reviewer.yaml`：`kind: read`、`setting_sources: []`、`read_scope: cwd`，没有 Bash 与写工具。
+合同带 `inputs.review = {pr, focus?}`、且角色属于 workspace 的 `supervisor.reviewer_roles`（默认 `[pr-reviewer]`）时，
+claude-sdk 执行器在启动会话前由确定性代码完成准备，模型不参与：
+
+1. 合同 cwd（或 `inputs.repo`）必须是本 workspace 登记的仓库；PR 链接的 host/owner/repo 必须等于该仓库 `remote.origin.url`
+   配置原值解析出的仓库（不经 insteadOf 改写，必须恰好一个地址），否则任务启动前 `failed(repo_not_in_workspace)`；
+2. `gh pr view <链接>` 读取 PR，核对编号，记录当前 `headRefOid`；`gh pr diff` 写入任务私有目录的 `pr.diff`；
+3. `git fetch origin pull/<n>/head`，取到的提交必须等于记录的 head（准备期间有新提交时 `failed(head_moved)`），
+   再 `git worktree add --detach` 检出到任务私有目录下的 `worktree/` 作为会话 cwd。git 一律带 `-c core.hooksPath=/dev/null`，
+   不运行仓库 hook；
+4. 会话的 `read_scope` 允许 worktree（含根下 `.github/`）与私有目录；首条消息写明 PR、head 与 diff 路径；
+   项目约定（`setting_sources: []` 时追加的 CLAUDE.md / AGENTS.md）从登记仓库读取，不从 PR 的检出读取，PR 不能借此改写系统提示词；
+5. SDK `outputFormat: {type: 'json_schema'}`（schema 即 `schemas/tasks/review-output.schema.json`），`StructuredOutput`
+   直接放行、不进审批。结果的 `verdict`、`blocking`、`notes` 取自结构化输出并按 zod 再校验（approve 时 blocking 必须为空，
+   不允许多余字段），`reviewed_sha` 由执行器填入第 2 步记录的 head；结构化输出缺失、不合规或 `error_max_structured_output_retries`
+   → `failed(review_output_invalid)`。`summary` 仍是最后一段文字（没有文字时由结论生成）；
+6. 任务结束（任何结果）后移除 worktree 与私有目录；节点启动时清理本节点残留的私有目录并 `git worktree prune`。
+   私有目录为 `<flow-home>/state/review/<node-id>/<task-id>/`。
+
+审查任务恢复执行（回复后重新排队）时不恢复旧会话：旧会话可能看过另一个 head，回复附在新的任务说明之后，重新准备。
+不在 `reviewer_roles` 中的角色即使带 `inputs.review` 也按普通任务运行，不做准备。中枢入账时丢弃合同没有 `inputs.review`
+或执行器不是 claude-sdk 的任务提交的 `result.review`；采信时（合并请求、pr-merge 再次核对）统一用 core 的
+`trustedReview` / `reviewApproves` 判断：同一 workspace、执行器 claude-sdk、角色在 `reviewer_roles` 中、已 done、
+`inputs.review.pr` 等于该 PR。
+
+### 有效类别为 read 的角色由执行器强制只读（tasks 5.7）
+
+有效类别（D9，doctor 显示）只是配置层判断，执行器另外强制：
+
+- claude-sdk：SDK `tools` 选项只提供 Read、Grep、Glob、ToolSearch、WaitForMcpServers（Flow MCP 不受 `tools` 影响）；
+  `canUseTool` 对其他工具一律拒绝，不做策略预检、不进审批。允许的 Flow 工具只有自动放行清单中的那些（`task_create`、`task_reply`
+  等直接拒绝）；StructuredOutput 只在配置了结构化输出时可用。
+- codex-exec：实测 Codex 0.164 的 `-c mcp_servers={}` 与用户级 `config.toml` 中的表是**合并**而不是替换，用户级配置里的 MCP 服务器
+  照样启动，所以不用 `-c` 覆盖。只读角色改用 Flow 管理的 `CODEX_HOME`（`<flow-home>/state/codex-read-home/`）：每次运行前覆盖其中的
+  `config.toml`（只有注释，没有 `mcp_servers`、`notify` 与项目信任记录，因此项目级 `.codex/config.toml` 也不会加载；实测未信任的
+  项目不加载项目配置）；会话记录保存在这里，`exec resume` 照常可用。
+  凭证：`auth.json` 是指向用户 CODEX_HOME（worker 环境的 `CODEX_HOME`，缺省 `~/.codex`）中 `auth.json` 的符号链接，Codex
+  原地改写凭证时写回用户的文件；用户的 CODEX_HOME 没有 `auth.json`（例如凭证存在钥匙串）时不创建链接，Codex 因未登录而失败，
+  不会回退到用户配置。用户级 config.toml 中的模型、provider 等设置也不生效，只读角色需要的设置写在角色的 `permissions.config`
+  （只允许 `model`、`model_reasoning_effort`，否则推断为 write）或 `model` / `effort` 中。
+  `codexExecPermissions` 可用的键与 core 的 `CODEX_EXEC_KNOWN_PERMISSION_KEYS` 由防漂移测试保持一致。
+
 ### triage：codex-exec
 
 ```yaml
@@ -267,6 +313,44 @@ permissions:
 `sandbox` 可取 `read-only`（缺省）、`workspace-write`、`danger-full-access`，控制初始执行与恢复执行的 Codex 沙箱。
 此执行器没有交互审批通道；分诊角色保持只读。也支持标量形式的 `permissions.config`。
 最后一条代理消息若是提问，任务进入 `blocked(question)`；用户文字回复后重新排队，带会话 id 用 exec resume 继续。
+
+### merger：pr-merge（add-m1-supervisor D10 第 5 步）
+
+```yaml
+name: merger
+kind: merge
+executor: pr-merge
+prompt: merger.md
+```
+
+pr-merge 执行器**不调用任何模型**，合同的 `inputs.merge = {pr, review_task}` 由中枢填写；执行器重新读取全部事实，
+任何一项不满足或无法确认都以 `failed(<原因码>)` 结束、不合并：
+
+| 核对 | 原因码 |
+| --- | --- |
+| `inputs.merge` 合法 | `invalid_inputs` |
+| cwd 是本 workspace 登记仓库；PR 链接的仓库等于 `remote.origin.url`；`gh repo view` 报告的仓库一致 | `repo_not_in_workspace` |
+| 本任务由 hub 或 user 创建、origin 为 instruction、`parent` 是审查任务、中枢记录的 `inputs.merge` 与合同一致 | `merge_not_eligible` |
+| 审查任务：同一 workspace、claude-sdk、角色在 `reviewer_roles`、done、`inputs.review.pr` 等于该 PR、结论 approve | `review_not_approved` |
+| PR 为 OPEN | `pr_not_open` |
+| base 为仓库默认分支 | `base_not_default` |
+| 当前 head 等于 `reviewed_sha` | `head_moved` |
+| 不是草稿且 `mergeable = MERGEABLE` | `not_mergeable` |
+| 至少一项检查且全部 `pass`（`skipping` 不算失败，但不计入"至少一项"），没有进行中的；`supervisor.allow_no_checks: true` 时允许没有检查 | `checks_not_green` |
+
+通过后执行 `gh pr merge <链接> --<merge_method> --match-head-commit <reviewed_sha>`（`supervisor.merge_method`，默认 squash；
+head 在核对之后变化时 GitHub 拒绝合并），再读 PR 状态：必须为 MERGED 且有合并提交，否则 `failed(merge_failed)`。
+必需检查未完成时 gh 会改为打开自动合并，没有确认合并时执行器一律用 `--disable-auto` 尝试关掉它。
+分支要求 merge queue 时 PR 只进入队列，执行器按 `merge_failed` 结束，但**队列之后仍可能合并它**（`--disable-auto`
+不会把 PR 移出队列），也不会再确认流水线；使用 merge queue 的仓库不要开启 `supervisor.auto_merge`。
+
+合并后用 `gh run list -R <host/owner/repo> --commit <合并提交> --branch <默认分支>` 轮询（默认每 15 秒）：
+全部结束且结论都是 success / skipped / neutral，并在下一次查询中没有新出现的 run → `done`，结果附 run 链接；
+有其他结论 → `failed(pipeline_failed)`；30 分钟仍未结束 → `failed(pipeline_timeout)`，附 run 链接；
+合并后 2 分钟内一直没有任何 run → `done`，注明未发现发布流水线（查询失败不算"没有 run"）。
+
+审查任务经中枢 `GET /v1/tasks/:id` 读取：本机节点以 user token 访问；用绑定 token（`FLOW_HUB_TOKEN`，`node:<id>` 身份）
+运行的节点只能看自己持有租约的任务，读不到审查任务时按 `merge_not_eligible` / `review_not_approved` 失败。pr-merge 应在本机节点上运行。
 
 ## 安全边界
 

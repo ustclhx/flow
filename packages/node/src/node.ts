@@ -1018,9 +1018,21 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     cancelJump = clock.setTimeout(check, JUMP_CHECK_MS)
   }
 
-  const looping = Promise.all(
-    LEASE_SLOT_KINDS.filter((kind) => capacity[kind] > 0).map((kind) =>
-      loop(kind).catch((err) => logger.warn(`节点领取循环（${kind}）异常退出`, String(err))),
+  // 执行器的启动清理（例如移除审查任务残留的 worktree）在领取任务之前完成。
+  const prepared = (async () => {
+    for (const p of registry.list()) {
+      try {
+        await p.prepare?.({ nodeId })
+      } catch (err) {
+        logger.warn(`执行器 ${p.type} 的启动清理失败`, String(err))
+      }
+    }
+  })()
+  const looping = prepared.then(() =>
+    Promise.all(
+      LEASE_SLOT_KINDS.filter((kind) => capacity[kind] > 0).map((kind) =>
+        loop(kind).catch((err) => logger.warn(`节点领取循环（${kind}）异常退出`, String(err))),
+      ),
     ),
   )
 

@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -16,6 +18,8 @@ import {
   createCodexExecExecutor,
   type ExecutorContext,
   type ExecutorRun,
+  prepareReadCodexHome,
+  readCodexHome,
 } from '../src/index.ts'
 import { bench } from './harness.ts'
 import { processStopped } from './process.ts'
@@ -49,7 +53,7 @@ const { spawn } = require('node:child_process')
 const question = ${JSON.stringify(question)}
 const resumed = ${JSON.stringify(resumed)}
 const args = process.argv.slice(2)
-fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ args, cwd: process.cwd(), token: process.env.FLOW_HUB_TOKEN, home: process.env.FLOW_HOME, actor: process.env.FLOW_ACTOR }))
+fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ args, cwd: process.cwd(), token: process.env.FLOW_HUB_TOKEN, home: process.env.FLOW_HOME, actor: process.env.FLOW_ACTOR, codexHome: process.env.CODEX_HOME }))
 // 故意逐 7 字节输出，覆盖 UTF-8、多行和 JSON 跨 chunk；最后一行没有换行。
 const send = text => { const b = Buffer.from(text.trimEnd()); for (let i = 0; i < b.length; i += 7) fs.writeSync(1, b.subarray(i, i + 7)) }
 ${body}
@@ -80,6 +84,8 @@ ${body}
     home,
     codexCommand: [process.execPath, script],
     resolveRole: async () => ok(resolvedRole),
+    // 只读角色隔离 CODEX_HOME 时链接的凭证来源：临时目录，绝不读取 ~/.codex。
+    codexAuthSource: join(dir, 'codex-src'),
   }
   const run = (context = ctx, opts = options) => {
     const r = createCodexExecExecutor(opts).run(contract, context)
@@ -101,6 +107,7 @@ ${body}
         token?: string
         actor: string
         home: string
+        codexHome?: string
       },
     launched: () => existsSync(report),
   }
@@ -433,4 +440,50 @@ test('角色 user 在启动 Codex 前失败，不回退身份', async () => {
     result: { reason: 'invalid_actor' },
   })
   expect(s.launched()).toBe(false)
+})
+
+describe('只读角色由执行器强制只读（add-m1-supervisor 5.7）', () => {
+  test('有效类别 read：隔离的 CODEX_HOME，config.toml 不含 MCP 与 notify，auth.json 链接到用户凭证', async () => {
+    const s = setup()
+    const src = join(s.dir, 'codex-src')
+    mkdirSync(src)
+    writeFileSync(join(src, 'auth.json'), '{"placeholder":true}')
+    // 用户级配置里的 MCP 服务器与 notify 不能进入只读角色的 Codex。
+    writeFileSync(join(src, 'config.toml'), '[mcp_servers.x]\ncommand = "/bin/sh"\n')
+    const { outcome } = await collect(s.run())
+    expect(outcome.outcome).toBe('done')
+    const isolated = readCodexHome(s.home)
+    expect(s.report().codexHome).toBe(isolated)
+    const config = readFileSync(join(isolated, 'config.toml'), 'utf8')
+    expect(config).not.toMatch(/^\s*\[?mcp_servers/m)
+    expect(config).not.toMatch(/^\s*notify/m)
+    expect(config).not.toMatch(/^\s*\[projects/m)
+    expect(lstatSync(join(isolated, 'auth.json')).isSymbolicLink()).toBe(true)
+    expect(readlinkSync(join(isolated, 'auth.json'))).toBe(join(src, 'auth.json'))
+    expect(existsSync(join(isolated, 'mcp_servers'))).toBe(false)
+  })
+
+  test('每次运行覆盖 config.toml 并修复 auth.json 链接；凭证来源没有 auth.json 时不创建链接', async () => {
+    const s = setup()
+    const isolated = readCodexHome(s.home)
+    mkdirSync(isolated, { recursive: true })
+    writeFileSync(join(isolated, 'config.toml'), 'notify = ["/bin/sh", "-c", "x"]\n')
+    writeFileSync(join(isolated, 'auth.json'), 'stale')
+    await collect(s.run())
+    expect(readFileSync(join(isolated, 'config.toml'), 'utf8')).not.toContain('notify =')
+    expect(existsSync(join(isolated, 'auth.json'))).toBe(false)
+    expect(await prepareReadCodexHome(s.home, join(s.dir, 'missing'))).toBe(isolated)
+  })
+
+  test('有效类别 write（sandbox 不是 read-only，或 config 含白名单外的键）：不改 CODEX_HOME', async () => {
+    for (const permissions of [
+      { sandbox: 'workspace-write' },
+      { config: { notify: 'x' } },
+    ] as const) {
+      const s = setup('send(resumed)', { permissions })
+      await collect(s.run({ ...s.ctx, env: { ...s.ctx.env, CODEX_HOME: '/codex/user-home' } }))
+      expect(s.report().codexHome).toBe('/codex/user-home')
+      expect(existsSync(readCodexHome(s.home))).toBe(false)
+    }
+  })
 })
