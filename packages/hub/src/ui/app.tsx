@@ -20,6 +20,7 @@ import { z } from 'zod'
 import { actOnInbox, type InboxActionDeps } from '../inbox/actions.ts'
 import { respond } from '../ledger/routes.ts'
 import { userOnly } from '../server/auth.ts'
+import { proposalOf } from '../supervisor-tools/task-proposals.ts'
 import { APP_CSS, APP_JS, ICON_SVG } from './assets.ts'
 import { Board, type BoardModel, BoardPage, LoginPage, type UiItem } from './page.tsx'
 import { SESSION_TTL_MS, type UiSessions } from './sessions.ts'
@@ -65,6 +66,7 @@ export interface UiAppDeps {
 const uiActRequest = z.strictObject({
   action: z.enum([...INBOX_ACTIONS, 'dismiss']),
   text: z.string().trim().min(1).max(16_384).optional(),
+  goal: z.string().trim().min(1).max(16_384).optional(),
 })
 
 function uiError(c: Context, status: ContentfulStatusCode, code: string, message: string) {
@@ -139,6 +141,10 @@ function boardModel(deps: InboxActionDeps, now: number): BoardModel {
       body: redactSecrets(item.body),
       snippet: snippetOf(deps, item),
       pending: pending ? { kind: pending.kind } : null,
+    }
+    if (item.source === 'task_proposal') {
+      const proposal = proposalOf(deps, item)
+      if (proposal) entry.goal = redactSecrets(proposal.payload.draft.goal)
     }
     if (pending) waiting.push(entry)
     else levels[item.level].push(entry)

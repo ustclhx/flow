@@ -58,7 +58,10 @@
             "proposal",
             "policy",
             "supervisor",
-            "digest"
+            "digest",
+            "task_proposal",
+            "merge_request",
+            "decision"
           ],
           "description": "条目来源"
         },
@@ -98,6 +101,17 @@
               "reject"
             ],
             "description": "条目上可用的操作"
+          }
+        },
+        "options": {
+          "description": "supervisor 提问的候选答复（2–4 个，D11）；只用于 source=supervisor 的条目",
+          "minItems": 2,
+          "maxItems": 4,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
           }
         },
         "source_seq": {

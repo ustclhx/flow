@@ -4850,7 +4850,10 @@
                           "proposal",
                           "policy",
                           "supervisor",
-                          "digest"
+                          "digest",
+                          "task_proposal",
+                          "merge_request",
+                          "decision"
                         ],
                         "description": "条目来源"
                       },
@@ -4890,6 +4893,17 @@
                             "reject"
                           ],
                           "description": "条目上可用的操作"
+                        }
+                      },
+                      "options": {
+                        "description": "supervisor 提问的候选答复（2–4 个，D11）；只用于 source=supervisor 的条目",
+                        "minItems": 2,
+                        "maxItems": 4,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
                         }
                       },
                       "source_seq": {
@@ -5087,6 +5101,7 @@
                           "proposal_rejected",
                           "proposal_removed",
                           "answered",
+                          "expired",
                           "dismissed",
                           "acted",
                           "digested"
@@ -6563,6 +6578,12 @@
                         ],
                         "additionalProperties": false,
                         "title": "Task proposal decision"
+                      },
+                      "decision_path": {
+                        "description": "带决策时，接受后写入的决策条目路径（提交时由中枢确定，接受与重试都用它）",
+                        "type": "string",
+                        "maxLength": 256,
+                        "pattern": "^decisions\\/[A-Za-z0-9][A-Za-z0-9._-]*\\.md$"
                       },
                       "reason": {
                         "description": "提案理由",

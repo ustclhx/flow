@@ -72,15 +72,30 @@ export function callbackData(shortId: string, action: ButtonAction): string {
   return `i:${shortId}:${action}`
 }
 
-const CALLBACK_RE = /^i:([0-9a-z]{1,11}):(approve|deny|accept|reject|dismiss)$/
+/** supervisor 提问的选项按钮（D11）：`i:<短 id>:o<序号>`，点选即以该选项答复。 */
+export function optionCallbackData(shortId: string, index: number): string {
+  return `i:${shortId}:o${index}`
+}
 
-export function parseCallbackData(data: string | undefined): {
-  short_id: string
-  action: ButtonAction
-} | null {
+const CALLBACK_RE = /^i:([0-9a-z]{1,11}):(approve|deny|accept|reject|dismiss|o[0-3])$/
+
+export function parseCallbackData(data: string | undefined):
+  | {
+      short_id: string
+      action: ButtonAction
+    }
+  | {
+      short_id: string
+      action: 'reply'
+      /** 选项序号（从 0 开始）。 */
+      option: number
+    }
+  | null {
   if (!data || Buffer.byteLength(data, 'utf8') > CALLBACK_DATA_MAX) return null
   const m = CALLBACK_RE.exec(data)
   if (!m?.[1] || !m[2]) return null
+  if (m[2].startsWith('o'))
+    return { short_id: m[1], action: 'reply', option: Number(m[2].slice(1)) }
   return { short_id: m[1], action: m[2] as ButtonAction }
 }
 
@@ -91,6 +106,15 @@ export function buttonActions(item: OutboundItem): ButtonAction[] {
   for (const a of item.actions) if (a !== 'reply' && !out.includes(a)) out.push(a)
   out.push('dismiss')
   return out
+}
+
+/** 提问的选项按钮：每个选项一个，按钮文字为选项本身（截断到 60 字符）。 */
+function optionButtons(item: OutboundItem, prefix: string): InlineButton[] {
+  if (item.state !== 'open' || !item.options) return []
+  return item.options.slice(0, 4).map((o, i) => ({
+    text: clip(`${prefix}${o}`, 60),
+    callback_data: optionCallbackData(item.short_id, i),
+  }))
 }
 
 function buttonsFor(item: OutboundItem, prefix: string): InlineButton[] {
@@ -122,8 +146,17 @@ function renderItem(item: OutboundItem, scale: number, r: Redact): string {
     const snippet = clipTail(r(item.snippet), Math.floor(1500 * scale))
     if (snippet) lines.push(`<pre>${escapeHtml(snippet)}</pre>`)
   }
+  // 任务提案可在 Web 上修改目标后接受（D11）。Web 页面只接受本机访问，从手机打开需要对外暴露，
+  // 留给用户决定（design Open Questions），这里只提示到电脑上操作。
+  if (item.state === 'open' && item.source === 'task_proposal') {
+    lines.push('<i>要修改目标后再接受：Web 页面仅本机可用（在电脑上运行 flow ui）</i>')
+  }
   if (item.state === 'open' && item.actions.includes('reply')) {
-    lines.push('<i>直接回复这条消息即可答复</i>')
+    lines.push(
+      item.options
+        ? '<i>点选项按钮，或直接回复这条消息答复</i>'
+        : '<i>直接回复这条消息即可答复</i>',
+    )
   }
   return lines.join('\n\n')
 }
@@ -163,8 +196,15 @@ function keyboard(message: ChannelMessage): ReplyMarkup {
     rows.push(kept)
     count += kept.length
   }
-  if (message.kind === 'item') push(buttonsFor(message.item, ''))
-  else for (const item of message.items) push(buttonsFor(item, `#${item.short_id} `))
+  if (message.kind === 'item') {
+    push(optionButtons(message.item, ''))
+    push(buttonsFor(message.item, ''))
+  } else {
+    for (const item of message.items) {
+      push(optionButtons(item, `#${item.short_id} `))
+      push(buttonsFor(item, `#${item.short_id} `))
+    }
+  }
   return { inline_keyboard: rows }
 }
 

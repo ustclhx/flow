@@ -1,0 +1,35 @@
+{
+  "$id": "https://flow.local/schemas/protocol/supervisor-ask.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "提问全文"
+    },
+    "options": {
+      "minItems": 2,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "description": "提问的候选答复（2–4 个）；渠道上显示为按钮，点选即以该选项答复"
+    }
+  },
+  "required": [
+    "workspace",
+    "question"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/supervisor/questions 请求体"
+}

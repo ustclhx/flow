@@ -280,9 +280,9 @@ export function createApplier(db: Database): Applier {
         const p = e.payload
         stmt(
           `INSERT INTO inbox_items (id, level, source, source_ref, source_seq, reason, workspace,
-             task_id, title, body, actions_json, state, created_seq, created_at, created_by,
-             updated_at, last_seq, deferred_until)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)`,
+             task_id, title, body, actions_json, options_json, state, created_seq, created_at,
+             created_by, updated_at, last_seq, deferred_until)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)`,
         ).run(
           p.item_id,
           p.level,
@@ -295,6 +295,7 @@ export function createApplier(db: Database): Applier {
           p.title,
           p.body,
           JSON.stringify(p.actions),
+          p.options === undefined ? null : JSON.stringify(p.options),
           e.seq,
           e.ts,
           e.actor,

@@ -13,6 +13,7 @@ import {
   inboxCloseReason,
   inboxItemId,
   inboxLevel,
+  inboxOptions,
   inboxSource,
   inboxVia,
 } from '../inbox/schema.ts'
@@ -338,6 +339,9 @@ export const eventPayloads = {
     actions: z.array(inboxAction).default([]).meta({
       description: '可用的操作；忽略（dismiss）总是可用，不写在这里',
     }),
+    options: inboxOptions.optional().meta({
+      description: 'supervisor 提问的候选答复（2–4 个，D11）；只用于 source=supervisor 的条目',
+    }),
     source_seq: z.number().int().min(1).optional().meta({
       description: '触发该条目的账本事件 seq（反应器的幂等键）；提案等账本外的来源没有',
     }),
@@ -452,6 +456,9 @@ export const eventPayloads = {
     wake_task_id: taskId.meta({ description: '提交提案的唤醒任务' }),
     draft: taskContract,
     decision: taskProposalDecision.optional(),
+    decision_path: decisionPath.optional().meta({
+      description: '带决策时，接受后写入的决策条目路径（提交时由中枢确定，接受与重试都用它）',
+    }),
     reason: z.string().max(2000).optional().meta({ description: '提案理由' }),
   }),
   /** 用户接受任务提案：中枢以 user 身份建任务（origin instruction），有决策时写入 brain。 */

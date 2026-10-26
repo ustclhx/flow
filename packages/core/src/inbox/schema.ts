@@ -28,16 +28,33 @@ export const INBOX_LEVEL_RANK: Readonly<Record<InboxLevel, number>> = {
  * - `task`：任务进入 blocked；
  * - `proposal`：待确认的修改提案（state/proposals/，不在账本中）；
  * - `policy`：`auto-report` 策略的执行记录；
- * - `supervisor`：supervisor 的提问（变更 ④ 接入）；
- * - `digest`：每日摘要（3.3）。
+ * - `supervisor`：supervisor 的提问（`ask_user`，变更 ④ D11）；
+ * - `digest`：每日摘要（3.3）；
+ * - `task_proposal`：supervisor 的任务提案（`task_propose`，D11）。与知识修改提案 `proposal` 分开：
+ *   动作路由到中枢的提案接受 / 驳回，不受提案目录扫描（`proposal_removed`）影响；
+ * - `merge_request`：supervisor 的合并请求等待用户批准（D10，4.8 接入）；
+ * - `decision`：到期决策的回看提醒（D11：决策没有 workspace 或 workspace 未启用 supervisor 时）。
  */
-export const INBOX_SOURCES = ['task', 'proposal', 'policy', 'supervisor', 'digest'] as const
+export const INBOX_SOURCES = [
+  'task',
+  'proposal',
+  'policy',
+  'supervisor',
+  'digest',
+  'task_proposal',
+  'merge_request',
+  'decision',
+] as const
 export type InboxSource = (typeof INBOX_SOURCES)[number]
 export const inboxSource = z.enum(INBOX_SOURCES).meta({ description: '条目来源' })
 
 /**
- * 条目上的操作（inbox spec "操作"，3.2 映射到已有操作）：
- * approve / deny / reply → `task_reply`；accept / reject → `kb_proposals_accept` / `kb_proposals_reject`；
+ * 条目上的操作（inbox spec "操作"，3.2 映射到已有操作），按条目来源路由：
+ * - `task`：approve / deny / reply → `task_reply`；
+ * - `proposal`：accept / reject → `kb_proposals_accept` / `kb_proposals_reject`；
+ * - `supervisor`（提问）：reply → 条目以 `answered` 关闭并写 `supervisor.answered`；
+ * - `task_proposal`：accept / reject → 中枢建任务 / 驳回（`task_proposal.accepted|rejected`）；
+ * - `merge_request`：approve（批准合并）/ reject（驳回）→ 合并请求处理（4.8）。
  * dismiss（忽略）对任何未关闭的条目都可用，不写进 `actions`。
  */
 export const INBOX_ACTIONS = ['approve', 'deny', 'reply', 'accept', 'reject'] as const
@@ -59,7 +76,7 @@ export const inboxVia = z.enum(INBOX_VIA).meta({ description: '操作发起的�
  * - `task_done` / `task_failed` / `task_cancelled`：任务进入终态；
  * - `superseded`：同一任务再次卡住（原因变了），由新条目取代；
  * - `proposal_accepted` / `proposal_rejected` / `proposal_removed`：提案已处理或已不存在；
- * - `answered`：提问已被答复（变更 ④）；
+ * - `answered`：提问已被答复（变更 ④）；`expired`：提问 7 天未答复（D11）；
  * - `dismissed`：用户忽略（3.2）；`acted`：用户在条目上执行了操作（3.2）；
  * - `digested`：策略执行记录已写进每日摘要（3.3），不再单独保留。
  */
@@ -74,6 +91,7 @@ export const INBOX_CLOSE_REASONS = [
   'proposal_rejected',
   'proposal_removed',
   'answered',
+  'expired',
   'dismissed',
   'acted',
   'digested',
@@ -98,6 +116,14 @@ export const inboxItemId = z
 export const INBOX_TITLE_MAX = 200
 export const INBOX_BODY_MAX = 4000
 export const INBOX_NOTE_MAX = 1000
+/** supervisor 提问的选项（D11）：2–4 个，每个最多 100 字符。 */
+export const INBOX_OPTION_MAX = 100
+export const inboxOptions = z
+  .array(z.string().trim().min(1).max(INBOX_OPTION_MAX))
+  .min(2)
+  .max(4)
+  .refine((o) => new Set(o).size === o.length, '选项不能重复')
+  .meta({ description: '提问的候选答复（2–4 个）；渠道上显示为按钮，点选即以该选项答复' })
 /** 推送失败原因（`inbox.pushed` op=failed）的长度上限。 */
 export const INBOX_PUSH_REASON_MAX = 500
 
@@ -155,6 +181,7 @@ export const inboxItemView = z
     title: z.string(),
     body: z.string(),
     actions: z.array(inboxAction),
+    options: inboxOptions.optional(),
     state: z.enum(['open', 'closed']),
     created_at: timestamp,
     created_by: actor,
@@ -196,9 +223,15 @@ export const inboxListQuery = z.strictObject({
 export type InboxListQuery = z.infer<typeof inboxListQuery>
 export const inboxListData = z.object({ items: z.array(inboxItemView) })
 
+/** 任务提案接受时可改写的目标的长度上限（字符）。 */
+export const INBOX_GOAL_MAX = 16_384
+
 export const inboxActRequest = z.strictObject({
   action: z.enum([...INBOX_ACTIONS, 'dismiss']),
   text: z.string().trim().min(1).max(16_384).optional(),
+  goal: z.string().trim().min(1).max(INBOX_GOAL_MAX).optional().meta({
+    description: '只用于接受任务提案（task_proposal 条目的 accept）：用修改后的目标建任务',
+  }),
   via: inboxVia.optional(),
 })
 export type InboxActRequest = z.infer<typeof inboxActRequest>

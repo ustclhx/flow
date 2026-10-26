@@ -18,6 +18,8 @@ export interface UiItem {
   snippet: string | null
   /** 已提交、等待送达执行器的回复；有值时条目放进"已提交"一栏。 */
   pending: { kind: string } | null
+  /** 任务提案的目标全文（D11：Web 上可以修改目标后再接受）；其他条目省略。 */
+  goal?: string
 }
 
 export interface BoardModel {
@@ -46,6 +48,9 @@ const SOURCE_LABEL: Record<string, string> = {
   policy: '自动放行记录',
   supervisor: 'supervisor 提问',
   digest: '每日摘要',
+  task_proposal: '任务提案',
+  merge_request: '合并请求',
+  decision: '决策回看',
 }
 
 export const ACTION_LABEL: Record<InboxAction, string> = {
@@ -137,6 +142,26 @@ export const Card: FC<{ entry: UiItem; now: number }> = ({ entry, now }) => {
       <h3 class="title">{entry.title}</h3>
       {entry.body ? <div class="body">{entry.body}</div> : null}
       {entry.snippet ? <Snippet text={entry.snippet} /> : null}
+      {item.options && item.options.length > 0 ? (
+        <div class="options">
+          {item.options.map((o) => (
+            <button type="button" class="btn secondary" data-option={o}>
+              {o}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {entry.goal !== undefined ? (
+        <details class="goal-edit">
+          <summary>修改目标后接受</summary>
+          <label class="sr" for={`goal-${item.id}`}>
+            任务目标
+          </label>
+          <textarea id={`goal-${item.id}`} rows={6} maxlength={16384} data-goal>
+            {entry.goal}
+          </textarea>
+        </details>
+      ) : null}
       <div class={item.actions.length === 0 ? 'actions only-dismiss' : 'actions'}>
         {actions.map((a) => (
           <button

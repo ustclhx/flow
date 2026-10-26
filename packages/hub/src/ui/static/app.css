@@ -524,6 +524,25 @@ textarea:focus-visible,
   display: none;
 }
 
+/* supervisor 提问的选项与任务提案的目标编辑（add-m1-supervisor D11） */
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.goal-edit {
+  margin-top: 10px;
+}
+
+.goal-edit summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted, inherit);
+}
+
+.goal-edit textarea,
 .reply textarea {
   display: block;
   width: 100%;

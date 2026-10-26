@@ -28,7 +28,10 @@
         "proposal",
         "policy",
         "supervisor",
-        "digest"
+        "digest",
+        "task_proposal",
+        "merge_request",
+        "decision"
       ],
       "description": "条目来源"
     },
@@ -86,6 +89,17 @@
         ],
         "description": "条目上可用的操作"
       }
+    },
+    "options": {
+      "minItems": 2,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "description": "提问的候选答复（2–4 个）；渠道上显示为按钮，点选即以该选项答复"
     },
     "state": {
       "type": "string",
@@ -245,6 +259,7 @@
                 "proposal_rejected",
                 "proposal_removed",
                 "answered",
+                "expired",
                 "dismissed",
                 "acted",
                 "digested"

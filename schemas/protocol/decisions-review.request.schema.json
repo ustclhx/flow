@@ -1,0 +1,25 @@
+{
+  "$id": "https://flow.local/schemas/protocol/decisions-review.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^decisions\\/[A-Za-z0-9][A-Za-z0-9._-]*\\.md$",
+      "description": "决策条目路径（相对 brain/）"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "回看结论：追加到决策的“回看”一节"
+    }
+  },
+  "required": [
+    "path",
+    "text"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/decisions/review 请求体"
+}

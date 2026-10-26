@@ -868,6 +868,12 @@
           "additionalProperties": false,
           "title": "Task proposal decision"
         },
+        "decision_path": {
+          "description": "带决策时，接受后写入的决策条目路径（提交时由中枢确定，接受与重试都用它）",
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^decisions\\/[A-Za-z0-9][A-Za-z0-9._-]*\\.md$"
+        },
         "reason": {
           "description": "提案理由",
           "type": "string",

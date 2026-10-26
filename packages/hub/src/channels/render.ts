@@ -41,6 +41,7 @@ const REASON_LABEL: Readonly<Record<InboxCloseReason, string>> = {
   proposal_rejected: '已处理（提案已拒绝）',
   proposal_removed: '已处理（提案已不存在）',
   answered: '已处理（已答复）',
+  expired: '已过期（7 天未答复）',
   dismissed: '已忽略',
   acted: '已处理',
   digested: '已写入每日摘要',
@@ -92,6 +93,7 @@ export function toOutbound(item: InboxItemView, o: RenderOptions): OutboundItem 
     text: clipText(redact(text), INBOX_BODY_MAX),
     snippet,
     actions: item.state === 'open' ? [...item.actions] : [],
+    ...(item.state === 'open' && item.options ? { options: item.options.map(redact) } : {}),
     state: item.state,
     closed: item.closed ? { reason: item.closed.reason, label: closedLabel(item.closed) } : null,
   }

@@ -45,7 +45,9 @@ export function createInboxRoutes(deps: InboxActionDeps): Hono {
         c.req.param('id'),
         parsed.data,
         c.get('actor') ?? 'unknown',
-        auth?.kind === 'wake' ? { workspace: auth.wake.workspace } : undefined,
+        auth?.kind === 'wake'
+          ? { workspace: auth.wake.workspace, origin: auth.wake.origin }
+          : undefined,
       ),
       inboxActData,
     )

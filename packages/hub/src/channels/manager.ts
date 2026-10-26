@@ -383,7 +383,11 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
     return false
   }
 
-  const renderOpts = () => ({ ledger, snippetMax: cadence().snippet_max_chars, redact })
+  const renderOpts = () => ({
+    ledger,
+    snippetMax: cadence().snippet_max_chars,
+    redact,
+  })
 
   /** 推送到期的条目。遇到传输层错误时抛出（由 runSlot 退避）。 */
   async function sendDue(slot: Slot, plugin: ChannelPlugin) {

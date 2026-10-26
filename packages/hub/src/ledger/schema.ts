@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS inbox_items (
   title             TEXT NOT NULL,
   body              TEXT NOT NULL,
   actions_json      TEXT NOT NULL,
+  options_json      TEXT,
   state             TEXT NOT NULL CHECK (state IN ('open', 'closed')),
   created_seq       INTEGER NOT NULL UNIQUE,
   created_at        TEXT NOT NULL,
@@ -206,4 +207,10 @@ export const LEDGER_COLUMN_MIGRATIONS: ReadonlyArray<{
   // add-m1-supervisor：task.created 的 origin（D2）与 task.branch_reported 的分支（D15）。
   { table: 'tasks', column: 'origin', ddl: 'ALTER TABLE tasks ADD COLUMN origin TEXT' },
   { table: 'tasks', column: 'branch', ddl: 'ALTER TABLE tasks ADD COLUMN branch TEXT' },
+  // add-m1-supervisor：supervisor 提问的选项（D11）。
+  {
+    table: 'inbox_items',
+    column: 'options_json',
+    ddl: 'ALTER TABLE inbox_items ADD COLUMN options_json TEXT',
+  },
 ]
