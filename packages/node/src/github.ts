@@ -133,8 +133,11 @@ export const UNTRUSTED_CHECKOUT_ENV = { GIT_LFS_SKIP_SMUDGE: '1' } as const
 /**
  * 检出与浏览 PR 内容时，中和由配置驱动、会在沙箱外运行的程序（add-m1-supervisor D10）：
  * - `core.hooksPath=/dev/null`：不运行 hook；`core.fsmonitor=false`：不运行 fsmonitor 钩子；
- * - 仓库与用户配置中已登记的每个 filter driver（`git config --get-regexp '^filter\.'`）把 smudge、clean、process
- *   置空并设 `required=false`：PR 的 `.gitattributes` 引用它们时按原样检出，不执行任何命令。
+ * - 仓库与用户配置中已登记的每个 filter driver（`filter.<名>.*`）把 smudge、clean、process 置空并设 `required=false`：
+ *   PR 的 `.gitattributes` 引用它们时按原样检出，不执行任何命令；
+ * - 每个配置了 `textconv` 或 `command` 的 diff driver（`diff.<名>.*`）把两者置空，并设 `diff.external=`。
+ *   实测 git 对空的 textconv / command / external 会尝试运行空命令并报错（`cannot run :`），不会执行任何程序：
+ *   这类 diff 失败而不是执行配置里的程序（fail-closed）。
  * 读取配置失败时返回失败（调用方不检出）。
  */
 export async function untrustedCheckoutConfig(
@@ -144,8 +147,9 @@ export async function untrustedCheckoutConfig(
   const pairs: GitConfigPair[] = [
     ['core.hooksPath', '/dev/null'],
     ['core.fsmonitor', 'false'],
+    ['diff.external', ''],
   ]
-  const listed = await git(repo, ['config', '--null', '--get-regexp', '^filter\\.'], options)
+  const listed = await git(repo, ['config', '--null', '--get-regexp', '^(filter|diff)\\.'], options)
   let text = ''
   if (listed.ok) text = listed.data
   else {
@@ -153,16 +157,21 @@ export async function untrustedCheckoutConfig(
     const d = listed.error.details as { exitCode?: unknown; stdout?: unknown } | undefined
     if (d?.exitCode !== 1 || d.stdout !== '') return listed
   }
-  const drivers = new Set<string>()
-  // --null：每项为 "key\nvalue\0"。
+  const filters = new Set<string>()
+  const diffs = new Set<string>()
+  // --null：每项为 "key\nvalue\0"；子节名（driver）可能含点，取首段与末段之间的部分。
   for (const item of text.split('\0')) {
     const key = item.split('\n', 1)[0] ?? ''
-    if (!key.startsWith('filter.')) continue
+    const first = key.indexOf('.')
     const last = key.lastIndexOf('.')
-    const driver = key.slice('filter.'.length, last)
-    if (last > 'filter.'.length && driver !== '') drivers.add(driver)
+    if (first < 0 || last <= first + 1) continue
+    const section = key.slice(0, first).toLowerCase()
+    const driver = key.slice(first + 1, last)
+    const name = key.slice(last + 1).toLowerCase()
+    if (section === 'filter') filters.add(driver)
+    else if (section === 'diff' && (name === 'textconv' || name === 'command')) diffs.add(driver)
   }
-  for (const d of [...drivers].sort()) {
+  for (const d of [...filters].sort()) {
     pairs.push(
       [`filter.${d}.smudge`, ''],
       [`filter.${d}.clean`, ''],
@@ -170,6 +179,8 @@ export async function untrustedCheckoutConfig(
       [`filter.${d}.required`, 'false'],
     )
   }
+  for (const d of [...diffs].sort())
+    pairs.push([`diff.${d}.textconv`, ''], [`diff.${d}.command`, ''])
   return ok(pairs)
 }
 
@@ -259,8 +270,11 @@ const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
                 pageInfo { hasNextPage }
                 nodes {
                   __typename
-                  ... on CheckRun { name status conclusion detailsUrl }
-                  ... on StatusContext { context state targetUrl }
+                  ... on CheckRun {
+                    name status conclusion detailsUrl startedAt
+                    checkSuite { app { slug } workflowRun { event workflow { name } } }
+                  }
+                  ... on StatusContext { context state targetUrl createdAt }
                 }
               }
             }
@@ -278,14 +292,58 @@ const snapshotContext = z.union([
     status: z.string(),
     conclusion: z.string().nullable(),
     detailsUrl: z.string().nullable().optional(),
+    startedAt: z.string().nullable().optional(),
+    checkSuite: z
+      .looseObject({
+        app: z.looseObject({ slug: z.string().nullable().optional() }).nullable().optional(),
+        workflowRun: z
+          .looseObject({
+            event: z.string().nullable().optional(),
+            workflow: z
+              .looseObject({ name: z.string().nullable().optional() })
+              .nullable()
+              .optional(),
+          })
+          .nullable()
+          .optional(),
+      })
+      .nullable()
+      .optional(),
   }),
   z.looseObject({
     __typename: z.literal('StatusContext'),
     context: z.string(),
     state: z.string(),
     targetUrl: z.string().nullable().optional(),
+    createdAt: z.string().nullable().optional(),
   }),
 ])
+type SnapshotContext = z.infer<typeof snapshotContext>
+
+/**
+ * rollup 可能包含同一检查的多次运行（重新运行后旧的 check run 仍在，gh CLI 的 `pr checks` 同样去重，见
+ * cli/cli `pkg/cmd/pr/checks/aggregate.go` 的 eliminateDuplicates）。按与 gh 相同的键去重——CheckRun 为
+ * 名称 + app + workflow + event，StatusContext 为 context——只保留最新的一条（按 startedAt / createdAt）。
+ * 与 gh 不同：没有开始时间的运行（排队中的重新运行）视为最新，避免旧的成功结果掩盖进行中的重跑。
+ */
+export function latestChecks(contexts: readonly SnapshotContext[]): SnapshotContext[] {
+  const time = (c: SnapshotContext) => {
+    const t = c.__typename === 'CheckRun' ? c.startedAt : c.createdAt
+    const ms = t ? Date.parse(t) : Number.NaN
+    return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms
+  }
+  const key = (c: SnapshotContext) =>
+    c.__typename === 'CheckRun'
+      ? `run\0${c.name}\0${c.checkSuite?.app?.slug ?? ''}\0${c.checkSuite?.workflowRun?.workflow?.name ?? ''}\0${c.checkSuite?.workflowRun?.event ?? ''}`
+      : `status\0${c.context}`
+  const out = new Map<string, SnapshotContext>()
+  for (const c of contexts) {
+    const k = key(c)
+    const prev = out.get(k)
+    if (!prev || time(c) > time(prev)) out.set(k, c)
+  }
+  return [...out.values()]
+}
 
 const snapshotResponse = z.looseObject({
   data: z.looseObject({
@@ -353,7 +411,7 @@ export interface PrSnapshot {
 }
 
 /** CheckRun / StatusContext 归到与 `gh pr checks` 相同的 bucket。 */
-function bucketOf(c: z.infer<typeof snapshotContext>): GhCheck {
+function bucketOf(c: SnapshotContext): GhCheck {
   if (c.__typename === 'CheckRun') {
     const bucket =
       c.status !== 'COMPLETED'
@@ -524,7 +582,7 @@ export function createGitHubCli(options: GitHubCliOptions = {}): GitHubCli {
         nameWithOwner: repo.nameWithOwner,
         defaultBranch: repo.defaultBranchRef.name,
         checksOid: commit?.oid,
-        checks: (contexts?.nodes ?? []).map(bucketOf),
+        checks: latestChecks(contexts?.nodes ?? []).map(bucketOf),
         checksTruncated:
           contexts !== undefined &&
           (contexts.pageInfo.hasNextPage ||

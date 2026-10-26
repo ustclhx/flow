@@ -112,3 +112,162 @@ describe('gh 封装', () => {
     })
   })
 })
+
+describe('prSnapshot（GraphQL）', () => {
+  const pr = parsePrUrl(PR_URL)
+  if (!pr) throw new Error('PR 链接')
+  const HEAD = 'a'.repeat(40)
+  const run = (over: Record<string, unknown> = {}) => ({
+    __typename: 'CheckRun',
+    name: 'ci',
+    status: 'COMPLETED',
+    conclusion: 'SUCCESS',
+    detailsUrl: 'https://ci/1',
+    startedAt: '2026-10-26T08:00:00Z',
+    checkSuite: {
+      app: { slug: 'github-actions' },
+      workflowRun: { event: 'pull_request', workflow: { name: 'CI' } },
+    },
+    ...over,
+  })
+  const response = (rollup: unknown, prOver: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      data: {
+        repository: {
+          nameWithOwner: 'acme/demo',
+          defaultBranchRef: { name: 'main' },
+          pullRequest: {
+            number: 7,
+            url: PR_URL,
+            state: 'OPEN',
+            isDraft: false,
+            baseRefName: 'main',
+            headRefOid: HEAD,
+            mergeable: 'MERGEABLE',
+            mergeStateStatus: 'CLEAN',
+            isMergeQueueEnabled: false,
+            isInMergeQueue: false,
+            autoMergeRequest: null,
+            commits: { nodes: [{ commit: { oid: HEAD, statusCheckRollup: rollup } }] },
+            ...prOver,
+          },
+        },
+      },
+    })
+  const contexts = (nodes: unknown[], over: Record<string, unknown> = {}) => ({
+    contexts: { totalCount: nodes.length, pageInfo: { hasNextPage: false }, nodes, ...over },
+  })
+  const snap = async (stdout: string) => {
+    const { run: runner, calls } = fakeRunner(() => out(stdout))
+    return { r: await createGitHubCli({ run: runner }).prSnapshot(pr), calls }
+  }
+
+  test('参数：gh api graphql、--hostname、owner / name 为字符串、number 用 -F（整数）', async () => {
+    const { r, calls } = await snap(response(contexts([run()])))
+    expect(r.ok).toBe(true)
+    const args = calls[0]?.args ?? []
+    expect(args.slice(0, 4)).toEqual(['api', 'graphql', '--hostname', 'github.com'])
+    expect(args).toContain('owner=acme')
+    expect(args).toContain('name=demo')
+    expect(args[args.indexOf('number=7') - 1]).toBe('-F')
+    expect(args[args.indexOf('owner=acme') - 1]).toBe('-f')
+    const query = args.find((a) => a.startsWith('query=')) ?? ''
+    expect(query).toContain('statusCheckRollup')
+    expect(query).toContain('isMergeQueueEnabled')
+  })
+
+  test('bucket 映射：CheckRun 与 StatusContext', async () => {
+    const { r } = await snap(
+      response(
+        contexts([
+          run({ name: 'a' }),
+          run({ name: 'b', conclusion: 'SKIPPED' }),
+          run({ name: 'c', conclusion: 'NEUTRAL' }),
+          run({ name: 'd', conclusion: 'CANCELLED' }),
+          run({ name: 'e', conclusion: 'TIMED_OUT' }),
+          run({ name: 'f', status: 'IN_PROGRESS', conclusion: null }),
+          { __typename: 'StatusContext', context: 's1', state: 'SUCCESS', targetUrl: null },
+          { __typename: 'StatusContext', context: 's2', state: 'PENDING' },
+          { __typename: 'StatusContext', context: 's3', state: 'EXPECTED' },
+          { __typename: 'StatusContext', context: 's4', state: 'ERROR' },
+        ]),
+      ),
+    )
+    if (!r.ok) throw new Error(r.error.message)
+    expect(Object.fromEntries(r.data.checks.map((c) => [c.name, c.bucket]))).toEqual({
+      a: 'pass',
+      b: 'skipping',
+      c: 'skipping',
+      d: 'cancel',
+      e: 'fail',
+      f: 'pending',
+      s1: 'pass',
+      s2: 'pending',
+      s3: 'pending',
+      s4: 'fail',
+    })
+    expect(r.data).toMatchObject({
+      checksOid: HEAD,
+      checksTruncated: false,
+      mergeQueue: false,
+      autoMerge: false,
+    })
+  })
+
+  test('null rollup：没有检查、不截断；没有提交时 checksOid 为空', async () => {
+    const a = await snap(response(null))
+    expect(a.r).toMatchObject({
+      ok: true,
+      data: { checks: [], checksTruncated: false, checksOid: HEAD },
+    })
+    const b = await snap(response(null, { commits: { nodes: [] } }))
+    expect(b.r).toMatchObject({ ok: true, data: { checks: [] } })
+    if (b.r.ok) expect(b.r.data.checksOid).toBeUndefined()
+  })
+
+  test('截断：还有下一页或总数多于返回的条目', async () => {
+    for (const over of [{ pageInfo: { hasNextPage: true } }, { totalCount: 101 }]) {
+      const { r } = await snap(response(contexts([run()], over)))
+      expect(r).toMatchObject({ ok: true, data: { checksTruncated: true } })
+    }
+  })
+
+  test('未知 __typename 或缺字段：gh_bad_output（判失败）', async () => {
+    for (const bad of [
+      response(contexts([{ __typename: 'FutureCheck', name: 'x' }])),
+      response(contexts([run({ status: undefined })])),
+      response(null, { isMergeQueueEnabled: undefined }),
+      '{"errors":[{"message":"x"}]}',
+    ]) {
+      const { r } = await snap(bad)
+      expect(r).toMatchObject({ ok: false, error: { code: 'gh_bad_output' } })
+    }
+  })
+
+  test('同一检查的多次运行只保留最新的一条；排队中的重跑（没有 startedAt）视为最新', async () => {
+    const { r } = await snap(
+      response(
+        contexts([
+          run({ conclusion: 'FAILURE', startedAt: '2026-10-26T08:00:00Z' }),
+          run({ conclusion: 'SUCCESS', startedAt: '2026-10-26T09:00:00Z' }),
+          run({ name: 'lint', conclusion: 'SUCCESS', startedAt: '2026-10-26T08:00:00Z' }),
+          run({ name: 'lint', status: 'QUEUED', conclusion: null, startedAt: null }),
+          // 不同 workflow 的同名检查分别保留。
+          run({
+            conclusion: 'FAILURE',
+            checkSuite: {
+              app: { slug: 'github-actions' },
+              workflowRun: { event: 'push', workflow: { name: 'Deploy' } },
+            },
+          }),
+        ]),
+      ),
+    )
+    if (!r.ok) throw new Error(r.error.message)
+    expect(r.data.checks.map((c) => `${c.name}:${c.bucket}`).sort()).toEqual([
+      'ci:fail',
+      'ci:pass',
+      'lint:pending',
+    ])
+  })
+})

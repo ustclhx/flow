@@ -529,9 +529,18 @@ describe('检出与会话中不运行由配置驱动的程序', () => {
     sh(r.repo, 'config', 'filter.mark.smudge', filter)
     sh(r.repo, 'config', 'filter.mark.clean', filter)
     sh(r.repo, 'config', 'filter.mark.required', 'true')
+    for (const [name, key] of [
+      ['textconv', 'diff.mark.textconv'],
+      ['diffcmd', 'diff.mark.command'],
+      ['external', 'diff.external'],
+    ] as const) {
+      const script = join(r.root, `${name}.sh`)
+      writeFileSync(script, `#!/bin/sh\ntouch ${join(marker, name)}\n`, { mode: 0o755 })
+      sh(r.repo, 'config', key, script)
+    }
     // PR 内容引用该 driver。
     sh(r.repo, 'checkout', '-q', 'feature')
-    writeFileSync(join(r.repo, '.gitattributes'), '*.ts filter=mark\n')
+    writeFileSync(join(r.repo, '.gitattributes'), '*.ts filter=mark diff=mark\n')
     writeFileSync(join(r.repo, 'other.ts'), 'export const y = 1\n')
     sh(
       r.repo,
@@ -572,6 +581,16 @@ describe('检出与会话中不运行由配置驱动的程序', () => {
           env,
           stdio: 'pipe',
         })
+        // diff 驱动与外部 diff 被置空：git 报错而不是运行配置里的程序。
+        for (const args of [
+          ['diff', 'HEAD~1'],
+          ['diff', '--no-ext-diff', 'HEAD~1'],
+        ])
+          try {
+            execFileSync('git', args, { cwd: io.options.cwd, env, stdio: 'pipe' })
+          } catch {
+            // 预期失败（cannot run）。
+          }
         sessionMarkers = readdirSync(marker)
         yield resultMsg({ structured_output: { verdict: 'approve' } })
       },
@@ -584,7 +603,15 @@ describe('检出与会话中不运行由配置驱动的程序', () => {
     // 对照：不加覆盖时同样的操作确实会运行它们（证明测试有效）。
     sh(r.repo, 'worktree', 'add', '-q', '--detach', join(r.root, 'control'), head)
     sh(join(r.root, 'control'), 'status', '--porcelain')
-    expect(readdirSync(marker).sort()).toEqual(['filter', 'fsmonitor'])
+    sh(join(r.root, 'control'), 'diff', 'HEAD~1')
+    sh(join(r.root, 'control'), 'diff', '--no-ext-diff', 'HEAD~1')
+    expect(readdirSync(marker).sort()).toEqual([
+      'diffcmd',
+      'external',
+      'filter',
+      'fsmonitor',
+      'textconv',
+    ])
   })
 })
 

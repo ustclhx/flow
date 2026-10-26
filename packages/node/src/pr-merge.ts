@@ -1,7 +1,6 @@
 import {
   type Artifact,
   clipText,
-  type FlowError,
   fail,
   gitSha,
   latestTrustedReview,
@@ -51,7 +50,7 @@ import { resolveContractCwd } from './workdir.ts'
  * 3. 本任务由 hub 或 user 创建、origin 为 instruction、`parent` 就是审查任务（`merge_not_eligible`）；
  * 4. 审查任务：同一 workspace、执行器 claude-sdk、角色在 `supervisor.reviewer_roles` 中、已 done、
  *    `inputs.review.pr` 等于该 PR、结论 approve，且是该 PR **最新一次**可信审查（`review_not_approved`）；
- *    中枢不可达时以可重试的 `merge_unverifiable` 结束（任务进入 blocked，可以重试）；
+ *    中枢不可达时 `failed(merge_unverifiable)`，摘要写明未合并、可重试；
  * 5. 一次 GraphQL 读取 PR 的同一时刻状态（`PrSnapshot`）：链接与编号一致（`pr_unverifiable`）、仓库一致
  *    （`repo_not_in_workspace`）、open（`pr_not_open`）、base 为默认分支（`base_not_default`）、没有启用合并队列
  *    （`merge_queue_unsupported`）、head 等于 `reviewed_sha` 且检查就是这个提交的（`head_moved`）、不是草稿且可合并
@@ -77,10 +76,14 @@ export const DEFAULT_PIPELINE_TIMEOUT_MS = 30 * 60_000
 export const DEFAULT_PIPELINE_POLL_MS = 15_000
 export const DEFAULT_RUN_DISCOVERY_MS = 2 * 60_000
 /** `mergeable` 为 UNKNOWN（GitHub 仍在计算）时的重试次数与间隔。 */
+/** merger 合同 timeout_s 的下限：合并前核对加 30 分钟流水线等待，留出余量（docs/executors.md）。 */
+export const MIN_MERGER_TIMEOUT_S = 40 * 60
 export const MERGEABLE_RETRIES = 3
 export const MERGEABLE_RETRY_MS = 5_000
 /** 核对"最新一次可信审查"时读取的任务数（按创建时间倒序）。 */
 const REVIEW_SCAN_LIMIT = 500
+/** 未结束的任务状态：同一 PR 有这些状态的审查任务时不合并。 */
+const UNFINISHED = ['queued', 'running', 'verifying', 'blocked'] as const
 /** 计入发布流水线的 workflow run 事件。 */
 export const PIPELINE_EVENTS = new Set(['push', 'workflow_run'])
 
@@ -135,7 +138,7 @@ export function evaluateRuns(runs: readonly GhRun[]): 'pending' | 'success' | 'f
 
 const MERGE_ACTORS = new Set(['hub', 'user'])
 
-/** 中枢不可达等无法核实的情况：以可重试的错误结束（节点上报 blocked，可以重试）。 */
+/** 中枢不可达等无法核实的情况：以 failed(merge_unverifiable) 结束（未合并，可重试）。 */
 class Unverifiable extends Error {}
 
 export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
@@ -221,6 +224,12 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
         const pr = parsePrUrl(prUrl)
         if (!pr) return failed('invalid_inputs', `PR 链接不合法：${prUrl}`)
         artifacts.push({ kind: 'pr', ref: pr.url })
+        // 超时会在等待流水线时打断任务（PR 已合并却报超时）：合并前就拒绝过短的 timeout_s。
+        if (contract.timeout_s < MIN_MERGER_TIMEOUT_S)
+          return failed(
+            'timeout_too_short',
+            `merger 合同的 timeout_s=${contract.timeout_s} 小于 ${MIN_MERGER_TIMEOUT_S} 秒（40 分钟），不发起合并`,
+          )
 
         // ---- 2. 登记仓库与 PR 归属 ----
         const repoDir = await resolveContractCwd(options.home, contract, true)
@@ -258,11 +267,39 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
         )
         if (!approves.ok) return failed('review_not_approved', approves.reason)
         const listed = hubCall(
-          await client.listTasks({ workspace: contract.workspace, limit: REVIEW_SCAN_LIMIT }),
+          await client.listTasks({
+            workspace: contract.workspace,
+            status: 'done',
+            limit: REVIEW_SCAN_LIMIT,
+          }),
           '读取任务列表',
         )
         if (!listed.ok)
           return failed('review_not_approved', `无法核对最新审查：${listed.error.message}`)
+        // 同一 PR 还有未结束的审查任务：新的结论可能推翻这次 approve，不合并。
+        for (const st of UNFINISHED) {
+          const pending = hubCall(
+            await client.listTasks({
+              workspace: contract.workspace,
+              status: st,
+              limit: REVIEW_SCAN_LIMIT,
+            }),
+            '读取任务列表',
+          )
+          if (!pending.ok)
+            return failed('review_not_approved', `无法核对进行中的审查：${pending.error.message}`)
+          const other = pending.data.tasks.find(
+            (t) =>
+              t.id !== reviewTaskId &&
+              t.contract.inputs?.review?.pr === pr.url &&
+              supervisor.reviewer_roles.includes(t.contract.role),
+          )
+          if (other)
+            return failed(
+              'review_not_approved',
+              `同一 PR 还有未结束的审查任务 ${other.id}（${other.status}），等它结束后再合并`,
+            )
+        }
         const latest = latestTrustedReview(
           [...listed.data.tasks, reviewTask.data.task],
           { workspace: contract.workspace, pr: pr.url },
@@ -313,6 +350,9 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
             `检查所属的提交 ${v.checksOid ?? '（无）'} 不是审查时的 ${reviewedSha}`,
           )
         if (v.isDraft) return failed('not_mergeable', 'PR 仍是草稿')
+        // mergeStateStatus（BLOCKED、BEHIND、UNSTABLE 等）只读取、记录在活动里，不作为判定依据：
+        // 合并条件由上面的确定性核对与下面的检查判定，分支保护由 GitHub 在合并时执行。
+        status(`mergeStateStatus=${v.mergeStateStatus}（只记录，不判定）`)
         if (v.mergeable !== 'MERGEABLE')
           return failed('not_mergeable', `PR 当前不可合并（mergeable=${v.mergeable}）`)
         if (v.checksTruncated)
@@ -478,10 +518,8 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
       const done = main()
         .then((o): Result<ExecutorOutcome> => ok(o))
         .catch((err): Result<ExecutorOutcome> => {
-          if (err instanceof Unverifiable) {
-            status(`无法核实合并条件，未合并：${err.message}`)
-            return { ok: false, error: unverifiable(err.message) }
-          }
+          if (err instanceof Unverifiable)
+            return ok(failed('merge_unverifiable', `未合并，中枢不可达，可重试：${err.message}`))
           return fail('failure', 'pr_merge_error', String((err as Error)?.message ?? err))
         })
         .finally(() => queue.close())
@@ -496,12 +534,6 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
     },
   }
 }
-
-const unverifiable = (message: string): FlowError => ({
-  kind: 'retryable',
-  code: 'merge_unverifiable',
-  message: `无法核实合并条件（未合并，可重试）：${message}`,
-})
 
 /** 本任务的资格：由 hub 或 user 创建、origin 为 instruction、parent 为审查任务。返回不满足的原因。 */
 function checkSelf(task: TaskView, contract: TaskContract, reviewTask: string): string | undefined {

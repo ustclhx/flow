@@ -274,7 +274,9 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
    head（准备期间有新提交时 `failed(head_moved)`），再 `git worktree add --detach` 检出到任务私有目录下的 `worktree/` 作为会话 cwd；
 4. 检出时不运行任何由配置驱动的程序：`-c core.hooksPath=/dev/null`、`-c core.fsmonitor=false`，并对
    `git config --get-regexp '^filter\.'` 列出的每个 filter driver 加 `-c filter.<名>.smudge= -c filter.<名>.clean=
-   -c filter.<名>.process= -c filter.<名>.required=false`（PR 的 `.gitattributes` 引用它们时原样检出），环境设
+   -c filter.<名>.process= -c filter.<名>.required=false`（PR 的 `.gitattributes` 引用它们时原样检出）；对配置了
+   `textconv` 或 `command` 的每个 diff driver 加 `-c diff.<名>.textconv= -c diff.<名>.command=`，并加 `-c diff.external=`
+   （实测 git 对这些空值会报 `cannot run :` 而不执行任何程序，相关 diff 失败而不是运行配置里的命令）；环境设
    `GIT_LFS_SKIP_SMUDGE=1`。会话环境用 `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` 注入同样的覆盖
    （接在已有条目之后）与 `GIT_LFS_SKIP_SMUDGE=1`，Claude Code 自己运行的 `git status` 等也不会触发它们；
 5. 会话无条件 `settingSources: []`、`strictMcpConfig: true`（只用注入的 Flow MCP），并设 `ENABLE_CLAUDEAI_MCP_SERVERS=false`
@@ -357,7 +359,9 @@ pr-merge 执行器**不调用任何模型**，合同的 `inputs.merge = {pr, rev
 | cwd 是本 workspace 登记仓库；PR 链接的仓库等于 `remote.origin.url`；GraphQL 报告的仓库一致 | `repo_not_in_workspace` |
 | 读到 workspace 配置；本任务由 hub 或 user 创建、origin 为 instruction、`parent` 是审查任务、中枢记录的 `inputs.merge` 与合同一致 | `merge_not_eligible` |
 | 审查任务：同一 workspace、claude-sdk、角色在 `reviewer_roles`、done、`inputs.review.pr` 等于该 PR、结论 approve，且是该 PR **最新一次**可信审查 | `review_not_approved` |
-| 中枢不可达（可重试错误） | `merge_unverifiable`（可重试：任务进入 blocked(crashed)，可在收件箱重试） |
+| 同一 PR 没有未结束（queued / running / verifying / blocked）的审查任务 | `review_not_approved` |
+| 中枢不可达（可重试错误） | `merge_unverifiable`（摘要写明"未合并，中枢不可达，可重试"） |
+| 合同 `timeout_s` 不小于 2400（40 分钟） | `timeout_too_short` |
 | PR 快照读取成功、编号与链接（大小写不敏感）一致 | `pr_unverifiable` |
 | PR 为 OPEN | `pr_not_open` |
 | base 为仓库默认分支 | `base_not_default` |
@@ -368,7 +372,11 @@ pr-merge 执行器**不调用任何模型**，合同的 `inputs.merge = {pr, rev
 
 PR 状态与检查来自**同一次** GraphQL 读取（`gh api graphql`：`headRefOid`、`mergeable`、`isMergeQueueEnabled`、
 `autoMergeRequest` 与最新提交的 `statusCheckRollup`），不会出现"读检查之后 head 变了"的错位；合并前再读一次 head，
-合并命令本身也带 `--match-head-commit`。**分支保护应把关键检查设为 required**：pr-merge 只能看到读取时已存在的检查，
+合并命令本身也带 `--match-head-commit`。`mergeStateStatus`（BLOCKED、BEHIND、UNSTABLE 等）只读取并记在活动里，
+不作为判定依据。rollup 可能包含同一检查的多次运行（重新运行后旧的 check run 仍在；gh CLI 的 `gh pr checks` 同样去重，
+见 cli/cli `pkg/cmd/pr/checks/aggregate.go` 的 `eliminateDuplicates`），执行器按与 gh 相同的键去重——CheckRun 为名称 + app +
+workflow + event，StatusContext 为 context——只保留最新一条（按 startedAt / createdAt；没有开始时间的排队重跑视为最新，
+旧的成功结果不会掩盖进行中的重跑）。**分支保护应把关键检查设为 required**：pr-merge 只能看到读取时已存在的检查，
 之后才创建的检查不在核对范围内。
 
 通过后执行 `gh pr merge <链接> --<merge_method> --match-head-commit <reviewed_sha>`（`supervisor.merge_method`，默认 squash）。
@@ -384,7 +392,12 @@ PR 状态与检查来自**同一次** GraphQL 读取（`gh api graphql`：`headR
 请确认默认分支最新提交的流水线）；30 分钟仍未结束 → `failed(pipeline_timeout)`，附 run 链接；合并后 2 分钟内一直没有任何 run →
 `done`，注明未发现发布流水线（查询失败不算"没有 run"）。合并后被取消时，cancelled 的结果带合并提交与 artifacts。
 
-审查任务与任务列表经中枢 `GET /v1/tasks/:id`、`GET /v1/tasks` 读取：本机节点以 user token 访问；用绑定 token
+**timeout_s**：merger 合同的 `timeout_s` 不得小于 2400 秒（40 分钟：核对与合并之外还要等最长 30 分钟的流水线），
+否则执行器在合并前以 `timeout_too_short` 失败；角色文件不支持 `timeout_s`，由创建 merger 任务的中枢保证（缺省 3600）。
+
+审查任务与任务列表（`status=done` 的可信审查，以及各未结束状态的同 PR 审查）经中枢 `GET /v1/tasks/:id`、`GET /v1/tasks`
+读取。执行器自己按 flow-home 构造中枢客户端，不声明 `X-Flow-Actor`：本机节点以 user token 访问，身份为 user
+（与 G5 "节点接口只允许 user 与 node:*" 的要求一致；这两个是任务接口，不是节点协议接口）；用绑定 token
 （`FLOW_HUB_TOKEN`，`node:<id>` 身份）运行的节点读不到它们，按核对失败处理。pr-merge 应在本机节点上运行。
 
 gh 版本：按已验证的 gh 2.102.0 要求（需要 `gh api graphql --hostname`、`gh pr merge --match-head-commit`、

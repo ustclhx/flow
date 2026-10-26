@@ -187,10 +187,11 @@ function fakeHub(s: Setup) {
       const task = id === s.self.id ? s.self : id === s.review.id ? s.review : undefined
       return task ? ok({ task, events: [], replies: [] }) : fail('failure', 'not_found', id)
     },
-    async listTasks(): Promise<Result<{ tasks: TaskView[] }>> {
-      s.hubCalls.push('list')
+    async listTasks(q: { status?: string }): Promise<Result<{ tasks: TaskView[] }>> {
+      s.hubCalls.push(`list:${q.status ?? ''}`)
       if (s.hubDown) return fail('retryable', 'hub_unavailable', '中枢不可用')
-      return ok({ tasks: [...s.others, s.review, s.self] })
+      const all = [...s.others, s.review, s.self]
+      return ok({ tasks: q.status ? all.filter((t) => t.status === q.status) : all })
     },
   }
 }
@@ -244,7 +245,15 @@ describe('合并前的条件核对', () => {
     expect(calls.slice(0, merged)).toEqual([`pr snapshot ${PR_URL}`, `pr view ${PR_URL}`])
     expect(calls.findIndex((c) => c.startsWith('run list'))).toBeGreaterThan(merged)
     expect(calls).toContain(`run list acme/demo ${MERGE_SHA} main`)
-    expect(s.hubCalls).toEqual(['t-merge', 't-review', 'list'])
+    expect(s.hubCalls).toEqual([
+      't-merge',
+      't-review',
+      'list:done',
+      'list:queued',
+      'list:running',
+      'list:verifying',
+      'list:blocked',
+    ])
   })
 
   test('merge_method 取 workspace 配置', async () => {
@@ -376,16 +385,39 @@ describe('合并前的条件核对', () => {
     }
   })
 
-  test('中枢不可达：以可重试的 merge_unverifiable 结束（任务进入 blocked，可重试），不合并', async () => {
+  test('中枢不可达：failed(merge_unverifiable)，摘要写明未合并、可重试', async () => {
     const down = setup()
     down.hubDown = true
-    const { done, texts } = await executeRaw(down)
-    expect(done).toMatchObject({
-      ok: false,
-      error: { kind: 'retryable', code: 'merge_unverifiable' },
-    })
-    expect(texts.some((t) => t.includes('未合并'))).toBe(true)
+    const { outcome } = await execute(down)
+    expect(reason(outcome)).toBe('merge_unverifiable')
+    if (outcome.outcome === 'failed')
+      expect(outcome.result.summary).toContain('未合并，中枢不可达，可重试')
     expect(down.gh.state.calls).toEqual([])
+  })
+
+  test('同一 PR 还有未结束的审查任务：failed(review_not_approved)', async () => {
+    for (const status of ['queued', 'running', 'verifying', 'blocked'] as const) {
+      const s = setup()
+      s.others = [{ ...s.review, id: 't-review-next', status, result: null, finished_at: null }]
+      const { outcome } = await execute(s)
+      expect(reason(outcome)).toBe('review_not_approved')
+      if (outcome.outcome === 'failed') expect(outcome.result.summary).toContain('t-review-next')
+      expect(mergeCalls(s)).toEqual([])
+    }
+    // 其他 PR 的进行中审查不影响。
+    const s = setup()
+    s.others = [
+      {
+        ...s.review,
+        id: 't-review-other',
+        status: 'running',
+        contract: {
+          ...s.review.contract,
+          inputs: { review: { pr: 'https://github.com/acme/demo/pull/8' } },
+        },
+      },
+    ]
+    expect((await execute(s)).outcome.outcome).toBe('done')
   })
 
   test('审查任务不是该 PR 最新一次可信审查：failed(review_not_approved)', async () => {
@@ -466,6 +498,13 @@ describe('合并前的条件核对', () => {
     cwd.contract = { ...cwd.contract, cwd: cwd.r.root }
     expect(reason((await execute(cwd)).outcome)).toBe('repo_not_in_workspace')
     for (const x of [s, cwd]) expect(x.gh.state.calls).toEqual([])
+  })
+
+  test('合同 timeout_s 小于 40 分钟：failed(timeout_too_short)，不合并', async () => {
+    const s = setup()
+    s.contract = { ...s.contract, timeout_s: 2399 }
+    expect(reason((await execute(s)).outcome)).toBe('timeout_too_short')
+    expect(s.gh.state.calls).toEqual([])
   })
 
   test('合并前取消：cancelled，不合并', async () => {
@@ -725,7 +764,9 @@ describe('经节点运行：等待流水线期间不被判为无进展', () => {
     const b = await bench({ executors: [executor] })
     target = b.clock
     try {
-      const id = await b.create({ ...s.contract, cwd: s.r.repo })
+      // 中枢校验 parent 存在：测试台中不建审查任务，parent 的核对由注入的假中枢（本任务视图）完成。
+      const { parent: _parent, ...withoutParent } = s.contract
+      const id = await b.create({ ...withoutParent, cwd: s.r.repo })
       await waitFor(() => polling, '开始等待流水线')
       for (let i = 0; i < 20; i++) await b.clock.advance(60_000)
       const t = b.task(id)

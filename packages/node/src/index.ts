@@ -162,6 +162,7 @@ export {
   evaluateRuns,
   MERGEABLE_RETRIES,
   MERGEABLE_RETRY_MS,
+  MIN_MERGER_TIMEOUT_S,
   PIPELINE_EVENTS,
   PR_MERGE_EXECUTOR,
   type PrMergeOptions,

@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { lstat, mkdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -158,7 +159,7 @@ export async function prepareReadCodexHome(
     return ok(dir)
   }
   // 先建临时链接再 rename：替换是原子的，不会出现没有 auth.json 的瞬间。
-  const tmp = `${link}.${process.pid}.${Date.now()}.tmp`
+  const tmp = `${link}.${randomBytes(8).toString('hex')}.tmp`
   await symlink(target, tmp)
   try {
     await rename(tmp, link)
