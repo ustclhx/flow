@@ -1,8 +1,12 @@
+import { existsSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import {
   clipText,
   fail,
+  flowPaths,
   type InboxVia,
   type LedgerEvent,
+  loadWorkspaces,
   MANUAL_WAKE_TEXT,
   ok,
   type QueueDropReason,
@@ -68,7 +72,8 @@ export const UNAVAILABLE_GRACE_MS = 24 * 60 * 60 * 1000
 /** 稳定的不可唤醒原因：立即丢弃积压。其余（角色、workspace 文件）视为暂时的。 */
 /**
  * 稳定的不可唤醒原因：立即静默丢弃积压（doctor 已提示）。只有 `role_invalid`（角色文件有错、多个或可写的
- * supervisor 角色）与 `workspaces_invalid`（workspace 配置整体加载失败）视为暂时的，走 24 小时宽限。
+ * supervisor 角色）与 `workspaces_invalid`（该 workspace 的定义文件存在但有错误，例如正在编辑）视为暂时的，
+ * 走 24 小时宽限。
  */
 const STABLE_DROP_REASONS: ReadonlySet<QueueDropReason> = new Set([
   'disabled',
@@ -90,10 +95,11 @@ export interface WakeSchedulerOptions {
   /** 全部 workspace（status 不指定 workspace 时列出）。 */
   listWorkspaces: () => Promise<WorkspaceInfo[]>
   /**
-   * workspace 配置是否能整体加载（`loadWorkspaces` 成功）。`workspaces` 返回 null 时据此区分
-   * "文件不存在"（稳定，丢弃积压）与"配置加载失败"（暂时，24 小时宽限）。缺省视为能加载。
+   * 某 workspace 定义文件的状态（`workspaceStateFromHome`）：`missing` 文件确实不存在（稳定，静默丢弃积压）；
+   * `invalid` 文件存在但没能正常加载，或加载结果里有指向它的问题（含 supervisor 段校验失败被降级为
+   * 未启用）——暂时的，24 小时宽限；`ok` 正常。缺省按 `workspaces` 是否找到判断（找到为 ok，否则 missing）。
    */
-  workspacesLoaded?: () => Promise<boolean>
+  workspaceState?: (ref: string) => Promise<WorkspaceFileState>
   /** 唯一的 supervisor 角色（core `findSupervisorRole`）：没有为 null，多个或可写时失败。 */
   supervisorRole: () => Promise<Result<Role | null>>
   /** 计"今天"用的日期（YYYY-MM-DD），默认中枢本地时区。 */
@@ -136,6 +142,31 @@ export interface WakeScheduler {
   projection(): WakeProjection
 }
 
+export type WorkspaceFileState = 'missing' | 'invalid' | 'ok'
+
+/**
+ * 按 flow-home 判断某 workspace 定义文件的状态（每次重新读取）。`ws/global` 恒为 ok。
+ * - 文件 `config/workspaces/<id>.yaml|yml` 都不存在 → missing；
+ * - 整体加载失败、文件存在但不在加载结果中，或 issues / warnings 中有指向该文件的问题 → invalid；
+ * - 否则 ok。
+ */
+export function workspaceStateFromHome(home: string): (ref: string) => Promise<WorkspaceFileState> {
+  return async (ref) => {
+    if (ref === 'ws/global') return 'ok'
+    const dir = flowPaths(home).workspaces
+    const files = ['yaml', 'yml']
+      .map((ext) => join(dir, `${wsId(ref)}.${ext}`))
+      .filter((f) => existsSync(f))
+    if (files.length === 0) return 'missing'
+    const loaded = await loadWorkspaces(home)
+    if (!loaded.ok) return 'invalid'
+    const rels = new Set(files.map((f) => relative(home, f)))
+    const flagged = [...loaded.data.issues, ...loaded.data.warnings].some((i) => rels.has(i.file))
+    if (flagged || !loaded.data.workspaces.some((w) => w.ref === ref)) return 'invalid'
+    return 'ok'
+  }
+}
+
 type Availability =
   | { ok: true; ws: WorkspaceInfo; role: Role }
   | {
@@ -160,7 +191,9 @@ export const localNextDay = (ms: number) => {
 export const pauseMs = (failures: number) =>
   Math.min(PAUSE_MAX_MS, PAUSE_BASE_MS * 2 ** Math.max(0, failures - 2))
 
-const wsId = (ref: string) => ref.replace(/^ws\//, '')
+function wsId(ref: string) {
+  return ref.replace(/^ws\//, '')
+}
 const clip = (s: string | undefined, max = FIELD_MAX) =>
   s === undefined ? undefined : clipText(s, max)
 
@@ -216,16 +249,27 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
 
   async function availability(ref: string): Promise<Availability> {
     const ws = await o.workspaces(ref)
+    // 文件正在编辑（YAML 写到一半、supervisor 段写错被降级为未启用等）是暂时的，先于"未启用"判断；
+    // 只有文件确实不存在才是稳定的 unknown_workspace。
+    const state: WorkspaceFileState = o.workspaceState
+      ? await o.workspaceState(ref)
+      : ws
+        ? 'ok'
+        : 'missing'
+    if (state === 'invalid') {
+      return {
+        ok: false,
+        code: ws ? 'supervisor_disabled' : 'unknown_workspace',
+        reason: `config/workspaces/${wsId(ref)}.yaml 有错误，暂时无法确认 ${ref} 的配置（运行 flow doctor 查看）`,
+        drop: 'workspaces_invalid',
+      }
+    }
     if (!ws) {
-      // 配置整体加载失败（暂时的）与 workspace 文件确实不存在（稳定的）分开处理。
-      const loaded = o.workspacesLoaded ? await o.workspacesLoaded() : true
       return {
         ok: false,
         code: 'unknown_workspace',
-        reason: loaded
-          ? `workspace ${ref} 未定义`
-          : `config/workspaces/ 加载失败，暂时无法确认 ${ref}（运行 flow doctor 查看）`,
-        drop: loaded ? 'unknown_workspace' : 'workspaces_invalid',
+        reason: `workspace ${ref} 未定义`,
+        drop: 'unknown_workspace',
       }
     }
     const off = (reason: string, drop: QueueDropReason): Availability => ({

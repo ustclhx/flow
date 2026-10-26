@@ -12,7 +12,7 @@ import {
 } from '@flow/core'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { TaskService } from '../ledger/tasks.ts'
-import { answerQuestion } from '../supervisor-tools/questions.ts'
+import { answerQuestion, isQuestionItem } from '../supervisor-tools/questions.ts'
 
 /**
  * 任务提案条目（`source: task_proposal`）的接受与驳回（design D11；tasks 4.6）。
@@ -56,7 +56,9 @@ function ownQuestion(
   binding: { workspace: string; origin?: string } | undefined,
 ): boolean {
   if (actor !== SUPERVISOR_ACTOR || !binding || binding.origin === 'reply') return false
+  // 只限提问条目：调度器发给用户的 wake.* 提醒（上限、失败 Interrupt）不能被 supervisor 忽略。
   if (item.source !== 'supervisor' || item.workspace !== binding.workspace) return false
+  if (!isQuestionItem(item)) return false
   const wake = ledger.wakeOf(item.source_ref)
   return wake !== null && wake.workspace === binding.workspace
 }

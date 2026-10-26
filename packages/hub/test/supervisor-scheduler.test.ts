@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -13,6 +13,7 @@ import {
 } from '@flow/core'
 import { Hono } from 'hono'
 import {
+  actOnInbox,
   createHubApp,
   createSupervisorRoutes,
   createTaskService,
@@ -26,6 +27,8 @@ import {
   type RoleLookup,
   type WakeScheduler,
   type WorkspaceInfo,
+  workspaceLookupFromHome,
+  workspaceStateFromHome,
 } from '../src/index.ts'
 import { contract, must, result, tempLedger } from './ledger-helpers.ts'
 import { FakeClock, testToken } from './server-fixtures.ts'
@@ -68,8 +71,8 @@ interface SetupOptions {
   role?: () => Promise<Result<Role | null>>
   store?: LedgerStore
   clock?: FakeClock
-  /** workspace 配置能否整体加载（缺省能）。 */
-  workspacesLoaded?: () => Promise<boolean>
+  /** workspace 定义文件的状态（缺省按是否找到判断）。 */
+  workspaceState?: (ref: string) => Promise<'missing' | 'invalid' | 'ok'>
   /** 包装建任务（测试创建失败）。 */
   wrapTasks?: (t: ReturnType<typeof createTaskService>) => ReturnType<typeof createTaskService>
 }
@@ -110,7 +113,7 @@ async function setup(o: SetupOptions = {}) {
     workspaces: async (ref) => workspaces[ref] ?? null,
     listWorkspaces: async () => Object.values(workspaces),
     supervisorRole: o.role ?? (async () => ok(SUPERVISOR)),
-    ...(o.workspacesLoaded ? { workspacesLoaded: o.workspacesLoaded } : {}),
+    ...(o.workspaceState ? { workspaceState: o.workspaceState } : {}),
     dayKey,
     nextDay,
     logger: { warn() {} },
@@ -1201,7 +1204,7 @@ describe('第三轮审查', () => {
     expect(env.clock.pending).toBe(0)
   })
 
-  test('workspace 文件不存在静默丢弃；workspace 配置整体加载失败走宽限', async () => {
+  test('workspace 文件不存在静默丢弃；定义文件有错走宽限', async () => {
     const gone = await setup()
     delete gone.workspaces[WS]
     const a = instruction(gone.store)
@@ -1210,7 +1213,7 @@ describe('第三轮审查', () => {
       expect.objectContaining({ up_to_seq: a, reason: 'unknown_workspace' }),
     ])
 
-    const broken = await setup({ workspacesLoaded: async () => false })
+    const broken = await setup({ workspaceState: async () => 'invalid' })
     delete broken.workspaces[WS]
     const b = instruction(broken.store)
     await broken.settle()
@@ -1316,5 +1319,114 @@ describe('第三轮审查', () => {
     expect(env.wakes()[1]?.events).not.toContain(other)
     const ev = env.store.getTask(env.wakes()[1]?.task_id ?? '')?.contract.inputs?.wake?.events[0]
     expect(ev?.summary).toContain('已过期')
+  })
+})
+
+describe('第四轮审查', () => {
+  test('按文件判断 workspace 状态：YAML 写到一半、supervisor 段写错走宽限，文件被删除静默丢弃', async () => {
+    const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
+    const l = await tempLedger({ now: clock.now })
+    cleanups.push(l.cleanup)
+    const home = mkdtempSync(join(tmpdir(), 'flow-sup-wsstate-'))
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }))
+    const repo = join(home, 'repo')
+    mkdirSync(repo, { recursive: true })
+    const dir = join(home, 'config', 'workspaces')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'demo.yaml')
+    const good = `id: demo\nkind: product\nname: demo\ndescription: d\nrepos: [${JSON.stringify(repo)}]\n`
+    writeFileSync(file, good)
+    // 另一个 workspace 的文件有错，不影响 demo
+    writeFileSync(join(dir, 'other.yaml'), 'id: other\nkind: [\n')
+    const state = workspaceStateFromHome(home)
+    expect(await state(WS)).toBe('ok')
+    const lookup = workspaceLookupFromHome(home)
+    let n = 0
+    const tasks = createTaskService({
+      ledger: l.store,
+      workspaceExists: async (ref) => (await lookup(ref)) !== null,
+      workspaces: lookup,
+      roles,
+      now: clock.now,
+      newTaskId: () => `t-f${++n}`,
+    })
+    const scheduler = createWakeScheduler({
+      ledger: l.store,
+      tasks,
+      clock,
+      workspaces: lookup,
+      workspaceState: state,
+      listWorkspaces: async () => [],
+      supervisorRole: async () => ok(SUPERVISOR),
+      dayKey,
+      nextDay,
+      logger: { warn() {} },
+    })
+    scheduler.start()
+    cleanups.push(() => scheduler.stop())
+    const wakes = () =>
+      l.store.eventsAfter(0, {}, 10_000).filter((e) => e.type === 'supervisor.wake_started')
+
+    // 1. YAML 写到一半：保留队列，改好后照常唤醒
+    writeFileSync(file, 'id: demo\nkind: product\nname: [\n')
+    expect(await state(WS)).toBe('invalid')
+    const a = instruction(l.store, '编辑期间的指令')
+    await scheduler.idle()
+    expect(drops(l.store)).toEqual([])
+    writeFileSync(file, good)
+    await clock.advance(60_000)
+    await scheduler.idle()
+    expect(wakes()).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ events: [a] }) }),
+    ])
+    finish(l.store, wakes()[0]?.task_id ?? '')
+    await scheduler.idle()
+
+    // 2. supervisor 段写错（被降级为未启用）：不按 disabled 丢弃
+    writeFileSync(file, `${good}supervisor:\n  merge_method: ff\n`)
+    expect(await state(WS)).toBe('invalid')
+    const b = instruction(l.store, 'supervisor 段写错期间的指令')
+    await scheduler.idle()
+    expect(drops(l.store)).toEqual([])
+    expect(
+      scheduler
+        .projection()
+        .pending(WS, 'instruction')
+        .map((e) => e.seq),
+    ).toEqual([b])
+
+    // 3. 文件被删除：稳定原因，静默丢弃
+    rmSync(file)
+    expect(await state(WS)).toBe('missing')
+    await clock.advance(60_000)
+    await scheduler.idle()
+    expect(drops(l.store)).toEqual([
+      expect.objectContaining({ queue: 'instruction', up_to_seq: b, reason: 'unknown_workspace' }),
+    ])
+    expect(l.store.listInboxItems({ source: 'supervisor' })).toEqual([])
+  })
+
+  test('supervisor 不能忽略调度器发给用户的 wake.fail.* 提醒（user_only）', async () => {
+    const env = await setup()
+    patrol(env.store)
+    await env.settle()
+    failTask(env.store, env.wakes()[0]?.task_id ?? '')
+    await env.settle()
+    const retry = env.wakes()[1]?.task_id ?? ''
+    failTask(env.store, retry)
+    await env.settle()
+    const itemId = `wake.fail.${retry}`
+    expect(env.store.getInboxItem(itemId)).not.toBeNull()
+    instruction(env.store)
+    await env.settle()
+    const r = await actOnInbox(
+      { ledger: env.store, tasks: env.tasks, home: tmpdir(), scanProposals: async () => {} },
+      itemId,
+      { action: 'dismiss' },
+      'supervisor',
+      { workspace: WS, origin: 'instruction' },
+    )
+    expect(r).toMatchObject({ ok: false, error: { code: 'user_only' } })
+    expect(env.store.getInboxItem(itemId)?.state).toBe('open')
   })
 })

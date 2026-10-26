@@ -5832,7 +5832,7 @@
                           "no_repo",
                           "workspaces_invalid"
                         ],
-                        "description": "global / disabled / no_repo / no_role / unknown_workspace：稳定地不可唤醒，立即丢弃；role_invalid / workspaces_invalid：暂时不可唤醒持续超过 24 小时，丢弃早于宽限期的事件"
+                        "description": "global / disabled / no_repo / no_role / unknown_workspace：稳定地不可唤醒，立即丢弃；role_invalid / workspaces_invalid（定义文件有错）：暂时不可唤醒持续超过 24 小时，丢弃早于宽限期的事件"
                       }
                     },
                     "required": [
