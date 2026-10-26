@@ -48,7 +48,7 @@ export {
   type WakeTokenAuthority,
   type WakeTokenOptions,
 } from './server/wake-tokens.ts'
-export * from './supervisor-tools/index.ts'
 export * from './supervisor/index.ts'
+export * from './supervisor-tools/index.ts'
 export * from './ui/app.tsx'
 export * from './ui/sessions.ts'

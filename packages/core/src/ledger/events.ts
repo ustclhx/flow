@@ -120,11 +120,12 @@ export const QUEUE_DROP_REASONS = [
   'no_role',
   'role_invalid',
   'no_repo',
+  'workspaces_invalid',
 ] as const
 export type QueueDropReason = (typeof QUEUE_DROP_REASONS)[number]
 export const queueDropReason = z.enum(QUEUE_DROP_REASONS).meta({
   description:
-    'global / disabled / no_repo：稳定地不可唤醒，立即丢弃；unknown_workspace / no_role / role_invalid：暂时不可唤醒持续超过 24 小时，丢弃早于宽限期的事件',
+    'global / disabled / no_repo / no_role / unknown_workspace：稳定地不可唤醒，立即丢弃；role_invalid / workspaces_invalid：暂时不可唤醒持续超过 24 小时，丢弃早于宽限期的事件',
 })
 
 /** 任务提案 id：`tp-<随机串>`。 */

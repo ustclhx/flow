@@ -66,7 +66,17 @@ const UNAVAILABLE_RETRY_BASE_MS = 60_000
 const UNAVAILABLE_RETRY_MAX_MS = 60 * 60 * 1000
 export const UNAVAILABLE_GRACE_MS = 24 * 60 * 60 * 1000
 /** 稳定的不可唤醒原因：立即丢弃积压。其余（角色、workspace 文件）视为暂时的。 */
-const STABLE_DROP_REASONS: ReadonlySet<QueueDropReason> = new Set(['disabled', 'global', 'no_repo'])
+/**
+ * 稳定的不可唤醒原因：立即静默丢弃积压（doctor 已提示）。只有 `role_invalid`（角色文件有错、多个或可写的
+ * supervisor 角色）与 `workspaces_invalid`（workspace 配置整体加载失败）视为暂时的，走 24 小时宽限。
+ */
+const STABLE_DROP_REASONS: ReadonlySet<QueueDropReason> = new Set([
+  'disabled',
+  'global',
+  'no_repo',
+  'no_role',
+  'unknown_workspace',
+])
 const TAIL_LINES = 40
 const FIELD_MAX = 2000
 
@@ -79,6 +89,11 @@ export interface WakeSchedulerOptions {
   workspaces: WorkspaceLookup
   /** 全部 workspace（status 不指定 workspace 时列出）。 */
   listWorkspaces: () => Promise<WorkspaceInfo[]>
+  /**
+   * workspace 配置是否能整体加载（`loadWorkspaces` 成功）。`workspaces` 返回 null 时据此区分
+   * "文件不存在"（稳定，丢弃积压）与"配置加载失败"（暂时，24 小时宽限）。缺省视为能加载。
+   */
+  workspacesLoaded?: () => Promise<boolean>
   /** 唯一的 supervisor 角色（core `findSupervisorRole`）：没有为 null，多个或可写时失败。 */
   supervisorRole: () => Promise<Result<Role | null>>
   /** 计"今天"用的日期（YYYY-MM-DD），默认中枢本地时区。 */
@@ -202,11 +217,15 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
   async function availability(ref: string): Promise<Availability> {
     const ws = await o.workspaces(ref)
     if (!ws) {
+      // 配置整体加载失败（暂时的）与 workspace 文件确实不存在（稳定的）分开处理。
+      const loaded = o.workspacesLoaded ? await o.workspacesLoaded() : true
       return {
         ok: false,
         code: 'unknown_workspace',
-        reason: `workspace ${ref} 未定义`,
-        drop: 'unknown_workspace',
+        reason: loaded
+          ? `workspace ${ref} 未定义`
+          : `config/workspaces/ 加载失败，暂时无法确认 ${ref}（运行 flow doctor 查看）`,
+        drop: loaded ? 'unknown_workspace' : 'workspaces_invalid',
       }
     }
     const off = (reason: string, drop: QueueDropReason): Availability => ({
@@ -691,10 +710,19 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         arm(ref, null)
         return
       }
-      // 暂时不可唤醒（角色文件有错、workspace 文件暂时读不到等）：保留队列，按退避重查；
+      // 暂时不可唤醒（角色文件有错、workspace 配置整体加载失败）：保留队列，按退避重查；
       // 持续超过 24 小时才丢弃早于宽限期的事件，并告诉用户。
       const cutoff = now - UNAVAILABLE_GRACE_MS
       if (dropQueues(ref, a.drop, cutoff)) unavailableItem(ref, a.reason, dayKey(now))
+      // 普通队列为空且没有委托：不必重查，等下一个事件到来再触发。
+      if (
+        NORMAL_QUEUES.every((q) => projection.pending(ref, q).length === 0) &&
+        !delegations.length
+      ) {
+        unavailableRetries.delete(ref)
+        arm(ref, null)
+        return
+      }
       const n = (unavailableRetries.get(ref) ?? 0) + 1
       unavailableRetries.set(ref, n)
       const oldest = NORMAL_QUEUES.flatMap((q) => projection.pending(ref, q))

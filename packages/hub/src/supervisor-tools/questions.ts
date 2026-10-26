@@ -27,6 +27,10 @@ import { oneLine, type SupervisorToolsDeps } from './common.ts'
  *   （条目的 `source_ref`）的 origin。
  */
 
+/** supervisor 来源中的提问条目（可以回复）；调度器的提醒条目不是。 */
+export const isQuestionItem = (i: Pick<InboxItemView, 'id' | 'actions'>) =>
+  i.id.startsWith('ask.') && i.actions.includes('reply')
+
 /** 提问过期时间：7 天。 */
 export const QUESTION_TTL_MS = 7 * 24 * 3600 * 1000
 
@@ -43,12 +47,15 @@ export async function askUser(
   if (!ws) return fail('failure', 'unknown_workspace', `workspace ${input.workspace} 未定义`)
   const limit = (ws.supervisor ?? defaultSupervisorConfig()).limits.open_questions
   // 以下到 append 都是同步代码：并发的提问不能各自通过上限检查后一起写入。
-  const open = ledger.listInboxItems({
-    source: 'supervisor',
-    state: 'open',
-    workspace: input.workspace,
-    limit: -1,
-  })
+  // 只计提问条目：同一来源下还有唤醒调度器（G10）的上限、失败等提醒条目（id 前缀 wake.，没有 reply）。
+  const open = ledger
+    .listInboxItems({
+      source: 'supervisor',
+      state: 'open',
+      workspace: input.workspace,
+      limit: -1,
+    })
+    .filter(isQuestionItem)
   if (open.length >= limit) {
     return fail(
       'failure',
@@ -59,7 +66,7 @@ export async function askUser(
   }
   const mine = ledger
     .listInboxItems({ source: 'supervisor', workspace: input.workspace, limit: -1 })
-    .filter((i) => i.source_ref === wake.task_id).length
+    .filter((i) => isQuestionItem(i) && i.source_ref === wake.task_id).length
   const id = questionItemId(wake.task_id, mine + 1)
   const options = input.options
   const body = [
@@ -140,7 +147,7 @@ export function expireQuestions(
 ): string[] {
   const closed: string[] = []
   for (const item of ledger.listInboxItems({ source: 'supervisor', state: 'open', limit: -1 })) {
-    if (Date.parse(item.created_at) > now - ttlMs) continue
+    if (!isQuestionItem(item) || Date.parse(item.created_at) > now - ttlMs) continue
     const r = ledger.append(
       {
         type: 'inbox.item_closed',

@@ -68,6 +68,8 @@ interface SetupOptions {
   role?: () => Promise<Result<Role | null>>
   store?: LedgerStore
   clock?: FakeClock
+  /** workspace 配置能否整体加载（缺省能）。 */
+  workspacesLoaded?: () => Promise<boolean>
   /** 包装建任务（测试创建失败）。 */
   wrapTasks?: (t: ReturnType<typeof createTaskService>) => ReturnType<typeof createTaskService>
 }
@@ -108,6 +110,7 @@ async function setup(o: SetupOptions = {}) {
     workspaces: async (ref) => workspaces[ref] ?? null,
     listWorkspaces: async () => Object.values(workspaces),
     supervisorRole: o.role ?? (async () => ok(SUPERVISOR)),
+    ...(o.workspacesLoaded ? { workspacesLoaded: o.workspacesLoaded } : {}),
     dayKey,
     nextDay,
     logger: { warn() {} },
@@ -1124,8 +1127,8 @@ describe('第二轮审查', () => {
     expect(env.wakes()).toEqual([expect.objectContaining({ events: [keep] })])
     finish(env.store, env.wakes()[0]?.task_id ?? '')
 
-    role = ok(null)
-    const old = instruction(env.store, '一直没有角色')
+    role = fail('failure', 'supervisor_role_writable', '角色可写')
+    const old = instruction(env.store, '角色一直有错')
     await env.clock.advance(23 * HOUR)
     await env.settle()
     expect(drops(env.store)).toEqual([])
@@ -1133,7 +1136,7 @@ describe('第二轮审查', () => {
     await env.clock.advance(2 * HOUR)
     await env.settle()
     expect(drops(env.store)).toEqual([
-      expect.objectContaining({ queue: 'instruction', up_to_seq: old, reason: 'no_role' }),
+      expect.objectContaining({ queue: 'instruction', up_to_seq: old, reason: 'role_invalid' }),
     ])
     expect(
       env.scheduler
@@ -1146,6 +1149,11 @@ describe('第二轮审查', () => {
         .listInboxItems({ source: 'supervisor' })
         .filter((i) => i.id.startsWith('wake.unavail.')),
     ).toHaveLength(1)
+    // 宽限期内的事件也过期丢弃后，队列为空：不再按退避重查，等下一个事件
+    await env.clock.advance(24 * HOUR)
+    await env.settle()
+    expect(env.scheduler.projection().pending(WS, 'instruction')).toEqual([])
+    expect(env.clock.pending).toBe(0)
   })
 
   test('稳定不可唤醒（没有仓库）立即丢弃', async () => {
@@ -1178,5 +1186,135 @@ describe('第二轮审查', () => {
     await env.settle()
     expect(env.store.getTask(w)?.status).toBe('failed')
     expect(env.wakes()[1]).toMatchObject({ origin: 'instruction', events: [seq] })
+  })
+})
+
+describe('第三轮审查', () => {
+  test('探针 3：没有 supervisor 角色是稳定原因，静默丢弃、不产生 Interrupt', async () => {
+    const env = await setup({ role: async () => ok(null) })
+    const seq = instruction(env.store)
+    await env.settle()
+    expect(drops(env.store)).toEqual([
+      expect.objectContaining({ queue: 'instruction', up_to_seq: seq, reason: 'no_role' }),
+    ])
+    expect(env.store.listInboxItems({ source: 'supervisor' })).toEqual([])
+    expect(env.clock.pending).toBe(0)
+  })
+
+  test('workspace 文件不存在静默丢弃；workspace 配置整体加载失败走宽限', async () => {
+    const gone = await setup()
+    delete gone.workspaces[WS]
+    const a = instruction(gone.store)
+    await gone.settle()
+    expect(drops(gone.store)).toEqual([
+      expect.objectContaining({ up_to_seq: a, reason: 'unknown_workspace' }),
+    ])
+
+    const broken = await setup({ workspacesLoaded: async () => false })
+    delete broken.workspaces[WS]
+    const b = instruction(broken.store)
+    await broken.settle()
+    expect(drops(broken.store)).toEqual([])
+    expect(
+      broken.scheduler
+        .projection()
+        .pending(WS, 'instruction')
+        .map((e) => e.seq),
+    ).toEqual([b])
+    await broken.clock.advance(25 * HOUR)
+    await broken.settle()
+    expect(drops(broken.store)).toEqual([
+      expect.objectContaining({ up_to_seq: b, reason: 'workspaces_invalid' }),
+    ])
+  })
+
+  test('node_lost 真实路径：租约过期 → blocked(node_lost) → 自动失败并重试；旧唤醒 token 返回 401', async () => {
+    const env = await setup()
+    const seq = instruction(env.store)
+    await env.settle()
+    const w = env.wakes()[0]?.task_id ?? ''
+    start(env.store, w)
+    const wakeTokens = createWakeTokenAuthority({ ledger: () => env.store, now: env.clock.now })
+    const secret = wakeTokens.issue({ lease_id: `l-${w}-1`, task_id: w }) ?? ''
+    const app = createHubApp({
+      token: testToken,
+      wakeTokens,
+      ledger: env.store,
+      mount: [{ path: '/', app: createSupervisorRoutes({ scheduler: () => env.scheduler }) }],
+    })
+    const call = () =>
+      app.request('/v1/supervisor/status', { headers: { Authorization: `Bearer ${secret}` } })
+    expect((await call()).status).toBe(403)
+    must(
+      env.store.appendMany(
+        [
+          {
+            type: 'task.lease_expired',
+            task_id: w,
+            workspace: WS,
+            payload: {
+              lease_id: `l-${w}-1`,
+              node_id: 'n1',
+              expired_at: '2026-10-26T08:01:00.000Z',
+              attempt: 1,
+            },
+          },
+          {
+            type: 'task.blocked',
+            task_id: w,
+            workspace: WS,
+            payload: { reason: 'node_lost', message: '节点掉线' },
+          },
+        ],
+        { actor: 'hub' },
+      ),
+    )
+    await env.settle()
+    expect(env.store.getTask(w)?.status).toBe('failed')
+    expect(env.wakes()[1]).toMatchObject({ origin: 'instruction', events: [seq] })
+    expect((await call()).status).toBe(401)
+  })
+
+  test('G13：提问条目（ask.*、可回复）以 expired 关闭时唤醒一次，origin 取提问所在唤醒；非提问条目不唤醒', async () => {
+    const env = await setup()
+    patrol(env.store)
+    await env.settle()
+    const wake = env.wakes()[0]?.task_id ?? ''
+    const item = (id: string, actions: 'reply'[]) =>
+      must(
+        env.store.append(
+          {
+            type: 'inbox.item_created',
+            workspace: WS,
+            payload: {
+              item_id: id,
+              level: 'decide',
+              source: 'supervisor',
+              source_ref: wake,
+              title: '提问',
+              actions,
+            },
+          },
+          { actor: 'hub' },
+        ),
+      )
+    item(`ask.${wake}.1`, ['reply'])
+    item(`note.${wake}`, [])
+    finish(env.store, wake)
+    const close = (id: string) =>
+      must(
+        env.store.append(
+          { type: 'inbox.item_closed', workspace: WS, payload: { item_id: id, reason: 'expired' } },
+          { actor: 'hub' },
+        ),
+      ).seq
+    const other = close(`note.${wake}`)
+    const expired = close(`ask.${wake}.1`)
+    await env.settle()
+    expect(env.wakes()).toHaveLength(2)
+    expect(env.wakes()[1]).toMatchObject({ origin: 'autonomous', events: [expired] })
+    expect(env.wakes()[1]?.events).not.toContain(other)
+    const ev = env.store.getTask(env.wakes()[1]?.task_id ?? '')?.contract.inputs?.wake?.events[0]
+    expect(ev?.summary).toContain('已过期')
   })
 })

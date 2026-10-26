@@ -56,6 +56,8 @@ import { redactingLogger } from '../secrets/logger.ts'
 import { SecretRedactor } from '../secrets/redactor.ts'
 import { createHubSecrets, type HubSecretsOptions } from '../secrets/service.ts'
 import { currentRuntime } from '../serve.ts'
+import { createSupervisorRoutes } from '../supervisor/routes.ts'
+import { createWakeScheduler, type WakeScheduler } from '../supervisor/scheduler.ts'
 import {
   acceptTaskProposal,
   createSupervisorToolRoutes,
@@ -64,8 +66,6 @@ import {
   startSupervisorTools,
   supervisorActiveFromHome,
 } from '../supervisor-tools/index.ts'
-import { createSupervisorRoutes } from '../supervisor/routes.ts'
-import { createWakeScheduler, type WakeScheduler } from '../supervisor/scheduler.ts'
 import { createUiApp, createUiLoginCodeRoutes } from '../ui/app.tsx'
 import { createUiSessions } from '../ui/sessions.ts'
 import { systemClock } from './clock.ts'
@@ -371,6 +371,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       clock,
       logger,
       workspaces: workspaceLookupFromHome(options.home),
+      workspacesLoaded: async () => (await loadWorkspaces(options.home)).ok,
       listWorkspaces: async () => {
         const loaded = await loadWorkspaces(options.home)
         return loaded.ok ? loaded.data.workspaces : []
