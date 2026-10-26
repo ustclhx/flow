@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { generatePlist } from '../src/daemon/plist.ts'
 import {
   runDoctor as actualDoctor,
+  CLAUDE_READ_ONLY_SNIPPET,
   compareVersions,
   DEV_CREATABLE_BY_SNIPPET,
   type DoctorOptions,
@@ -122,7 +123,7 @@ describe('flow doctor', () => {
     expect(formatDoctorReport(report)).toContain('[warn] config/roles/loose.yaml：声明 kind: read')
   })
 
-  test('多个 kind: supervisor 角色：doctor 报错', async () => {
+  test('第二个 kind: supervisor 角色（名字不是 supervisor）：角色配置报错', async () => {
     const home = tempHome('flow-doctor-kind-')
     await initFlowHome(home)
     writeText(
@@ -131,12 +132,9 @@ describe('flow doctor', () => {
     )
     const result = await runDoctor(home, 'FLOW_HOME')
     const report = reportOf(result)
-    expect(report.checks.find((c) => c.id === 'roles.supervisor')).toMatchObject({
-      ok: false,
-      severity: 'error',
-      message: expect.stringContaining('中枢不会唤醒 supervisor'),
-    })
-    expect(failed(report)).toContain('roles.supervisor')
+    const check = report.checks.find((c) => c.id === 'roles.config.config/roles/boss.yaml.name')
+    expect(check).toMatchObject({ ok: false, severity: 'error' })
+    expect(check?.message).toContain('必须是小写 supervisor')
     expect(result.ok).toBe(false)
   })
 
@@ -153,18 +151,42 @@ describe('flow doctor', () => {
     ).toMatchObject({ ok: false, message: expect.stringContaining('保留身份') })
   })
 
-  test('supervisor 角色带写权限：警告', async () => {
+  test('supervisor 角色可写（写工具、未禁用写工具或加载项目设置）：doctor 报错并附片段', async () => {
+    const home = tempHome('flow-doctor-kind-')
+    await initFlowHome(home)
+    for (const permissions of [
+      '  setting_sources: []\n  disallowedTools: [Bash, Edit, Write, MultiEdit, NotebookEdit]\n  allowedTools: ["Bash(git status)"]\n',
+      '  setting_sources: []\n  disallowedTools: [Bash, Edit, Write, MultiEdit, NotebookEdit]\n  writable_paths: ["docs/**"]\n',
+      '  disallowedTools: [Bash, Edit, Write, MultiEdit, NotebookEdit]\n',
+      '  setting_sources: []\n  disallowedTools: [Bash, Edit, Write, NotebookEdit]\n',
+    ]) {
+      writeText(
+        join(home, 'config/roles/supervisor.yaml'),
+        `name: supervisor\nkind: supervisor\nexecutor: claude-sdk\nprompt: 测试\npermissions:\n${permissions}`,
+      )
+      const result = await runDoctor(home, 'FLOW_HOME')
+      const check = reportOf(result).checks.find((c) => c.id === 'roles.supervisor')
+      expect(check).toMatchObject({ ok: false, severity: 'error' })
+      expect(check?.message).toContain('中枢不会唤醒 supervisor')
+      expect(check?.hint).toContain(CLAUDE_READ_ONLY_SNIPPET)
+      expect(result.ok).toBe(false)
+    }
+  })
+
+  test('claude-sdk 角色声明 read 但推断为 write：警告并附只读片段', async () => {
     const home = tempHome('flow-doctor-kind-')
     await initFlowHome(home)
     writeText(
-      join(home, 'config/roles/supervisor.yaml'),
-      'name: supervisor\nkind: supervisor\nexecutor: claude-sdk\nprompt: 测试\npermissions:\n  allowedTools: ["Bash(git status)"]\n',
+      join(home, 'config/roles/looker.yaml'),
+      'name: looker\nkind: read\nexecutor: claude-sdk\nprompt: 测试\n',
     )
-    const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
-    expect(report.checks.find((c) => c.id === 'role.supervisor.supervisor_tools')).toMatchObject({
-      ok: false,
-      severity: 'warning',
-    })
+    const check = reportOf(await runDoctor(home, 'FLOW_HOME')).checks.find(
+      (c) => c.id === 'role.looker.kind',
+    )
+    expect(check).toMatchObject({ ok: false, severity: 'warning' })
+    expect(check?.hint).toContain(
+      'permissions:\n  setting_sources: []\n  disallowedTools:\n    - Bash\n    - Edit\n    - Write\n    - MultiEdit\n    - NotebookEdit',
+    )
   })
 
   test('已有用户升级：dev.yaml 没有 creatable_by 且存在 supervisor 角色时给出可复制片段', async () => {

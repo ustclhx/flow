@@ -6,6 +6,7 @@ import { exitCodeOf, type Result } from '../src/result.ts'
 import { DEFAULT_ROLE_FILES } from '../src/role-templates.ts'
 import {
   actorMatches,
+  CODEX_EXEC_READ_SAFE_CONFIG_KEYS,
   canCreateRole,
   effectiveRoleKind,
   findSupervisorRole,
@@ -321,20 +322,67 @@ describe('角色有效类别（D9）', () => {
       ...(kind ? { kind } : {}),
     }) as Role
 
+  /** claude-sdk 推断为 read 的最小配置。 */
+  const readOnly = {
+    setting_sources: [],
+    disallowedTools: ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
+  }
+
   test('按执行器与权限推断类别', () => {
     expect(inferRoleKind(of('codex-orca'))).toBe('write')
-    expect(inferRoleKind(of('codex-exec'))).toBe('read')
-    expect(inferRoleKind(of('codex-exec', { sandbox: 'read-only' }))).toBe('read')
-    expect(inferRoleKind(of('codex-exec', { sandbox: 'workspace-write' }))).toBe('write')
-    expect(inferRoleKind(of('codex-exec', { sandbox: 'danger-full-access' }))).toBe('write')
     expect(inferRoleKind(of('pr-merge'))).toBe('merge')
     expect(inferRoleKind(of('fake'))).toBe('write')
     expect(inferRoleKind(of('gpt-cli'))).toBe('write')
-    expect(inferRoleKind(of('claude-sdk'))).toBe('read')
-    expect(inferRoleKind(of('claude-sdk', { allowedTools: ['Read', 'Glob', 'Grep'] }))).toBe('read')
-    expect(inferRoleKind(of('claude-sdk', { permissionMode: 'plan' }))).toBe('read')
-    expect(inferRoleKind(of('claude-sdk', { disallowedTools: ['Bash', 'Edit'] }))).toBe('read')
-    for (const permissions of [
+  })
+
+  test('codex-exec：只读沙箱且 config 只含白名单键才是 read', () => {
+    expect(CODEX_EXEC_READ_SAFE_CONFIG_KEYS).toEqual(['model', 'model_reasoning_effort'])
+    expect(inferRoleKind(of('codex-exec'))).toBe('read')
+    expect(inferRoleKind(of('codex-exec', { sandbox: 'read-only' }))).toBe('read')
+    expect(inferRoleKind(of('codex-exec', { config: {} }))).toBe('read')
+    expect(
+      inferRoleKind(
+        of('codex-exec', { config: { model: 'gpt-x', model_reasoning_effort: 'high' } }),
+      ),
+    ).toBe('read')
+    expect(inferRoleKind(of('codex-exec', { sandbox: 'workspace-write' }))).toBe('write')
+    expect(inferRoleKind(of('codex-exec', { sandbox: 'danger-full-access' }))).toBe('write')
+    for (const config of [
+      { notify: 'say done' },
+      { 'mcp_servers.x.command': 'evil' },
+      { sandbox_mode: 'workspace-write' },
+      { model: 'gpt-x', 'shell_environment_policy.inherit': 'all' },
+    ]) {
+      expect(inferRoleKind(of('codex-exec', { config }))).toBe('write')
+    }
+  })
+
+  test('claude-sdk：setting_sources 显式 []、禁用全部写工具、没有写规则才是 read', () => {
+    expect(inferRoleKind(of('claude-sdk', readOnly))).toBe('read')
+    expect(
+      inferRoleKind(of('claude-sdk', { ...readOnly, allowedTools: ['Read', 'Glob', 'Grep'] })),
+    ).toBe('read')
+    expect(inferRoleKind(of('claude-sdk', { ...readOnly, permissionMode: 'plan' }))).toBe('read')
+    expect(inferRoleKind(of('claude-sdk', { ...readOnly, permissionMode: 'default' }))).toBe('read')
+    // setting_sources 缺省（执行器默认 ['project']）或含任何来源：仓库设置的 allow 与 hooks 生效。
+    expect(inferRoleKind(of('claude-sdk'))).toBe('write')
+    for (const setting_sources of [undefined, ['project'], ['local'], ['user'], 'project']) {
+      expect(inferRoleKind(of('claude-sdk', { ...readOnly, setting_sources }))).toBe('write')
+    }
+    // disallowedTools 必须逐项覆盖 Bash、Edit、Write、MultiEdit、NotebookEdit。
+    for (const missing of ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']) {
+      const disallowedTools = readOnly.disallowedTools.filter((t) => t !== missing)
+      expect(inferRoleKind(of('claude-sdk', { ...readOnly, disallowedTools }))).toBe('write')
+    }
+    expect(
+      inferRoleKind(
+        of('claude-sdk', {
+          ...readOnly,
+          disallowedTools: ['Bash(rm:*)', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
+        }),
+      ),
+    ).toBe('write')
+    for (const extra of [
       { writable_paths: [] },
       { writable_paths: ['docs/**'] },
       { allowedTools: ['Edit'] },
@@ -347,7 +395,7 @@ describe('角色有效类别（D9）', () => {
       { permissionMode: 'bypassPermissions' },
       { permissionMode: 'auto' },
     ]) {
-      expect(inferRoleKind(of('claude-sdk', permissions))).toBe('write')
+      expect(inferRoleKind(of('claude-sdk', { ...readOnly, ...extra }))).toBe('write')
     }
   })
 
@@ -375,7 +423,11 @@ describe('角色有效类别（D9）', () => {
 
   test('声明只能收紧：取声明与推断中更严格者', () => {
     expect(effectiveRoleKind(of('codex-orca', undefined, 'read'))).toBe('write')
-    expect(effectiveRoleKind(of('claude-sdk', { writable_paths: [] }, 'read'))).toBe('write')
+    expect(effectiveRoleKind(of('claude-sdk', { ...readOnly, writable_paths: [] }, 'read'))).toBe(
+      'write',
+    )
+    expect(effectiveRoleKind(of('claude-sdk', undefined, 'read'))).toBe('write')
+    expect(effectiveRoleKind(of('claude-sdk', readOnly, 'write'))).toBe('write')
     expect(effectiveRoleKind(of('pr-merge', undefined, 'write'))).toBe('merge')
     expect(effectiveRoleKind(of('codex-exec', undefined, 'write'))).toBe('write')
     expect(effectiveRoleKind(of('codex-exec', undefined, 'merge'))).toBe('merge')
@@ -388,10 +440,17 @@ describe('角色有效类别（D9）', () => {
 
   test('kind: supervisor 只能用于 claude-sdk；未知 kind 被拒绝', () => {
     expect(
-      roleSchema.safeParse({ ...role, executor: 'claude-sdk', kind: 'supervisor' }).success,
+      roleSchema.safeParse({
+        ...role,
+        name: 'supervisor',
+        executor: 'claude-sdk',
+        kind: 'supervisor',
+      }).success,
     ).toBe(true)
     for (const executor of ['codex-orca', 'codex-exec', 'pr-merge', 'fake']) {
-      expect(roleSchema.safeParse({ ...role, executor, kind: 'supervisor' })).toMatchObject({
+      expect(
+        roleSchema.safeParse({ ...role, name: 'supervisor', executor, kind: 'supervisor' }),
+      ).toMatchObject({
         success: false,
         error: { issues: [expect.objectContaining({ path: ['kind'] })] },
       })
@@ -399,7 +458,7 @@ describe('角色有效类别（D9）', () => {
     expect(roleSchema.safeParse({ ...role, kind: 'admin' }).success).toBe(false)
   })
 
-  test('supervisor 为保留 actor：名为 supervisor 但类别不是 supervisor 的角色报错', async () => {
+  test('supervisor 为保留 actor：名字与 kind: supervisor 必须同时出现', async () => {
     const sdk = { ...role, executor: 'claude-sdk' }
     expect(roleSchema.safeParse({ ...sdk, name: 'supervisor', kind: 'supervisor' }).success).toBe(
       true,
@@ -410,14 +469,14 @@ describe('角色有效类别（D9）', () => {
       { ...role, name: 'supervisor', kind: 'write' },
       { ...sdk, name: 'Supervisor', kind: 'supervisor' },
       { ...sdk, name: 'SUPERVISOR' },
+      { ...sdk, name: 'boss', kind: 'supervisor' },
     ]) {
       expect(roleSchema.safeParse(bad)).toMatchObject({
         success: false,
         error: { issues: [expect.objectContaining({ path: ['name'] })] },
       })
     }
-    // 其他名字的 supervisor 角色允许（唯一性由 findSupervisorRole / doctor 检查）。
-    expect(roleSchema.safeParse({ ...sdk, name: 'boss', kind: 'supervisor' }).success).toBe(true)
+    expect(roleSchema.safeParse({ ...sdk, name: 'boss', kind: 'read' }).success).toBe(true)
 
     const home = tempHome('flow-roles-')
     writeText(
@@ -431,12 +490,25 @@ describe('角色有效类别（D9）', () => {
     ])
   })
 
-  test('findSupervisorRole：没有返回 null，一个返回该角色，多个报 multiple_supervisor_roles', () => {
-    const sup = (name: string) => ({ ...of('claude-sdk', undefined, 'supervisor'), name }) as Role
+  test('findSupervisorRole：没有返回 null；唯一且只读返回该角色；多个或可写时报错', () => {
+    const sup = (name: string, permissions: Record<string, unknown> = readOnly) =>
+      ({ ...of('claude-sdk', permissions, 'supervisor'), name }) as Role
     expect(data(findSupervisorRole([of('codex-orca')]))).toBeNull()
     expect(data(findSupervisorRole([of('codex-orca'), sup('supervisor')]))?.name).toBe('supervisor')
     const r = findSupervisorRole([sup('supervisor'), sup('boss')])
     expect(r).toMatchObject({ ok: false, error: { code: 'multiple_supervisor_roles' } })
     expect(r.ok || r.error.message).toContain('supervisor、boss')
+    for (const permissions of [
+      { ...readOnly, allowedTools: ['Bash(git status)'] },
+      { ...readOnly, allowedTools: ['Edit'] },
+      { ...readOnly, writable_paths: ['docs/**'] },
+      { ...readOnly, setting_sources: ['project'] },
+      { setting_sources: [] },
+    ]) {
+      expect(findSupervisorRole([sup('supervisor', permissions)])).toMatchObject({
+        ok: false,
+        error: { code: 'supervisor_role_writable' },
+      })
+    }
   })
 })

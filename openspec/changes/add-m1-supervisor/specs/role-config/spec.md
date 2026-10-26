@@ -3,11 +3,31 @@
 ## ADDED Requirements
 
 ### Requirement: 角色有效类别
-角色 SHALL 支持可选字段 `kind: read | write | merge | supervisor`；中枢同时按配置推断类别（codex-orca 为 write；codex-exec 只读沙箱为 read，否则 write；claude-sdk 有 `writable_paths`、允许 Edit/Write/NotebookEdit 或任何 `Bash(...)` 规则时为 write，否则 read；pr-merge 为 merge）。有效类别 MUST 取声明与推断中更严格者，声明只能收紧。`kind: supervisor` MUST 显式声明且只能用于 claude-sdk。`flow doctor` MUST 显示每个角色的有效类别。
+角色 SHALL 支持可选字段 `kind: read | write | merge | supervisor`；中枢同时按配置推断类别：codex-orca 为 write；codex-exec 只读沙箱且 `permissions.config` 为空或只含白名单键（`model`、`model_reasoning_effort`）时为 read，否则 write；claude-sdk 只有在 `setting_sources` 显式为 `[]`、`disallowedTools` 列出 Bash、Edit、Write、MultiEdit、NotebookEdit、没有 `writable_paths`、`allowedTools` 中没有 Edit/Write/MultiEdit/NotebookEdit 与任何 `Bash` 规则、权限模式不是 acceptEdits/bypassPermissions/auto 时为 read，否则 write；pr-merge 为 merge；其他执行器为 write。有效类别 MUST 取声明与推断中更严格者，声明只能收紧。`kind: supervisor` MUST 显式声明、只能用于 claude-sdk、角色名 MUST 是 `supervisor`；名为 `supervisor` 但类别不是 supervisor 的角色 MUST 加载报错。supervisor 角色按配置推断不是 read 时，doctor MUST 报错，中枢不唤醒 supervisor。`flow doctor` MUST 显示每个角色的有效类别。
 
 #### Scenario: 多个 supervisor 角色
-- **WHEN** 有两个角色声明 `kind: supervisor`
-- **THEN** doctor 报错，中枢不唤醒 supervisor
+- **WHEN** 除 `supervisor.yaml` 外，另一个角色也声明 `kind: supervisor`
+- **THEN** 该角色名字不是 `supervisor`，加载报错，doctor 报错；中枢的 `findSupervisorRole` 对多个 supervisor 角色返回 `multiple_supervisor_roles`，不唤醒 supervisor
+
+#### Scenario: supervisor 角色可写
+- **WHEN** supervisor 角色有 `Bash` 允许规则、`writable_paths`，未禁用 Bash/Edit/Write/MultiEdit/NotebookEdit，或 `setting_sources` 不是 `[]`
+- **THEN** doctor 报错并给出只读片段，中枢不唤醒 supervisor
+
+#### Scenario: claude-sdk 加载项目设置
+- **WHEN** claude-sdk 角色没有写 `setting_sources`，或其中包含 project、local、user
+- **THEN** 有效类别为 write
+
+#### Scenario: claude-sdk 未禁用写工具
+- **WHEN** claude-sdk 角色 `setting_sources: []`，只允许 Read/Grep/Glob，但 `disallowedTools` 没有列出 MultiEdit
+- **THEN** 有效类别为 write
+
+#### Scenario: codex-exec 带 config
+- **WHEN** codex-exec 角色沙箱为只读，`permissions.config` 含白名单以外的键（例如 `notify`、`mcp_servers.*`）
+- **THEN** 有效类别为 write；只含 `model`、`model_reasoning_effort` 时仍为 read
+
+#### Scenario: 保留名
+- **WHEN** 名为 `supervisor` 的角色没有声明 `kind: supervisor`，或 `kind: supervisor` 的角色名字不是 `supervisor`
+- **THEN** 角色加载报错，doctor 显示该错误
 
 #### Scenario: 默认 reviewer
 - **WHEN** reviewer 配有 `writable_paths`

@@ -19,8 +19,8 @@ export const KNOWN_EXECUTORS = [
 ] as const
 
 /**
- * 保留 actor `supervisor`（design D7、D15）：只能是 `kind: supervisor` 角色的名字。
- * 名字不区分大小写地等于它、但类别不是 supervisor 的角色在加载时报错。
+ * 保留 actor `supervisor`（design D7、D9、D15）：`kind: supervisor` 角色的名字必须正是它，
+ * 名字不区分大小写地等于它、但类别不是 supervisor 的角色也在加载时报错。
  */
 export const SUPERVISOR_ACTOR = 'supervisor'
 
@@ -116,11 +116,11 @@ export const roleSchema = z
         path: ['name'],
         message: 'supervisor 是保留身份，只能用作 kind: supervisor 角色的名字',
       })
-    } else if (role.name.toLowerCase() === SUPERVISOR_ACTOR && role.name !== SUPERVISOR_ACTOR) {
+    } else if (role.kind === 'supervisor' && role.name !== SUPERVISOR_ACTOR) {
       ctx.addIssue({
         code: 'custom',
         path: ['name'],
-        message: 'supervisor 是保留身份，角色名必须写作小写 supervisor',
+        message: 'kind: supervisor 角色的名字必须是小写 supervisor（保留身份）',
       })
     }
     if (role.permissions?.writable_paths !== undefined && role.executor !== 'claude-sdk') {
@@ -215,39 +215,76 @@ const KIND_RANK: Record<RoleKind, number> = { read: 0, write: 1, merge: 2, super
 
 /** 允许后就能改文件或执行命令的工具；`Bash` 不论是否带括号规则都算写（design D9）。 */
 const CLAUDE_WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'])
+/**
+ * claude-sdk 推断为 read 时 `disallowedTools` 必须逐项列出的工具（design D9）：没有禁用的工具会进入
+ * Flow 审批，可能被 auto 规则或 supervisor 代回复放行。
+ */
+export const CLAUDE_READ_REQUIRED_DISALLOWED = [
+  'Bash',
+  'Edit',
+  'Write',
+  'MultiEdit',
+  'NotebookEdit',
+] as const
 /** 不经 canUseTool 就会放行编辑或任意调用的权限模式。 */
 const CLAUDE_WRITE_MODES = new Set(['acceptEdits', 'bypassPermissions', 'auto'])
+/**
+ * codex-exec 的 `permissions.config` 中不会启动进程或改变沙箱的键（design D9）；
+ * 出现其他任何键都推断为 write（例如 MCP 服务器、通知命令、shell 环境、沙箱设置）。
+ */
+export const CODEX_EXEC_READ_SAFE_CONFIG_KEYS = ['model', 'model_reasoning_effort'] as const
 
 /** `Edit`、`Edit(src/**)`、`Bash(gh pr review:*)` 等允许规则取括号前的工具名。 */
 const ruleTool = (rule: string) => rule.split('(', 1)[0]?.trim() ?? ''
 
+const stringList = (v: unknown): string[] | null =>
+  Array.isArray(v) && v.every((x) => typeof x === 'string') ? v : null
+
 function claudeSdkWrites(permissions: Record<string, unknown> | undefined): boolean {
-  if (!permissions) return false
-  if (permissions.writable_paths !== undefined) return true
-  const mode = permissions.permissionMode
-  if (typeof mode === 'string' && CLAUDE_WRITE_MODES.has(mode)) return true
-  const allowed = permissions.allowedTools
-  if (!Array.isArray(allowed)) return false
-  return allowed.some(
-    (rule) => typeof rule === 'string' && (rule === '*' || CLAUDE_WRITE_TOOLS.has(ruleTool(rule))),
-  )
+  const p = permissions ?? {}
+  if (p.writable_paths !== undefined) return true
+  // setting_sources 缺省时执行器用 ['project']；含任何来源时仓库 .claude/settings.json 的
+  // permissions.allow 与 hooks 都会生效，只有显式 [] 才可能是 read。
+  const sources = stringList(p.setting_sources)
+  if (!sources || sources.length > 0) return true
+  if (p.permissionMode !== undefined) {
+    if (typeof p.permissionMode !== 'string' || CLAUDE_WRITE_MODES.has(p.permissionMode))
+      return true
+  }
+  const disallowed = new Set(stringList(p.disallowedTools) ?? [])
+  if (!CLAUDE_READ_REQUIRED_DISALLOWED.every((t) => disallowed.has(t))) return true
+  const allowed = p.allowedTools === undefined ? [] : stringList(p.allowedTools)
+  if (!allowed) return true
+  return allowed.some((rule) => rule === '*' || CLAUDE_WRITE_TOOLS.has(ruleTool(rule)))
+}
+
+function codexExecWrites(permissions: Record<string, unknown> | undefined): boolean {
+  const sandbox = permissions?.sandbox
+  if (sandbox !== undefined && sandbox !== 'read-only') return true
+  const config = permissions?.config
+  if (config === undefined) return false
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) return true
+  const safe: readonly string[] = CODEX_EXEC_READ_SAFE_CONFIG_KEYS
+  return Object.keys(config).some((k) => !safe.includes(k))
 }
 
 /**
- * 按配置推断的类别（design D9）：codex-orca → write；codex-exec 只读沙箱（缺省即只读）→ read，否则 write；
- * claude-sdk 有 writable_paths、允许 Edit/Write/MultiEdit/NotebookEdit、任何 Bash 规则，
- * 或权限模式为 acceptEdits / bypassPermissions / auto → write，否则 read；pr-merge → merge；
- * 其他执行器（含 fake 与未知类型）按 write 处理，需要更低类别时也无法放宽。
+ * 按配置推断的类别（design D9）：
+ * - codex-orca → write；
+ * - codex-exec：沙箱为只读（缺省即只读）且 `config` 只含 CODEX_EXEC_READ_SAFE_CONFIG_KEYS → read，否则 write；
+ * - claude-sdk：以下全部满足才是 read，否则 write——`setting_sources` 显式为 `[]`；没有 writable_paths；
+ *   权限模式不是 acceptEdits / bypassPermissions / auto；`disallowedTools` 列出
+ *   CLAUDE_READ_REQUIRED_DISALLOWED 全部工具；`allowedTools` 中没有 Edit/Write/MultiEdit/NotebookEdit 与任何 Bash 规则；
+ * - pr-merge → merge；
+ * - 其他执行器（含 fake 与未知类型）按 write 处理。
  * 推断结果永远不是 supervisor：它必须显式声明。
  */
 export function inferRoleKind(role: Pick<Role, 'executor' | 'permissions'>): RoleKind {
   switch (role.executor) {
     case 'pr-merge':
       return 'merge'
-    case 'codex-exec': {
-      const sandbox = role.permissions?.sandbox
-      return sandbox === undefined || sandbox === 'read-only' ? 'read' : 'write'
-    }
+    case 'codex-exec':
+      return codexExecWrites(role.permissions) ? 'write' : 'read'
     case 'claude-sdk':
       return claudeSdkWrites(role.permissions) ? 'write' : 'read'
     default:
@@ -264,7 +301,8 @@ export function effectiveRoleKind(role: Pick<Role, 'executor' | 'permissions' | 
 
 /**
  * 在角色集合中找唯一的 supervisor 角色（按有效类别）：没有返回 null；多于一个返回
- * `multiple_supervisor_roles` 失败，中枢据此不唤醒 supervisor，doctor 报错。
+ * `multiple_supervisor_roles`；它按配置推断为 write（有写工具、未禁用写工具或加载项目设置）返回
+ * `supervisor_role_writable`。失败时中枢不唤醒 supervisor，doctor 报错。
  */
 export function findSupervisorRole(roles: readonly Role[]): Result<Role | null> {
   const found = roles.filter((r) => effectiveRoleKind(r) === 'supervisor')
@@ -275,5 +313,14 @@ export function findSupervisorRole(roles: readonly Role[]): Result<Role | null> 
       `最多只能有一个 kind: supervisor 角色，现有：${found.map((r) => r.name).join('、')}`,
     )
   }
-  return ok(found[0] ?? null)
+  const role = found[0]
+  if (role && inferRoleKind(role) !== 'read') {
+    return fail(
+      'failure',
+      'supervisor_role_writable',
+      `supervisor 角色 ${role.name} 的配置可以写文件或执行命令（writable_paths、写工具或 Bash 允许规则、宽松的权限模式、未禁用 ${CLAUDE_READ_REQUIRED_DISALLOWED.join('/')}，或 setting_sources 不是 []）`,
+      { role: role.name },
+    )
+  }
+  return ok(role ?? null)
 }

@@ -10,6 +10,7 @@ import { isRepoRoot } from './git.ts'
 import { type Env, flowPaths, GIT_REPOS } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import {
+  CLAUDE_READ_REQUIRED_DISALLOWED,
   canCreateRole,
   effectiveRoleKind,
   findSupervisorRole,
@@ -447,7 +448,17 @@ export async function runDoctor(
 /** 可直接复制进已有 dev.yaml 的片段（design D14：升级用户）。 */
 export const DEV_CREATABLE_BY_SNIPPET = `creatable_by:\n  - ${SUPERVISOR_ACTOR}`
 
-/** 角色有效类别（design D9）、supervisor 唯一性与 dev 的 creatable_by 升级提示。 */
+/** claude-sdk 角色推断为 read 所需的权限片段（design D9），放在 permissions 下。 */
+export const CLAUDE_READ_ONLY_SNIPPET = [
+  'permissions:',
+  '  setting_sources: []',
+  '  disallowedTools:',
+  ...CLAUDE_READ_REQUIRED_DISALLOWED.map((t) => `    - ${t}`),
+].join('\n')
+
+const claudeReadHint = `不设 writable_paths、不允许写工具与 Bash 规则，并确保 permissions 包含（已有列表时合并）：\n${CLAUDE_READ_ONLY_SNIPPET}`
+
+/** 角色有效类别（design D9）、supervisor 唯一且只读、dev 的 creatable_by 升级提示。 */
 function checkRoleKinds(roles: Role[]): DoctorCheck[] {
   const checks: DoctorCheck[] = []
   for (const role of roles) {
@@ -463,32 +474,32 @@ function checkRoleKinds(roles: Role[]): DoctorCheck[] {
         ? `${file}：声明 kind: ${role.kind} 比按配置推断的 ${inferred} 宽松，声明只能收紧，有效类别为 ${effective}`
         : `${file}：有效类别 ${effective}（推断 ${inferred}${role.kind ? `，声明 ${role.kind}` : ''}）`,
       ...(loosened
-        ? { hint: `删除 kind 或改为 ${effective}；要降低类别，请收紧执行器权限配置` }
+        ? {
+            hint:
+              role.executor === 'claude-sdk' && role.kind === 'read'
+                ? claudeReadHint
+                : `删除 kind 或改为 ${effective}；要降低类别，请收紧执行器权限配置`,
+          }
         : {}),
     })
-    if (effective === 'supervisor' && inferred === 'write') {
-      checks.push({
-        id: `role.${role.name}.supervisor_tools`,
-        ok: false,
-        severity: 'warning',
-        message: `${file}：supervisor 角色配置了写文件或命令权限（writable_paths、Edit/Write/NotebookEdit、Bash 或宽松的权限模式）`,
-        hint: 'supervisor 只应有 Read、Grep、Glob 与 Flow MCP；参考 flow init 生成的 supervisor.yaml',
-      })
-    }
   }
   const supervisor = findSupervisorRole(roles)
   if (!supervisor.ok) {
+    const writable = supervisor.error.code === 'supervisor_role_writable'
     checks.push({
       id: 'roles.supervisor',
       ok: false,
       severity: 'error',
       message: `${supervisor.error.message}；中枢不会唤醒 supervisor`,
-      hint: '只保留一个 kind: supervisor 角色',
+      hint: writable
+        ? `supervisor 只应有 Read、Grep、Glob 与 Flow MCP（参考 flow init 生成的 supervisor.yaml）；${claudeReadHint}`
+        : '只保留一个 kind: supervisor 角色',
     })
-    return checks
+    if (!writable) return checks
   }
+  const hasSupervisor = roles.some((r) => effectiveRoleKind(r) === 'supervisor')
   const dev = roles.find((r) => r.name === 'dev')
-  if (supervisor.data && dev && !canCreateRole(dev, SUPERVISOR_ACTOR)) {
+  if (hasSupervisor && dev && !canCreateRole(dev, SUPERVISOR_ACTOR)) {
     checks.push({
       id: 'role.dev.supervisor',
       ok: false,

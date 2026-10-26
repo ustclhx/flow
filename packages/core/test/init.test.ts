@@ -117,7 +117,15 @@ describe('flow init', () => {
           setting_sources: [],
           read_scope: 'cwd',
           allowedTools: ['Read', 'Grep', 'Glob'],
-          disallowedTools: ['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch'],
+          disallowedTools: [
+            'Bash',
+            'Edit',
+            'Write',
+            'MultiEdit',
+            'NotebookEdit',
+            'WebFetch',
+            'WebSearch',
+          ],
         },
       }),
       expect.objectContaining({
@@ -142,7 +150,15 @@ describe('flow init', () => {
           setting_sources: [],
           read_scope: 'cwd',
           allowedTools: ['Read', 'Grep', 'Glob'],
-          disallowedTools: ['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch'],
+          disallowedTools: [
+            'Bash',
+            'Edit',
+            'Write',
+            'MultiEdit',
+            'NotebookEdit',
+            'WebFetch',
+            'WebSearch',
+          ],
         },
       }),
       expect.objectContaining({
