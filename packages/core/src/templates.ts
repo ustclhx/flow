@@ -110,3 +110,77 @@ export const BRAIN_LOG_MD = `# 变更日志
 > 由 Flow 追加，已有行不得修改。格式：\`YYYY-MM-DD <操作> <操作者> <简述>\`
 
 `
+
+/**
+ * `config/policies.yaml` 的初始内容：规则全部注释掉，未配置的动作一律交给用户。
+ * 以 `# ` 开头的行是可直接取消注释的规则，`## ` 开头的行是说明（测试据此逐条验证模板）。
+ */
+export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语法与判定规则见 packages/core/src/policy/README.md。
+## 未被规则覆盖的动作一律交给用户。以下模板默认全部注释掉：按 workspace 取消注释，
+## 并把 ws/<id> 换成实际的 workspace id。
+##
+## —— supervisor 建任务（add-m1-supervisor D5）——
+## 允许 supervisor 角色直接创建任务（中枢仍按 D5 校验唤醒 parent、origin、仓库与数量上限）。
+## scope 用角色名而不是 ws/<id>：workspace scope 会同时放行该 workspace 内所有角色的建任务请求。
+# - scope: supervisor
+#   action: task.create
+#   level: auto
+##
+## —— 卡住时代用户回复的白名单（D15）——
+## level: supervisor 表示委托给本 workspace 的 supervisor 判断，不是直接放行；
+## supervisor 拿不准时转交用户，超时或无法唤醒时同样转交用户。
+## 命令前缀按词边界匹配（pnpm test --x 命中、pnpm test:e2e 不命中），串联命令的每段都须满足同一前缀。
+# - scope: ws/<id>
+#   action: tool:CodexCommand
+#   level: supervisor
+#   when: {command_prefix: pnpm check}
+# - scope: ws/<id>
+#   action: tool:CodexCommand
+#   level: supervisor
+#   when: {command_prefix: pnpm test}
+# - scope: ws/<id>
+#   action: tool:CodexCommand
+#   level: supervisor
+#   when: {command_prefix: pnpm lint}
+# - scope: ws/<id>
+#   action: tool:Bash
+#   level: supervisor
+#   when: {command_prefix: pnpm check}
+# - scope: ws/<id>
+#   action: tool:Bash
+#   level: supervisor
+#   when: {command_prefix: pnpm test}
+# - scope: ws/<id>
+#   action: tool:Bash
+#   level: supervisor
+#   when: {command_prefix: pnpm lint}
+##
+## gh 只作用于本 workspace 的登记仓库：不带 -R/--repo、无环境变量前缀、节点核对 gh 解析出的仓库，
+## --body-file 只能指向工作目录内的文件。
+# - scope: ws/<id>
+#   action: pr.create
+#   level: supervisor
+#   when: {gh_scope: workspace_repo}
+# - scope: ws/<id>
+#   action: tool:CodexCommand
+#   level: supervisor
+#   when: {command_prefix: gh pr view, gh_scope: workspace_repo}
+# - scope: ws/<id>
+#   action: tool:CodexCommand
+#   level: supervisor
+#   when: {command_prefix: gh pr diff, gh_scope: workspace_repo}
+# - scope: ws/<id>
+#   action: tool:Bash
+#   level: supervisor
+#   when: {command_prefix: gh pr view, gh_scope: workspace_repo}
+# - scope: ws/<id>
+#   action: tool:Bash
+#   level: supervisor
+#   when: {command_prefix: gh pr diff, gh_scope: workspace_repo}
+##
+## 只推到执行器上报的任务分支（非默认分支），单段 git push、无全局选项与强推，节点核对推送环境。
+# - scope: ws/<id>
+#   action: git.push
+#   level: supervisor
+#   when: {push_to: task_branch}
+`

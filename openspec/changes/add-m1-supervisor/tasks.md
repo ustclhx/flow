@@ -9,7 +9,7 @@
 - [ ] 1.3 角色 `kind` 与有效类别（D9：声明只能收紧、Bash 规则计为 write），doctor 显示与警告
 - [ ] 1.4 角色模板：`supervisor`、`pr-reviewer`、`merger` 及提示词；`dev` 模板 `creatable_by: [supervisor]`；doctor 对缺少该值的已有 `dev.yaml` 给出片段
 - [ ] 1.5 合同 `inputs.wake`、`inputs.review` 与结果 `result.review` 的 schema
-- [ ] 1.6 策略档位 `supervisor`（合并次序；受保护动作含 `task.respond` 提升为 `draft-approve` 并标 `guarded`；通配规则不能给出）；`when.push_to: task_branch`（core 纯函数 `parsePushTarget`：单段、无 git 全局选项、登记 remote 名、单一显式 refspec、禁用选项清单、无启用的 hook，不确定即不满足）与 `when.gh_scope: workspace_repo`；`policy/check` 响应加 `decision_id`；`policies.yaml` 模板加入注释掉的代回复白名单，每个前缀写法有测试；`FLOW_TOOL_ACTIONS` 与 CLI 映射加 `task_respond` → `task.respond`；账本事件 `task.reply_delegated`、`task.reply_escalated`、`task.branch_reported`，`task.blocked` 加 `decision_id`、`diff_stat`、`no_delegate`，`policy/check` 请求加 `push_env_ok`、`gh_env_ok`，`task.replied.via` 加 `supervisor`；workspace 配置 `supervisor.delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；`supervisor` 列为保留 actor（角色加载与 doctor 报错）
+- [ ] 1.6 策略档位 `supervisor`（合并次序；受保护动作含 `task.respond` 提升为 `draft-approve` 并标 `guarded`；通配规则不能给出）；`when.push_to: task_branch`（core 纯函数 `parsePushTarget`：单段、无 git 全局选项、登记 remote 名、单一显式 refspec、禁用选项清单、无启用的 hook，不确定即不满足）与 `when.gh_scope: workspace_repo`；`policy/check` 响应加 `decision_id`；`policies.yaml` 模板加入注释掉的代回复白名单，每个前缀写法有测试；`FLOW_TOOL_ACTIONS` 与 CLI 映射加 `task_respond` → `task.respond`；账本事件 `task.reply_delegated`、`task.reply_escalated`、`task.branch_reported`，`task.blocked` 加 `decision_id`、`diff_stat`、`no_delegate`，`policy/check` 请求加 `push_env_ok`、`gh_env_ok`，`task.replied.via` 加 `supervisor`；workspace 配置 `supervisor.delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；`supervisor` 列为保留 actor（角色加载与 doctor 报错）。（G2 已完成策略引擎部分：`supervisor` 档位与合并次序、受保护动作/工具的提升、`parsePushTarget` 与 `push_to` / `gh_scope` 条件及 decide 上下文、`FLOW_TOOL_ACTIONS` 与 CLI 的 `task.respond`、`policies.yaml` 注释模板与逐条测试、policy README；协议字段、账本事件、workspace 配置、保留 actor 不在此组）
 
 ## 2. 中枢：任务创建的校验
 
@@ -18,7 +18,7 @@
 - [ ] 2.3 origin 计算与固化（D2）：只有挂在唤醒链上或经接受提案建的任务有 origin；`user.instruction`、`supervisor.release` 只接受 user 身份；reviewer_roles 任务的目标由中枢模板重写
 - [ ] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（realpath）；第 0 步 reply 唤醒 → `reply_only_wake`
 - [ ] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数；超限错误码
-- [ ] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）
+- [ ] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（G2 已完成模板部分；端到端测试未做）
 - [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试
 
 ## 3. 中枢：唤醒调度器

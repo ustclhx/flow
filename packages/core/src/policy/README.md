@@ -65,9 +65,9 @@ core 不访问文件系统或解析符号链接；节点在预检前对每个路
 
 flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做决定的操作额外识别为具体
 动作（`FLOW_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、
-`task_reply` → `task.reply`、`kb_proposals_accept` / `kb_proposals_reject` → `proposal.decide`、
+`task_reply` → `task.reply`、`task_respond` → `task.respond`、`kb_proposals_accept` / `kb_proposals_reject` → `proposal.decide`、
 `resource_transfer` → `resource.transfer`。Bash 调 flow CLI 时识别为同样的动作
-（`flow task create|cancel|reply`、`flow kb proposals accept|reject`、`flow resource transfer`）；
+（`flow task create|cancel|reply|respond`、`flow kb proposals accept|reject`、`flow resource transfer`）；
 `flow hub`、`flow policy`、`flow daemon`、`flow mcp`、`flow node`、`flow init` 识别为
 `flow.admin`，`flow secrets` 识别为 `secrets`。flow 可执行文件按 basename 识别
 （`/Users/x/.bun/bin/flow`），`bunx|npx|pnpx flow`、`bun x flow`、`bun [run] <脚本>.ts`、
@@ -94,11 +94,56 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 串联请求的每段命令都须满足；每个请求路径须匹配至少一个模式。路径 `*` 不跨 `/`，
 `**` 跨目录，`?` 匹配单字符，其余字符按字面处理。缺少条件输入时不匹配该规则。
 
+### 条件 `push_to` 与 `gh_scope`（`conditions.ts`，D15）
+
+两个条件让 supervisor 代为批准越出沙箱的推送与 gh 调用，采用**白名单**：只接受明确列出的写法，
+任何不确定都视为不满足（规则不命中）。判定需要的上下文由 `decide(rules, request, context)` 的第三个
+参数 `PolicyContext` 传入（`task_branch`、`default_branch`、`remotes`、`push_env_ok`、`gh_env_ok`、
+`cwd`、`realpath`）；字段缺失时条件不满足。core 不访问文件系统，`realpath` 由调用方注入。
+
+`when.push_to: task_branch`（schema 只允许用于 `action: git.push`）由 `pushToTaskBranch` 判定，
+命令先经 `parsePushTarget` 解析。以下全部满足才满足：
+- 命令只含字母、数字、空格与 `._/:@=+-`：引号、`$`、glob、重定向、`~`、`;`、`&`、`|`、`#`、
+  换行与非 ASCII 字符一律不满足（分支名与 remote 名用不到它们）；
+- 只有一段，第一个词就是 `git`（不带路径、没有环境变量赋值或 `env`、`sudo` 等包装），第二个词就是
+  `push`（`-c`、`-C`、`--git-dir`、`--exec-path`、`--config-env` 等全局选项都不满足）；
+- 选项只能是 `-u`、`--set-upstream`、`-q`、`--quiet`、`-v`、`--verbose`、`--progress`、
+  `--no-progress`；`--all`、`--mirror`、`--tags`、`--follow-tags`、`--prune`、`--delete`、
+  `--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*` 等以及任何未列出的选项
+  （包括短选项连写、`--`）都不满足；
+- 恰好一个 remote 加一个 refspec；remote 是名字（不是 URL 或路径），且在 `remotes` 中；
+- refspec 不以 `+` 或 `:` 开头，来源与目标都不是 `HEAD`、不含 `@`，是普通分支名；目标（去掉
+  `refs/heads/`，无冒号时等于来源）等于 `task_branch`；
+- `task_branch` 存在且不等于 `default_branch`（缺默认分支即不满足）；`push_env_ok` 严格为 `true`。
+
+`when.gh_scope: workspace_repo` 由 `ghScopeWorkspaceRepo` 判定：
+- `gh_env_ok` 严格为 `true`；
+- 没有 shell 元字符：引号外的 `` $ ` \ < > { } * ? [ ] ~ ; & | ( ) # ``、换行，双引号内的
+  `` $ ` \ ``，未闭合的引号，不可打印字符（单引号内按字面）；
+- 只有一段，第一个词就是 `gh`（没有 `GH_REPO`、`GH_HOST`、`GH_TOKEN` 等环境变量赋值或包装），
+  第二、三个词是 `pr create`、`pr view` 或 `pr diff`；
+- 只带白名单选项（不含 `-R` / `--repo`、`--recover`、`--web`、`--editor` 等），`--head` 不含 `:`；
+  create 没有位置参数，view / diff 最多一个 PR 编号或分支名（不接受 URL）；
+- `--body-file` / `-F` 的文件解析符号链接后位于 `cwd`（同样 realpath）内；`-`、`~` 开头、
+  文件不存在或未提供 `cwd` / `realpath` 都不满足。
+
+中枢 `policy/check` 从请求取 `push_env_ok`、`gh_env_ok`（只认 `true`），从合同取 `cwd`，`remotes`
+固定为 `origin`；任务分支（`task.branch_reported`）与默认分支接入前 `push_to` 永不满足。
+推送环境（push 地址、`core.sshCommand`、`url.*.insteadOf`、`remote.*.push`、hook 等）与 gh 实际
+解析的仓库由节点检查，core 只判定命令文本。
+
+`flow init` 生成的 `config/policies.yaml` 带一组注释掉的模板：supervisor 角色的 `task.create`
+auto（scope 用角色名 `supervisor`，避免 workspace scope 顺带放行该 workspace 其他角色建任务），
+以及代回复白名单（`tool:CodexCommand` 与 `tool:Bash` 的 `pnpm check|test|lint` 前缀、带
+`gh_scope` 的 `pr.create` 与 `gh pr view|diff`、带 `push_to` 的 `git.push`）。
+
 每个参与判定的动作都必须命中规则，否则该动作返回 `user`，最终取最保守的结果。
 只配置 workspace 的 `pr.merge: auto` 即可放行直接的 `gh pr merge`，无需另配工具规则；
 但 `gh pr create && gh pr merge` 必须同时覆盖两个具体动作。`bash -c 'gh pr merge'`
 还包含 `shell.opaque` 等敏感动作，只配置 `pr.merge` 仍交给用户处理。
-合并次序为 `notify > user > draft-approve > auto-report > auto`，空动作也返回 `user`。
+合并次序为 `notify > user > draft-approve > supervisor > auto-report > auto`，空动作也返回 `user`。
+档位 `supervisor`（D15）表示委托给本 workspace 的 supervisor 判断：节点不放行，按卡住上报，
+由中枢决定是否委托（不在代回复范围内时按 `draft-approve` 交给用户）。
 **安全底线是：敏感动作只能由显式规则放行，识别不确定时按敏感处理。**
 **受保护的动作**（`GUARDED_ACTIONS`）：`shell.opaque`、`pr.merge`、`deploy`、`secrets`、
 `policy.edit`、`config.edit`、`flow.admin`，以及上述 flow 工具的具体动作，均只有具体 workspace 或角色
@@ -114,6 +159,12 @@ scope 加精确 action（不含通配符）的规则才能自动放行；不透�
 外发或提权的请求；例如 `rm -rf ~`、`curl -d @dist …` 经 Codex 请求时只有工具动作，
 `scope: * action: tool:* level: auto` 不能放行它们，需要显式写出
 `scope: ws/<id> action: tool:CodexCommand`。
+
+**`supervisor` 与 `auto`、`auto-report` 同属自动档位**，并且更严格：受保护的动作（含
+`task.respond`）命中 `supervisor` 规则时一律提升为 `draft-approve`（即使是具体 scope 加精确
+action 的规则；这些动作只能由用户或显式 auto 规则处理，永不委托）；受保护的工具只有具体
+scope（workspace 或角色）加精确 action 的规则才能判为 `supervisor`，`scope: *` 或通配 action
+最多 `draft-approve`。
 
 上述两类中，不满足条件的自动档位提升为 `draft-approve`，以 `guarded` 标明。每个动作的 `matched_rules` 保留最高具体程度的全部
 规则，按档位和原始序号排序；汇总按动作顺序去重。保留原始规则内容供后续审计，判定

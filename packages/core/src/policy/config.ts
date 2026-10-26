@@ -6,28 +6,48 @@ import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { formatZodIssues, type ValidationIssue } from '../validation-issue.ts'
 
-export const policyLevelSchema = z.enum(['notify', 'draft-approve', 'auto-report', 'auto'])
+/** `supervisor`：委托给本 workspace 的 supervisor 判断（D15）；节点对它不放行，按卡住上报。 */
+export const policyLevelSchema = z.enum([
+  'notify',
+  'draft-approve',
+  'supervisor',
+  'auto-report',
+  'auto',
+])
 export type PolicyLevel = z.infer<typeof policyLevelSchema>
 
-export const policyRuleSchema = z.strictObject({
-  scope: z.union([
-    z.literal('*'),
-    workspaceRef,
-    z.string().regex(/^[^\s/*]+$/, '应为角色名、ws/<id> 或 *'),
-  ]),
-  action: z.string().regex(/^[^\s]+$/, '应为动作 id 或含 * 的动作模式'),
-  level: policyLevelSchema,
-  when: z
-    .strictObject({
-      command_prefix: z.string().trim().min(1).optional().meta({
-        description: '按命令词匹配前缀；串联请求的每段命令都必须满足',
-      }),
-      paths: z.array(z.string().min(1)).min(1).optional().meta({
-        description: '每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /',
-      }),
-    })
-    .optional(),
-})
+export const policyRuleSchema = z
+  .strictObject({
+    scope: z.union([
+      z.literal('*'),
+      workspaceRef,
+      z.string().regex(/^[^\s/*]+$/, '应为角色名、ws/<id> 或 *'),
+    ]),
+    action: z.string().regex(/^[^\s]+$/, '应为动作 id 或含 * 的动作模式'),
+    level: policyLevelSchema,
+    when: z
+      .strictObject({
+        command_prefix: z.string().trim().min(1).optional().meta({
+          description: '按命令词匹配前缀；串联请求的每段命令都必须满足',
+        }),
+        paths: z.array(z.string().min(1)).min(1).optional().meta({
+          description: '每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /',
+        }),
+        push_to: z.literal('task_branch').optional().meta({
+          description:
+            '只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），且节点上报 push_env_ok；任何不确定都不满足',
+        }),
+        gh_scope: z.literal('workspace_repo').optional().meta({
+          description:
+            '用于 gh pr create|view|diff：不带 -R/--repo、无环境变量前缀、节点上报 gh_env_ok，--body-file 只能在 cwd 内',
+        }),
+      })
+      .optional(),
+  })
+  .refine((rule) => rule.when?.push_to === undefined || rule.action === 'git.push', {
+    path: ['when', 'push_to'],
+    message: 'push_to 只能用于 action: git.push',
+  })
 
 export const policiesConfigSchema = z
   .array(policyRuleSchema)

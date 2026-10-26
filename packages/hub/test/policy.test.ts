@@ -288,3 +288,30 @@ test('不存在的任务返回 404，非法或超长请求返回 400；文件级
   })
   expect(must(await user.showTask(task.id)).events).toHaveLength(before)
 })
+
+test('supervisor 档位：精确规则委托；受保护动作提升；push_to 缺任务分支时不命中', async () => {
+  const { user, request, policies } = await setup([
+    {
+      scope: 'ws/xuanxue-saas',
+      action: 'tool:Bash',
+      level: 'supervisor',
+      when: { command_prefix: 'pnpm check' },
+    },
+  ])
+  const delegated = must(await user.checkPolicy({ ...request, command: 'pnpm check' }))
+  expect(delegated.level).toBe('supervisor')
+  policies([{ scope: 'ws/xuanxue-saas', action: 'pr.merge', level: 'supervisor' }])
+  const merge = must(await user.checkPolicy({ ...request, command: 'gh pr merge 29' }))
+  expect(merge.level).toBe('draft-approve')
+  expect(merge.actions.find((a) => a.action === 'pr.merge')?.guarded).toBe(true)
+  // 投影尚无任务分支与默认分支、请求也没有 push_env_ok：push_to 永不满足，交给用户。
+  policies([
+    {
+      scope: 'ws/xuanxue-saas',
+      action: 'git.push',
+      level: 'supervisor',
+      when: { push_to: 'task_branch' },
+    },
+  ])
+  expect(must(await user.checkPolicy(request)).level).toBe('user')
+})

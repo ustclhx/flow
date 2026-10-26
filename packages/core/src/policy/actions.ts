@@ -17,6 +17,7 @@ export const COMMAND_ACTION_MAPPINGS: readonly CommandActionMapping[] = [
   { prefix: ['flow', 'task', 'create'], action: 'task.create' },
   { prefix: ['flow', 'task', 'cancel'], action: 'task.cancel' },
   { prefix: ['flow', 'task', 'reply'], action: 'task.reply' },
+  { prefix: ['flow', 'task', 'respond'], action: 'task.respond' },
   { prefix: ['flow', 'inbox', 'act'], action: 'inbox.act' },
   { prefix: ['flow', 'kb', 'proposals', 'accept'], action: 'proposal.decide' },
   { prefix: ['flow', 'kb', 'proposals', 'reject'], action: 'proposal.decide' },
@@ -49,6 +50,8 @@ export const FLOW_TOOL_ACTIONS: Readonly<Record<string, string>> = {
   task_create: 'task.create',
   task_cancel: 'task.cancel',
   task_reply: 'task.reply',
+  // supervisor 代用户回复委托的卡住（D15）；受保护，不能被判为 supervisor 档位。
+  task_respond: 'task.respond',
   inbox_act: 'inbox.act',
   kb_proposals_accept: 'proposal.decide',
   kb_proposals_reject: 'proposal.decide',
@@ -80,13 +83,13 @@ export const GUARDED_TOOLS: readonly string[] = [
 export const isGuardedTool = (action: string): boolean =>
   GUARDED_TOOLS.includes(action) || action.startsWith('tool:mcp__')
 
-interface ParsedCommands {
+export interface ParsedCommands {
   commands: string[][]
   opaque: boolean
 }
 
 /** 只做静态分词，不执行 shell；保留引号内的空格和分隔符，支持反斜杠续行。 */
-function splitCommands(command: string): ParsedCommands {
+export function splitCommands(command: string): ParsedCommands {
   const commands: string[][] = []
   let words: string[] = []
   let word = ''

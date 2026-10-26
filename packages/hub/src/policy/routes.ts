@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import {
   classifyAction,
   decide,
@@ -8,6 +9,7 @@ import {
   isNodeActor,
   loadHubConfig,
   loadPoliciesConfig,
+  type PolicyContext,
   policyCheckData,
   policyCheckRequest,
   redactSecrets,
@@ -19,6 +21,34 @@ import { scrubPayload } from '../ledger/scrub.ts'
 import type { LedgerStore } from '../ledger/store.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { checkTaskScope, type HubAuthOptions } from '../server/auth.ts'
+
+/** 登记仓库的 remote 名：节点的 push_env_ok 核对它的推送地址与登记仓库一致。 */
+const REGISTERED_REMOTES = ['origin'] as const
+
+/**
+ * `push_to`、`gh_scope` 条件的判定上下文；任何缺失的字段都使对应条件不满足。
+ * - `push_env_ok`、`gh_env_ok`：节点随请求上报的字段（协议字段由 1.6 的协议部分加入
+ *   `policyCheckRequest`；尚未加入时请求里不会出现，这里只认严格的 `true`）；
+ * - TODO(1.6 协议/账本)：任务分支取自投影中的 `task.branch_reported`，仓库默认分支待登记仓库提供；
+ *   在此之前两者缺失，`push_to` 永不满足（保守）。
+ */
+function policyContext(cwd: string | undefined, body: object): PolicyContext {
+  const reported = body as { push_env_ok?: unknown; gh_env_ok?: unknown }
+  const home = homedir()
+  const resolvedCwd =
+    cwd === undefined
+      ? undefined
+      : cwd === '~' || cwd.startsWith('~/')
+        ? join(home, cwd.slice(1))
+        : cwd
+  return {
+    remotes: REGISTERED_REMOTES,
+    push_env_ok: reported.push_env_ok === true,
+    gh_env_ok: reported.gh_env_ok === true,
+    ...(resolvedCwd !== undefined && isAbsolute(resolvedCwd) ? { cwd: resolvedCwd } : {}),
+    realpath: (path) => realpathSync(path),
+  }
+}
 
 /** 只做预检与审计；执行器放行、blocked 和收件箱由后续节点与反应器接入。 */
 export function createPolicyRoutes(deps: {
@@ -82,11 +112,15 @@ export function createPolicyRoutes(deps: {
       userHome: homedir(),
       hubPorts,
     })
-    const decision = decide(loaded.data.rules, {
-      scope: { workspace: task.contract.workspace, role: task.contract.role },
-      actions,
-      ...request,
-    })
+    const decision = decide(
+      loaded.data.rules,
+      {
+        scope: { workspace: task.contract.workspace, role: task.contract.role },
+        actions,
+        ...request,
+      },
+      policyContext(task.contract.cwd, parsed.data),
+    )
     if (dry_run) {
       // 调试不入账，响应仍按同一规则脱敏，避免从命中条件返回密钥。
       return respond(

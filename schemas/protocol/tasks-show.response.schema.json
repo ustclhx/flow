@@ -1096,6 +1096,7 @@
                             "enum": [
                               "notify",
                               "draft-approve",
+                              "supervisor",
                               "auto-report",
                               "auto"
                             ]
@@ -1145,6 +1146,7 @@
                                   "enum": [
                                     "notify",
                                     "draft-approve",
+                                    "supervisor",
                                     "auto-report",
                                     "auto"
                                   ]
@@ -1165,6 +1167,16 @@
                                         "type": "string",
                                         "minLength": 1
                                       }
+                                    },
+                                    "push_to": {
+                                      "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），且节点上报 push_env_ok；任何不确定都不满足",
+                                      "type": "string",
+                                      "const": "task_branch"
+                                    },
+                                    "gh_scope": {
+                                      "description": "用于 gh pr create|view|diff：不带 -R/--repo、无环境变量前缀、节点上报 gh_env_ok，--body-file 只能在 cwd 内",
+                                      "type": "string",
+                                      "const": "workspace_repo"
                                     }
                                   },
                                   "additionalProperties": false
@@ -1203,6 +1215,7 @@
                                       "enum": [
                                         "notify",
                                         "draft-approve",
+                                        "supervisor",
                                         "auto-report",
                                         "auto"
                                       ]
@@ -1258,6 +1271,7 @@
                                         "enum": [
                                           "notify",
                                           "draft-approve",
+                                          "supervisor",
                                           "auto-report",
                                           "auto"
                                         ]
@@ -1278,6 +1292,16 @@
                                               "type": "string",
                                               "minLength": 1
                                             }
+                                          },
+                                          "push_to": {
+                                            "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），且节点上报 push_env_ok；任何不确定都不满足",
+                                            "type": "string",
+                                            "const": "task_branch"
+                                          },
+                                          "gh_scope": {
+                                            "description": "用于 gh pr create|view|diff：不带 -R/--repo、无环境变量前缀、节点上报 gh_env_ok，--body-file 只能在 cwd 内",
+                                            "type": "string",
+                                            "const": "workspace_repo"
                                           }
                                         },
                                         "additionalProperties": false
