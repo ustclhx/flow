@@ -84,21 +84,23 @@ export const replyVia = z.enum(REPLY_VIA).meta({
   description: '回复发起的渠道；supervisor 表示 supervisor 代用户回复',
 })
 
-/** 代回复委托结束的原因（D15 "转交与竞态"）。 */
+/**
+ * 代回复委托结束的原因（D15 "转交与竞态"）。任务离开该次卡住（包括进入新的卡住）时委托隐式失效，
+ * 不写事件，见 `activeDelegation`。
+ */
 export const REPLY_ESCALATION_REASONS = [
   'supervisor',
   'timeout',
   'wake_unavailable',
   'wake_failed',
   'wake_ended',
-  'superseded',
   'user_dismissed',
   'user_replied',
 ] as const
 export type ReplyEscalationReason = (typeof REPLY_ESCALATION_REASONS)[number]
 export const replyEscalationReason = z.enum(REPLY_ESCALATION_REASONS).meta({
   description:
-    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；superseded 任务进入新的卡住；user_dismissed 用户忽略；user_replied 用户已回复',
+    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复',
 })
 
 /** 可委托给 supervisor 的卡住原因（D15）。 */

@@ -18,6 +18,7 @@ import {
   supervisorConfigSchema,
   taskResult,
   taskView,
+  validateBrain,
 } from '../src/index.ts'
 import { initFlowHome } from '../src/init.ts'
 import { doctorOptions } from './doctor-helpers.ts'
@@ -163,13 +164,17 @@ describe('账本事件与协议字段（1.1、1.6）', () => {
     expect(event('task.reply_escalated', { ...task, payload: { reason: 'timeout' } }).success).toBe(
       false,
     )
+    // superseded 已删去：进入新的卡住时委托隐式失效，不写事件
+    expect(
+      event('task.reply_escalated', { ...task, payload: { reason: 'superseded', block_seq: 3 } })
+        .success,
+    ).toBe(false)
     for (const reason of [
       'supervisor',
       'timeout',
       'wake_unavailable',
       'wake_failed',
       'wake_ended',
-      'superseded',
       'user_dismissed',
       'user_replied',
     ]) {
@@ -321,12 +326,33 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
     expect(delegationEnabled(byId.get('plain') as never)).toBe(true)
     expect(delegationEnabled(byId.get('broken') as never)).toBe(false)
     expect(delegationEnabled(byId.get('global') as never)).toBe(false)
-    expect(r.data.issues).toEqual([
+    expect(r.data.issues).toEqual([])
+    expect(r.data.warnings).toEqual([
       expect.objectContaining({
         file: 'config/workspaces/broken.yaml',
         field: 'supervisor.merge_method',
       }),
     ])
+  })
+
+  test('validateBrain：supervisor 段问题按警告报告，不算错误', async () => {
+    const home = tempHome('flow-validate-supervisor-')
+    await initFlowHome(home)
+    const base = 'kind: product\nname: 测试\ndescription: 测试\nrepos: []\n'
+    writeText(
+      join(home, 'config/workspaces/bad.yaml'),
+      `id: bad\n${base}supervisor:\n  merge_method: ff\n`,
+    )
+    const r = await validateBrain(home)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.data.errors.filter((e) => e.file === 'config/workspaces/bad.yaml')).toEqual([])
+    expect(r.data.warnings).toContainEqual(
+      expect.objectContaining({
+        file: 'config/workspaces/bad.yaml',
+        field: 'supervisor.merge_method',
+      }),
+    )
   })
 
   test('doctor 显示每个 workspace 的 supervisor 设置，并报告配置错误', async () => {
@@ -351,7 +377,7 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
     expect(find('workspace.off.supervisor')?.message).toBe('ws/off supervisor：未启用')
     expect(
       find('workspaces.config.config/workspaces/bad.yaml.supervisor.limits.chain_depth'),
-    ).toMatchObject({ ok: false, severity: 'error' })
+    ).toMatchObject({ ok: false, severity: 'warning' })
     // supervisor 段非法：workspace 照常加载，supervisor 显示为未启用
     expect(find('workspace.bad.supervisor')?.message).toBe('ws/bad supervisor：未启用')
     expect(find('workspace.global.supervisor')?.message).toContain('global 不启用 supervisor')

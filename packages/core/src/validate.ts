@@ -114,7 +114,8 @@ export async function validateBrain(
   const workspaces = new Map<string, Workspace>(wsResult.data.workspaces.map((w) => [w.ref, w]))
   const knownIds = new Set(read.data.entries.map((e) => e.id))
   const errors: ValidationIssue[] = [...wsResult.data.issues, ...read.data.issues]
-  const warnings: ValidationIssue[] = []
+  // workspace 的 supervisor 段问题已降级为"supervisor 未启用"，按警告报告。
+  const warnings: ValidationIssue[] = [...wsResult.data.warnings]
   const stale: VerificationItem[] = []
   const neverVerified: VerificationItem[] = []
 

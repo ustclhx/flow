@@ -459,8 +459,17 @@ async function checkWorkspaces(home: string): Promise<DoctorCheck[]> {
     id: `workspaces.config.${issue.file}.${issue.field ?? ''}`,
     ok: false,
     message: `${issue.file}${issue.field ? `：${issue.field}` : ''}：${issue.message}`,
-    hint: '修正 workspace 配置后重新运行 flow doctor；有问题的文件不会被加载（只有 supervisor 段有问题时，该 workspace 照常加载、supervisor 视为未启用）',
+    hint: '修正 workspace 配置后重新运行 flow doctor；有问题的文件不会被加载',
   }))
+  for (const issue of loaded.data.warnings) {
+    checks.push({
+      id: `workspaces.config.${issue.file}.${issue.field ?? ''}`,
+      ok: false,
+      severity: 'warning',
+      message: `${issue.file}${issue.field ? `：${issue.field}` : ''}：${issue.message}（supervisor 视为未启用）`,
+      hint: '修正 supervisor 段后重新运行 flow doctor；该 workspace 其余配置照常生效',
+    })
+  }
   for (const ws of loaded.data.workspaces) {
     if (ws.file === null) {
       checks.push({

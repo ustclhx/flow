@@ -26,6 +26,8 @@ reserved:
 
 **升级注意**：`node.yaml` 是严格校验的，未知字段会让读取失败。写入 `reserved` 之后，**旧版本的节点二进制会因为不认识该字段而读取失败、无法启动**。先升级节点（与中枢）再写 `reserved`；回滚到旧版本前先删掉这一节。不写时取默认值，新旧版本都能读。
 
+同理，旧节点会 strict 解析策略检查响应中的 `matched_rules[].rule`：升级节点之后，才能在 `policies.yaml` 中写带新条件（`when.push_to`、`when.gh_scope`）的规则，见 `packages/core/src/policy/README.md`。
+
 ## 本机验收记录（2026-10-24，add-m1-ledger-daemon 7.2）
 
 环境：macOS 15.1（Darwin 24.1.0），bun 位于 `~/.bun/bin/bun`，`FLOW_HOME=~/flow-home`。

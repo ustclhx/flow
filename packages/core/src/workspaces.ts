@@ -34,6 +34,8 @@ export interface WorkspaceSet {
   workspaces: Workspace[]
   /** 定义文件中的问题；有问题的文件不会出现在 workspaces 中。 */
   issues: ValidationIssue[]
+  /** 只影响 supervisor 段的问题：workspace 照常加载，supervisor 视为未启用（按警告处理）。 */
+  warnings: ValidationIssue[]
 }
 
 export const GLOBAL_WORKSPACE: Workspace = {
@@ -56,7 +58,8 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
   const dir = flowPaths(home).workspaces
   const workspaces: Workspace[] = []
   const issues: ValidationIssue[] = []
-  if (!existsSync(dir)) return ok({ workspaces: [GLOBAL_WORKSPACE], issues })
+  const warnings: ValidationIssue[] = []
+  if (!existsSync(dir)) return ok({ workspaces: [GLOBAL_WORKSPACE], issues, warnings })
   let names: string[]
   try {
     names = (await readdir(dir)).filter((n) => /\.ya?ml$/.test(n) && !n.startsWith('.')).sort()
@@ -87,7 +90,7 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
       const { supervisor: _bad, ...rest } = data as Record<string, unknown>
       const retry = workspaceSchema.safeParse(rest)
       if (retry.success) {
-        issues.push(...formatZodIssues(parsed.error.issues, data, { file }))
+        warnings.push(...formatZodIssues(parsed.error.issues, data, { file }))
         supervisorInvalid = true
         parsed = retry
       }
@@ -116,5 +119,5 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
       supervisor: supervisorInvalid ? disabledSupervisorConfig() : ws.supervisor,
     })
   }
-  return ok({ workspaces: [GLOBAL_WORKSPACE, ...workspaces], issues })
+  return ok({ workspaces: [GLOBAL_WORKSPACE, ...workspaces], issues, warnings })
 }

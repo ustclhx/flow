@@ -151,7 +151,7 @@ workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 tru
 
 supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回复，`decision` 为 `approve`、`deny`（仅授权请求）、`answer`（仅提问，`text` 必填且不超过 2000 字符）或 `escalate`。中枢 MUST 在同一事务里核对：调用方的绑定 token 对应持活动租约、正被分配处理这次委托的 reply 唤醒；workspace 一致；任务当前卡住序号等于 `block_seq`；委托有效且没有待送达的回复。通过后写 `task.replied`（actor supervisor）；条目仍在任务离开 `blocked` 时关闭并记录回复者。节点放行前 MUST 重新读取待批请求，与 `decision_id` 对应的请求一致、推送或 gh 环境复查通过才执行，否则丢弃该回复并以不可委托的新卡住交给用户。`escalate` 写 `task.reply_escalated{reason: supervisor}` 并把条目推送给用户。
 
-以下情况中枢 MUST 结束委托（`task.reply_escalated{reason}`；除用户自己回复或忽略外，按条目原级别推送给用户）：超过 `supervisor.reply_timeout_s`（默认 600）未回复；唤醒无法开始或当前 reply 唤醒处于 `blocked`（立即转交）；处理它的唤醒失败或结束时仍未回复；任务进入新的卡住；用户忽略条目；用户回复（同一次追加中结束委托）。supervisor 的回复写入之前，用户的回复 MUST 优先，之后 supervisor 的回复返回 `stale_block`。supervisor 代回复的内容 SHALL 出现在当天的每日摘要中。
+以下情况中枢 MUST 结束委托（`task.reply_escalated{reason}`；除用户自己回复或忽略外，按条目原级别推送给用户）：超过 `supervisor.reply_timeout_s`（默认 600）未回复；唤醒无法开始或当前 reply 唤醒处于 `blocked`（立即转交）；处理它的唤醒失败或结束时仍未回复；用户忽略条目；用户回复（同一次追加中结束委托）。委托只在任务处于 `blocked` 且当前卡住的 seq 等于 `block_seq` 时有效：任务离开该次卡住（`unblocked`、`requeued`、`lease_expired`，以及进入新的卡住）时委托 MUST 隐式失效、不写事件，新卡住重新判定。supervisor 的回复写入之前，用户的回复 MUST 优先，之后 supervisor 的回复返回 `stale_block`。supervisor 代回复的内容 SHALL 出现在当天的每日摘要中。
 
 #### Scenario: 代为选择方案
 - **WHEN** 用户手动建的 dev 任务进入 `blocked(question)`，问"A 记录既有失败后开 PR，还是 B 扩大范围修复"，且任务目标只限 README
@@ -176,6 +176,10 @@ supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回�
 #### Scenario: 超时转交
 - **WHEN** 委托后 600 秒内 supervisor 没有回复
 - **THEN** 条目推送给用户，之后 supervisor 的 `task_respond` 返回 `stale_block`
+
+#### Scenario: 进入新的卡住
+- **WHEN** 委托期间任务从这次卡住直接进入新的卡住（blocked → blocked），或被重新排队
+- **THEN** 旧委托隐式失效、不写转交事件，旧 `block_seq` 上的 `task_respond` 与转交都被拒绝；新卡住重新判定，可以重新委托
 
 #### Scenario: 用户抢先回复
 - **WHEN** 委托期间、supervisor 回复之前，用户在 Web 上直接批准

@@ -1,8 +1,11 @@
 import {
   ACTIVITY_TEXT_MAX,
+  type ActiveDelegation,
   type Activity,
+  activeDelegation,
   checkTaskEvent,
   type Database,
+  DELEGATION_ENDING_EVENTS,
   type EventPayload,
   type EventType,
   type eventPayloads,
@@ -135,6 +138,11 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   findTaskByIdempotencyKey(key: string): TaskView | null
   /** 某任务的全部事件（按 seq）。 */
   taskEvents(taskId: string): LedgerEvent[]
+  /**
+   * 该任务当前有效的代回复委托（D15，core `activeDelegation`）：任务离开该次卡住
+   * （包括进入新的卡住）时隐式失效。调度与 task_respond 统一用它判断。
+   */
+  activeDelegation(taskId: string): ActiveDelegation | null
   getNode(nodeId: string): NodeView | null
   listNodes(): NodeView[]
   getLease(leaseId: string): LeaseRecord | null
@@ -463,6 +471,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       : invalidEvent(`回复 ${draft.payload.reply_id} 不是该任务待送达的回复`)
   }
 
+  const taskEventsOf = (taskId: string) =>
+    all<EventRow>('SELECT * FROM events WHERE task_id = ? ORDER BY seq', taskId).map(rowToEvent)
+  const currentDelegation = (taskId: string | undefined) => {
+    const t = taskId === undefined ? undefined : taskState(taskId)
+    return t && taskId !== undefined ? activeDelegation(t, taskEventsOf(taskId)) : null
+  }
+
   /** 该任务最近一次 task.blocked（即当前或最后一次卡住）。 */
   const lastBlocked = (taskId: string | undefined) => {
     const row = get<{ seq: number; payload_json: string }>(
@@ -514,6 +529,19 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     if (blocked.prior_reason !== undefined) {
       return notDelegable('节点掉线后保留 prior_reason 的卡住不能委托')
     }
+    if (
+      get(
+        `SELECT 1 FROM events WHERE task_id = ? AND seq > ? AND type IN (${[
+          ...DELEGATION_ENDING_EVENTS,
+        ]
+          .map((t) => `'${t}'`)
+          .join(', ')}) LIMIT 1`,
+        draft.task_id ?? null,
+        p.block_seq,
+      )
+    ) {
+      return notDelegable('任务已离开这次卡住（例如租约过期），不能委托')
+    }
     if (delegationOf(draft.task_id, p.block_seq, 'task.reply_delegated')) {
       return fail('failure', 'duplicate_delegation', `卡住 ${p.block_seq} 已经委托过`, {
         block_seq: p.block_seq,
@@ -536,15 +564,19 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     if (decision?.type !== 'policy.decided' || decision.task_id !== draft.task_id) {
       return invalidEvent(`decision_id ${p.decision_id} 不是本任务的策略判定`)
     }
+    // 下界取"上一次离开 blocked"与"上一次 task.blocked"中较晚者：blocked → blocked 时
+    // 前一次卡住期间的判定属于前一次卡住，不能拿来委托新的卡住。
     const left =
       get<{ seq: number | null }>(
         `SELECT MAX(seq) AS seq FROM events WHERE task_id = ? AND seq < ?
-           AND type IN ('task.unblocked', 'task.requeued_with_reply', 'task.requeued')`,
+           AND type IN ('task.unblocked', 'task.requeued_with_reply', 'task.requeued', 'task.blocked')`,
         draft.task_id ?? null,
         p.block_seq,
       )?.seq ?? 0
     if (p.decision_id <= left || p.decision_id >= p.block_seq) {
-      return invalidEvent(`策略判定 ${p.decision_id} 不属于这次卡住（早于上一次离开 blocked）`)
+      return invalidEvent(
+        `策略判定 ${p.decision_id} 不属于这次卡住（早于上一次离开 blocked 或上一次卡住）`,
+      )
     }
     const level = (JSON.parse(decision.payload_json) as { level?: string }).level
     if (level !== 'supervisor') {
@@ -723,18 +755,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
             { type: draft.type, actor: draft.actor, reason: draft.payload.reason },
           )
         }
-        // 只能结束当前这次卡住上仍有效的委托（未被转交过）。
+        // 只能结束当前这次卡住上仍有效的委托：任务离开该次卡住（含进入新的卡住）后委托已隐式失效，
+        // 不再写转交事件（activeDelegation）。
         const last = lastBlocked(draft.task_id)
         if (!last || last.seq !== draft.payload.block_seq) {
           return invalidEvent(`block_seq ${draft.payload.block_seq} 不是该任务当前的卡住`)
         }
-        if (!delegationOf(draft.task_id, draft.payload.block_seq, 'task.reply_delegated')) {
-          return fail('failure', 'not_delegated', '这次卡住没有委托给 supervisor', {
-            block_seq: draft.payload.block_seq,
-          })
-        }
-        if (delegationOf(draft.task_id, draft.payload.block_seq, 'task.reply_escalated')) {
-          return fail('failure', 'not_delegated', '这次卡住的委托已经结束', {
+        const active = currentDelegation(draft.task_id)
+        if (!active || active.block_seq !== draft.payload.block_seq) {
+          return fail('failure', 'not_delegated', '这次卡住没有仍有效的 supervisor 委托', {
             block_seq: draft.payload.block_seq,
           })
         }
@@ -1046,9 +1075,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return r ? rowToTask(r) : null
     },
     taskEvents(taskId) {
-      return all<EventRow>('SELECT * FROM events WHERE task_id = ? ORDER BY seq', taskId).map(
-        rowToEvent,
-      )
+      return taskEventsOf(taskId)
+    },
+    activeDelegation(taskId) {
+      return currentDelegation(taskId)
     },
     getNode(nodeId) {
       const r = get<NodeRow>(`${NODE_SELECT} WHERE n.node_id = ?`, nodeId)

@@ -22,7 +22,7 @@ import {
   type TaskOrigin,
   USER_ACTOR,
 } from '@flow/core'
-import type { LedgerStore } from './store.ts'
+import type { EventInput, LedgerStore } from './store.ts'
 
 /**
  * 任务服务（tasks.md 2.3；task-ledger spec "任务合同""幂等创建""取消"）。
@@ -117,6 +117,12 @@ export interface CreateTaskOptions {
    * 计算规则见 D2，由后续任务（2.3）实现；缺省表示不在 supervisor 链上。
    */
   origin?: TaskOrigin
+  /**
+   * 只限 hub：与 `task.created` 在同一次 appendMany（同一事务、同一次通知）中写入的事件，
+   * 参数是新任务的 id。用于唤醒任务的 `supervisor.wake_started`（D1），保证租约分配等订阅者
+   * 不会看到"任务已建、但还没有 wake_started"的窗口。事件以同一身份（hub）写入。
+   */
+  withCreated?: (taskId: string) => EventInput[]
 }
 
 export interface CancelTaskOptions {
@@ -184,6 +190,9 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           { field: 'idempotency_key', code: 'invalid_field', message: '幂等键不一致' },
         ])
       }
+      if (opts.withCreated !== undefined && opts.actor !== HUB_ACTOR) {
+        return fail('failure', 'actor_mismatch', 'withCreated 只限中枢（hub）使用')
+      }
       // inputs.wake 只由中枢的唤醒调度写入（D1）；其他身份携带即拒绝，避免伪造唤醒上下文。
       if (contract.inputs?.wake !== undefined && opts.actor !== HUB_ACTOR) {
         return fail('usage', 'invalid_arguments', 'inputs.wake 只能由中枢创建唤醒任务时写入', [
@@ -240,15 +249,15 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         if (i >= 5) return fail('failure', 'internal_error', '无法生成不重复的任务 id')
         id = newTaskId(now())
       }
-      const written = ledger.append(
-        {
-          type: 'task.created',
-          task_id: id,
-          workspace: contract.workspace,
-          payload: { contract, ...(opts.origin === undefined ? {} : { origin: opts.origin }) },
-        },
-        { actor: opts.actor },
-      )
+      const created: EventInput = {
+        type: 'task.created',
+        task_id: id,
+        workspace: contract.workspace,
+        payload: { contract, ...(opts.origin === undefined ? {} : { origin: opts.origin }) },
+      }
+      const written = ledger.appendMany([created, ...(opts.withCreated?.(id) ?? [])], {
+        actor: opts.actor,
+      })
       if (!written.ok) return written
       const task = ledger.getTask(id)
       return task

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { openDatabase, policyDecisionSchema, taskView } from '@flow/core'
 import {
   completionDrafts,
+  createNodeProtocol,
   createTaskService,
   type EventInput,
   LEDGER_DDL,
@@ -22,6 +23,7 @@ import {
   tempLedger,
   WS,
 } from './ledger-helpers.ts'
+import { FakeClock, tick } from './server-fixtures.ts'
 
 /**
  * add-m1-supervisor 1.1 / 1.6 的账本部分：origin 写入通道、代回复与唤醒事件的写入校验、
@@ -659,5 +661,156 @@ describe('旧账本迁移：origin、branch 列', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('委托隐式失效（activeDelegation）', () => {
+  test('blocked → blocked：旧委托失效，不能再转交；新卡住可以重新委托', async () => {
+    const { store, newTask } = await setup()
+    const t = await newTask()
+    startTask(store, t.id)
+    const b1 = block(store, t.id)
+    must(delegate(store, t.id, { block_seq: b1.seq }))
+    expect(store.activeDelegation(t.id)).toMatchObject({ block_seq: b1.seq, kind: 'question' })
+    // 本轮结束（lease_held=false）进入新的卡住
+    const b2 = block(store, t.id, { lease_held: false })
+    expect(store.activeDelegation(t.id)).toBeNull()
+    expect(code(escalate(store, t.id, b1.seq))).toBe('invalid_event')
+    expect(code(escalate(store, t.id, b2.seq))).toBe('not_delegated')
+    must(delegate(store, t.id, { block_seq: b2.seq }))
+    expect(store.activeDelegation(t.id)).toMatchObject({ block_seq: b2.seq })
+    must(escalate(store, t.id, b2.seq))
+    expect(store.activeDelegation(t.id)).toBeNull()
+  })
+
+  test('requeued 后委托失效', async () => {
+    const { store, newTask } = await setup()
+    const t = await newTask()
+    startTask(store, t.id)
+    const b = block(store, t.id)
+    must(delegate(store, t.id, { block_seq: b.seq }))
+    must(store.append(drafts(t.id)['task.requeued:manual'], hub))
+    expect(store.getTask(t.id)?.status).toBe('queued')
+    expect(store.activeDelegation(t.id)).toBeNull()
+    expect(code(escalate(store, t.id, b.seq))).toBe('invalid_transition')
+  })
+
+  test('lease_expired 后委托失效，也不能再委托这次卡住', async () => {
+    const { store, newTask } = await setup()
+    const t = await newTask()
+    startTask(store, t.id)
+    const b = block(store, t.id)
+    must(store.append(drafts(t.id)['task.lease_expired'], hub))
+    expect(store.getTask(t.id)?.status).toBe('blocked')
+    const r = delegate(store, t.id, { block_seq: b.seq })
+    expect(code(r)).toBe('not_delegable')
+    expect(store.activeDelegation(t.id)).toBeNull()
+  })
+
+  // 账本里 blocked → blocked 只能是 lease_held=false（本轮结束），授权卡住因此先以 lease_held 被拒；
+  // "下界取上一次 task.blocked"是防御性的，这里确认这条路径不会放行旧判定。
+  test('blocked → blocked 后，前一次卡住期间的判定不能用于新的授权卡住', async () => {
+    const { store, newTask } = await setup()
+    const t = await newTask()
+    startTask(store, t.id)
+    block(store, t.id, { reason: 'awaiting_approval', lease_held: true })
+    const d = decide(store, t.id)
+    const b2 = block(store, t.id, {
+      reason: 'awaiting_approval',
+      decision_id: d.seq,
+      lease_held: false,
+    })
+    const r = delegate(store, t.id, {
+      block_seq: b2.seq,
+      kind: 'awaiting_approval',
+      decision_id: d.seq,
+    })
+    expect(code(r)).toBe('not_delegable')
+  })
+})
+
+describe('createTask 的 withCreated（与 task.created 同一次写入）', () => {
+  const wake = (id: string, generation = 1): EventInput => ({
+    task_id: id,
+    workspace: WS,
+    type: 'supervisor.wake_started',
+    payload: { task_id: id, workspace: WS, origin: 'instruction', events: [], generation },
+  })
+
+  test('只限 hub；hub 写入时两条事件同一事务、同一次通知', async () => {
+    const { store, tasks } = await setup()
+    const input = contractInput({ role: 'supervisor' })
+    expect(
+      code(await tasks.createTask(input, { actor: 'user', withCreated: (id) => [wake(id)] })),
+    ).toBe('actor_mismatch')
+    const seen: string[][] = []
+    const off = store.subscribe((e) => {
+      if (e.type === 'task.created' && e.task_id) {
+        seen.push(store.taskEvents(e.task_id).map((x) => x.type))
+      }
+    })
+    const t = must(
+      await tasks.createTask(input, {
+        actor: 'hub',
+        origin: 'instruction',
+        withCreated: (id) => [wake(id)],
+      }),
+    ).task
+    off()
+    // 订阅者收到 task.created 时，wake_started 已在账本中
+    expect(seen).toEqual([['task.created', 'supervisor.wake_started']])
+    expect(store.taskEvents(t.id).map((e) => e.type)).toEqual([
+      'task.created',
+      'supervisor.wake_started',
+    ])
+    // 附带事件不合法时整体不写
+    const bad = await tasks.createTask(input, { actor: 'hub', withCreated: (id) => [wake(id, 1)] })
+    expect(code(bad)).toBe('duplicate_wake')
+    expect(store.listTasks({}).filter((x) => x.contract.role === 'supervisor')).toHaveLength(1)
+  })
+
+  test('并发的领取 drain 拿不到"有任务、没有 wake_started"的窗口', async () => {
+    const clock = new FakeClock(Date.parse('2026-10-24T08:00:00.000Z'))
+    const l = await tempLedger({ now: clock.now })
+    const protocol = createNodeProtocol({
+      ledger: l.store,
+      clock,
+      leaseTtlS: 60,
+      leaseWaitMaxS: 30,
+    })
+    cleanups.push(() => {
+      protocol.stop()
+      l.cleanup()
+    })
+    const tasks = createTaskService({
+      ledger: l.store,
+      workspaceExists: () => true,
+      roles: anyRole,
+      now: clock.now,
+    })
+    must(
+      protocol.service.registerNode(
+        { node_id: 'n1', hostname: 'h', version: '0.0.0', capabilities: ['executor:fake'] },
+        'unknown',
+      ),
+    )
+    const pending = protocol.service.acquire({
+      node_id: 'n1',
+      capabilities: ['executor:fake'],
+      wait_s: 10,
+    })
+    await tick()
+    expect(protocol.service.waiting()).toBe(1)
+    const t = must(
+      await tasks.createTask(contractInput({ role: 'supervisor' }), {
+        actor: 'hub',
+        withCreated: (id) => [wake(id)],
+      }),
+    ).task
+    const r = await pending
+    expect(r.ok && r.data.lease?.task_id).toBe(t.id)
+    const types = l.store.taskEvents(t.id).map((e) => e.type)
+    expect(types.indexOf('supervisor.wake_started')).toBe(1)
+    expect(types.indexOf('task.started')).toBeGreaterThan(1)
   })
 })

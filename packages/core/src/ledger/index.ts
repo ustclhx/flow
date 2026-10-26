@@ -6,6 +6,7 @@ import { createTaskRequest, ENDPOINTS, errorBody, okBody } from './protocol.ts'
 import { activity, reviewOutput, taskResult, taskStatus, taskView } from './task.ts'
 
 export * from './common.ts'
+export * from './delegation.ts'
 export * from './events.ts'
 export * from './protocol.ts'
 export * from './redact.ts'
