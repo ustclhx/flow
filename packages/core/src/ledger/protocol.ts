@@ -788,12 +788,15 @@ export const briefContextData = z
           decision: z.enum(BRIEF_REPLY_DECISIONS),
           reason: z.string().nullable().meta({ description: '转交原因（只有 escalate 有）' }),
           at: timestamp,
-          text: z.string().nullable().meta({ description: '截断后的回答或拒绝理由' }),
+          answer_chars: z.number().int().min(0).nullable().meta({
+            description:
+              '回答或拒绝理由的字符数；没有文字时为 null。原文不进入简报（reply 唤醒不能写入会进入后续上下文的内容）',
+          }),
         }),
       )
       .meta({
         description:
-          '代回复记录：中枢根据 task.replied（actor supervisor）与 task.reply_escalated 生成，按时间倒序',
+          '代回复记录：中枢根据 task.replied（actor supervisor）与 task.reply_escalated 生成，按时间倒序；只含任务 id、决定、时间与回答长度，不含回答原文',
       }),
   })
   .meta({ title: 'GET /v1/briefs/context' })

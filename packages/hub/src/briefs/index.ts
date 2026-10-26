@@ -6,7 +6,6 @@ import {
   briefUpdateRequest,
   ENDPOINTS,
   fail,
-  isTerminalStatus,
   ok,
   type Result,
   SUPERVISOR_ACTOR,
@@ -23,7 +22,10 @@ import type { LedgerStore } from '../ledger/store.ts'
  * - `POST /v1/briefs`（`brief_update`）：只允许 user 与 supervisor；supervisor 的 workspace 与
  *   唤醒 origin 取自调用方绑定（`binding`），不信任请求中的声明。
  * - `GET /v1/briefs/context`：`ws_brief` 的中枢部分——未结束的任务、未关闭的收件箱条目，以及由账本
- *   确定性生成的代回复记录（只含任务 id、决定、时间与截断后的回答）。
+ *   确定性生成的代回复记录（只含任务 id、决定、时间与回答长度）。回答原文由 reply 唤醒中的 supervisor
+ *   写出，若进入简报就会进入后续（有建任务权限的）唤醒的上下文，违反 D15 "reply 唤醒不能写入会进入后续
+ *   上下文的内容"，因此不收录；原文只进用户可见的每日摘要（TODO(4.9 / 每日摘要)：摘要直接读
+ *   `task.replied` 的 text，不经这里）。
  */
 
 /** supervisor 调用方的绑定信息（design D6：由中枢按唤醒绑定 token 认定）。 */
@@ -34,14 +36,14 @@ export interface SupervisorBinding {
 }
 
 export interface BriefRoutesDeps {
-  ledger: Pick<LedgerStore, 'listTasks' | 'listInboxItems' | 'recentEvents'>
+  ledger: Pick<LedgerStore, 'openTasks' | 'listInboxItems' | 'recentEvents'>
   home: string
   /**
-   * 解析 supervisor 调用方的绑定。TODO(G5 / tasks 2.2)：唤醒绑定 token 合入后由鉴权中间件提供
-   * （绑定 workspace 与唤醒 task_id，按 `supervisor.wake_started` 取 origin）；在此之前没有绑定信息，
-   * 返回 null 时只按 actor 判定。
+   * 解析 supervisor 调用方的唤醒绑定（design D6：由中枢按唤醒绑定 token 认定，不信任请求声明）。
+   * 必填；返回 null 表示调用方不是经唤醒 token 认证的 supervisor，supervisor 的写请求一律拒绝
+   * （失败即拒绝）。
    */
-  binding?: (c: Context) => SupervisorBinding | null
+  binding: (c: Context) => SupervisorBinding | null
 }
 
 const TASK_LIMIT = 20
@@ -49,8 +51,6 @@ const INBOX_LIMIT = 20
 const REPLY_LIMIT = 10
 const GOAL_MAX = 200
 const TITLE_MAX = 200
-/** 代回复记录中回答的截断长度。 */
-export const BRIEF_REPLY_TEXT_MAX = 200
 
 const clipLine = (text: string, max: number) => {
   const flat = text.replace(/\s+/g, ' ').trim()
@@ -62,19 +62,14 @@ export function briefContext(
   ledger: BriefRoutesDeps['ledger'],
   workspace: string,
 ): BriefContextData {
-  const tasks = ledger
-    .listTasks({ workspace, limit: 500 })
-    .filter((t) => !isTerminalStatus(t.status))
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id))
-    .slice(0, TASK_LIMIT)
-    .map((t) => ({
-      id: t.id,
-      role: t.contract.role,
-      status: t.status,
-      goal: clipLine(t.contract.goal, GOAL_MAX),
-      blocked_reason: t.blocked?.reason ?? null,
-      updated_at: t.updated_at,
-    }))
+  const tasks = ledger.openTasks(workspace, TASK_LIMIT).map((t) => ({
+    id: t.id,
+    role: t.contract.role,
+    status: t.status,
+    goal: clipLine(t.contract.goal, GOAL_MAX),
+    blocked_reason: t.blocked?.reason ?? null,
+    updated_at: t.updated_at,
+  }))
   const inbox = ledger
     .listInboxItems({ state: 'open', workspace, limit: INBOX_LIMIT })
     .map((i) => ({
@@ -101,7 +96,7 @@ export function briefContext(
         decision: p.kind === 'text' ? 'answer' : p.kind,
         reason: null,
         at: e.ts,
-        text: p.text ? clipLine(p.text, BRIEF_REPLY_TEXT_MAX) : null,
+        answer_chars: p.text === undefined ? null : p.text.length,
       })
     } else if (e.type === 'task.reply_escalated') {
       // 转交说明可能由 supervisor 填写，不进入后续唤醒的上下文：只记原因。
@@ -110,7 +105,7 @@ export function briefContext(
         decision: 'escalate',
         reason: e.payload.reason,
         at: e.ts,
-        text: null,
+        answer_chars: null,
       })
     }
   }
@@ -131,10 +126,17 @@ export function checkBriefCaller(
       `只有 supervisor 与 user 能更新简报笔记，当前为 ${actor}`,
     )
   }
-  if (binding?.origin === 'reply') {
+  if (!binding) {
+    return fail(
+      'failure',
+      'scope_denied',
+      'supervisor 只能通过唤醒绑定 token 调用 brief_update（无法确认本次唤醒与 workspace）',
+    )
+  }
+  if (binding.origin === 'reply') {
     return fail('failure', 'reply_only_wake', 'reply 唤醒只能调用 task_respond 与只读操作')
   }
-  if (binding && binding.workspace !== workspace) {
+  if (binding.workspace !== workspace) {
     return fail(
       'failure',
       'workspace_mismatch',
@@ -162,10 +164,11 @@ export function createBriefRoutes(deps: BriefRoutesDeps): Hono {
       )
     }
     const actor = c.get('actor') ?? 'unknown'
-    const denied = checkBriefCaller(actor, parsed.data.workspace, deps.binding?.(c) ?? null)
+    const denied = checkBriefCaller(actor, parsed.data.workspace, deps.binding(c))
     if (denied) return respond(c, denied, briefUpdateData)
     return respond(c, await writeBrief(deps.home, parsed.data, { actor }), briefUpdateData)
   })
+  // TODO(G5)：接入唤醒绑定后，对绑定的 supervisor 只返回其绑定 workspace 的数据（其余 workspace 403）。
   app.get(ENDPOINTS['briefs-context'].path, (c) => {
     const parsed = briefContextQuery.safeParse(c.req.query())
     if (!parsed.success) {

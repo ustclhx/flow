@@ -89,3 +89,17 @@ export function treeContents(dir: string): Map<string, string> {
   }
   return out
 }
+
+/**
+ * 让测试不可能连到真实中枢：把临时 home 的中枢端口配成不可达的 1，并清除环境变量
+ * `FLOW_HUB_TOKEN`（临时 home 没有 `state/hub.token`）。返回恢复环境变量的函数。
+ */
+export function isolateHub(home: string): () => void {
+  writeText(join(home, 'config', 'hub.yaml'), 'port: 1\n')
+  const saved = process.env.FLOW_HUB_TOKEN
+  delete process.env.FLOW_HUB_TOKEN
+  return () => {
+    if (saved === undefined) delete process.env.FLOW_HUB_TOKEN
+    else process.env.FLOW_HUB_TOKEN = saved
+  }
+}

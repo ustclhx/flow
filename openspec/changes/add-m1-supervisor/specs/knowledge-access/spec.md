@@ -26,3 +26,20 @@ brain 中 `briefs/<id>.md` SHALL 是一类独立路径：只能经中枢写入�
 #### Scenario: 不进索引
 - **WHEN** `briefs/product-res.md` 存在时运行 brain 校验与索引生成
 - **THEN** 校验不报错，`index.md` 中没有该文件
+
+#### Scenario: 保留目录的大小写变体
+- **WHEN** 任何身份以 `Briefs/product-res`、`BRIEFS/x` 为标识写条目或提交修改提案
+- **THEN** 以路径不合法拒绝（`invalid_entry_id` / `invalid_path`），brain 中不产生该文件；`ws_brief` 只读取 git 中已提交的 `briefs/<id>.md`
+
+## MODIFIED Requirements
+
+### Requirement: Workspace 简报
+系统 SHALL 为指定的 workspace 输出一份简报，内容包括：supervisor 笔记、workspace 描述、项目卡片摘要、所拥有的资源列表、最近 N 条相关 journal、可能过时的事实，以及启用 supervisor 时由中枢提供的进行中的任务、待处理条目与代回复记录，和本 workspace 的近期决策。输出长度 MUST 受一个可配置的字符预算限制：笔记放在最前、最多占预算的 40%；其余各节分享剩余预算，放不下的节在行边界截断并标注；额度不足以保留一节的标题与少量内容时，从最低优先级的节开始整节省略，并在末尾注明省略了什么。
+
+#### Scenario: 预算截断
+- **WHEN** 以较小的预算请求 `ws/xuanxue-saas` 的简报
+- **THEN** 输出不超过该预算，被截断的节带截断标注，整节省略的部分在末尾注明
+
+#### Scenario: 长 journal 不挤掉其他节
+- **WHEN** 最近 journal 远超预算，同时有进行中的任务
+- **THEN** 两节都保留标题，各自截断

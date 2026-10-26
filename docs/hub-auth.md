@@ -68,7 +68,7 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | `GET /v1/tasks`、`POST /v1/tasks/:id/cancel`、`GET /v1/events`、`GET /v1/nodes`、`GET /v1/hub/status` | ✓ | ✓ | 403 `scope_denied` | 403 |
 | `GET /v1/inbox` | ✓ | ✓ | 403 `scope_denied` | 403 |
 | `POST /v1/inbox/:id/act` | 全部操作 | 仅 dismiss 且条目 `created_by` 为自己；其余 403 `user_only` | 403 `scope_denied` | 403 |
-| `POST /v1/briefs`（`brief_update`） | ✓ | 仅 `supervisor`（绑定了唤醒时还要求同一 workspace、不是 reply 唤醒），其余 403 `role_not_allowed` | 403 `scope_denied` | 403 |
+| `POST /v1/briefs`（`brief_update`） | ✓ | 仅经**唤醒绑定 token** 认证的 `supervisor`：只能写绑定的 workspace（否则 403 `workspace_mismatch`），reply 唤醒 403 `reply_only_wake`；没有唤醒绑定的 supervisor（例如 user token 降级声明）403 `scope_denied`；其他身份 403 `role_not_allowed` | 403 `scope_denied` | 403 |
 | `GET /v1/briefs/context`（`ws_brief` 的中枢部分） | ✓ | ✓ | 403 `scope_denied` | 403 |
 | `POST /v1/tasks/:id/reply` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/hub/rebuild` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |

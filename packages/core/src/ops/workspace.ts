@@ -8,6 +8,7 @@ import { parseFrontmatter } from '../frontmatter.ts'
 import { flowPaths } from '../home.ts'
 import type { BriefContextData } from '../ledger/protocol.ts'
 import { fail, ok, type Result } from '../result.ts'
+import { effectiveRoleKind, loadRoles } from '../roles.ts'
 import { isResourceType, RESOURCE_TYPES } from '../schema/entries.ts'
 import { validateBrain } from '../validate.ts'
 import { loadWorkspaces, type Workspace } from '../workspaces.ts'
@@ -195,7 +196,7 @@ const DECISION_LABEL: Record<string, string> = {
 
 /**
  * 由中枢数据生成的几节（进行中的任务、待处理条目、代回复记录）。中枢不可用时返回一节说明，
- * 简报其余部分照常生成。代回复记录只含任务 id、决定、时间与截断后的回答（design D15），
+ * 简报其余部分照常生成。代回复记录只含任务 id、决定、时间与回答长度（design D15），不含回答原文，
  * 并标明不是指令。
  */
 export function hubBriefSections(context: BriefContextData | null): BriefSection[] {
@@ -225,8 +226,8 @@ export function hubBriefSections(context: BriefContextData | null): BriefSection
   if (context.replies.length) {
     const lines = context.replies.map((r) => {
       const decision = `${DECISION_LABEL[r.decision] ?? r.decision}${r.reason ? `（${r.reason}）` : ''}`
-      const text = r.text ? `：「${oneLine(r.text, 200)}」` : ''
-      return `- ${r.at} · ${r.task_id} · ${decision}${text}`
+      const size = r.answer_chars === null ? '' : `（回答 ${r.answer_chars} 字）`
+      return `- ${r.at} · ${r.task_id} · ${decision}${size}`
     })
     sections.push({
       label: '代回复记录',
@@ -258,6 +259,13 @@ function decisionLines(entries: BrainEntry[], ref: string): string[] {
     )
 }
 
+/** workspace 是否启用了 supervisor：配置开启且存在有效类别为 supervisor 的角色（D3）。 */
+async function supervisorActive(home: string, ws: Workspace): Promise<boolean> {
+  if (!ws.supervisor.enabled) return false
+  const roles = await loadRoles(home)
+  return roles.ok && roles.data.roles.some((r) => effectiveRoleKind(r) === 'supervisor')
+}
+
 export const wsBriefOp = defineOperation({
   name: 'ws_brief',
   cli: 'ws brief',
@@ -285,9 +293,15 @@ export const wsBriefOp = defineOperation({
     const ws = await workspaceOf(ctx.home, input.workspace)
     if (!ws.ok) return ws
     const ref = ws.data.ref
+    // 只有本 workspace 启用了 supervisor（且存在 kind: supervisor 角色，D3）时才需要中枢数据；
+    // 未启用时不请求中枢，也不出现"中枢数据"一节。
+    const active = await supervisorActive(ctx.home, ws.data)
     // 中枢数据在加锁前读取：中枢不可用时最多等待一次超时，不占着写锁。
-    const hub = await new HubClient(ctx).briefContext(ref)
-    const context = hub.ok ? hub.data : null
+    let context: BriefContextData | null = null
+    if (active) {
+      const hub = await new HubClient(ctx).briefContext(ref)
+      if (hub.ok) context = hub.data
+    }
     return withWriteLock(ctx.home, async () => {
       const read = await readBrainEntries(ctx.home)
       if (!read.ok) return read
@@ -325,7 +339,7 @@ export const wsBriefOp = defineOperation({
       const sections: BriefSection[] = [
         { label: 'workspace 描述', text: `# ${ws.data.name}（${ref}）\n\n${ws.data.description}` },
       ]
-      const hubSections = hubBriefSections(context)
+      const hubSections = active ? hubBriefSections(context) : []
       const replies = hubSections.filter((s) => s.label === '代回复记录')
       sections.push(...hubSections.filter((s) => s.label !== '代回复记录'))
       if (decisions.length)
@@ -346,7 +360,7 @@ export const wsBriefOp = defineOperation({
         workspace: ref,
         ...fitBrief(note, sections, budget),
         note_hash: brief.data.hash,
-        hub: context ? ('ok' as const) : ('unavailable' as const),
+        hub: !active ? ('skipped' as const) : context ? ('ok' as const) : ('unavailable' as const),
       })
     })
   },

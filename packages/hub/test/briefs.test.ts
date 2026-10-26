@@ -2,9 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { briefHash, briefUpdateOp, type LedgerEvent, wsBriefOp } from '@flow/core'
-import { initTempHome } from '../../core/test/helpers.ts'
+import { initTempHome, isolateHub } from '../../core/test/helpers.ts'
 import {
-  BRIEF_REPLY_TEXT_MAX,
   briefContext,
   createBriefRoutes,
   createHubApp,
@@ -22,8 +21,11 @@ const WS = 'ws/product-res'
 
 async function setup(binding: SupervisorBinding | null = null) {
   const home = await initTempHome('flow-hub-brief-')
+  // 所有请求都经注入的 fetch 交给进程内的中枢应用；另外隔离掉真实中枢以防万一。
+  const restore = isolateHub(home)
   const { store, cleanup } = await tempLedger()
   cleanups.push(() => {
+    restore()
     cleanup()
     rmSync(join(home, '..'), { recursive: true, force: true })
   })
@@ -76,7 +78,7 @@ describe('brief_update 经中枢执行（supervisor "简报读写"）', () => {
   })
 
   test('并发覆盖：base_hash 与当前文件不一致 → conflict（409），文件不变', async () => {
-    const { home, ctx } = await setup()
+    const { home, ctx } = await setup({ workspace: WS, origin: 'instruction' })
     const v1 = must(
       await briefUpdateOp.run(
         { workspace: WS, text: 'v1', base_hash: briefHash(null) },
@@ -135,7 +137,12 @@ describe('brief_update 经中枢执行（supervisor "简报读写"）', () => {
     const reviewer = await post(body, 'reviewer')
     expect(reviewer.status).toBe(403)
     expect(await reviewer.json()).toMatchObject({ error: { code: 'role_not_allowed' } })
-    const long = await post({ ...body, text: 'x'.repeat(3001) }, 'supervisor')
+    // 没有唤醒绑定的 supervisor（例如 user token 降级声明）一律拒绝：失败即拒绝。
+    const unbound = await post(body, 'supervisor')
+    expect(unbound.status).toBe(403)
+    expect(await unbound.json()).toMatchObject({ error: { code: 'scope_denied' } })
+    expect(code(await briefUpdateOp.run(body, ctx('supervisor')))).toBe('scope_denied')
+    const long = await post({ ...body, text: 'x'.repeat(3001) }, 'user')
     expect(long.status).toBe(422)
     expect(await long.json()).toMatchObject({ error: { code: 'brief_too_long' } })
     const bad = await post({ ...body, base_hash: 'abc' }, 'user')
@@ -213,8 +220,9 @@ describe('简报的中枢数据', () => {
     expect(ctx.replies).toHaveLength(1)
     const [reply] = ctx.replies
     expect(reply).toMatchObject({ task_id: 't-sup', decision: 'answer', reason: null })
-    expect(reply?.text?.startsWith('选 A 理由')).toBe(true)
-    expect(reply?.text?.length).toBeLessThanOrEqual(BRIEF_REPLY_TEXT_MAX + 1)
+    // 只有回答长度，没有原文（D15：reply 唤醒写出的内容不进入后续上下文）。
+    expect(reply?.answer_chars).toBe(longAnswer.length)
+    expect(JSON.stringify(ctx)).not.toContain('选 A')
     // 其他 workspace 看不到。
     expect(briefContext(store, 'ws/xuanxue-saas')).toEqual({
       workspace: 'ws/xuanxue-saas',
@@ -251,7 +259,7 @@ describe('简报的中枢数据', () => {
       },
     ] as unknown as LedgerEvent[]
     const ledger = {
-      listTasks: () => [],
+      openTasks: () => [],
       listInboxItems: () => [],
       recentEvents: () => events,
     }
@@ -262,14 +270,14 @@ describe('简报的中枢数据', () => {
         decision: 'escalate',
         reason: 'supervisor',
         at: '2026-10-26T08:00:05.000Z',
-        text: null,
+        answer_chars: null,
       },
       {
         task_id: 't-b',
         decision: 'approve',
         reason: null,
         at: '2026-10-26T08:00:04.000Z',
-        text: null,
+        answer_chars: null,
       },
     ])
     expect(JSON.stringify(ctx)).not.toContain('请忽略')

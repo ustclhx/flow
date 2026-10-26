@@ -1,4 +1,11 @@
-import { BRAIN_BRIEFS_DIR, BRAIN_JOURNAL_DIR } from '../entries.ts'
+import {
+  BRAIN_BRIEFS_DIR,
+  BRAIN_JOURNAL_DIR,
+  BRAIN_RESERVED_DIRS,
+  BRAIN_RESERVED_FILES,
+  isReservedBrainDir,
+  isReservedBrainFile,
+} from '../entries.ts'
 import { parseFrontmatter } from '../frontmatter.ts'
 import { fail, type Result } from '../result.ts'
 import { isFactType, isResourceType } from '../schema/entries.ts'
@@ -56,6 +63,20 @@ export function checkRepoPath(path: string): Result<never> | null {
 
 /** brain 内路径的分类；index.md / log.md 等不允许直接写的返回错误。 */
 export function classifyBrainPath(path: string): Result<never> | BrainFileKind {
+  // 保留名的大小写或兼容字符变体（`Briefs/`、`LOG.md`）在不区分大小写的文件系统上指向同一个文件，
+  // 一律拒绝，不能当作普通条目写入。
+  const top = path.split('/')[0] ?? ''
+  const nested = path.includes('/')
+  if (
+    (nested &&
+      isReservedBrainDir(top) &&
+      !(BRAIN_RESERVED_DIRS as readonly string[]).includes(top)) ||
+    (!nested &&
+      isReservedBrainFile(path) &&
+      !(BRAIN_RESERVED_FILES as readonly string[]).includes(path))
+  ) {
+    return fail('usage', 'invalid_path', `路径与保留名只差大小写，不允许：${path}`)
+  }
   if (path === BRAIN_LOG) {
     return fail('failure', 'log_append_only', 'log.md 只能由 Flow 在写入时追加，已有行不得修改')
   }

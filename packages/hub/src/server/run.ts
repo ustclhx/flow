@@ -216,7 +216,17 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         { path: '/', app: status },
         { path: '/', app: createTaskRoutes({ ledger, tasks }) },
         { path: '/', app: createInboxRoutes(inboxDeps) },
-        { path: '/', app: createBriefRoutes({ ledger, home: options.home }) },
+        {
+          path: '/',
+          app: createBriefRoutes({
+            ledger,
+            home: options.home,
+            // TODO(G5 #51)：唤醒绑定 token 合入后改为从 c.get('auth') 取绑定的 workspace 与唤醒 origin。
+            // 在此之前没有可信的绑定信息：恒返回 null，supervisor 的 brief_update 一律被拒绝（失败即拒绝），
+            // user 不受影响。
+            binding: () => null,
+          }),
+        },
         { path: '/', app: createUiLoginCodeRoutes(uiSessions) },
         {
           path: '/',

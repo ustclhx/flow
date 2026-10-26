@@ -1,6 +1,7 @@
-import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { BRAIN_BRIEFS_DIR } from '../entries.ts'
+import { type GitOptions, git } from '../git.ts'
 import { flowPaths } from '../home.ts'
 import { redactSecrets } from '../ledger/redact.ts'
 import { fail, ok, type Result } from '../result.ts'
@@ -45,21 +46,44 @@ export interface BriefNote {
   exists: boolean
 }
 
-async function readText(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, 'utf8')
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw err
-  }
+/**
+ * 笔记在 brain 仓库 HEAD 中已提交的内容；不存在时为 null。
+ *
+ * 只读提交过的内容、不读工作区文件：笔记只能经 `writeBrief` 提交，工作区里绕过写入层放进来的文件
+ * （例如在不区分大小写的文件系统上经 `Briefs/` 写入的条目）不会被当作笔记读出。
+ */
+async function committedBrief(
+  home: string,
+  path: string,
+  opts: GitOptions = {},
+): Promise<Result<string | null>> {
+  const dir = flowPaths(home).brain
+  const listed = await git(dir, ['ls-tree', '--name-only', 'HEAD', '--', path], opts)
+  if (listed.code !== 0) return fail('failure', 'read_failed', '无法读取 brain 仓库中的简报笔记')
+  if (listed.stdout.trim() !== path) return ok(null)
+  const shown = await git(dir, ['cat-file', 'blob', `HEAD:${path}`], opts)
+  if (shown.code !== 0) return fail('failure', 'read_failed', '无法读取 brain 仓库中的简报笔记')
+  return ok(shown.stdout)
 }
 
-/** 读取某 workspace 的笔记（只读，不加锁）。 */
-export async function readBrief(home: string, workspace: string): Promise<Result<BriefNote>> {
+/** 读取某 workspace 已提交的笔记（只读，不加锁）。 */
+export async function readBrief(
+  home: string,
+  workspace: string,
+  opts: { git?: GitOptions } = {},
+): Promise<Result<BriefNote>> {
   const path = briefPath(workspace)
   if (!path.ok) return path
-  const text = await readText(join(flowPaths(home).brain, path.data))
-  return ok({ workspace, text: text ?? '', hash: briefHash(text), exists: text !== null })
+  const notReady = checkRepoReady(home, 'brain')
+  if (notReady) return notReady
+  const text = await committedBrief(home, path.data, opts.git)
+  if (!text.ok) return text
+  return ok({
+    workspace,
+    text: text.data ?? '',
+    hash: briefHash(text.data),
+    exists: text.data !== null,
+  })
 }
 
 export interface BriefInput {
@@ -82,6 +106,10 @@ export interface BriefReceipt {
 }
 
 /**
+ * **只供中枢使用**（`packages/hub/src/briefs/`）。core 的操作（CLI、MCP）一律不得调用它：
+ * `brief_update` 只把请求发给中枢，由中枢按唤醒绑定认定调用方后再调用这里。之所以留在 core，
+ * 是因为它依赖写入层内部的简报写入能力（`brief-capability.ts`，不从包入口导出）。
+ *
  * 整体替换某 workspace 的笔记。只由中枢调用：调用方身份（user / supervisor）与 workspace 绑定
  * 由中枢在调用前核对；这里再核对身份、长度、workspace 是否已定义，并在写锁内比较 `base_hash`。
  */
@@ -115,7 +143,9 @@ export async function writeBrief(
   const file = `brain/${path.data}`
 
   const writeLocked = async (lock: WriteLock): Promise<Result<BriefReceipt>> => {
-    const before = await readText(join(flowPaths(home).brain, path.data))
+    const committed = await committedBrief(home, path.data, ctx.git)
+    if (!committed.ok) return committed
+    const before = committed.data
     const actual = briefHash(before)
     if (actual !== input.base_hash) {
       return fail(
@@ -134,10 +164,11 @@ export async function writeBrief(
         repo: 'brain',
         op: 'brief',
         summary: `${input.workspace} 简报笔记`,
+        // 冲突已按已提交内容在锁内判定；工作区文件只决定是新建还是替换。
         files: [
-          before === null
-            ? { op: 'create', path: path.data, content }
-            : { op: 'replace', path: path.data, content, baseHash: hashContent(before) },
+          existsSync(join(flowPaths(home).brain, path.data))
+            ? { op: 'replace', path: path.data, content }
+            : { op: 'create', path: path.data, content },
         ],
       },
       { ...ctx, lock, [BRIEF_WRITE]: true },

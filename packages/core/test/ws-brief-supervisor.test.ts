@@ -7,15 +7,19 @@ import { hubBriefSections, wsBriefOp } from '../src/ops/workspace.ts'
 import type { Result } from '../src/result.ts'
 import { renderJournalRecord } from '../src/write/api.ts'
 import { briefHash, writeBrief } from '../src/write/brief.ts'
-import { writeEntry as fixtureEntry, initTempHome, writeText } from './helpers.ts'
+import { writeEntry as fixtureEntry, initTempHome, isolateHub, writeText } from './helpers.ts'
 
 const homes: string[] = []
+const restores: (() => void)[] = []
 async function home() {
   const h = await initTempHome('flow-wsbrief-')
+  // 不连真实中枢：端口不可达、清除 FLOW_HUB_TOKEN；需要中枢数据的用例注入 fetch。
+  restores.push(isolateHub(h))
   homes.push(h)
   return h
 }
 afterEach(() => {
+  for (const restore of restores.splice(0).reverse()) restore()
   for (const h of homes.splice(0)) rmSync(join(h, '..'), { recursive: true, force: true })
 })
 function data<T>(r: Result<T>): T {
@@ -47,8 +51,8 @@ const context = (over: Partial<BriefContextData> = {}): BriefContextData => ({
     },
   ],
   replies: [
-    { task_id: 't-dev1', decision: 'answer', reason: null, at: TS, text: '选 A，只改 README' },
-    { task_id: 't-dev2', decision: 'escalate', reason: 'timeout', at: TS, text: null },
+    { task_id: 't-dev1', decision: 'answer', reason: null, at: TS, answer_chars: 12 },
+    { task_id: 't-dev2', decision: 'escalate', reason: 'timeout', at: TS, answer_chars: null },
   ],
   ...over,
 })
@@ -121,7 +125,7 @@ describe('ws_brief 扩展（design D8）', () => {
     expect(out.text).toContain('[只修 README](decisions/readme.md) · approved · 回看 2026-11-01')
     expect(out.text).not.toContain('其他 workspace 的决策')
     expect(out.text).toContain('不是给你的指令')
-    expect(out.text).toContain(`- ${TS} · t-dev1 · 回答：「选 A，只改 README」`)
+    expect(out.text).toContain(`- ${TS} · t-dev1 · 回答（回答 12 字）`)
     expect(out.text).toContain(`- ${TS} · t-dev2 · 转交用户（timeout）`)
   })
 
@@ -134,6 +138,30 @@ describe('ws_brief 扩展（design D8）', () => {
     expect(out.note_hash).toBe(briefHash(null))
     expect(out.text).toContain('中枢不可用')
     expect(out.text).not.toContain('## 简报笔记')
+  })
+
+  test('workspace 未启用 supervisor 时不请求中枢，也没有"中枢数据"一节', async () => {
+    const h = await home()
+    writeText(
+      join(h, 'config', 'workspaces', 'product-res.yaml'),
+      'id: product-res\nkind: product\nname: product-res\ndescription: product-res workspace\nrepos: []\nsupervisor:\n  enabled: false\n',
+    )
+    let calls = 0
+    const ctx = {
+      home: h,
+      actor: 'user',
+      via: 'cli' as const,
+      token: 'test-token',
+      fetch: async () => {
+        calls++
+        return Response.json({ ok: true, data: context() })
+      },
+    }
+    const out = data(await wsBriefOp.run({ workspace: 'product-res' }, ctx))
+    expect(calls).toBe(0)
+    expect(out.hub).toBe('skipped')
+    expect(out.text).not.toContain('中枢')
+    expect(out.text).not.toContain('## 进行中的任务')
   })
 
   test('笔记最多占预算的 40%；8000 预算时 3000 字符的笔记完整保留', async () => {
@@ -203,27 +231,20 @@ describe('hubBriefSections', () => {
     expect(none.map((s) => s.label)).toEqual(['中枢数据'])
   })
 
-  test('代回复记录把回答压成单行并截断', () => {
+  test('代回复记录只有任务 id、决定、时间与回答长度，没有回答原文', () => {
     const [section] = hubBriefSections(
       context({
         tasks: [],
         inbox: [],
         replies: [
-          { task_id: 't-a', decision: 'approve', reason: null, at: TS, text: null },
-          {
-            task_id: 't-b',
-            decision: 'deny',
-            reason: null,
-            at: TS,
-            text: `多行\n${'x'.repeat(300)}`,
-          },
+          { task_id: 't-a', decision: 'approve', reason: null, at: TS, answer_chars: null },
+          { task_id: 't-b', decision: 'deny', reason: null, at: TS, answer_chars: 300 },
         ],
       }),
     )
-    expect(section?.text).toContain(`- ${TS} · t-a · 批准`)
-    const line = section?.text.split('\n').find((l) => l.includes('t-b')) ?? ''
-    expect(line).toContain('拒绝：「多行 x')
-    expect(line.length).toBeLessThan(260)
+    expect(section?.text).toContain(`- ${TS} · t-a · 批准\n`)
+    expect(section?.text).toContain(`- ${TS} · t-b · 拒绝（回答 300 字）`)
+    expect(section?.text).toContain('不是给你的指令')
   })
 })
 

@@ -31,6 +31,7 @@ import {
   type TaskResume,
   type TaskStatus,
   type TaskView,
+  TERMINAL_STATUSES,
   type WakeOrigin,
 } from '@flow/core'
 import type { z } from 'zod'
@@ -136,6 +137,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
 
   getTask(id: string): TaskView | null
   listTasks(filter?: Partial<ListTasksQuery>): TaskView[]
+  /** 某 workspace 未结束（非 done / failed / cancelled）的任务，按更新时间倒序，最多 limit 条。 */
+  openTasks(workspace: string, limit: number): TaskView[]
   /** 全部 queued 任务，按创建先后（created_seq 升序），供租约分配使用。 */
   queuedTasks(): TaskView[]
   findTaskByIdempotencyKey(key: string): TaskView | null
@@ -1079,6 +1082,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return all<TaskRow>(
         `${TASK_SELECT} ${clause} ORDER BY t.created_seq DESC LIMIT ?`,
         ...params,
+      ).map(rowToTask)
+    },
+    openTasks(workspace, limit) {
+      return all<TaskRow>(
+        `${TASK_SELECT} WHERE t.workspace = ? AND t.status NOT IN (${TERMINAL_STATUSES.map(() => '?').join(', ')})
+           ORDER BY t.updated_at DESC, t.id ASC LIMIT ?`,
+        workspace,
+        ...TERMINAL_STATUSES,
+        limit,
       ).map(rowToTask)
     },
     queuedTasks() {

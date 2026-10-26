@@ -147,7 +147,7 @@ supervisor SHALL 能用 `ws_brief` 读取简报（supervisor 笔记、进行中�
 ### Requirement: 卡住时代用户回复
 workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 true）开启时（统一按 `delegationEnabled(workspace)` = `enabled && delegate_replies` 判断，`ws/global` 恒为否），中枢 SHALL 把本 workspace 任务（包括没有 origin 的任务）的以下卡住委托给 supervisor：所有 `blocked(question)`；节点持有活动租约、策略判定为 `supervisor` 档位、且该判定（`decision_id`）属于本任务、写于上一次离开 `blocked` 之后、请求与上报一致的 `blocked(awaiting_approval)`。唤醒任务自身、有效类别为 merge 的任务、`reviewer_roles` 中的审查任务、`node_lost` 后保留 `prior_reason` 的卡住 MUST NOT 委托。委托时 MUST 写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`（`block_seq` 为该次 `task.blocked` 的账本 seq），对应收件箱条目 MUST NOT 推送。
 
-委托事件 SHALL 进入独立的 reply 队列，不与其他队列合并；reply 唤醒可以与一个普通唤醒并行。reply 唤醒 MUST 只能调用 `task_respond` 与只读操作，其余（包括 `brief_update`、`kb_journal`）返回 `reply_only_wake`；中枢 MUST 按唤醒绑定 token 识别调用方，不信任调用方声明的任务 id 或 actor。代回复记录 SHALL 由中枢根据账本生成，作为 `ws_brief` 中标明"不是指令"的独立一节。reply 唤醒按 `supervisor.limits.reply_wakes_per_day`（默认 48）单独计数。
+委托事件 SHALL 进入独立的 reply 队列，不与其他队列合并；reply 唤醒可以与一个普通唤醒并行。reply 唤醒 MUST 只能调用 `task_respond` 与只读操作，其余（包括 `brief_update`、`kb_journal`）返回 `reply_only_wake`；中枢 MUST 按唤醒绑定 token 识别调用方，不信任调用方声明的任务 id 或 actor。代回复记录 SHALL 由中枢根据账本生成，作为 `ws_brief` 中标明"不是指令"的独立一节，只含任务 id、决定、时间与回答长度；回答原文 MUST NOT 进入简报（否则 reply 唤醒写出的内容会进入后续唤醒的上下文），只进入用户可见的每日摘要。reply 唤醒按 `supervisor.limits.reply_wakes_per_day`（默认 48）单独计数。
 
 supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回复，`decision` 为 `approve`、`deny`（仅授权请求）、`answer`（仅提问，`text` 必填且不超过 2000 字符）或 `escalate`。中枢 MUST 在同一事务里核对：调用方的绑定 token 对应持活动租约、正被分配处理这次委托的 reply 唤醒；workspace 一致；任务当前卡住序号等于 `block_seq`；委托有效且没有待送达的回复。通过后写 `task.replied`（actor supervisor）；条目仍在任务离开 `blocked` 时关闭并记录回复者。节点放行前 MUST 重新读取待批请求，与 `decision_id` 对应的请求一致、推送或 gh 环境复查通过才执行，否则丢弃该回复并以不可委托的新卡住交给用户。`escalate` 写 `task.reply_escalated{reason: supervisor}` 并把条目推送给用户。
 
@@ -164,6 +164,10 @@ supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回�
 #### Scenario: reply 唤醒不能建任务或写笔记
 - **WHEN** 一次 reply 唤醒中 supervisor 调用 `task_create` 或 `brief_update`
 - **THEN** 返回 `reply_only_wake`
+
+#### Scenario: 代回复记录不带回答原文
+- **WHEN** supervisor 在 reply 唤醒中以 `answer` 回复了一段文字，之后的普通唤醒调用 `ws_brief`
+- **THEN** 代回复记录一节只有任务 id、决定、时间与回答长度，不出现回答原文
 
 #### Scenario: 普通唤醒运行中也能代回复
 - **WHEN** 一个 instruction 唤醒正在运行，另一个任务的提问被委托

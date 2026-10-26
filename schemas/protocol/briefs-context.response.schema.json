@@ -151,12 +151,18 @@
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                 "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
               },
-              "text": {
-                "description": "截断后的回答或拒绝理由",
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "answer_chars": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "回答或拒绝理由的字符数；没有文字时为 null。原文不进入简报（reply 唤醒不能写入会进入后续上下文的内容）"
               }
             },
             "required": [
@@ -164,11 +170,11 @@
               "decision",
               "reason",
               "at",
-              "text"
+              "answer_chars"
             ],
             "additionalProperties": false
           },
-          "description": "代回复记录：中枢根据 task.replied（actor supervisor）与 task.reply_escalated 生成，按时间倒序"
+          "description": "代回复记录：中枢根据 task.replied（actor supervisor）与 task.reply_escalated 生成，按时间倒序；只含任务 id、决定、时间与回答长度，不含回答原文"
         }
       },
       "required": [
