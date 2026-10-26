@@ -86,7 +86,12 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     if (!actor.ok) return respond(c, actor, createTaskData)
     const body = await jsonBody(c, false)
     if (!body.ok) return respond(c, body, createTaskData)
-    const r = await tasks.createTask(body.data, { actor: actor.data })
+    // 调用方唤醒只取自鉴权中间件按唤醒绑定 token 认定的结果（D6），不读请求体或请求头。
+    const auth = c.get('auth')
+    const r = await tasks.createTask(body.data, {
+      actor: actor.data,
+      ...(auth?.kind === 'wake' ? { wake: { task_id: auth.wake.task_id } } : {}),
+    })
     return respond(c, r, createTaskData, r.ok && r.data.created ? 201 : 200)
   })
 
@@ -112,8 +117,12 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
         cancelTaskData,
       )
     }
+    const auth = c.get('auth')
     const r = tasks.cancelTask(c.req.param('id'), {
       actor: actor.data,
+      ...(auth?.kind === 'wake'
+        ? { wake: { task_id: auth.wake.task_id, workspace: auth.wake.workspace } }
+        : {}),
       ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
     })
     return respond(c, r, cancelTaskData)

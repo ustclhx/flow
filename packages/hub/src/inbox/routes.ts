@@ -37,9 +37,16 @@ export function createInboxRoutes(deps: InboxActionDeps): Hono {
     if (!parsed.success) {
       return respond(c, fail('usage', 'invalid_arguments', '条目操作参数不合法'), inboxActData)
     }
+    const auth = c.get('auth')
     return respond(
       c,
-      await actOnInbox(deps, c.req.param('id'), parsed.data, c.get('actor') ?? 'unknown'),
+      await actOnInbox(
+        deps,
+        c.req.param('id'),
+        parsed.data,
+        c.get('actor') ?? 'unknown',
+        auth?.kind === 'wake' ? { workspace: auth.wake.workspace } : undefined,
+      ),
       inboxActData,
     )
   })

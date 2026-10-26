@@ -68,6 +68,8 @@ const RULES: readonly Rule[] = [
   { id: 'npm-token', confidence: 'high', re: /\bnpm_[A-Za-z0-9]{30,255}/g },
   // `flow hub token issue` 签发的绑定 token（明文只输出一次，中枢只存摘要，无法入名单）。
   { id: 'flow-hub-token', confidence: 'high', re: /\bfht_[A-Za-z0-9_-]{43}/g },
+  // 中枢按唤醒租约签发的唤醒绑定 token（add-m1-supervisor D6），只在租约响应中下发一次。
+  { id: 'flow-wake-token', confidence: 'high', re: /\bfwk_[A-Za-z0-9_-]{43}/g },
   { id: 'huggingface-token', confidence: 'high', re: /\bhf_[A-Za-z0-9]{30,255}/g },
   { id: 'api-key', confidence: 'high', re: /\bsk-ant-[A-Za-z0-9_-]{20,512}/g },
   // 通用的 sk- 前缀会命中 `sk-learn-…` 这类普通名字，只用于自由文本。

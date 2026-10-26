@@ -4,6 +4,7 @@ export * from './channels/index.ts'
 export * from './inbox/index.ts'
 export * from './ledger/index.ts'
 export * from './nodes/index.ts'
+export { verifyPolicyFromHome } from './policy/verify.ts'
 export * from './scheduler/index.ts'
 export * from './secrets/index.ts'
 export {
@@ -40,5 +41,12 @@ export {
   openTokenStore,
   sha256Hex,
 } from './server/tokens.ts'
+export {
+  createWakeTokenAuthority,
+  WAKE_TOKEN_PREFIX,
+  type WakeCaller,
+  type WakeTokenAuthority,
+  type WakeTokenOptions,
+} from './server/wake-tokens.ts'
 export * from './ui/app.tsx'
 export * from './ui/sessions.ts'

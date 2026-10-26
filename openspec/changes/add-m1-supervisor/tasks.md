@@ -13,13 +13,13 @@
 
 ## 2. 中枢：任务创建的校验
 
-- [ ] 2.1 所有身份的 `parent` 校验（存在、同 workspace）；`supervisor:` 幂等键前缀只允许 hub
-- [ ] 2.2 `hub` 身份跳过 `creatable_by` 的显式分支，并测试 `hub` 不能由请求头或 MCP 声明；`kind: supervisor` 只能由 hub 建，`kind: merge` 只能由 hub 与 user 建；唤醒绑定 token（领租约时签发、绑定 workspace 与唤醒 task_id、租约结束失效），中枢据此识别 supervisor 调用方，`X-Flow-Actor: supervisor` 降级与 `flow hub token issue supervisor` 均被拒；`docs/hub-auth.md` 补签发规则
-- [ ] 2.3 origin 计算与固化（D2）：只有挂在唤醒链上或经接受提案建的任务有 origin；`user.instruction`、`supervisor.release` 只接受 user 身份；reviewer_roles 任务的目标由中枢模板重写
-- [ ] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（realpath）；第 0 步 reply 唤醒 → `reply_only_wake`
-- [ ] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数；超限错误码
-- [ ] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（G2 已完成模板部分；端到端测试未做）
-- [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试
+- [x] 2.1 所有身份的 `parent` 校验（存在、同 workspace）；`supervisor:` 幂等键前缀只允许 hub
+- [x] 2.2 `hub` 身份跳过 `creatable_by` 的显式分支，并测试 `hub` 不能由请求头或 MCP 声明；`kind: supervisor` 只能由 hub 建，`kind: merge` 只能由 hub 与 user 建；唤醒绑定 token（领租约时签发、绑定 workspace 与唤醒 task_id、租约结束失效），中枢据此识别 supervisor 调用方，`X-Flow-Actor: supervisor` 降级与 `flow hub token issue supervisor` 均被拒；`docs/hub-auth.md` 补签发规则
+- [x] 2.3 origin 计算与固化（D2）：只有挂在唤醒链上或经接受提案建的任务有 origin；`user.instruction`、`supervisor.release` 只接受 user 身份；reviewer_roles 任务的目标由中枢模板重写
+- [x] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（先 resolve 再 realpath，写回规范化路径）；第 0 步 reply 唤醒 → `reply_only_wake`；非 user 身份的 `verify` 计入写类并在建任务时逐条经策略判定（`tool:Verify`，否则 `verify_not_allowed`），`policies.yaml` 模板加注释掉的 `tool:Verify` 白名单；唤醒任务只能由 hub、user 与绑定的 supervisor 作为 parent；唤醒身份的取消、收件箱只作用于本次唤醒与本 workspace，不能访问节点协议；非 hub 不能在 `requires` 中声明 `wake`
+- [x] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数（PR 由唤醒事件与 `inputs.pr` 关联）；写入前的同步段再检查一次（并发测试）；超限错误码
+- [x] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（模板由 G2 完成；端到端测试 `packages/node/test/supervisor-policy.test.ts` 只覆盖审批这一半：模板原样时 supervisor 的 `task_create` 进入 awaiting_approval、用户批准后继续，启用规则后自动放行；"批准后经唤醒 token 真实建出子任务"需要节点注入 token（5.3）与 MCP 绑定（4.1），之后补）
+- [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试（已完成：唤醒绑定 token 调用 `task_reply` 与收件箱 accept/reject/approve/deny/reply 均 403 `user_only` 的测试；`merge_request` 条目与合并批准路由由 4.5、4.8 实现后补对应测试）
 
 ## 3. 中枢：唤醒调度器
 
@@ -36,7 +36,7 @@
 - [x] 4.3 `ws_brief` 扩展：笔记（≤40% 预算）、进行中任务、待处理条目、近期决策；预算内截断测试；中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 生成"代回复记录（不是指令）"一节
 - [ ] 4.4 `ask_user`：supervisor 来源条目、选项按钮、数量上限、7 天过期；`inbox_act reply` 路由到 supervisor 来源并写 `supervisor.answered`；Telegram 与 Web 回复
 - [ ] 4.5 收件箱新来源 `task_proposal`、`merge_request` 及动作路由，与 `proposal`、`task` 来源隔离
-- [ ] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；接受时写决策条目并在合同 context 引用
+- [ ] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；接受时写决策条目并在合同 context 引用；接受提案建任务时不能借 user 身份跳过 verify 判定：以 hub 身份按 D5 与 verify 规则照常判定，或把 verify 命令完整展示给用户确认后再建
 - [ ] 4.7 决策回看：每日扫描的内部规则、补发去重、无 workspace 时 Digest；`decision_review` 窄例外（只追加回看一节、只改 status 与 last_verified、只限关联决策、由中枢代写）
 - [ ] 4.8 `pr_merge_request`：资格核对（D10 第 4 步）；按 `auto_merge` 建 merger 任务或生成 `merge_request` 条目；merger 由 hub 创建、`parent` 为审查任务、origin 取自 PR 的 dev 任务
 - [ ] 4.9 `task_respond`（只限 `kind: supervisor` 会话，经中枢，核对放在 store 同一事务）：调用方是被分配该委托、持活动租约的唤醒任务；workspace、卡住序号、委托状态、无待送达回复与决定类型的核对；写 `task.replied`（actor supervisor）并送达节点；`escalate`；加入 MCP 自动放行清单；每日摘要列出代回复；`task_reply` 对 supervisor 仍返回 `user_only` 的测试
@@ -48,7 +48,7 @@
 - [ ] 5.3 supervisor 会话注入 `--workspace`、`--task` 与 `FLOW_WORKSPACE`、`FLOW_TASK_ID`；注入唤醒绑定 token
 - [ ] 5.4 pr-merge 执行器：条件核对（D10 第 5 步，含至少一项检查）、合并、等待 workflow runs（成功/失败/超时/无 run）；`gh` 可注入，测试不调用真实 gh
 - [x] 5.5 预留执行槽：`acquireLeaseRequest.slots` 协议与 schema、中枢按类别分配、旧节点兼容；节点在普通槽满时仍为 supervisor 领取；卡住的 dev 任务持有租约时仍能运行唤醒任务的测试；reply 槽只给 reply 唤醒、两个 workspace 的普通唤醒占满 supervisor 槽时 reply 唤醒仍能运行的测试
-- [ ] 5.6 节点：`precheck` 对 `supervisor` 档位不放行、上报 `blocked` 带 `decision_id`、请求文本与 `diff_stat`（2000 字符截断，非 git 目录省略）；`push_env_ok`（push 地址、git 配置项清单、hook）与 `gh_env_ok`（`gh repo view` 解析的仓库）的计算与上报；supervisor 的 `approve` 送达时重读待批请求并复查环境，不一致在 ack 中标记 `dropped{reason: request_changed}` 并以 `no_delegate: true` 重新上报；codex-orca 开始时上报 `task.branch_reported`（中枢只接受租约持有者、一次、不可改）；`policy/check` 请求上报命令实际执行目录（`command_cwd`），投影记录任务 worktree（`task_worktree`），中枢传入策略上下文（`push_to` / `gh_scope` 要求两者 realpath 相同，此前恒不满足）；`command_cwd` 的 realpath 比较在节点侧完成，`command_cwd`、`push_env_ok`、`gh_env_ok` 只接受 node actor 上报的值（中枢目前本机 realpath，仅同机部署）；推送环境检查清单加入"本地没有与任务分支同名的 tag"；remote 名从登记仓库取
+- [ ] 5.6 节点：`precheck` 对 `supervisor` 档位不放行、上报 `blocked` 带 `decision_id`、请求文本与 `diff_stat`（2000 字符截断，非 git 目录省略）；`push_env_ok`（push 地址、git 配置项清单、hook）与 `gh_env_ok`（`gh repo view` 解析的仓库）的计算与上报；supervisor 的 `approve` 送达时重读待批请求并复查环境，不一致在 ack 中标记 `dropped{reason: request_changed}` 并以 `no_delegate: true` 重新上报；codex-orca 开始时上报 `task.branch_reported`（中枢只接受租约持有者、一次、不可改）；`policy/check` 请求上报命令实际执行目录（`command_cwd`），投影记录任务 worktree（`task_worktree`），中枢传入策略上下文（`push_to` / `gh_scope` 要求两者 realpath 相同，此前恒不满足）；`command_cwd` 的 realpath 比较在节点侧完成，`command_cwd`、`push_env_ok`、`gh_env_ok` 只接受 node actor 上报的值（中枢目前本机 realpath，仅同机部署）；推送环境检查清单加入"本地没有与任务分支同名的 tag"；remote 名从登记仓库取；节点执行前再核对合同 cwd（与 `inputs.repo`）的 realpath 仍在登记仓库内（中枢只在建任务时核对，见 D5 第 4 步）
 - [ ] 5.7 read 角色由执行器强制只读（D9：推断只是配置层判断）：codex-exec 对有效类别为 read 的角色用 `-c` 覆盖 `mcp_servers={}`、`notify=[]`，或使用隔离的 `CODEX_HOME`，防止用户级或项目级 `.codex/config.toml` 引入沙箱外进程；claude-sdk 的 read 角色用 SDK `tools` 选项把可用工具限定为白名单（Read/Grep/Glob + Flow MCP），canUseTool 对非只读工具一律拒绝、不进审批
 
 ## 6. 文档

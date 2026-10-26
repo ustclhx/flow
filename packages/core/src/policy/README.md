@@ -196,7 +196,7 @@ scope 加精确 action（不含通配符）的规则才能自动放行；不透�
 
 **受保护的工具**（`GUARDED_TOOLS` / `isGuardedTool`）：`tool:CodexCommand`（Codex 请求越出
 沙箱执行）、所有 `tool:mcp__*`（flow 自己的工具与以后接入的第三方 MCP）、`tool:WebFetch`、
-`tool:WebSearch`（外发数据）、`tool:Task` / `tool:Agent`（派生子 agent，继承并放大权限）。
+`tool:WebSearch`（外发数据）、`tool:Task` / `tool:Agent`（派生子 agent，继承并放大权限）、`tool:Verify`（非 user 身份建任务时合同中的验收命令，在沙箱外执行；建任务时逐条判定，只有 auto / auto-report 放行，否则 `verify_not_allowed`，见 add-m1-supervisor D5）。
 请求涉及这些工具时，参与判定的每个动作（工具本身或从命令识别出的具体动作）都只有 action
 不含通配符的规则才能自动放行；`*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为
 `draft-approve`。原因：通配的 auto 规则通常是为本地读写工具写的，不应顺带放行越出沙箱、

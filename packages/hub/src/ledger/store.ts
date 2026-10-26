@@ -116,6 +116,18 @@ export interface InboxItemFilter {
   limit?: number
 }
 
+/** 唤醒任务的账本记录（`supervisor.wake_started`）。 */
+export interface WakeRecord {
+  task_id: string
+  workspace: string
+  origin: WakeOrigin
+  generation: number
+  /** `supervisor.wake_started` 事件的 seq。 */
+  seq: number
+  /** 这次唤醒合并的账本事件 seq（`supervisor.wake_started.events`，中枢写入）。 */
+  events: number[]
+}
+
 /** 每张投影表按主键排序后的行（JSON 字段保持原文）。 */
 export type ProjectionSnapshot = Record<ProjectionTable, Record<string, unknown>[]>
 
@@ -142,6 +154,20 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   /** 全部 queued 任务，按创建先后（created_seq 升序），供租约分配使用。 */
   queuedTasks(): TaskView[]
   findTaskByIdempotencyKey(key: string): TaskView | null
+  /**
+   * 该任务是否是 supervisor 唤醒任务（D1：以账本中的 `supervisor.wake_started` 为准，不看角色名或 inputs），
+   * 是则返回该事件记录的 origin、代数与 seq。
+   */
+  wakeOf(taskId: string): WakeRecord | null
+  /** 这些 seq 的事件所属的任务 id（去重）。 */
+  eventTaskIds(seqs: readonly number[]): string[]
+  /** 以某任务为 parent、由某身份创建的任务数（D4 每次唤醒建任务数）。 */
+  countChildren(parentId: string, createdBy: string): number
+  /**
+   * 本 workspace 中对某 PR（链接不区分大小写）给出 `changes_requested` 的审查任务数（D4 审查轮数）：
+   * 只统计角色在 `roles` 中、执行器为 claude-sdk 的任务的 `result.review.verdict`。
+   */
+  countChangesRequested(workspace: string, pr: string, roles: readonly string[]): number
   /** 某任务的全部事件（按 seq）。 */
   taskEvents(taskId: string): LedgerEvent[]
   /**
@@ -863,6 +889,29 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     }
   }
 
+  /** 唤醒任务的账本记录（`supervisor.wake_started`）；`wakeOf` 与 `wakeOrigin` 共用。 */
+  function wakeRecordOf(taskId: string): WakeRecord | null {
+    const r = get<{ seq: number; workspace: string; payload_json: string }>(
+      `SELECT seq, workspace, payload_json FROM events
+         WHERE type = 'supervisor.wake_started' AND task_id = ? ORDER BY seq LIMIT 1`,
+      taskId,
+    )
+    if (!r) return null
+    const p = JSON.parse(r.payload_json) as {
+      origin: WakeOrigin
+      generation: number
+      events?: number[]
+    }
+    return {
+      task_id: taskId,
+      workspace: r.workspace,
+      origin: p.origin,
+      generation: p.generation,
+      seq: r.seq,
+      events: p.events ?? [],
+    }
+  }
+
   const insertEvent = db.prepare(
     `INSERT INTO events (ts, type, workspace, task_id, actor, payload_json)
      VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`,
@@ -1102,20 +1151,48 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       const r = get<TaskRow>(`${TASK_SELECT} WHERE t.idempotency_key = ?`, key)
       return r ? rowToTask(r) : null
     },
+    wakeOf: wakeRecordOf,
+    eventTaskIds(seqs) {
+      if (seqs.length === 0) return []
+      const rows = all<{ task_id: string }>(
+        `SELECT DISTINCT task_id FROM events
+         WHERE task_id IS NOT NULL AND seq IN (${seqs.map(() => '?').join(', ')})`,
+        ...seqs,
+      )
+      return rows.map((r) => r.task_id)
+    },
+    countChildren(parentId, createdBy) {
+      return (
+        get<{ n: number }>(
+          'SELECT COUNT(*) AS n FROM tasks WHERE parent = ? AND created_by = ?',
+          parentId,
+          createdBy,
+        )?.n ?? 0
+      )
+    },
+    countChangesRequested(workspace, pr, roles) {
+      if (roles.length === 0) return 0
+      return (
+        get<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM tasks
+           WHERE workspace = ?
+             AND lower(json_extract(contract_json, '$.inputs.review.pr')) = lower(?)
+             AND json_extract(contract_json, '$.executor') = 'claude-sdk'
+             AND json_extract(contract_json, '$.role') IN (${roles.map(() => '?').join(', ')})
+             AND json_extract(result_json, '$.review.verdict') = 'changes_requested'`,
+          workspace,
+          pr,
+          ...roles,
+        )?.n ?? 0
+      )
+    },
     taskEvents(taskId) {
       return taskEventsOf(taskId)
     },
     activeDelegation(taskId) {
       return currentDelegation(taskId)
     },
-    wakeOrigin(taskId) {
-      const row = get<{ origin: WakeOrigin | null }>(
-        `SELECT json_extract(payload_json, '$.origin') AS origin FROM events
-         WHERE type = 'supervisor.wake_started' AND task_id = ? LIMIT 1`,
-        taskId,
-      )
-      return row?.origin ?? null
-    },
+    wakeOrigin: (taskId) => wakeRecordOf(taskId)?.origin ?? null,
     getNode(nodeId) {
       const r = get<NodeRow>(`${NODE_SELECT} WHERE n.node_id = ?`, nodeId)
       return r ? rowToNode(r) : null

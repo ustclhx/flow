@@ -777,6 +777,12 @@
                           ],
                           "additionalProperties": false,
                           "title": "Review inputs"
+                        },
+                        "pr": {
+                          "description": "写类任务针对的 PR（例如按审查意见修改）；中枢据此统计同一 PR 的修改轮数（D4）",
+                          "type": "string",
+                          "maxLength": 512,
+                          "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$"
                         }
                       },
                       "additionalProperties": {}
@@ -858,6 +864,11 @@
                   ],
                   "additionalProperties": false,
                   "title": "Task resume"
+                },
+                "wake_token": {
+                  "description": "唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略",
+                  "type": "string",
+                  "minLength": 16
                 }
               },
               "required": [

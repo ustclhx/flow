@@ -25,6 +25,8 @@ export async function actOnInbox(
   id: string,
   input: InboxActRequest,
   actor: string,
+  /** 唤醒绑定 token 认定的调用方（D6）：只能作用于绑定的 workspace。 */
+  binding?: { workspace: string },
 ): Promise<Result<{ item: InboxItemView }>> {
   const { ledger, tasks, home } = deps
   if (actor !== 'user' && input.action !== 'dismiss') {
@@ -35,6 +37,9 @@ export async function actOnInbox(
   }
   const item = ledger.getInboxItem(id)
   if (!item) return fail('failure', 'not_found', '收件箱条目不存在')
+  if (binding && item.workspace !== binding.workspace) {
+    return fail('failure', 'workspace_mismatch', '本次唤醒不能处理其他 workspace 的条目')
+  }
   if (actor !== 'user' && item.created_by !== actor) {
     return fail('failure', 'user_only', '只能忽略自己发起的条目')
   }

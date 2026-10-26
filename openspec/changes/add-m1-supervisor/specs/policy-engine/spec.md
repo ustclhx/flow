@@ -36,7 +36,7 @@
 ### Requirement: 不可自动放行的动作
 `pr.merge`、`deploy`、`secrets`、`shell.opaque`、策略文件的修改（`policy.edit`）、flow-home `config/` 下任何文件的修改（`config.edit`），以及 flow MCP 中会扩大权限的操作（`task.create`、`task.cancel`、`task.reply`、`task.respond`、`proposal.decide`、`resource.transfer`），在用户没有显式配置时 SHALL 一律交给用户；即使命中了 `scope: *` 或通配 action 的 `auto` 规则，也 MUST 只有 scope 为具体 workspace 或角色、且 action 不含通配符的规则才能自动放行它们。这些动作 MUST NOT 被判为 `supervisor`：命中 `supervisor` 规则时提升为 `draft-approve` 并标 `guarded`；在受保护判定中 `supervisor` 与 `auto`、`auto-report` 同属自动档位。
 
-请求涉及受保护的工具时——Codex 越出沙箱的命令（`tool:CodexCommand`）、所有 MCP 工具（`tool:mcp__*`）、外发工具（`tool:WebFetch`、`tool:WebSearch`）、派生子 agent（`tool:Task`）——参与判定的每个动作 MUST 只由 action 不含通配符的规则自动放行；`*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为 `draft-approve`；`supervisor` 档位同样只能由具体 scope 加精确 action 的规则给出。
+请求涉及受保护的工具时——Codex 越出沙箱的命令（`tool:CodexCommand`）、所有 MCP 工具（`tool:mcp__*`）、外发工具（`tool:WebFetch`、`tool:WebSearch`）、派生子 agent（`tool:Task`）、非 user 身份建任务时的合同验收命令（`tool:Verify`，见 supervisor 能力的"supervisor 建任务的约束"）——参与判定的每个动作 MUST 只由 action 不含通配符的规则自动放行；`*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为 `draft-approve`；`supervisor` 档位同样只能由具体 scope 加精确 action 的规则给出。
 
 经 Bash 调用 flow CLI 完成同样的操作时 MUST 识别为同样的动作，flow 的管理命令（hub、policy、daemon 等）识别为受保护的 `flow.admin`；命令直接访问中枢端口时 MUST 按无法确定处理。
 
@@ -99,3 +99,10 @@
 #### Scenario: 包装命令不命中前缀
 - **WHEN** 有规则 `scope: ws/a action: tool:Bash level: auto when: {command_prefix: pnpm test}`，请求 `sudo pnpm test`、`./pnpm test` 或 `NODE_OPTIONS=--require=./x.js pnpm test`
 - **THEN** 规则不命中，请求交给用户
+
+### Requirement: 验收命令的建任务时判定
+非 user 身份建任务时，合同 `verify` 中的每条命令 SHALL 在创建时经策略判定：动作为 `tool:Verify` 加上命令识别出的动作，scope 为新任务的 workspace 与角色，`command_prefix` 严格匹配；只有判定为 `auto` 或 `auto-report` 的命令可以出现在合同中，否则建任务 MUST 被拒绝（`verify_not_allowed`）。`flow init` 生成的 `policies.yaml` SHALL 带一组注释掉的 `tool:Verify` auto 模板（`pnpm check`、`pnpm test`、`pnpm lint`）。
+
+#### Scenario: 通配规则不能放行验收命令
+- **WHEN** 只有 `scope: * action: * level: auto`，reviewer 身份建带 `verify: [pnpm test]` 的任务
+- **THEN** 判定为 `draft-approve`，返回 `verify_not_allowed`

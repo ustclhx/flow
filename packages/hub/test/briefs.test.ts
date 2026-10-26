@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { briefHash, briefUpdateOp, type LedgerEvent, wsBriefOp } from '@flow/core'
+import { briefHash, briefUpdateOp, type LedgerEvent, type WakeOrigin, wsBriefOp } from '@flow/core'
 import { initTempHome, isolateHub } from '../../core/test/helpers.ts'
 import {
   briefContext,
@@ -18,6 +18,7 @@ afterEach(() => {
 })
 
 const WS = 'ws/product-res'
+const WAKE_TOKEN = `fwk_${'w'.repeat(43)}`
 
 async function setup(binding: SupervisorBinding | null = null) {
   const home = await initTempHome('flow-hub-brief-')
@@ -29,8 +30,22 @@ async function setup(binding: SupervisorBinding | null = null) {
     cleanup()
     rmSync(join(home, '..'), { recursive: true, force: true })
   })
+  // supervisor 身份只能由唤醒绑定 token 认定（G5，D6）：测试用一个固定的唤醒 token 代表绑定的唤醒。
   const app = createHubApp({
     token: testToken,
+    wakeTokens: {
+      authenticate: (p) =>
+        p === WAKE_TOKEN && binding
+          ? {
+              actor: 'supervisor',
+              task_id: 't-wake',
+              workspace: binding.workspace,
+              lease_id: 'l-wake',
+              origin: binding.origin as WakeOrigin,
+              generation: 1,
+            }
+          : null,
+    },
     mount: [{ path: '/', app: createBriefRoutes({ ledger: store, home, binding: () => binding }) }],
   })
   /** 操作上下文：HubClient 直接把请求交给进程内的中枢应用。 */
@@ -38,7 +53,7 @@ async function setup(binding: SupervisorBinding | null = null) {
     home,
     actor,
     via: 'mcp' as const,
-    token: testToken,
+    token: actor === 'supervisor' && binding ? WAKE_TOKEN : testToken,
     fetch: (req: Request) => app.fetch(req),
   })
   return { home, store, app, ctx }
@@ -137,11 +152,11 @@ describe('brief_update 经中枢执行（supervisor "简报读写"）', () => {
     const reviewer = await post(body, 'reviewer')
     expect(reviewer.status).toBe(403)
     expect(await reviewer.json()).toMatchObject({ error: { code: 'role_not_allowed' } })
-    // 没有唤醒绑定的 supervisor（例如 user token 降级声明）一律拒绝：失败即拒绝。
+    // 没有唤醒绑定的 supervisor（例如 user token 降级声明）一律拒绝：鉴权层先按保留身份拒绝（G5）。
     const unbound = await post(body, 'supervisor')
     expect(unbound.status).toBe(403)
-    expect(await unbound.json()).toMatchObject({ error: { code: 'scope_denied' } })
-    expect(code(await briefUpdateOp.run(body, ctx('supervisor')))).toBe('scope_denied')
+    expect(await unbound.json()).toMatchObject({ error: { code: 'reserved_actor' } })
+    expect(code(await briefUpdateOp.run(body, ctx('supervisor')))).toBe('reserved_actor')
     const long = await post({ ...body, text: 'x'.repeat(3001) }, 'user')
     expect(long.status).toBe(422)
     expect(await long.json()).toMatchObject({ error: { code: 'brief_too_long' } })

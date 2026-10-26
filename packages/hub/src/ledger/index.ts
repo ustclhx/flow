@@ -19,7 +19,19 @@ export {
   openLedger,
   type ProjectionSnapshot,
   type RebuildOptions,
+  type WakeRecord,
 } from './store.ts'
+export {
+  chainDepth,
+  checkRepoInWorkspace,
+  computeOrigin,
+  isReservedIdempotencyKey,
+  prsForNewTask,
+  RESERVED_CAPABILITIES,
+  type RepoCheckOptions,
+  taskKind,
+  wakePrs,
+} from './supervisor-checks.ts'
 export {
   acceptedReplyKinds,
   type CancelTaskOptions,
@@ -33,6 +45,10 @@ export {
   roleLookupFromHome,
   type TaskService,
   type TaskServiceOptions,
+  type VerifyPolicyCheck,
   type WorkspaceCheck,
+  type WorkspaceInfo,
+  type WorkspaceLookup,
   workspaceCheckFromHome,
+  workspaceLookupFromHome,
 } from './tasks.ts'

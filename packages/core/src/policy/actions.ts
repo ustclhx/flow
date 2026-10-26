@@ -79,6 +79,8 @@ export const GUARDED_TOOLS: readonly string[] = [
   'tool:WebSearch',
   'tool:Task',
   'tool:Agent',
+  // 合同验收命令（add-m1-supervisor D5）：在沙箱外直接运行，只有精确 action 的规则能自动放行。
+  'tool:Verify',
 ]
 export const isGuardedTool = (action: string): boolean =>
   GUARDED_TOOLS.includes(action) || action.startsWith('tool:mcp__')

@@ -17,6 +17,7 @@ import type { HubClock } from './server/clock.ts'
 import { createEventsApp } from './server/events.ts'
 import { createTokenRoutes } from './server/token-routes.ts'
 import type { HubTokenStore } from './server/tokens.ts'
+import type { WakeTokenAuthority } from './server/wake-tokens.ts'
 
 /**
  * 中枢的 HTTP 应用（design D3）。这里只定义路由，不感知运行时；
@@ -32,6 +33,8 @@ export interface HubDeps {
   token?: string
   /** 绑定 token 的存储；提供时启用绑定 token 鉴权并挂载 token 管理路由。 */
   tokens?: HubTokenStore
+  /** 唤醒绑定 token（add-m1-supervisor D6）；提供时启用 supervisor 身份的鉴权。 */
+  wakeTokens?: Pick<WakeTokenAuthority, 'authenticate'>
   /** 某任务活动租约所属的节点 id；node:* 身份据此只读自己持有租约的任务。 */
   leaseHolders?: (taskId: string) => readonly string[]
   ledger?: LedgerReader
@@ -70,6 +73,7 @@ export function createHubApp(deps: HubDeps = {}): Hono {
     hubAuth({
       ...(deps.token === undefined ? {} : { token: deps.token }),
       ...(deps.tokens ? { tokens: deps.tokens } : {}),
+      ...(deps.wakeTokens ? { wakeTokens: deps.wakeTokens } : {}),
       ...(deps.leaseHolders ? { leaseHolders: deps.leaseHolders } : {}),
     }),
   )

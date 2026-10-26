@@ -39,7 +39,10 @@ export function createNodeRoutes({ service }: NodeRoutesDeps): Hono {
   app.post(ENDPOINTS['leases-acquire'].path, async (c) => {
     const body = await jsonBody(c, false)
     if (!body.ok) return respond(c, body, acquireLeaseData)
-    const r = await service.acquire(body.data, { signal: c.req.raw.signal })
+    const r = await service.acquire(body.data, {
+      signal: c.req.raw.signal,
+      actor: c.get('actor') ?? 'unknown',
+    })
     return respond(c, r, acquireLeaseData)
   })
 
