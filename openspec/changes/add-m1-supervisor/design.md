@@ -204,6 +204,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 5. **pr-merge 执行器**（节点上，不调用模型；`gh` 可注入）在本 workspace 登记仓库中执行：
    - 读 PR（一次 GraphQL 读取同一时刻的 head、可合并性、合并队列与 head 提交的检查）：open、base 为默认分支、仓库与登记仓库一致、`headRefOid == reviewed_sha`、可合并、未启用合并队列（否则 `merge_queue_unsupported`）；合并前再读一次 head；
    - 检查：至少有一项检查且全部成功、没有进行中的检查（workspace 配置 `supervisor.allow_no_checks: true` 时允许没有检查）；
+     检查完全 fail-closed：head 提交上的每一条 check run 与 status 都单独计入（只对同一 check run id 去重），不按名称合并重跑结果——同一 workflow 中同名的不同 job 无法与重跑可靠区分。有意的后果：flaky 检查重跑成功后旧的失败记录仍会阻止合并，需要推新提交或由用户手动合并；
    - 再次核对审查任务（同第 4 步）；
    - 任一不满足 → `failed`，原因码如 `pr_not_open`、`head_moved`、`checks_not_green`、`review_not_approved`，**不合并**；
    - 合并方式取 `supervisor.merge_method`（默认 `squash`）；

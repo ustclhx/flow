@@ -1,5 +1,11 @@
 import type { SupervisorConfig } from '../schema/supervisor.ts'
-import { type ReviewResult, reviewResult, type TaskResult, type TaskView } from './task.ts'
+import {
+  PR_URL_RE,
+  type ReviewResult,
+  reviewResult,
+  type TaskResult,
+  type TaskView,
+} from './task.ts'
 
 /**
  * 审查结论的采信规则（add-m1-supervisor D10；pr-acceptance "审查结论由执行器把关"）。
@@ -12,8 +18,26 @@ import { type ReviewResult, reviewResult, type TaskResult, type TaskView } from 
 
 export const REVIEW_EXECUTOR = 'claude-sdk'
 
-/** 两个 PR 链接是否指向同一个 PR（GitHub 的 host、owner、repo 不区分大小写，按整串忽略大小写比较）。 */
-export const samePrUrl = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+/** PR 链接的规范形式：host 小写并去掉 `www.` 前缀与 `:443`，owner/repo 小写；不符合 `PR_URL_RE` 时返回 undefined。 */
+export function normalizePrUrl(url: string): string | undefined {
+  if (!PR_URL_RE.test(url)) return undefined
+  const m = /^https:\/\/([^/]+)\/(.+)$/.exec(url)
+  if (!m?.[1] || !m[2]) return undefined
+  const host = m[1]
+    .toLowerCase()
+    .replace(/:443$/, '')
+    .replace(/^www\./, '')
+  return `https://${host}/${m[2].toLowerCase()}`
+}
+
+/**
+ * 两个 PR 链接是否指向同一个 PR。两边都必须符合 `PR_URL_RE`（否则返回 false，fail-closed）；比较前做规范化：
+ * host 去掉 `www.` 与 `:443`，host、owner、repo 按 GitHub 规则不区分大小写。
+ */
+export function samePrUrl(a: string, b: string): boolean {
+  const x = normalizePrUrl(a)
+  return x !== undefined && x === normalizePrUrl(b)
+}
 
 /** 合同是否可能产出审查结论（不看角色；角色由 `trustedReview` 按 workspace 配置判断）。 */
 export function mayCarryReview(contract: TaskView['contract']): boolean {

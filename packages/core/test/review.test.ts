@@ -183,3 +183,13 @@ test('PR 链接比较不区分大小写（reviewApproves、latestTrustedReview�
   expect(samePrUrl(upper, PR)).toBe(true)
   expect(samePrUrl('https://github.com/acme/demo/pull/8', PR)).toBe(false)
 })
+
+test('samePrUrl：两边都须是合法 PR 链接；host 去掉 www. 与 :443 后比较', () => {
+  expect(samePrUrl('https://www.github.com/acme/demo/pull/7', PR)).toBe(true)
+  expect(samePrUrl('https://github.com:443/acme/demo/pull/7', PR)).toBe(true)
+  expect(samePrUrl('https://WWW.GitHub.com:443/Acme/Demo/pull/7', PR)).toBe(true)
+  expect(samePrUrl('https://github.com:8443/acme/demo/pull/7', PR)).toBe(false)
+  expect(samePrUrl('https://github.com/acme/demo/pull/7/', PR)).toBe(false)
+  expect(samePrUrl('not a url', 'not a url')).toBe(false)
+  expect(samePrUrl(PR, 'https://github.com/acme/demo/pull/70')).toBe(false)
+})

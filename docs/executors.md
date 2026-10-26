@@ -373,12 +373,12 @@ pr-merge 执行器**不调用任何模型**，合同的 `inputs.merge = {pr, rev
 PR 状态与检查来自**同一次** GraphQL 读取（`gh api graphql`：`headRefOid`、`mergeable`、`isMergeQueueEnabled`、
 `autoMergeRequest` 与最新提交的 `statusCheckRollup`），不会出现"读检查之后 head 变了"的错位；合并前再读一次 head，
 合并命令本身也带 `--match-head-commit`。`mergeStateStatus`（BLOCKED、BEHIND、UNSTABLE 等）只读取并记在活动里，
-不作为判定依据。rollup 可能包含同一检查的多次运行（重新运行后旧的 check run 仍在；gh CLI 的 `gh pr checks` 也去重，见 cli/cli
-`pkg/cmd/pr/checks/aggregate.go` 的 `eliminateDuplicates`）。执行器比 gh 更保守，宁可多判失败：只对 CheckRun 去重，键为
-workflow 的稳定 id（`checkSuite.workflowRun.workflow.databaseId`）+ 检查名 + event，取不到 id 时不去重、每条单独计入
-（两个同名 workflow 不会互相覆盖），StatusContext 不去重；同一键下按开始时间取最新一条（没有开始时间的排队重跑视为最新，
-时间相同时保留更差的那条）：最新是 pass 才能覆盖较早的非 pass，最新是 pending 则整体 pending，最新是 skipping / neutral 而
-较早有 fail 或 cancel 时按失败处理。**分支保护应把关键检查设为 required**：pr-merge 只能看到读取时已存在的检查，
+不作为判定依据。检查的判定完全 fail-closed：head 提交上 rollup 返回的每一条 CheckRun 与 StatusContext 都单独计入，只要有一条不是
+pass / skipping 就不合并（进行中为 pending，其余为失败，都是 `checks_not_green`）。不按名称合并"较新的成功覆盖较早的失败"：
+同一 workflow 中同名的不同 job（例如固定 name 的 matrix 分支）无法与重跑可靠区分，合并会把失败或进行中的检查遮住。
+唯一的去重是同一个 check run id（`databaseId`）重复出现时只算一次。
+**有意的后果**：flaky 检查重跑成功后，旧的失败记录仍在 rollup 中，pr-merge 不会合并；需要推一个新提交重新触发检查，
+或由用户手动合并。**分支保护应把关键检查设为 required**：pr-merge 只能看到读取时已存在的检查，
 之后才创建的检查不在核对范围内。
 
 通过后执行 `gh pr merge <链接> --<merge_method> --match-head-commit <reviewed_sha>`（`supervisor.merge_method`，默认 squash）。

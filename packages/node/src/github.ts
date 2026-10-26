@@ -270,11 +270,8 @@ const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
                 pageInfo { hasNextPage }
                 nodes {
                   __typename
-                  ... on CheckRun {
-                    name status conclusion detailsUrl startedAt
-                    checkSuite { app { slug } workflowRun { event workflow { databaseId name } } }
-                  }
-                  ... on StatusContext { context state targetUrl createdAt }
+                  ... on CheckRun { databaseId name status conclusion detailsUrl }
+                  ... on StatusContext { context state targetUrl }
                 }
               }
             }
@@ -292,92 +289,32 @@ const snapshotContext = z.union([
     status: z.string(),
     conclusion: z.string().nullable(),
     detailsUrl: z.string().nullable().optional(),
-    startedAt: z.string().nullable().optional(),
-    checkSuite: z
-      .looseObject({
-        app: z.looseObject({ slug: z.string().nullable().optional() }).nullable().optional(),
-        workflowRun: z
-          .looseObject({
-            event: z.string().nullable().optional(),
-            workflow: z
-              .looseObject({
-                databaseId: z.number().int().nullable().optional(),
-                name: z.string().nullable().optional(),
-              })
-              .nullable()
-              .optional(),
-          })
-          .nullable()
-          .optional(),
-      })
-      .nullable()
-      .optional(),
+    databaseId: z.number().int().nullable().optional(),
   }),
   z.looseObject({
     __typename: z.literal('StatusContext'),
     context: z.string(),
     state: z.string(),
     targetUrl: z.string().nullable().optional(),
-    createdAt: z.string().nullable().optional(),
   }),
 ])
 type SnapshotContext = z.infer<typeof snapshotContext>
 
-/** bucket 的严重程度：越小越差（开始时间相同时保留更差的那条）。 */
-const BUCKET_RANK: Record<string, number> = { fail: 0, cancel: 0, pending: 1, skipping: 2, pass: 3 }
-const rankOf = (bucket: string) => BUCKET_RANK[bucket] ?? 0
-
 /**
- * rollup 可能包含同一检查的多次运行（重新运行后旧的 check run 仍在；gh CLI 的 `pr checks` 也去重，见
- * cli/cli `pkg/cmd/pr/checks/aggregate.go` 的 eliminateDuplicates）。这里比 gh 更保守，宁可多判失败：
- * - 只对 CheckRun 去重，键为 workflow 的稳定 id（`workflow.databaseId`）+ 检查名 + event；取不到 workflow id 时
- *   不去重，每一条都单独计入（同名的两个 workflow 不会互相覆盖）；StatusContext 不去重；
- * - 同一键下按开始时间从新到旧排列（没有开始时间的排队重跑视为最新；时间相同时更差的在前），取最新一条：
- *   - 最新是 pass：覆盖较早的非 pass 记录（重跑成功）；
- *   - 最新是 pending：整体 pending；
- *   - 最新是 skipping（SKIPPED / NEUTRAL）且较早记录有 fail 或 cancel：整体按 fail（跳过不能遮住失败）；
- *   - 其他情况取最新一条本身。
+ * 完全 fail-closed（add-m1-supervisor D10）：同一 head 提交上的每一条 CheckRun 与 StatusContext 都单独计入，
+ * 不做"较新的成功覆盖较早的失败"之类的合并——同一 workflow 中同名的不同 job（例如固定 name 的 matrix 分支）
+ * 无法与重跑可靠区分。唯一的去重：同一个 check run id（`databaseId`）重复出现时只算一次。
+ * 后果是 flaky 检查重跑成功后旧的失败记录仍会阻止合并，需要推新提交或由用户手动合并（有意的选择，见 docs/executors.md）。
  */
 export function dedupeChecks(contexts: readonly SnapshotContext[]): GhCheck[] {
-  const time = (c: SnapshotContext) => {
-    const t = c.__typename === 'CheckRun' ? c.startedAt : c.createdAt
-    const ms = t ? Date.parse(t) : Number.NaN
-    return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms
-  }
-  const groups = new Map<string, Array<{ c: SnapshotContext; check: GhCheck }>>()
-  contexts.forEach((c, i) => {
-    const id =
-      c.__typename === 'CheckRun' ? c.checkSuite?.workflowRun?.workflow?.databaseId : undefined
-    const key =
-      c.__typename === 'CheckRun' && typeof id === 'number'
-        ? `run\0${id}\0${c.name}\0${c.checkSuite?.workflowRun?.event ?? ''}`
-        : `single\0${i}`
-    const list = groups.get(key) ?? []
-    list.push({ c, check: bucketOf(c) })
-    groups.set(key, list)
-  })
+  const seen = new Set<number>()
   const out: GhCheck[] = []
-  for (const list of groups.values()) {
-    list.sort((a, b) => {
-      const ta = time(a.c)
-      const tb = time(b.c)
-      if (ta !== tb) return ta > tb ? -1 : 1
-      return rankOf(a.check.bucket) - rankOf(b.check.bucket)
-    })
-    const [latest, ...older] = list
-    if (!latest) continue
-    if (latest.check.bucket === 'skipping') {
-      const bad = older.find((o) => o.check.bucket === 'fail' || o.check.bucket === 'cancel')
-      if (bad) {
-        out.push({
-          ...bad.check,
-          bucket: 'fail',
-          state: `${latest.check.state}（较早的运行 ${bad.check.state}）`,
-        })
-        continue
-      }
+  for (const c of contexts) {
+    if (c.__typename === 'CheckRun' && typeof c.databaseId === 'number') {
+      if (seen.has(c.databaseId)) continue
+      seen.add(c.databaseId)
     }
-    out.push(latest.check)
+    out.push(bucketOf(c))
   }
   return out
 }
