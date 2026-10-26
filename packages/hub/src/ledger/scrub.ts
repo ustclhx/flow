@@ -63,7 +63,8 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task_proposal.rejected': [['note']],
   'merge_request.rejected': [['note']],
   'task.unblocked': [['note']],
-  'task.replied': [['text']],
+  // reason：supervisor 代回复的理由（D15），只进每日摘要。
+  'task.replied': [['text'], ['reason']],
   'task.requeued': [['note']],
   'task.cancel_requested': [['reason']],
   // 收件箱条目的文字会外发到渠道（notify-channel "外发内容脱敏"），入账前就按自由文本处理。
@@ -80,6 +81,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
 export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string, number>>>> = {
   'task.blocked': { diff_stat: DIFF_STAT_MAX, 'request.reason': 2000 },
   'task.reply_escalated': { note: 2000 },
+  'task.replied': { reason: 2000 },
   'supervisor.answered': { text: INBOX_BODY_MAX },
   'task_proposal.created': { reason: 2000 },
   'task_proposal.rejected': { note: 2000 },

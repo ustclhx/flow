@@ -275,6 +275,28 @@ async function delegatedApprove(ctx: Ctx) {
       },
     }),
   )
+  // 中枢委托给 supervisor（D15）：supervisor 的回复只能落在有效的委托上（store 校验）。
+  const blockSeq = ctx.ledger
+    .taskEvents(id)
+    .filter((e) => e.type === 'task.blocked')
+    .at(-1)?.seq
+  must(
+    ctx.ledger.append(
+      {
+        task_id: id,
+        workspace: 'ws/demo',
+        type: 'task.reply_delegated',
+        payload: {
+          task_id: id,
+          block_seq: blockSeq ?? 0,
+          kind: 'awaiting_approval',
+          decision_id: decided.seq,
+          deadline: '2099-01-01T00:00:00.000Z',
+        },
+      },
+      { actor: 'hub' },
+    ),
+  )
   return { id, lease, decisionId: decided.seq }
 }
 
@@ -320,7 +342,7 @@ describe('ack-reply 拒收（dropped{reason: request_changed}）', () => {
           task_id: id,
           workspace: 'ws/demo',
           type: 'task.replied',
-          payload: { reply_id: 'r-sup', kind: 'approve', via: 'supervisor' },
+          payload: { reply_id: 'r-sup', kind: 'approve', via: 'supervisor', reason: '白名单内' },
         },
         { actor: 'supervisor' },
       ),
@@ -400,14 +422,24 @@ describe('ack-reply 拒收（dropped{reason: request_changed}）', () => {
   test('用户的回复不能拒收；dropped 必须带 reason，其他 outcome 不能带', async () => {
     const ctx = await setup()
     const { id, lease } = await delegatedApprove(ctx)
+    const blockSeq = ctx.ledger.activeDelegation(id)?.block_seq ?? 0
+    // 委托仍有效时，用户回复必须在同一次追加里结束委托（D15 "用户优先"）。
     must(
-      ctx.ledger.append(
-        {
-          task_id: id,
-          workspace: 'ws/demo',
-          type: 'task.replied',
-          payload: { reply_id: 'r-user', kind: 'approve' },
-        },
+      ctx.ledger.appendMany(
+        [
+          {
+            task_id: id,
+            workspace: 'ws/demo',
+            type: 'task.reply_escalated',
+            payload: { reason: 'user_replied', block_seq: blockSeq },
+          },
+          {
+            task_id: id,
+            workspace: 'ws/demo',
+            type: 'task.replied',
+            payload: { reply_id: 'r-user', kind: 'approve' },
+          },
+        ],
         { actor: 'user' },
       ),
     )

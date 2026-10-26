@@ -19,14 +19,72 @@ export interface ActiveDelegation {
   deadline: string
 }
 
-/** 离开当前这次卡住的事件（委托随之隐式失效）。 */
+/**
+ * 结束当前这次卡住上委托的事件（委托随之隐式失效）：离开这次卡住，以及请求取消
+ * （`task.cancel_requested`：用户要停掉任务，supervisor 不应再替它批准或回答，D15）。
+ */
 export const DELEGATION_ENDING_EVENTS: ReadonlySet<LedgerEvent['type']> = new Set([
   'task.blocked',
   'task.unblocked',
   'task.requeued',
   'task.requeued_with_reply',
   'task.lease_expired',
+  'task.cancel_requested',
 ])
+
+/** 卡住上报的待批请求与策略判定所针对的请求中，参与一致性核对的字段。 */
+export interface DelegationRequest {
+  tool: string
+  command?: string | undefined
+  paths?: readonly string[] | undefined
+}
+
+/** 请求文本（命令、路径）的上限：与 `BLOCKED_REQUEST_TEXT_MAX`、`policy.decided.request.command` 一致。 */
+const REQUEST_TEXT_MAX = 2000
+
+/**
+ * 文本是否可能被改写过（不确定）：达到上限（可能被截断）、以截断符结尾，或含脱敏标记
+ * （`[REDACTED:<规则>]`、已知密钥的 `[secret:<路径>]`）。两侧被同样截断或脱敏时逐字比较仍会"一致"，
+ * 但被比较的已不是原始请求，所以一律判为不一致。
+ */
+export function requestTextUncertain(text: string): boolean {
+  return (
+    text.length >= REQUEST_TEXT_MAX ||
+    text.endsWith('…') ||
+    text.includes('[REDACTED:') ||
+    text.includes('[secret:')
+  )
+}
+
+/**
+ * D15 "判定与卡住绑定"中的请求一致：`task.blocked.request` 与 `decision_id` 对应的
+ * `policy.decided.request` 逐字相同（两侧经同样的脱敏，G9）。任何不确定都判为不一致：
+ * - 任一侧缺失、或任一侧没有 `command`（没有命令的请求一律不委托）；
+ * - 工具不同、命令不逐字相等；
+ * - 路径：两侧都没有才算一致；有路径时必须两侧都有、顺序与内容完全相同；
+ * - 任一侧的命令或路径可能被截断或脱敏过（`requestTextUncertain`）。
+ */
+export function delegationRequestMatches(
+  blocked: DelegationRequest | undefined,
+  decided: DelegationRequest | undefined,
+): boolean {
+  if (!blocked || !decided) return false
+  if (blocked.command === undefined || decided.command === undefined) return false
+  for (const text of [
+    blocked.command,
+    decided.command,
+    ...(blocked.paths ?? []),
+    ...(decided.paths ?? []),
+  ]) {
+    if (requestTextUncertain(text)) return false
+  }
+  if (blocked.tool !== decided.tool || blocked.command !== decided.command) return false
+  const a = blocked.paths
+  const b = decided.paths
+  if (a === undefined && b === undefined) return true
+  if (a === undefined || b === undefined || a.length !== b.length) return false
+  return a.every((p, i) => p === b[i])
+}
 
 /**
  * 纯函数：`events` 为该任务的全部事件（按 seq 升序）。返回当前有效的委托，没有时为 null。

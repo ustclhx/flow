@@ -11,6 +11,7 @@ import {
   type InboxItemAction,
   type InboxVia,
   type LedgerEvent,
+  type ReplyEscalationReason,
   resolveInboxLevel,
   type TaskStatus,
   type TaskView,
@@ -203,8 +204,13 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     openBlocked(task, e)
   }
 
+  /** 条目标题：委托给 supervisor 期间加上"supervisor 处理中"（D15）。 */
+  const delegatedNow = (task: TaskView, blockSeq: number) =>
+    ledger.activeDelegation(task.id)?.block_seq === blockSeq
+
   function blockedDraft(task: TaskView, e: EventOf<'task.blocked'>): EventInput {
     const p = e.payload
+    const title = blockedTitle(task, p.reason)
     return {
       type: 'inbox.item_created',
       task_id: task.id,
@@ -219,7 +225,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         source: 'task',
         source_ref: task.id,
         reason: p.reason,
-        title: blockedTitle(task, p.reason),
+        title: delegatedNow(task, e.seq) ? delegatedTitle(title) : title,
         body: blockedBody(p.message, p.tail),
         actions: blockedActions(p.reason, p.prior_reason),
         source_seq: e.seq,
@@ -288,11 +294,71 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     })
   }
 
+  /**
+   * 代回复委托（D15）：委托开始时条目标题标"supervisor 处理中"；委托结束（转交）时恢复标题，
+   * 由 supervisor、超时或唤醒问题转交的在正文末尾注明原因（转交说明来自 supervisor，只给用户看）。
+   * 按目标内容比较后再写，重放同一事件不会重复修改。
+   */
+  function onDelegation(e: EventOf<'task.reply_delegated'> | EventOf<'task.reply_escalated'>) {
+    const task = ledger.getTask(e.task_id ?? '')
+    if (!task) return
+    const blockSeq = e.payload.block_seq
+    const item = ledger.getInboxItem(blockedItemId(blockSeq))
+    if (item?.state !== 'open') return
+    const blocked = ledger.taskEvents(task.id).find((x) => x.seq === blockSeq)
+    if (blocked?.type !== 'task.blocked') return
+    const base = blockedTitle(task, blocked.payload.reason)
+    let title = base
+    let body = item.body
+    if (e.type === 'task.reply_delegated') {
+      title = delegatedNow(task, blockSeq) ? delegatedTitle(base) : base
+    } else if (e.payload.reason !== 'user_replied' && e.payload.reason !== 'user_dismissed') {
+      const line = clipText(
+        `supervisor 未代为处理，已转交给你：${ESCALATION_LABEL[e.payload.reason]}${
+          e.payload.note ? `（${e.payload.note}）` : ''
+        }`,
+        600,
+      )
+      const original = blockedBody(blocked.payload.message, blocked.payload.tail)
+      body = clipText(`${line}\n\n${original}`, INBOX_BODY_MAX)
+    }
+    if (title === item.title && body === item.body) return
+    write({
+      type: 'inbox.item_updated',
+      task_id: task.id,
+      workspace: task.workspace,
+      payload: {
+        item_id: item.id,
+        ...(title === item.title ? {} : { title }),
+        ...(body === item.body ? {} : { body }),
+      },
+    })
+  }
+
+  /** 请求取消结束了这次卡住上的委托（不写转交事件）：去掉"supervisor 处理中"。 */
+  function onCancelRequested(e: EventOf<'task.cancel_requested'>) {
+    const task = ledger.getTask(e.task_id ?? '')
+    if (task?.status !== 'blocked') return
+    const blocked = latestBlocked(task.id)
+    if (!blocked) return
+    const item = ledger.getInboxItem(blockedItemId(blocked.seq))
+    if (item?.state !== 'open' || !item.title.startsWith(DELEGATED_TITLE_PREFIX)) return
+    write({
+      type: 'inbox.item_updated',
+      task_id: task.id,
+      workspace: task.workspace,
+      payload: { item_id: item.id, title: blockedTitle(task, blocked.payload.reason) },
+    })
+  }
+
   function handle(e: LedgerEvent) {
     if (e.seq <= done) return
     try {
       if (e.type === 'task.blocked') onBlocked(e)
       else if (e.type === 'policy.decided') onPolicyDecided(e)
+      else if (e.type === 'task.reply_delegated' || e.type === 'task.reply_escalated') {
+        onDelegation(e)
+      } else if (e.type === 'task.cancel_requested') onCancelRequested(e)
       else {
         const reason = CLOSING[e.type]
         if (reason !== undefined) onTaskLeft(e, reason)
@@ -411,6 +477,21 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     handle,
     reconcile,
   }
+}
+
+/** 委托给 supervisor 期间的条目标题前缀（D15 "supervisor 处理中"）。 */
+export const DELEGATED_TITLE_PREFIX = '【supervisor 处理中】'
+const delegatedTitle = (title: string) =>
+  clipText(`${DELEGATED_TITLE_PREFIX}${title}`, INBOX_TITLE_MAX)
+
+const ESCALATION_LABEL: Record<ReplyEscalationReason, string> = {
+  supervisor: 'supervisor 判断需要你来决定',
+  timeout: 'supervisor 超时未回复',
+  wake_unavailable: 'supervisor 无法开始处理',
+  wake_failed: 'supervisor 处理失败',
+  wake_ended: 'supervisor 结束时没有回复',
+  user_dismissed: '你忽略了该条目',
+  user_replied: '你已回复',
 }
 
 function blockedTitle(task: TaskView, reason: BlockedReason): string {

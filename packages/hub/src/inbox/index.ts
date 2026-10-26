@@ -4,6 +4,7 @@ import {
   EMPTY_INBOX_CONFIG,
   flowPaths,
   type InboxConfig,
+  type InboxItemView,
   inboxCadence,
   loadInboxConfig,
 } from '@flow/core'
@@ -50,6 +51,8 @@ export interface InboxServiceOptions {
   /** 渠道退避参数（测试用）。 */
   backoff?: { baseMs?: number; maxMs?: number }
   staleKnowledge?: () => number | Promise<number>
+  /** 暂缓推送的条目（D15 代回复委托中），见 `ChannelManagerOptions.held`。 */
+  held?: (item: InboxItemView) => boolean
 }
 
 export interface InboxService {
@@ -107,6 +110,7 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
     ...(o.resolve ? { resolve: o.resolve } : {}),
     ...(o.backoff ? { backoff: o.backoff } : {}),
     ...(o.logger ? { logger: o.logger } : {}),
+    ...(o.held ? { held: o.held } : {}),
   })
   pusher = createInboxPusher({
     ledger: o.ledger,

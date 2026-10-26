@@ -185,6 +185,30 @@ const decisions = (bb: Bench, id: string) =>
   bb.events(id).filter((e) => e.type === 'policy.decided')
 
 function supervisorApprove(bb: Bench, t: TaskView, replyId: string) {
+  // supervisor 的回复只能落在有效的委托上（D15，store 校验）：中枢的委托判定不在本测试范围内，直接写入。
+  if (!bb.ledger.activeDelegation(t.id)) {
+    const blocked = bb
+      .events(t.id)
+      .filter((e) => e.type === 'task.blocked')
+      .at(-1)
+    const p = blocked?.type === 'task.blocked' ? blocked.payload : undefined
+    const d = bb.ledger.append(
+      {
+        task_id: t.id,
+        workspace: t.workspace,
+        type: 'task.reply_delegated',
+        payload: {
+          task_id: t.id,
+          block_seq: blocked?.seq ?? 0,
+          kind: 'awaiting_approval',
+          ...(p?.decision_id === undefined ? {} : { decision_id: p.decision_id }),
+          deadline: '2099-01-01T00:00:00.000Z',
+        },
+      },
+      { actor: 'hub' },
+    )
+    if (!d.ok) throw new Error(d.error.message)
+  }
   const r = bb.ledger.append(
     {
       task_id: t.id,

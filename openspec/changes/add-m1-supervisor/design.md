@@ -321,6 +321,20 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 用户回复：在用户 `task_reply` 的同一次追加里写 `task.reply_escalated{reason: user_replied}` 结束委托（用户忽略条目同理写 `user_dismissed`）。这两种原因的事件 actor 为 user，store 只接受 user 写入；其他原因（`supervisor`、`timeout`、`wake_*`）由中枢写入，只接受 hub。委托结束后，之后 supervisor 的 `task_respond` 返回 `stale_block`。**在 supervisor 的回复写入之前，用户的回复优先**；supervisor 的回复已写入但尚未送达时，用户再回复按现有语义得到 `reply_pending`。转交与 `task_respond` 并发时，以 store 事务的先后为准，后到者得到 `stale_block`。
 
+**实现补充（G12）**：
+
+- **委托范围**：workspace 没有唯一可用的 `kind: supervisor` 角色，或没有登记仓库（唤醒任务无法开始）时，视为不在委托范围内：不写 `task.reply_delegated`，条目直接交给用户，也不写 `wake_unavailable`。`wake_unavailable` 只用于已经委托、之后唤醒才起不来的情况（配额用尽、reply 唤醒卡住、配置在委托之后变化）。
+- **请求一致的不确定**：任一侧的命令或路径达到 2000 字符上限、以截断符 `…` 结尾，或含脱敏标记（`[REDACTED:`、`[secret:`）时，判为不一致、不委托——两侧被同样改写时逐字比较仍会相等，但比较的已不是原始请求。store 另要求判定之后、卡住之前本任务没有别的 `policy.decided`，且判定晚于最近一次 `task.started` / `task.lease_expired`。
+- **判定时限**：一次判定（读 workspace 与角色配置）最长 30 秒，超时即不委托并放开条目，不堵住串行处理链。
+- **取消**：`task.cancel_requested` 结束这次卡住上的委托（不写转交事件），条目立即恢复标题并按原级别推送。
+- **回复与送达**：supervisor 的授权批准只送给仍持有租约、正在等待的 worker；节点已不持有租约时 `task_respond` 返回 `stale_block`（不随任务重新排队）。supervisor 的回复待送达期间，用户忽略该条目被拒绝（`reply_pending`，提示回复正在送达）。store 只接受 user 与 supervisor 写 `task.replied`，并核对 supervisor 回复的类型与委托的卡住类型一致（提问只能文字，授权请求只能批准或拒绝）。
+- **回答原文的边界**：回答原文（与 supervisor 的理由）不会自动进入任何后续唤醒的上下文（`inputs.wake`、`ws_brief` 都不含）；但它仍在账本与回复记录中，后续唤醒可以用只读工具（`task_show`、事件、收件箱）主动读到。这是已接受的边界：读到的内容仍是数据，不是指令，且后续唤醒的权限不因此扩大。每日摘要列出代回复并标注送达状态（已送达、被拒收、已随任务重新排队、待送达）。
+- **已知行为**：
+  - 中枢侧 `no_delegate` 兜底的窗口是"最近一次 `task.started` 之后"：同一租约内被拒收过一次，之后的卡住都交给用户，直到下一轮执行；
+  - 委托判定时读取一次配置，之后不再重读：委托期间修改 `delegate_replies`、`reply_timeout_s` 或角色，不影响已有委托（超时仍按委托时写下的 `deadline`）；
+  - `held` 对每个待推送条目查询一次委托状态，条目数量很大时有额外的查询开销；
+  - supervisor 已回复、节点长期不 ack 时，条目一直被挡住不推送，直到任务离开这次卡住（送达、租约过期或用户取消）；超时转交不覆盖这种情况（回复已写入）。
+
 备选：用确定性规则直接 `auto` 放行这些命令。保留为用户自己的选项（策略本来就支持），但它无法处理 `question`，也无法结合任务目标判断"这个请求是否合理"。
 
 **已接受的风险（验收命令）**：D5 第 5 步对 `tool:Verify` 的参数只做词法白名单检查，拦不住仓库内指向仓库外的符号链接（例如 worker 提交的 `src/link-to-outside`，`pnpm test src/link-to-outside` 会加载仓库外的文件），也拦不住用仓库内相对路径加载代码（`--reporter x.js`）；与代回复白名单一样，放行 `pnpm test` 本来就等于在沙箱外执行仓库中（可能被 worker 改过）的脚本，这一项不额外扩大风险。

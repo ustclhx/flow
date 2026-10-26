@@ -10,6 +10,8 @@ import {
   type Result,
   taskProposeData,
   taskProposeRequest,
+  taskRespondData,
+  taskRespondRequest,
 } from '@flow/core'
 import { type Context, Hono } from 'hono'
 import type { z } from 'zod'
@@ -25,6 +27,7 @@ import { proposeTask } from './task-proposals.ts'
  * `POST /v1/supervisor/questions`（ask_user）、`POST /v1/task-proposals`（task_propose）、
  * `POST /v1/decisions/review`（decision_review）、`POST /v1/merge-requests`（pr_merge_request）：
  * 只限非 reply 的 supervisor 唤醒 token（D6、D15）。
+ * `POST /v1/supervisor/respond`（task_respond）：只限 reply 唤醒 token（D15）。
  */
 export function createSupervisorToolRoutes(deps: SupervisorToolsDeps): Hono {
   const app = new Hono()
@@ -80,6 +83,20 @@ export function createSupervisorToolRoutes(deps: SupervisorToolsDeps): Hono {
     const caller = checkWakeCaller('pr_merge_request', actorOf(c), wakeCallerOf(c))
     if (!caller.ok) return respond(c, caller, mergeRequestData)
     return respond(c, await requestMerge(deps, caller.data, input.data), mergeRequestData, 201)
+  })
+
+  // task_respond（D15、tasks 4.9）：只限被分配该委托的 reply 唤醒；核对在 store 同一事务里完成。
+  app.post(ENDPOINTS['supervisor-respond'].path, async (c) => {
+    const input = await parse(c, taskRespondRequest)
+    if (!input.ok) return respond(c, input, taskRespondData)
+    if (!deps.delegation) {
+      return respond(c, fail('failure', 'action_not_available', '代回复尚未启用'), taskRespondData)
+    }
+    return respond(
+      c,
+      deps.delegation.respond(actorOf(c), wakeCallerOf(c), input.data),
+      taskRespondData,
+    )
   })
 
   return app

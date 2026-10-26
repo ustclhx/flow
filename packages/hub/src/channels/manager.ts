@@ -75,6 +75,11 @@ export interface ChannelManagerOptions {
   callTimeoutMs?: number
   /** 写推送事件的操作者，默认 `hub`。 */
   actor?: string
+  /**
+   * 暂缓推送的条目（D15：委托给 supervisor 处理中、或正在判定是否委托的卡住条目）：不推送，
+   * 也不计入 Decide 的提前推送阈值；不再被挡住后按自身级别适用推送节奏。
+   */
+  held?: (item: InboxItemView) => boolean
 }
 
 export interface ChannelManager {
@@ -391,7 +396,8 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
 
   /** 推送到期的条目。遇到传输层错误时抛出（由 runSlot 退避）。 */
   async function sendDue(slot: Slot, plugin: ChannelPlugin) {
-    const open = ledger.listInboxItems({ state: 'open', limit: 10_000 })
+    const held = o.held
+    const open = ledger.listInboxItems({ state: 'open', limit: 10_000 }).filter((i) => !held?.(i))
     for (const plan of planPushes(open, slot.id, clock.now(), cadence())) {
       if (stopped) return
       // 推送前重新确认：条目仍是 open、还没推送到该渠道（例如处理期间被用户在终端答复），
@@ -402,6 +408,7 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
           (i): i is InboxItemView =>
             i !== null &&
             i.state === 'open' &&
+            !held?.(i) &&
             !i.channels.some((c) => c.channel === slot.id) &&
             !slot.inflight.has(sendKey(i.id)),
         )

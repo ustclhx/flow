@@ -22,6 +22,7 @@ import {
   type PolicyCheckRequest,
   type ReplyTaskRequest,
   type TaskProposeRequest,
+  type TaskRespondRequest,
   type TelegramLinkCodeRequest,
 } from '../ledger/protocol.ts'
 import type { SupervisorWakeRequest } from '../ledger/supervisor-api.ts'
@@ -182,6 +183,9 @@ export class HubClient {
   }
   requestMerge(input: MergeRequestRequest) {
     return this.request('merge-requests-create', input)
+  }
+  respondTask(input: TaskRespondRequest) {
+    return this.request('supervisor-respond', input)
   }
   listInbox(input: z.input<typeof inboxListQuery> = {}) {
     return this.request('inbox-list', input)

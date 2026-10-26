@@ -16,6 +16,7 @@ import {
   executorInfo,
   ledgerEvent,
   mergeRequestId,
+  REPLY_REASON_MAX,
   taskProposalDecision,
   taskProposalId,
 } from './events.ts'
@@ -119,6 +120,8 @@ export const PROTOCOL_ERRORS = {
   not_delegable: { status: 409, kind: 'failure' },
   duplicate_delegation: { status: 409, kind: 'failure' },
   not_delegated: { status: 409, kind: 'failure' },
+  /** task_respond 的 block_seq 不是任务当前的卡住，或委托已结束、已有待送达的回复（D15）。 */
+  stale_block: { status: 409, kind: 'failure' },
   hub_busy: { status: 503, kind: 'retryable' },
   /** base_hash 与当前内容不一致（brief_update）。 */
   conflict: { status: 409, kind: 'failure' },
@@ -985,6 +988,59 @@ export const mergeRequestData = z
   })
   .meta({ title: 'POST /v1/merge-requests' })
 export type MergeRequestData = z.infer<typeof mergeRequestData>
+// ---------------------------------------------------------------------------
+// task_respond（design D15；tasks 4.9）
+// ---------------------------------------------------------------------------
+
+export const TASK_RESPOND_DECISIONS = ['approve', 'deny', 'answer', 'escalate'] as const
+export type TaskRespondDecision = (typeof TASK_RESPOND_DECISIONS)[number]
+/** answer 的文字上限（D15）。 */
+export const TASK_RESPOND_TEXT_MAX = 2000
+
+export const taskRespondRequest = z
+  .strictObject({
+    task_id: taskId.meta({ description: '委托给本次 reply 唤醒的任务' }),
+    block_seq: z
+      .number()
+      .int()
+      .min(1)
+      .meta({ description: '这次卡住的 task.blocked seq（inputs.wake 中委托事件的 block_seq）' }),
+    decision: z.enum(TASK_RESPOND_DECISIONS).meta({
+      description:
+        'approve / deny 只用于授权请求（awaiting_approval）；answer 只用于提问（question）；escalate 两者都可，转交用户',
+    }),
+    text: z.string().trim().min(1).max(TASK_RESPOND_TEXT_MAX).optional().meta({
+      description:
+        'answer 必填：回答全文；deny 可选：拒绝理由（交给 worker）；approve 与 escalate 不接受',
+    }),
+    reason: z
+      .string()
+      .trim()
+      .min(1)
+      .max(REPLY_REASON_MAX)
+      .meta({ description: '为什么这样决定；escalate 时作为转交说明给用户看' }),
+  })
+  .superRefine((r, ctx) => {
+    if (r.decision === 'answer' && r.text === undefined) {
+      ctx.addIssue({ code: 'custom', path: ['text'], message: 'answer 必须带 text' })
+    }
+    if ((r.decision === 'approve' || r.decision === 'escalate') && r.text !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['text'], message: `${r.decision} 不接受 text` })
+    }
+  })
+  .meta({ title: 'POST /v1/supervisor/respond 请求体' })
+export type TaskRespondRequest = z.infer<typeof taskRespondRequest>
+export const taskRespondData = z
+  .object({
+    task: taskView,
+    decision: z.enum(TASK_RESPOND_DECISIONS),
+    reply: replyView
+      .nullable()
+      .meta({ description: '写入的回复（approve / deny / answer）；escalate 时为 null' }),
+    requeued: z.boolean().meta({ description: 'true：没有节点持有该任务，任务已带着回复重新排队' }),
+  })
+  .meta({ title: 'POST /v1/supervisor/respond' })
+export type TaskRespondData = z.infer<typeof taskRespondData>
 
 export interface EndpointDef {
   method: 'GET' | 'POST'
@@ -1182,6 +1238,13 @@ export const ENDPOINTS = {
     auth: true,
     request: mergeRequestRequest,
     response: mergeRequestData,
+  },
+  'supervisor-respond': {
+    method: 'POST',
+    path: '/v1/supervisor/respond',
+    auth: true,
+    request: taskRespondRequest,
+    response: taskRespondData,
   },
   'leases-ack-reply': {
     method: 'POST',

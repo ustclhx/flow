@@ -56,6 +56,7 @@ import { redactingLogger } from '../secrets/logger.ts'
 import { SecretRedactor } from '../secrets/redactor.ts'
 import { createHubSecrets, type HubSecretsOptions } from '../secrets/service.ts'
 import { currentRuntime } from '../serve.ts'
+import { createDelegationService, type DelegationService } from '../supervisor/delegation.ts'
 import { createSupervisorRoutes } from '../supervisor/routes.ts'
 import {
   createWakeScheduler,
@@ -147,6 +148,8 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let protocol: NodeProtocol | undefined
   /** supervisor 的提问、任务提案与决策回看（add-m1-supervisor 4.4–4.7）。 */
   let supervisorTools: SupervisorToolsDeps | undefined
+  /** 卡住时由 supervisor 代用户回复（add-m1-supervisor 3.5、4.9）。 */
+  let delegation: DelegationService | undefined
   let stopSupervisorTools: (() => void) | undefined
   // Web 页面（6.1）：会话只在内存中；Host 校验需要实际监听的端口，启动成功后才填入。
   const uiSessions = createUiSessions({ now: () => clock.now() })
@@ -197,9 +200,25 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         roles: roleLookupFromHome(options.home),
         now: () => clock.now(),
       })
+      delegation = createDelegationService({
+        ledger,
+        clock,
+        workspaces: workspaceLookupFromHome(options.home),
+        roles: roleLookupFromHome(options.home),
+        supervisorRole: async () => {
+          const loaded = await loadRoles(options.home)
+          return loaded.ok ? findSupervisorRole(loaded.data.roles) : loaded
+        },
+        logger,
+        // 判定为不委托、委托被转交后，条目按原级别推送。
+        onRelease: () => {
+          void inbox?.pusher.tick()
+        },
+      })
       const tools: SupervisorToolsDeps = {
         ledger,
         tasks,
+        delegation,
         home: options.home,
         workspaces: workspaceLookupFromHome(options.home),
         roles: roleLookupFromHome(options.home),
@@ -328,6 +347,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     onStop: async () => {
       stopSupervisorTools?.()
       wakes?.stop()
+      delegation?.stop()
       await inbox?.stop()
       scheduler?.stop()
       protocol?.stop()
@@ -381,7 +401,10 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     ...(options.logger ? { logger: options.logger } : {}),
   })
   const activeLedger = ledger
+  // 代回复先于唤醒调度器与收件箱启动：判定中的卡住要先挡住推送，调度器的 onReplyUnavailable 要能转交。
+  delegation?.start()
   if (taskService) {
+    const activeDelegation = delegation
     wakes = createWakeScheduler({
       ledger,
       tasks: taskService,
@@ -397,6 +420,9 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         const loaded = await loadRoles(options.home)
         return loaded.ok ? findSupervisorRole(loaded.data.roles) : loaded
       },
+      ...(activeDelegation
+        ? { onReplyUnavailable: (info) => activeDelegation.onReplyUnavailable(info) }
+        : {}),
     })
     wakes.start()
   }
@@ -436,6 +462,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     scheduler,
     resolve: (value) => secrets.resolve(value),
     channels,
+    ...(delegation ? { held: delegation.held } : {}),
     // 渠道在中枢进程内运行，不经过 HTTP 鉴权，直接以 user 身份执行并记录 via（design D9）。
     act: async (id, action, text, via) => {
       if (!inboxActions) return fail('retryable', 'hub_starting', '中枢尚未就绪')

@@ -3,7 +3,13 @@ import { HubClient } from '../daemon/client.ts'
 import { inboxOptions } from '../inbox/schema.ts'
 import { taskId } from '../ledger/common.ts'
 import { decisionPath } from '../ledger/events.ts'
-import { createTaskRequest, DECISION_REVIEW_MAX, QUESTION_MAX } from '../ledger/protocol.ts'
+import {
+  createTaskRequest,
+  DECISION_REVIEW_MAX,
+  QUESTION_MAX,
+  type TaskRespondData,
+  taskRespondRequest,
+} from '../ledger/protocol.ts'
 import { prUrl } from '../ledger/task.ts'
 import { fail, type Result } from '../result.ts'
 import { SUPERVISOR_ACTOR } from '../roles.ts'
@@ -150,4 +156,37 @@ export const prMergeRequestOp = defineOperation({
     o.mode === 'auto'
       ? `已建 merger 任务 ${o.task?.id ?? ''}（合并请求 ${o.request_id}）`
       : `已提交合并请求 ${o.request_id}，等待用户批准（条目 #${o.item?.short_id ?? ''}）`,
+})
+
+/**
+ * `task_respond`（design D15；tasks 4.9）：回复委托给本次 reply 唤醒的一次卡住。
+ * 全部核对在中枢的同一事务里完成（调用方是被分配该委托、持活动租约的 reply 唤醒，任务与 workspace、
+ * 卡住序号、委托状态、待送达回复、决定类型）；这里只做本地身份预检。reply 唤醒也可调用（replyAllowed）。
+ */
+export const taskRespondInput = taskRespondRequest
+export type TaskRespondInput = z.infer<typeof taskRespondInput>
+
+const RESPOND_LABEL = {
+  approve: '批准',
+  deny: '拒绝',
+  answer: '回答',
+  escalate: '转交用户',
+} as const
+
+export const taskRespondOp = defineOperation({
+  name: 'task_respond',
+  cli: 'supervisor respond',
+  summary:
+    '回复委托给你的一次卡住：approve / deny（授权请求）、answer（提问，需 text）或 escalate（转交用户）；只限 reply 唤醒',
+  input: taskRespondInput,
+  positional: ['task_id'],
+  access: 'write',
+  replyAllowed: true,
+  run: async (input: TaskRespondInput, ctx) => {
+    const denied = supervisorOnly('task_respond', ctx)
+    if (denied) return denied
+    return new HubClient(ctx).respondTask(input)
+  },
+  human: (o: TaskRespondData) =>
+    `已${RESPOND_LABEL[o.decision]}任务 ${o.task.id}${o.requeued ? '（任务已带着回复重新排队）' : ''}`,
 })

@@ -186,6 +186,24 @@ describe('简报的中枢数据', () => {
     must(store.append(done['task.created'], { actor: 'user' }))
     must(store.append(done['task.cancelled'], { actor: 'user' }))
     const longAnswer = `选 A\n${'理由'.repeat(200)}`
+    // supervisor 的回复只能落在有效的委托上（D15，store 校验）。
+    const blockSeq = store.taskEvents('t-sup').filter((e) => e.type === 'task.blocked')[0]?.seq ?? 0
+    must(
+      store.append(
+        {
+          task_id: 't-sup',
+          workspace: WS,
+          type: 'task.reply_delegated',
+          payload: {
+            task_id: 't-sup',
+            block_seq: blockSeq,
+            kind: 'question',
+            deadline: '2099-01-01T00:00:00.000Z',
+          },
+        },
+        sys,
+      ),
+    )
     must(
       store.append(
         {
