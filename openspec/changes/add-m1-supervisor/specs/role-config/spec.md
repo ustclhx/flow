@@ -5,6 +5,10 @@
 ### Requirement: 角色有效类别
 角色 SHALL 支持可选字段 `kind: read | write | merge | supervisor`；中枢同时按配置推断类别（codex-orca 为 write；codex-exec 只读沙箱为 read，否则 write；claude-sdk 有 `writable_paths`、允许 Edit/Write/NotebookEdit 或任何 `Bash(...)` 规则时为 write，否则 read；pr-merge 为 merge）。有效类别 MUST 取声明与推断中更严格者，声明只能收紧。`kind: supervisor` MUST 显式声明且只能用于 claude-sdk。`flow doctor` MUST 显示每个角色的有效类别。
 
+#### Scenario: 多个 supervisor 角色
+- **WHEN** 有两个角色声明 `kind: supervisor`
+- **THEN** doctor 报错，中枢不唤醒 supervisor
+
 #### Scenario: 默认 reviewer
 - **WHEN** reviewer 配有 `writable_paths`
 - **THEN** 有效类别为 write

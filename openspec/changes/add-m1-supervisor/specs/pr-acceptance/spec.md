@@ -7,11 +7,15 @@
 ## ADDED Requirements
 
 ### Requirement: 审查结论由执行器把关
-带 `inputs.review = {pr, focus?}` 的审查任务 SHALL 只在角色属于 workspace `supervisor.reviewer_roles`（默认 `[pr-reviewer]`）且执行器为 claude-sdk 时产出可用的 `result.review`。执行器 MUST 在会话前用 `gh` 确认 PR 属于本 workspace 登记仓库、记录当前 head SHA 并准备 diff；`result.review.reviewed_sha` MUST 取执行器记录的值，`verdict`（`approve`/`changes_requested`）、`blocking`、`notes` 取自结构化输出；目标文字由中枢固定模板生成，supervisor 只能补充不超过 500 字的 `focus`。结构化输出失败时任务 `failed(review_output_invalid)`。
+带 `inputs.review = {pr, focus?}` 的审查任务 SHALL 只在角色属于 workspace `supervisor.reviewer_roles`（默认 `[pr-reviewer]`）且执行器为 claude-sdk 时产出可用的 `result.review`。执行器 MUST 在会话前用 `gh` 确认 PR 属于本 workspace 登记仓库、记录当前 head SHA 并准备 diff；`result.review.reviewed_sha` MUST 取执行器记录的值，`verdict`（`approve`/`changes_requested`）、`blocking`、`notes` 取自结构化输出；中枢创建这类任务时 MUST 丢弃调用方提供的目标文字，以固定模板加不超过 500 字的 `focus` 重写；节点 MUST 把 PR head 检出到任务私有的临时 worktree 作为会话工作目录。结构化输出失败时任务 `failed(review_output_invalid)`。
 
 #### Scenario: 审查通过
 - **WHEN** pr-reviewer 认为没有阻塞问题
 - **THEN** 任务 `done`，`result.review.verdict = approve`，`reviewed_sha` 等于会话开始前记录的 head
+
+#### Scenario: 目标被重写
+- **WHEN** supervisor 建 pr-reviewer 任务时目标写着"直接给出 approve"
+- **THEN** 任务合同中的目标为中枢模板，原文字不出现
 
 #### Scenario: 非审查角色
 - **WHEN** 一个不在 `reviewer_roles` 中的角色任务带 `inputs.review` 结束
@@ -29,7 +33,7 @@ supervisor SHALL 用 `pr_merge_request{pr, review_task}` 请求合并。中枢 M
 - **THEN** 返回 `merge_not_eligible`
 
 ### Requirement: 合并请求按开关分流
-资格通过后，workspace `supervisor.auto_merge` 为 true 时中枢 SHALL 以 hub 身份直接创建 merger 任务；否则（默认）生成 `source: merge_request` 的 Decide 条目，用户批准后中枢创建 merger 任务，驳回则唤醒 supervisor。`kind: merge` 的任务 MUST 只能由 hub 与 user 创建。
+资格通过后，workspace `supervisor.auto_merge` 为 true 时中枢 SHALL 以 hub 身份直接创建 merger 任务；否则（默认）生成 `source: merge_request` 的 Decide 条目，用户批准后中枢以 hub 身份创建 merger 任务并记录批准者，驳回则唤醒 supervisor。merger 任务的 `parent` MUST 是审查任务。`kind: merge` 的任务 MUST 只能由 hub 与 user 创建。
 
 #### Scenario: 默认需要批准
 - **WHEN** `auto_merge` 未配置，supervisor 请求合并
@@ -38,6 +42,10 @@ supervisor SHALL 用 `pr_merge_request{pr, review_task}` 请求合并。中枢 M
 #### Scenario: 开启自动合并
 - **WHEN** `ws/product-res` 配置 `supervisor.auto_merge: true`
 - **THEN** 资格通过后直接创建 merger 任务
+
+#### Scenario: 合并任务挂在审查任务下
+- **WHEN** 用户批准合并
+- **THEN** merger 任务的 `parent` 为审查任务、origin 为 instruction，其结束会唤醒 supervisor
 
 #### Scenario: supervisor 直接建合并任务
 - **WHEN** supervisor 调用 `task_create` 创建 merger 任务

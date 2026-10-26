@@ -33,18 +33,22 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 不创建新的唤醒任务
 
 ### Requirement: 来源由中枢计算且不可变
-每个唤醒和 supervisor 链上的任务 SHALL 有中枢计算的 origin（`instruction` 或 `autonomous`），创建时写入，之后不变：user 指令、user 创建的任务、接受提案所建任务为 instruction；巡检与决策回看为 autonomous；唤醒任务的子任务取该唤醒的 origin，其余任务继承 `parent`；回答提问继承提问所在唤醒的 origin。origin MUST NOT 取自合同 `inputs` 或任何调用方可填写的字段。
+每个唤醒和 supervisor 链上的任务 SHALL 有中枢计算的 origin（`instruction` 或 `autonomous`），创建时写入，之后不变：user 指令触发的唤醒、接受提案所建任务为 instruction；巡检与决策回看为 autonomous；唤醒任务的子任务取该唤醒的 origin，`parent` 有 origin 的任务继承它；回答提问继承提问所在唤醒的 origin。其他任务（包括用户手动建、不在链上的任务）MUST 没有 origin。origin MUST NOT 取自合同 `inputs` 或任何调用方可填写的字段。
 
 #### Scenario: 指令派生的后续唤醒
 - **WHEN** instruction 唤醒所建的 dev 任务 `done`
 - **THEN** 随后的唤醒 origin 为 instruction
+
+#### Scenario: 用户手动建的任务不入链
+- **WHEN** 用户 `flow task create` 一个没有 `parent` 的 dev 任务，它开出 PR 后结束
+- **THEN** 不唤醒 supervisor，supervisor 对该 PR 的合并请求返回 `merge_not_eligible`
 
 #### Scenario: 接受提案后的后续工作
 - **WHEN** 用户接受巡检提案所建的 dev 任务结束
 - **THEN** 随后的唤醒 origin 为 instruction
 
 ### Requirement: 按 workspace 与来源分队列串行唤醒
-同一 workspace 同时 SHALL 最多一个未结束（含 `blocked`）的唤醒任务。期间到达的事件按 origin 进入 instruction 或 autonomous 队列；当前唤醒结束后优先处理 instruction 队列，一次唤醒只合并同一条队列的事件。队列与代数 MUST 由账本投影，中枢重启后不丢失、不重复；唤醒任务的幂等键为 `supervisor:<ws>:<origin>:<generation>`，`supervisor:` 前缀 MUST 只允许 `hub` 使用。
+同一 workspace 同时 SHALL 最多一个未结束（含 `blocked`）的唤醒任务。期间到达的事件按 origin 进入 instruction 或 autonomous 队列；当前唤醒结束后优先处理 instruction 队列，一次唤醒只合并同一条队列的事件。队列与代数 MUST 由账本投影，中枢重启后不丢失、不重复；代数在每次创建唤醒时加一，唤醒任务的幂等键为 `supervisor:<ws>:<generation>`，`supervisor:` 前缀 MUST 只允许 `hub` 使用。
 
 #### Scenario: 运行中到达的事件被合并
 - **WHEN** 唤醒 A 运行期间，两个 instruction 链上的任务先后结束
@@ -58,6 +62,10 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **WHEN** 唤醒任务处于 `blocked(awaiting_approval)` 时到达新事件
 - **THEN** 事件进入队列；用户取消该唤醒任务后，下一次唤醒随即创建
 
+#### Scenario: 连续两次正常唤醒
+- **WHEN** 同一队列先后两次在唤醒结束后有新事件
+- **THEN** 创建两个不同的唤醒任务
+
 #### Scenario: 抢注幂等键
 - **WHEN** 非 hub 身份以 `supervisor:` 开头的幂等键建任务
 - **THEN** 返回 `reserved_idempotency_key`
@@ -67,11 +75,11 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 重启后为该事件创建且只创建一次唤醒任务
 
 ### Requirement: 唤醒失败与手动控制
-唤醒任务失败 SHALL 按重试设置重试一次；仍失败 MUST 在收件箱生成 Interrupt 条目、保留队列并递增代数。用户 SHALL 能用 `flow supervisor wake <ws> [<说明>]` 手动唤醒（写入 user 的 `user.instruction`），用 `flow supervisor status [<ws>]` 查看当前唤醒、两条队列长度、今日唤醒次数和最近一次结果。
+唤醒任务失败 SHALL 按重试设置重试一次；仍失败 MUST 在收件箱生成 Interrupt 条目并保留该队列。用户 SHALL 能用 `flow supervisor wake <ws> <说明>` 下指令（写入 `user.instruction`），用 `flow supervisor wake <ws> --release <instruction|autonomous>` 放行指定队列（写入 `supervisor.release`，唤醒保持该队列的 origin，不计入每日上限），用 `flow supervisor status [<ws>]` 查看当前唤醒、两条队列长度、今日唤醒次数和最近一次结果。一个 workspace 可用的 `kind: supervisor` 角色 MUST 恰好一个，多于一个时 doctor 报错且不唤醒。
 
 #### Scenario: 重试用尽后恢复
-- **WHEN** 唤醒两次都 `failed`，之后用户运行 `flow supervisor wake product-res`
-- **THEN** 收件箱先出现 Interrupt 条目；手动唤醒创建新代数的唤醒任务，包含原队列中的事件
+- **WHEN** autonomous 唤醒两次都 `failed`，之后用户运行 `flow supervisor wake product-res --release autonomous`
+- **THEN** 收件箱先出现 Interrupt 条目；放行后创建一个 origin 为 autonomous 的唤醒，包含该队列中的事件
 
 ### Requirement: 启用开关
 workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 `kind: supervisor` 角色时生效）。未启用时 MUST NOT 唤醒，`/ask`、`flow ask` 回复该 workspace 未启用 supervisor。
@@ -100,7 +108,7 @@ workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 
 - **THEN** 返回 `repo_not_in_workspace`
 
 ### Requirement: 硬性上限
-中枢 SHALL 按 workspace 配置 `supervisor.limits` 强制上限，默认：每次唤醒建任务 5 个、每 workspace 每天唤醒 24 次、`parent` 链深度 8、同一 PR `changes_requested` 2 轮、未回答提问 3 条。建任务超限返回 `limit_exceeded` 或 `review_rounds_exceeded`；每日唤醒超限时事件留在队列，并生成一条 Decide 条目，用户手动唤醒可放行一次。
+中枢 SHALL 按 workspace 配置 `supervisor.limits` 强制上限，默认：每次唤醒建任务 5 个、每 workspace 每天唤醒 24 次（其中 autonomous 最多 4 次）、`parent` 链深度 8、同一 PR `changes_requested` 2 轮、未回答提问 3 条。建任务超限返回 `limit_exceeded` 或 `review_rounds_exceeded`；每日唤醒超限时事件留在队列，并生成一条 Decide 条目，用户可用 `--release` 放行。
 
 #### Scenario: 第三轮修改
 - **WHEN** 同一 PR 已两次得到 `changes_requested`，supervisor 再为它建 dev 任务
