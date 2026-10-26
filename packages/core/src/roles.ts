@@ -10,7 +10,27 @@ import { formatZodIssues, type ValidationIssue } from './validation-issue.ts'
 import { isValidActor, USER_ACTOR } from './write/policy.ts'
 
 /** 当前内置的执行器类型；角色 schema 不限定此列表，由 doctor 检查可用性。 */
-export const KNOWN_EXECUTORS = ['fake', 'codex-orca', 'claude-sdk', 'codex-exec'] as const
+export const KNOWN_EXECUTORS = [
+  'fake',
+  'codex-orca',
+  'claude-sdk',
+  'codex-exec',
+  'pr-merge',
+] as const
+
+/**
+ * 保留 actor `supervisor`（design D7、D15）：只能是 `kind: supervisor` 角色的名字。
+ * 名字不区分大小写地等于它、但类别不是 supervisor 的角色在加载时报错。
+ */
+export const SUPERVISOR_ACTOR = 'supervisor'
+
+/** 角色类别（design D9）。严格程度：supervisor、merge > write > read。 */
+export const ROLE_KINDS = ['read', 'write', 'merge', 'supervisor'] as const
+export const roleKind = z.enum(ROLE_KINDS).meta({
+  description:
+    '角色类别：read | write | merge | supervisor；与按配置推断的类别取更严格者（声明只能收紧）；supervisor 必须显式声明且只能用于 claude-sdk',
+})
+export type RoleKind = z.infer<typeof roleKind>
 
 /**
  * `creatable_by` 中的一项：`*`；`<前缀>:*` 形式的前缀通配（例如 `node:*`、`remote:*`）；
@@ -66,6 +86,7 @@ export const roleSchema = z
       })
       .meta({ description: '可声明的 AI 角色名，与 YAML 文件名（不含扩展名）一致' }),
     executor: executorType,
+    kind: roleKind.optional(),
     prompt: z.string().min(1).meta({
       description: '内联提示词；同目录的 .md 文件名视为文件引用，文件必须存在',
     }),
@@ -82,6 +103,26 @@ export const roleSchema = z
     }),
   })
   .superRefine((role, ctx) => {
+    if (role.kind === 'supervisor' && role.executor !== 'claude-sdk') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['kind'],
+        message: 'kind: supervisor 只能用于 claude-sdk 执行器',
+      })
+    }
+    if (role.name.toLowerCase() === SUPERVISOR_ACTOR && role.kind !== 'supervisor') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['name'],
+        message: 'supervisor 是保留身份，只能用作 kind: supervisor 角色的名字',
+      })
+    } else if (role.name.toLowerCase() === SUPERVISOR_ACTOR && role.name !== SUPERVISOR_ACTOR) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['name'],
+        message: 'supervisor 是保留身份，角色名必须写作小写 supervisor',
+      })
+    }
     if (role.permissions?.writable_paths !== undefined && role.executor !== 'claude-sdk') {
       ctx.addIssue({
         code: 'custom',
@@ -168,4 +209,71 @@ export async function loadRoles(home: string): Promise<Result<RoleSet>> {
     roles.push(role)
   }
   return ok({ roles, errors })
+}
+
+const KIND_RANK: Record<RoleKind, number> = { read: 0, write: 1, merge: 2, supervisor: 3 }
+
+/** 允许后就能改文件或执行命令的工具；`Bash` 不论是否带括号规则都算写（design D9）。 */
+const CLAUDE_WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'])
+/** 不经 canUseTool 就会放行编辑或任意调用的权限模式。 */
+const CLAUDE_WRITE_MODES = new Set(['acceptEdits', 'bypassPermissions', 'auto'])
+
+/** `Edit`、`Edit(src/**)`、`Bash(gh pr review:*)` 等允许规则取括号前的工具名。 */
+const ruleTool = (rule: string) => rule.split('(', 1)[0]?.trim() ?? ''
+
+function claudeSdkWrites(permissions: Record<string, unknown> | undefined): boolean {
+  if (!permissions) return false
+  if (permissions.writable_paths !== undefined) return true
+  const mode = permissions.permissionMode
+  if (typeof mode === 'string' && CLAUDE_WRITE_MODES.has(mode)) return true
+  const allowed = permissions.allowedTools
+  if (!Array.isArray(allowed)) return false
+  return allowed.some(
+    (rule) => typeof rule === 'string' && (rule === '*' || CLAUDE_WRITE_TOOLS.has(ruleTool(rule))),
+  )
+}
+
+/**
+ * 按配置推断的类别（design D9）：codex-orca → write；codex-exec 只读沙箱（缺省即只读）→ read，否则 write；
+ * claude-sdk 有 writable_paths、允许 Edit/Write/MultiEdit/NotebookEdit、任何 Bash 规则，
+ * 或权限模式为 acceptEdits / bypassPermissions / auto → write，否则 read；pr-merge → merge；
+ * 其他执行器（含 fake 与未知类型）按 write 处理，需要更低类别时也无法放宽。
+ * 推断结果永远不是 supervisor：它必须显式声明。
+ */
+export function inferRoleKind(role: Pick<Role, 'executor' | 'permissions'>): RoleKind {
+  switch (role.executor) {
+    case 'pr-merge':
+      return 'merge'
+    case 'codex-exec': {
+      const sandbox = role.permissions?.sandbox
+      return sandbox === undefined || sandbox === 'read-only' ? 'read' : 'write'
+    }
+    case 'claude-sdk':
+      return claudeSdkWrites(role.permissions) ? 'write' : 'read'
+    default:
+      return 'write'
+  }
+}
+
+/** 有效类别：声明与推断中更严格者（声明只能收紧）。中枢据此判定建任务与委托的权限。 */
+export function effectiveRoleKind(role: Pick<Role, 'executor' | 'permissions' | 'kind'>): RoleKind {
+  const inferred = inferRoleKind(role)
+  if (!role.kind) return inferred
+  return KIND_RANK[role.kind] >= KIND_RANK[inferred] ? role.kind : inferred
+}
+
+/**
+ * 在角色集合中找唯一的 supervisor 角色（按有效类别）：没有返回 null；多于一个返回
+ * `multiple_supervisor_roles` 失败，中枢据此不唤醒 supervisor，doctor 报错。
+ */
+export function findSupervisorRole(roles: readonly Role[]): Result<Role | null> {
+  const found = roles.filter((r) => effectiveRoleKind(r) === 'supervisor')
+  if (found.length > 1) {
+    return fail(
+      'failure',
+      'multiple_supervisor_roles',
+      `最多只能有一个 kind: supervisor 角色，现有：${found.map((r) => r.name).join('、')}`,
+    )
+  }
+  return ok(found[0] ?? null)
 }

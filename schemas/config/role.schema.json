@@ -13,6 +13,16 @@
       "pattern": "^[a-z][a-z0-9-]{0,63}$",
       "description": "执行器类型，例如 fake、codex-orca、claude-sdk、codex-exec"
     },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write",
+        "merge",
+        "supervisor"
+      ],
+      "description": "角色类别：read | write | merge | supervisor；与按配置推断的类别取更严格者（声明只能收紧）；supervisor 必须显式声明且只能用于 claude-sdk"
+    },
     "prompt": {
       "type": "string",
       "minLength": 1,

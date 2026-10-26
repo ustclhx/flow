@@ -9,7 +9,16 @@ import type { execCommand } from './git.ts'
 import { isRepoRoot } from './git.ts'
 import { type Env, flowPaths, GIT_REPOS } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
-import { KNOWN_EXECUTORS, loadRoles, type Role } from './roles.ts'
+import {
+  canCreateRole,
+  effectiveRoleKind,
+  findSupervisorRole,
+  inferRoleKind,
+  KNOWN_EXECUTORS,
+  loadRoles,
+  type Role,
+  SUPERVISOR_ACTOR,
+} from './roles.ts'
 
 /** gitleaks 需 staged/stdin；Codex 需 exec --json/resume；Codex、Orca 下限取已验证的 fixture 版本。 */
 export const MIN_VERSIONS = {
@@ -392,7 +401,9 @@ export async function runDoctor(
         message: `config/roles/${role.name}.yaml：executor ${role.executor}${known ? '' : ' 不存在'}`,
         ...(known ? {} : { hint: `将 executor 改为 ${KNOWN_EXECUTORS.join('、')} 之一` }),
       })
-      if (!role.creatable_by?.length) {
+      // supervisor 与 merge 类别的任务由中枢按类别限定创建者（hub / user），不看 creatable_by。
+      const byKind = ['supervisor', 'merge'].includes(effectiveRoleKind(role))
+      if (!role.creatable_by?.length && !byKind) {
         checks.push({
           id: `role.${role.name}.creatable_by`,
           ok: false,
@@ -402,6 +413,7 @@ export async function runDoctor(
         })
       }
     }
+    checks.push(...checkRoleKinds(roles.data.roles))
   }
 
   checks.push(...(await checkExecutors(roles.ok ? roles.data.roles : [], env, opts, run, find)))
@@ -430,6 +442,63 @@ export async function runDoctor(
   }
   if (!report.ok) return fail('failure', 'doctor_failed', formatDoctorReport(report), report)
   return ok(report)
+}
+
+/** 可直接复制进已有 dev.yaml 的片段（design D14：升级用户）。 */
+export const DEV_CREATABLE_BY_SNIPPET = `creatable_by:\n  - ${SUPERVISOR_ACTOR}`
+
+/** 角色有效类别（design D9）、supervisor 唯一性与 dev 的 creatable_by 升级提示。 */
+function checkRoleKinds(roles: Role[]): DoctorCheck[] {
+  const checks: DoctorCheck[] = []
+  for (const role of roles) {
+    const inferred = inferRoleKind(role)
+    const effective = effectiveRoleKind(role)
+    const file = `config/roles/${role.name}.yaml`
+    const loosened = role.kind !== undefined && role.kind !== effective
+    checks.push({
+      id: `role.${role.name}.kind`,
+      ok: !loosened,
+      severity: loosened ? 'warning' : 'info',
+      message: loosened
+        ? `${file}：声明 kind: ${role.kind} 比按配置推断的 ${inferred} 宽松，声明只能收紧，有效类别为 ${effective}`
+        : `${file}：有效类别 ${effective}（推断 ${inferred}${role.kind ? `，声明 ${role.kind}` : ''}）`,
+      ...(loosened
+        ? { hint: `删除 kind 或改为 ${effective}；要降低类别，请收紧执行器权限配置` }
+        : {}),
+    })
+    if (effective === 'supervisor' && inferred === 'write') {
+      checks.push({
+        id: `role.${role.name}.supervisor_tools`,
+        ok: false,
+        severity: 'warning',
+        message: `${file}：supervisor 角色配置了写文件或命令权限（writable_paths、Edit/Write/NotebookEdit、Bash 或宽松的权限模式）`,
+        hint: 'supervisor 只应有 Read、Grep、Glob 与 Flow MCP；参考 flow init 生成的 supervisor.yaml',
+      })
+    }
+  }
+  const supervisor = findSupervisorRole(roles)
+  if (!supervisor.ok) {
+    checks.push({
+      id: 'roles.supervisor',
+      ok: false,
+      severity: 'error',
+      message: `${supervisor.error.message}；中枢不会唤醒 supervisor`,
+      hint: '只保留一个 kind: supervisor 角色',
+    })
+    return checks
+  }
+  const dev = roles.find((r) => r.name === 'dev')
+  if (supervisor.data && dev && !canCreateRole(dev, SUPERVISOR_ACTOR)) {
+    checks.push({
+      id: 'role.dev.supervisor',
+      ok: false,
+      severity: 'warning',
+      message:
+        'config/roles/dev.yaml：creatable_by 不包含 supervisor，supervisor 无法创建 dev 任务',
+      hint: `在 dev.yaml 中加入（已有 creatable_by 时把 supervisor 追加到列表）：\n${DEV_CREATABLE_BY_SNIPPET}`,
+    })
+  }
+  return checks
 }
 
 async function checkHook(
@@ -489,7 +558,8 @@ export function formatDoctorReport(r: DoctorReport): string {
           ? '[info]'
           : '[fail]'
     lines.push(`${tag} ${c.message}`)
-    if (!c.ok && c.hint) lines.push(`       修复：${c.hint}`)
+    // 多行提示（例如可复制的 yaml 片段）的后续行与首行对齐。
+    if (!c.ok && c.hint) lines.push(`       修复：${c.hint.split('\n').join('\n         ')}`)
   }
   const errors = r.checks.filter((c) => !c.ok && (c.severity ?? 'error') === 'error').length
   const warnings = r.checks.filter((c) => !c.ok && c.severity === 'warning').length

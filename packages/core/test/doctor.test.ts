@@ -6,6 +6,7 @@ import { generatePlist } from '../src/daemon/plist.ts'
 import {
   runDoctor as actualDoctor,
   compareVersions,
+  DEV_CREATABLE_BY_SNIPPET,
   type DoctorOptions,
   type DoctorReport,
   findExecutable,
@@ -73,13 +74,8 @@ describe('flow doctor', () => {
     const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
     const hints = report.checks.filter((c) => c.id.endsWith('.creatable_by'))
     // 缺省与显式空数组的行为一致。
+    // 默认模板都写了 creatable_by，或按类别限定创建者（supervisor、merger），不提示。
     expect(hints).toEqual([
-      expect.objectContaining({
-        id: 'role.dev.creatable_by',
-        ok: false,
-        severity: 'info',
-        message: expect.stringContaining('仅 user 可创建'),
-      }),
       expect.objectContaining({
         id: 'role.empty.creatable_by',
         severity: 'info',
@@ -87,8 +83,112 @@ describe('flow doctor', () => {
       }),
     ])
     expect(formatDoctorReport(report)).toContain(
-      '[info] config/roles/dev.yaml：creatable_by 缺省或为空，仅 user 可创建',
+      '[info] config/roles/empty.yaml：creatable_by 缺省或为空，仅 user 可创建',
     )
+  })
+
+  test('显示每个角色的有效类别；声明放宽时给出警告', async () => {
+    const home = tempHome('flow-doctor-kind-')
+    await initFlowHome(home)
+    writeText(
+      join(home, 'config/roles/loose.yaml'),
+      'name: loose\nexecutor: codex-orca\nkind: read\nprompt: 测试\n',
+    )
+    const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    const kinds = Object.fromEntries(
+      report.checks.filter((c) => c.id.endsWith('.kind')).map((c) => [c.id, c]),
+    )
+    expect(Object.keys(kinds).sort()).toEqual(
+      ['dev', 'loose', 'merger', 'pr-reviewer', 'reviewer', 'supervisor', 'triage'].map(
+        (n) => `role.${n}.kind`,
+      ),
+    )
+    expect(kinds['role.reviewer.kind']).toMatchObject({
+      ok: true,
+      message: 'config/roles/reviewer.yaml：有效类别 write（推断 write）',
+    })
+    expect(kinds['role.supervisor.kind']).toMatchObject({
+      ok: true,
+      message: 'config/roles/supervisor.yaml：有效类别 supervisor（推断 read，声明 supervisor）',
+    })
+    expect(kinds['role.triage.kind']?.message).toContain('有效类别 read')
+    expect(kinds['role.merger.kind']?.message).toContain('有效类别 merge')
+    expect(kinds['role.loose.kind']).toMatchObject({ ok: false, severity: 'warning' })
+    expect(kinds['role.loose.kind']?.message).toContain('声明 kind: read 比按配置推断的 write 宽松')
+    expect(failed(report)).toContain('role.loose.kind')
+    // 默认模板之间没有 supervisor 冲突，也不需要 dev 升级提示。
+    expect(report.checks.some((c) => c.id === 'roles.supervisor')).toBe(false)
+    expect(report.checks.some((c) => c.id === 'role.dev.supervisor')).toBe(false)
+    expect(formatDoctorReport(report)).toContain('[warn] config/roles/loose.yaml：声明 kind: read')
+  })
+
+  test('多个 kind: supervisor 角色：doctor 报错', async () => {
+    const home = tempHome('flow-doctor-kind-')
+    await initFlowHome(home)
+    writeText(
+      join(home, 'config/roles/boss.yaml'),
+      'name: boss\nexecutor: claude-sdk\nkind: supervisor\nprompt: 测试\n',
+    )
+    const result = await runDoctor(home, 'FLOW_HOME')
+    const report = reportOf(result)
+    expect(report.checks.find((c) => c.id === 'roles.supervisor')).toMatchObject({
+      ok: false,
+      severity: 'error',
+      message: expect.stringContaining('中枢不会唤醒 supervisor'),
+    })
+    expect(failed(report)).toContain('roles.supervisor')
+    expect(result.ok).toBe(false)
+  })
+
+  test('名为 supervisor 但类别不是 supervisor：角色配置报错', async () => {
+    const home = tempHome('flow-doctor-kind-')
+    await initFlowHome(home)
+    writeText(
+      join(home, 'config/roles/supervisor.yaml'),
+      'name: supervisor\nexecutor: claude-sdk\nprompt: 测试\n',
+    )
+    const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    expect(
+      report.checks.find((c) => c.id === 'roles.config.config/roles/supervisor.yaml.name'),
+    ).toMatchObject({ ok: false, message: expect.stringContaining('保留身份') })
+  })
+
+  test('supervisor 角色带写权限：警告', async () => {
+    const home = tempHome('flow-doctor-kind-')
+    await initFlowHome(home)
+    writeText(
+      join(home, 'config/roles/supervisor.yaml'),
+      'name: supervisor\nkind: supervisor\nexecutor: claude-sdk\nprompt: 测试\npermissions:\n  allowedTools: ["Bash(git status)"]\n',
+    )
+    const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    expect(report.checks.find((c) => c.id === 'role.supervisor.supervisor_tools')).toMatchObject({
+      ok: false,
+      severity: 'warning',
+    })
+  })
+
+  test('已有用户升级：dev.yaml 没有 creatable_by 且存在 supervisor 角色时给出可复制片段', async () => {
+    const home = tempHome('flow-doctor-kind-')
+    await initFlowHome(home)
+    const devYaml = 'name: dev\nexecutor: codex-orca\nprompt: dev.md\n'
+    writeText(join(home, 'config/roles/dev.yaml'), devYaml)
+    const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    const check = report.checks.find((c) => c.id === 'role.dev.supervisor')
+    expect(check).toMatchObject({ ok: false, severity: 'warning' })
+    expect(check?.message).toContain('supervisor 无法创建 dev 任务')
+    expect(check?.hint).toContain('creatable_by:\n  - supervisor')
+    expect(formatDoctorReport(report)).toContain('         creatable_by:\n           - supervisor')
+    // 片段追加到 dev.yaml 后即可通过，并能被加载。
+    writeText(join(home, 'config/roles/dev.yaml'), `${devYaml}${DEV_CREATABLE_BY_SNIPPET}\n`)
+    const fixed = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    expect(fixed.checks.some((c) => c.id === 'role.dev.supervisor')).toBe(false)
+    expect(fixed.checks.some((c) => c.id.startsWith('roles.config.'))).toBe(false)
+
+    // 没有 supervisor 角色时不提示。
+    rmSync(join(home, 'config/roles/supervisor.yaml'))
+    writeText(join(home, 'config/roles/dev.yaml'), devYaml)
+    const none = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    expect(none.checks.some((c) => c.id === 'role.dev.supervisor')).toBe(false)
   })
 
   test('已安装 plist 的 bun 或入口失效时报错并提示重新安装；有效路径通过', async () => {
