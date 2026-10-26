@@ -30,7 +30,7 @@
 
 ## 6. 真实环境集成
 
-- [x] 6.1 在 product-res 上用 `dev` 角色创建一个小任务（例如修正 README 中的一处模板残留），真实走一遍 codex-orca：自动建 worktree → 自动处理信任提示 → 开 PR → `done`；把过程和发现的识别问题记录到 `docs/executors.md`
+- [x] 6.1 在 product-res 上用 `dev` 角色创建一个小任务（例如修正 README 中的一处模板残留），真实走一遍 codex-orca：自动建 worktree → 自动处理信任提示 → 开 PR → `done`；把过程和发现的识别问题记录到 `docs/executors.md`（2026-10-26 完成；本机已信任 home，信任提示未出现，该路径仅有 fixture 覆盖）
 - [x] 6.2 用 `on-request` 权限的临时角色重做一次，故意触发授权请求，用 `flow task reply --approve` 放行并完成；用 `reviewer` 角色审查 6.1 的 PR，验证 claude-sdk 的审批挂起与恢复；用 `triage` 角色做一次只读分诊，验证 codex-exec 的提问恢复
 
 ## 7. 收尾

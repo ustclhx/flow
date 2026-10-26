@@ -382,7 +382,7 @@ wait "$FLOW_DEMO_NODE_PID" "$FLOW_DEMO_HUB_PID"
 
 ## 真实环境验证（任务 6.1、6.2）
 
-本次 7.1 只完成 doctor 和 fake 冒烟，不代表 6.1、6.2 已通过。真实验证要另外记录任务 id、版本、PR、
+7.1 只完成 doctor 和 fake 冒烟，不能代表 6.1、6.2；两者已于 2026-10-26 在真实 harness 上完成，见下方实测记录。真实验证要另外记录任务 id、版本、PR、
 信任提示与授权请求片段、回复和最终验收结果；不要把 fake 的结果当作真实 harness 的证据。
 
 ### 2026-10-26 实测记录
@@ -398,18 +398,18 @@ workspace `ws/product-res`。四个任务都由 user 创建，最终全部 `done
 | 6.2 `t-20261026-082121-5e127c` | triage / codex-exec（`sandbox: read-only`） | 最后一条消息被识别为提问（seq 145）→ 文字回复 → `task.requeued_with_reply`，第二次尝试以 `exec resume` 恢复同一会话 `01a1774c-…` | 分诊结论，`done`，attempt 2 |
 
 结论：codex-orca 的授权请求与提问识别、审批送达，claude-sdk 的审批挂起与恢复（批准和文字回复两种），
-codex-exec 的提问与 resume，均在真实 harness 上走通。回复都在节点下一次续约时送达。
+codex-exec 的提问与 resume，均在真实 harness 上走通。挂起中的任务（codex-orca、claude-sdk）在节点下一次续约时收到回复；codex-exec 没有挂起的进程，回复后重新排队并以 resume 恢复。
 
 未覆盖与发现：
 
 - **信任提示没有出现**：本机 Codex 已信任 home 目录，新 worktree 不弹信任提示，6.1 没有覆盖信任提示的自动处理；
   该路径仍只有 fixture 测试。
-- **卡住的任务占住并发槽**：`concurrency: 1` 时，690b74 等用户批准期间，reviewer 任务排队近 4 小时。
+- **卡住的任务占住并发槽**：`concurrency: 1` 时，690b74 等用户批准期间，reviewer 任务排队约 2 小时 40 分钟。
   ④ `add-m1-supervisor` 的预留执行槽（D12）处理这个问题。
 - **默认 reviewer 在用户主检出里跑 shell**：它请求 `git fetch … :pr28`，会在用户的仓库里留下本地分支。
   ④ 的 pr-reviewer 改由节点准备私有临时 worktree，角色本身没有 shell（D10）。
 - **Codex 沙箱内的常见越界**：本地端口监听（测试）和访问 GitHub API（开 PR）都需要越出沙箱，
-  每个 dev 任务至少会有两次授权请求。④ 的代回复（D15）把这类白名单内的请求交给 supervisor。
+  使用 `on-request` 的 dev-approval 任务因此出现了两次授权请求。④ 的代回复（D15，见 PR #43）把这类白名单内的请求交给 supervisor。
 - 6.2 的提问暴露出 product-res 自身的既有测试失败（`scripts/create-project.test.mjs` 期望值），与 Flow 无关，
   triage 的建议是修正测试期望。
 
