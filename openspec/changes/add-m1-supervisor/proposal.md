@@ -17,21 +17,23 @@
 - **workspace 简报**：supervisor 每次唤醒先读简报，结束前写回。简报 = 中枢生成的部分（进行中的任务、待处理条目、近期决策、近期 journal）+ supervisor 维护的笔记（当前状态、关注点、进行中的计划），笔记保存在 `brain/briefs/<ws>.md`。
 - **supervisor 的 MCP 工具**（只能通过这些行动）：读知识和简报、更新自己的简报笔记、建任务、提任务提案、问用户、写 journal、发起合并、写决策回看。
 - **建任务的权限按来源区分**：
-  - 由用户指令派生的工作（包括其后续的审查、合并）可以直接建任务；
-  - 由巡检发现的问题只能提**任务提案**，用户在收件箱点"接受"后才建任务；
-  - 只读角色（reviewer、triage）和合并任务不受此限。
-  - 来源沿任务的 `parent` 链判定，由中枢强制。
+  - 由用户指令派生的工作（包括其后续的审查、修改）可以直接建任务；
+  - 由巡检、回看发现的问题只能提**任务提案**，用户在收件箱点"接受"后才建任务；
+  - 只读类角色（triage、新的 pr-reviewer）不受此限；合并任务 supervisor 一律不能直接建。
+  - 来源由中枢在创建时计算并固化，不取自合同字段；所有身份的 `parent` 都要校验存在且同一 workspace。
+  - 中枢强制硬性上限：每次唤醒建任务数、每日唤醒次数、链深度、同一 PR 的修改轮数、未回答提问数。
 - **任务提案与决策回看**：任务提案可以带预期效果、衡量指标和回看日期。用户接受时，中枢以用户身份建任务，并在 `brain/` 写入一条 `decision` 条目（status `approved`）。到回看日期，中枢唤醒 supervisor 回看，它把结论追加到该决策的"回看"一节，并把状态改为 `reviewed`。
 - **问用户**：supervisor 可以发一条提问（可带选项）到收件箱（Decide）。用户回复后条目关闭为 `answered`，并唤醒 supervisor 处理答复。提问不阻塞唤醒任务本身。
-- **PR 验收链**：dev 任务开出 PR 后，supervisor 建 reviewer 任务；reviewer 输出结构化结论（是否通过、阻塞问题、所审的 head SHA）。之后由一个确定性的 **pr-merge 执行器**（不调用模型）在节点上完成：
+- **PR 验收链**：dev 任务开出 PR 后，supervisor 建 pr-reviewer（只读）任务；执行器在会话前核对 PR 属于本 workspace 仓库并记录 head SHA，会话输出结构化结论（是否通过、阻塞问题）。supervisor 的合并请求只对本 workspace 指令链上产出的 PR 有效。之后由一个确定性的 **pr-merge 执行器**（不调用模型）在节点上完成：
   - 核对 CI 全部通过、PR 当前 head 与审查的 SHA 一致、审查结论为通过；
   - 合并；
   - 等待 main 上对应提交的发布流水线结束，结果写入任务结果。
 
   是否自动合并由 workspace 配置 `supervisor.auto_merge` 决定，**默认关闭**：关闭时合并请求进收件箱等用户批准；开启时条件满足直接合并。条件不满足时一律不合并。
 - **节点为 supervisor 预留执行槽**：长时间的 dev 任务或卡住的任务不再挡住 supervisor 唤醒。
+- **claude-sdk 读边界** `read_scope: cwd`：supervisor 与 pr-reviewer 只能读仓库内文件，读不到 `hub.token`、密钥和 gh 凭证。
 - **Telegram `/ask`** 从"已记录，supervisor 尚未启用"改为真正唤醒 supervisor，并回复唤醒任务的编号。
-- **默认角色模板**新增 `supervisor`；`dev` 模板的 `creatable_by` 加上 `supervisor`（已有用户需手动更新，doctor 给出提示）。
+- **默认角色模板**新增 `supervisor`、`pr-reviewer`、`merger`，角色增加有效类别 `kind`；`dev` 模板的 `creatable_by` 加上 `supervisor`（已有用户需手动更新，doctor 给出提示）。
 - **不在本次范围**：
   - 参谋长、跨 workspace 汇总与分发；
   - supervisor 与用户的多轮实时对话（Web 工作台，M5）；
@@ -49,7 +51,7 @@
 
 ### Modified Capabilities
 
-依赖 ② `add-m1-executors`、③ `add-m1-inbox` 先归档到 `openspec/specs/`。
+依赖 ② `add-m1-executors` 先归档到 `openspec/specs/`（③ 已归档）。
 
 - `inbox`：supervisor 提问条目可回复并以 `answered` 关闭；任务提案条目的接受与驳回；合并审批条目。
 - `telegram-channel`：`/ask` 唤醒 supervisor。
@@ -57,11 +59,12 @@
 - `knowledge-access`：新增 supervisor 相关操作，以及按 workspace 绑定的 MCP 会话。
 - `role-config`：`supervisor` 角色、`dev` 默认模板的 `creatable_by`。
 - `node-protocol`：supervisor 预留执行槽。
-- `executor-claude-sdk`：审查任务的结构化输出。
+- `task-ledger`：所有身份建任务时校验 `parent`。
+- `executor-claude-sdk`：读边界、审查任务的准备与结构化输出、supervisor 会话绑定。
 
 ## Impact
 
 - 代码：`packages/hub`（唤醒调度器、来源链校验、提问与提案的收件箱动作、决策回看定时）、`packages/core/src/ops/`（新操作）、`packages/core/src/write/`（简报笔记、决策回看追加）、`packages/node`（pr-merge 执行器、预留执行槽、claude-sdk 结构化输出）、`packages/mcp`（按 workspace 绑定）、CLI（`flow ask`、`flow supervisor status`）。
 - 协议与 schema：新的账本事件（`supervisor.*`、`task_proposal.*`、`decision.review_due`）、角色与 workspace 配置字段、结果中的审查结论。
-- 用户数据：`brain/briefs/`、`brain/decisions/` 新增内容；`config/roles/supervisor.{yaml,md}`；`dev.yaml` 需手动加 `creatable_by: [supervisor]`；`config/schedules.yaml` 增加巡检规则。
+- 用户数据：`brain/briefs/`、`brain/decisions/` 新增内容；`config/roles/{supervisor,pr-reviewer,merger}.{yaml,md}`；`dev.yaml` 需手动加 `creatable_by: [supervisor]`；`config/schedules.yaml` 增加巡检规则。
 - 外部动作：pr-merge 会真实合并 PR，受默认关闭的开关和条件双重约束。
