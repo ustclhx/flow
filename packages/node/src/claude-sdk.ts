@@ -144,12 +144,7 @@ export const SUPERVISOR_MCP_AUTO_ALLOWED = [
  * 已登记在 supervisor 放行清单、但 `packages/core/src/ops` 中尚未实现的操作名（4.4、4.6、4.7、4.9
  * 实现时必须从这里删除，测试会核对）。没有对应工具时清单项不起作用。
  */
-export const FLOW_MCP_AUTO_ALLOWED_PENDING: readonly string[] = [
-  'ask_user',
-  'task_propose',
-  'decision_review',
-  'task_respond',
-]
+export const FLOW_MCP_AUTO_ALLOWED_PENDING: readonly string[] = ['task_respond']
 /** SDK 中 flow MCP 工具的全名前缀（服务名 flow），与 core 的动作识别共用。 */
 export const FLOW_MCP_TOOL_PREFIX = CORE_FLOW_MCP_TOOL_PREFIX
 /**
