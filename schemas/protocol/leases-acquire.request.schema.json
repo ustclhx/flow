@@ -17,6 +17,35 @@
         "description": "节点能力，例如 browser、executor:fake、repo:/path/to/repo"
       }
     },
+    "slots": {
+      "description": "各类别的空闲执行槽（D12）；不带时视为只有普通空位（旧节点兼容）",
+      "type": "object",
+      "properties": {
+        "general": {
+          "default": 0,
+          "description": "普通空位数",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "supervisor": {
+          "default": 0,
+          "description": "只给普通唤醒的空位数",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "reply": {
+          "default": 0,
+          "description": "只给 reply 唤醒的空位数",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        }
+      },
+      "additionalProperties": false,
+      "title": "Lease slots"
+    },
     "wait_s": {
       "default": 30,
       "description": "long-poll 最长等待秒数；中枢按 lease_wait_max_s 截断",

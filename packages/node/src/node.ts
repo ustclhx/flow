@@ -14,8 +14,11 @@ import {
   fail,
   flowPaths,
   HUB_TOKEN_ENV,
+  LEASE_SLOT_KINDS,
   LEDGER_ID_RE,
   type LeaseGrant,
+  type LeaseSlotKind,
+  type LeaseSlots,
   loadHubConfig,
   loadNodeConfig,
   loadRoles,
@@ -53,7 +56,9 @@ import { resolveContractCwd } from './workdir.ts'
  * - 注册 → 领取循环（long-poll）→ 每个租约一个 LeaseRunner：执行器 + 续约循环（TTL/3）
  *   + 活动批量随续约上报 + 取消处理 + 卡住检测与回复送达（add-m1-executors 1.2）+ 提交结束；
  * - 时钟跳变检测：墙钟比单调时钟多走超过 30 秒（睡眠唤醒）时立即续约全部租约（D5）；
- * - 并发上限：同时持有的租约数不超过 concurrency；
+ * - 并发上限按执行槽类别计数（add-m1-supervisor D12）：普通槽 concurrency，另有 `reserved.supervisor`
+ *   与 `reserved.reply` 两类预留槽。每个容量大于 0 的类别各有一个领取循环，领取时只上报本类别的
+ *   空位（`slots`；普通循环不带 slots，兼容旧中枢），因此普通槽占满（例如 dev 任务卡住并持有租约）时仍为唤醒任务领取；
  * - `stop()` 不提交结果：停止续约并取消执行器，租约到期后由中枢按合同处理（与进程被杀一致）。
  */
 
@@ -85,10 +90,17 @@ export interface StartNodeOptions {
   capabilities?: readonly string[]
   /** 覆盖 node.yaml 的 concurrency。 */
   concurrency?: number
+  /** 覆盖 node.yaml 的 reserved（D12）。 */
+  reserved?: { supervisor: number; reply: number }
   /** long-poll 等待秒数，默认 30（中枢按 lease_wait_max_s 截断）。 */
   waitS?: number
   /** 中枢不可用等错误后的重试间隔，默认 1000 毫秒。 */
   retryMs?: number
+  /**
+   * 中枢拒绝 `slots`（旧中枢的 strict 校验返回 invalid_arguments）后，预留槽循环的重试间隔，
+   * 默认 5 分钟；中枢升级后自动恢复。
+   */
+  slotsRetryMs?: number
   /** 时钟跳变阈值，默认 30 秒。 */
   jumpThresholdMs?: number
   /**
@@ -118,6 +130,8 @@ export interface RunningNode {
 }
 
 export const JUMP_THRESHOLD_MS = 30_000
+/** 中枢拒绝 slots 后预留槽循环的重试间隔。 */
+export const SLOTS_RETRY_MS = 5 * 60_000
 const JUMP_CHECK_MS = 1_000
 const ACTIVITY_PER_RENEW = 500
 const ACTIVITY_BUFFER_MAX = 5_000
@@ -851,11 +865,38 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     precheckTimeoutMs: options.precheckTimeoutMs,
   }
 
-  const runners = new Set<LeaseRunner>()
+  const reserved = options.reserved ?? nodeConfig.data.reserved
+  /** 各类别执行槽的容量（D12）。 */
+  const capacity: Record<LeaseSlotKind, number> = {
+    general: concurrency,
+    supervisor: reserved.supervisor,
+    reply: reserved.reply,
+  }
+  const runners = new Map<LeaseRunner, LeaseSlotKind>()
   const stopper = new AbortController()
-  let slotWake: (() => void) | undefined
-  let acquireAbort: AbortController | undefined
+  const slotWakes = new Set<() => void>()
+  const acquireAborts = new Set<AbortController>()
   let cancelJump = () => {}
+
+  const used = (kind: LeaseSlotKind) => {
+    let n = 0
+    for (const k of runners.values()) if (k === kind) n++
+    return n
+  }
+  const wakeSlots = () => {
+    for (const wake of [...slotWakes]) wake()
+  }
+  /** 等到有租约结束或节点停止。 */
+  const waitForSlot = () =>
+    new Promise<void>((resolve) => {
+      const done = () => {
+        slotWakes.delete(done)
+        stopper.signal.removeEventListener('abort', done)
+        resolve()
+      }
+      slotWakes.add(done)
+      stopper.signal.addEventListener('abort', done, { once: true })
+    })
 
   /**
    * 角色设定的无进展阈值：显式传入的 resolver 优先；否则每次领到租约时重新读取
@@ -869,15 +910,15 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     return (contract) => minutes.get(contract.role)
   }
 
-  const startRunner = async (grant: LeaseGrant) => {
+  const startRunner = async (grant: LeaseGrant, kind: LeaseSlotKind) => {
     const resolver = await roleResolver()
     // 读取角色期间节点被停止：不再启动，租约到期后由中枢按合同处理（与 stop 的语义一致）。
     if (stopper.signal.aborted) return
     const runner = new LeaseRunner({ ...env, roleNoProgressMinutes: resolver }, grant)
-    runners.add(runner)
+    runners.set(runner, kind)
     void runner.finished.finally(() => {
       runners.delete(runner)
-      slotWake?.()
+      wakeSlots()
     })
   }
 
@@ -891,42 +932,68 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
       concurrency,
     })
 
-  const loop = async () => {
-    let registered = false
-    while (!stopper.signal.aborted) {
-      if (!registered) {
+  /** 各领取循环共用的注册：成功前持续重试，节点停止时返回 false。 */
+  let registration: Promise<boolean> | undefined
+  const ensureRegistered = () => {
+    registration ??= (async () => {
+      while (!stopper.signal.aborted) {
         const r = await register()
         if (r.ok) {
-          registered = true
           logger.info(`节点 ${nodeId} 已注册到 ${hubUrl}`, { capabilities })
-        } else {
-          logger.warn('节点注册失败，稍后重试', r.error.code)
-          await sleep(clock, retryMs, stopper.signal)
-          continue
+          return true
         }
+        logger.warn('节点注册失败，稍后重试', r.error.code)
+        await sleep(clock, retryMs, stopper.signal)
       }
-      if (runners.size >= concurrency) {
-        await new Promise<void>((resolve) => {
-          slotWake = resolve
-          stopper.signal.addEventListener('abort', () => resolve(), { once: true })
-        })
-        slotWake = undefined
+      return false
+    })()
+    return registration
+  }
+
+  const slotsRetryMs = options.slotsRetryMs ?? SLOTS_RETRY_MS
+  const slotsRejected = new Set<LeaseSlotKind>()
+
+  /** 一个类别的领取循环：只为本类别的空位领取，计数也只算本类别（D12）。 */
+  const loop = async (kind: LeaseSlotKind) => {
+    while (!stopper.signal.aborted) {
+      if (!(await ensureRegistered())) break
+      const current = registration
+      const free = capacity[kind] - used(kind)
+      if (free <= 0) {
+        await waitForSlot()
         continue
       }
-      acquireAbort = new AbortController()
+      // 普通循环不带 slots：在新中枢上与 {general: n} 等价，同时兼容不认识 slots 的旧中枢。
+      const slots: LeaseSlots | undefined =
+        kind === 'general' ? undefined : { general: 0, supervisor: 0, reply: 0, [kind]: free }
+      const abort = new AbortController()
+      acquireAborts.add(abort)
       const r = await client.acquire(
-        { node_id: nodeId, capabilities, wait_s: options.waitS ?? 30 },
-        AbortSignal.any([acquireAbort.signal, stopper.signal]),
+        { node_id: nodeId, capabilities, wait_s: options.waitS ?? 30, ...(slots ? { slots } : {}) },
+        AbortSignal.any([abort.signal, stopper.signal]),
       )
-      acquireAbort = undefined
+      acquireAborts.delete(abort)
       if (stopper.signal.aborted) break
       if (!r.ok) {
-        if (r.error.code === 'node_not_registered') registered = false
-        else logger.warn('领取任务失败，稍后重试', r.error.code)
+        // 中枢丢失了注册（例如重建）：重新注册；多个循环同时发现时只重置一次。
+        if (r.error.code === 'node_not_registered') {
+          if (registration === current) registration = undefined
+        } else if (slots && r.error.code === 'invalid_arguments') {
+          // 旧中枢不认识 slots：只告警一次，长退避后再试（中枢升级后自动恢复）。
+          if (!slotsRejected.has(kind)) {
+            slotsRejected.add(kind)
+            logger.warn(`中枢不接受执行槽（slots），${kind} 预留槽暂停领取，稍后重试`, r.error.code)
+          }
+          await sleep(clock, slotsRetryMs, stopper.signal)
+          continue
+        } else logger.warn('领取任务失败，稍后重试', r.error.code)
         await sleep(clock, retryMs, stopper.signal)
         continue
       }
-      if (r.data.lease) await startRunner(r.data.lease)
+      if (slots && slotsRejected.delete(kind)) {
+        logger.info(`中枢已接受执行槽（slots），${kind} 预留槽恢复领取`)
+      }
+      if (r.data.lease) await startRunner(r.data.lease, kind)
     }
   }
 
@@ -944,14 +1011,18 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
       lastMono = mono
       if (jumped > threshold) {
         logger.info(`检测到时钟跳变 ${Math.round(jumped)}ms（睡眠唤醒），立即续约`)
-        for (const r of runners) void r.renewNow()
+        for (const r of runners.keys()) void r.renewNow()
       }
       if (!stopper.signal.aborted) cancelJump = clock.setTimeout(check, JUMP_CHECK_MS)
     }
     cancelJump = clock.setTimeout(check, JUMP_CHECK_MS)
   }
 
-  const looping = loop().catch((err) => logger.warn('节点循环异常退出', String(err)))
+  const looping = Promise.all(
+    LEASE_SLOT_KINDS.filter((kind) => capacity[kind] > 0).map((kind) =>
+      loop(kind).catch((err) => logger.warn(`节点领取循环（${kind}）异常退出`, String(err))),
+    ),
+  )
 
   let stopping: Promise<void> | undefined
   return ok({
@@ -962,10 +1033,10 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     stop() {
       stopping ??= (async () => {
         stopper.abort()
-        acquireAbort?.abort()
+        for (const a of acquireAborts) a.abort()
         cancelJump()
-        slotWake?.()
-        await Promise.allSettled([...runners].map((r) => r.abandon()))
+        wakeSlots()
+        await Promise.allSettled([...runners.keys()].map((r) => r.abandon()))
         await looping
       })()
       return stopping

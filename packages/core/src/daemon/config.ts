@@ -71,7 +71,7 @@ export type HubConfig = z.infer<typeof hubConfigSchema>
 
 export const NODE_RESERVED_DEFAULTS = { supervisor: 1, reply: 1 } as const
 
-/** 节点为 supervisor 预留的执行槽（D12）；调度使用由后续任务（5.5）实现。 */
+/** 节点为 supervisor 预留的执行槽（D12）：领取时作为 `slots.supervisor` / `slots.reply` 上报。 */
 export const nodeReservedSchema = z
   .strictObject({
     supervisor: z.number().int().min(0).max(8).default(NODE_RESERVED_DEFAULTS.supervisor).meta({

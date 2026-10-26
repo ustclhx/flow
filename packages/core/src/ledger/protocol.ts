@@ -20,6 +20,7 @@ import {
   taskResume,
   taskStatus,
   taskView,
+  type WakeOrigin,
 } from './task.ts'
 
 /**
@@ -518,10 +519,56 @@ export const listNodesData = z.object({ nodes: z.array(nodeView) }).meta({ title
 // leases
 // ---------------------------------------------------------------------------
 
+/** 执行槽类别（add-m1-supervisor D12）。 */
+export const LEASE_SLOT_KINDS = ['general', 'supervisor', 'reply'] as const
+export type LeaseSlotKind = (typeof LEASE_SLOT_KINDS)[number]
+
+const slotCount = (description: string) =>
+  z.number().int().min(0).max(64).default(0).meta({ description })
+
+/**
+ * 领取请求携带的空闲执行槽（D12）：普通任务只用 general；普通唤醒（origin 为 instruction /
+ * autonomous）可用 supervisor 或 general；reply 唤醒可用 reply 或 general。
+ * 唤醒身份以账本 `supervisor.wake_started` 为准。
+ */
+export const leaseSlots = z
+  .strictObject({
+    general: slotCount('普通空位数'),
+    supervisor: slotCount('只给普通唤醒的空位数'),
+    reply: slotCount('只给 reply 唤醒的空位数'),
+  })
+  .meta({ title: 'Lease slots', description: '本次领取时节点各类别的空闲执行槽数' })
+export type LeaseSlots = z.infer<typeof leaseSlots>
+
+/**
+ * 某任务在一次领取请求中可以占用的执行槽（纯函数，D12）。`wake` 是该任务
+ * `supervisor.wake_started` 的 origin，不是唤醒任务时为 null。
+ *
+ * - `slots` 缺省时视为只有普通空位、数量不限：旧节点，以及新节点的普通（general）领取循环
+ *   都不带 `slots`（新节点因此也能连旧中枢）；任何任务都返回 `general`。
+ * - 带 `slots` 时（新节点的 supervisor / reply 循环）：唤醒优先占对应的预留槽，其次普通空位；
+ *   普通任务只用普通空位；没有可用空位时返回 null。
+ *
+ * 唤醒落到普通空位之前，中枢会先把它交给同一节点正在等待的预留槽领取（见 hub 的 tryGrant），
+ * 避免唤醒挤占普通槽。
+ */
+export function leaseSlotFor(
+  slots: LeaseSlots | undefined,
+  wake: WakeOrigin | null,
+): LeaseSlotKind | null {
+  if (!slots) return 'general'
+  if (wake === 'reply' && slots.reply > 0) return 'reply'
+  if ((wake === 'instruction' || wake === 'autonomous') && slots.supervisor > 0) return 'supervisor'
+  return slots.general > 0 ? 'general' : null
+}
+
 export const acquireLeaseRequest = z
   .strictObject({
     node_id: nodeId,
     capabilities: z.array(capability),
+    slots: leaseSlots.optional().meta({
+      description: '各类别的空闲执行槽（D12）；不带时视为只有普通空位（旧节点兼容）',
+    }),
     wait_s: z
       .number()
       .int()
