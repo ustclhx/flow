@@ -101,7 +101,7 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 `xargs`……）或执行文件路径，因此首词必须与前缀首词完全相同（`./pnpm`、`/usr/bin/git` 不命中）；
 命令与前缀只能含空格与可见 ASCII（制表符、换行、NBSP、U+3000 等不命中）；解析不确定时不命中；
 串联命令的每段都须满足；任一段含引号外的文件重定向（`>`、`>>`、`>|`、`N>`、`&>`、`<`、`<<`、`<<<`、
-`<(`，只允许独立的 `2>&1`）或会展开的元字符（`$`（含双引号内）、`{`、`[`、`*`、`?`、`~`）时不命中。
+`<(`，只允许独立的 `2>&1`）、后台执行的单个 `&`（批准后会继续在沙箱外运行；`&&` 不受影响）或会展开的元字符（`$`（含双引号内）、`{`、`[`、`*`、`?`、`~`）时不命中。
 
 批准 `pnpm test` 这类命令等于批准在沙箱外执行仓库中的脚本（包括 worker 改过的 `package.json`
 scripts、测试配置与 `--reporter`、`--preload` 等参数），这是已接受的风险，supervisor 需结合 `diff_stat` 判断。
@@ -110,7 +110,10 @@ scripts、测试配置与 `--reporter`、`--preload` 等参数），这是已接
 前缀。现在它不命中，请求落到其他规则或交给用户（只会更保守）。动作识别（`classifyAction`）仍然
 消去包装，保守识别敏感动作；执行文件（含包装命令）或用于匹配映射前缀的词含会展开的元字符时
 （`{gh,pr} merge`、`gh $X pr merge`、`gh pr mer[g]e`、`git $IFS push`；含展开的词可代表任意多个词），
-整段按 `shell.opaque` 处理。分词只在空格与制表符处断词（与 bash 一致），命令中出现其他空白时
+整段按 `shell.opaque` 处理。识别前先去掉每段中任意位置的重定向词（`>out gh pr merge`、`gh 2>&1 pr merge`、
+`<in git push`；只有操作符的词连同其后的目标一起去掉，`gh>x` 这类无法拆分的写法按不透明处理），并把
+shell 保留字 `!`、`if`、`then`、`elif`、`else`、`do`、`while`、`until`、`coproc` 当作前缀剥离；
+`function`、`select`、`case`、`{`、`}` 开头的段按不透明处理。分词只在空格与制表符处断词（与 bash 一致），命令中出现其他空白时
 `classifyAction` 按 `shell.opaque` 处理。
 
 ### 条件 `push_to` 与 `gh_scope`（`conditions.ts`，D15）
@@ -136,7 +139,8 @@ scripts、测试配置与 `--reporter`、`--preload` 等参数），这是已接
   （包括短选项连写、`--`）都不满足；
 - 恰好一个 remote 加一个 refspec；remote 是名字（不是 URL 或路径），且在 `remotes` 中；
 - refspec 不以 `+` 或 `:` 开头，来源与目标都不是 `HEAD`、不含 `@`，是普通分支名；来源与目标都不能是
-  `refs/tags/…` 等非分支 ref；目标（规范为 `refs/heads/<分支>` 或短名，无冒号时等于来源）等于 `task_branch`；
+  `refs/tags/…` 等非分支 ref；目标（规范为 `refs/heads/<分支>` 或短名，无冒号时等于来源）等于 `task_branch`；目标写成短名时
+  来源也必须是任务分支；
   节点另需确认本地没有与任务分支同名的 tag；
 - `task_branch` 存在且不等于 `default_branch`（缺默认分支即不满足）；`push_env_ok` 严格为 `true`；
 - 命令在任务 worktree 中执行。

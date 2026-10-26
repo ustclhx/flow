@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { parse } from 'yaml'
 import {
   classifyAction,
+  commandPrefixMatches,
   decide,
   FLOW_TOOL_ACTIONS,
   GUARDED_ACTIONS,
@@ -327,6 +328,7 @@ describe('parsePushTarget 与 push_to: task_branch', () => {
       remote: 'origin',
       src: 'feat/x',
       dst: 'feat/y',
+      dstQualified: true,
     })
   })
 
@@ -710,7 +712,7 @@ describe('第二轮审查：重定向、展开与 tag', () => {
   test.each([
     ['git push origin ustclhx/t-1:refs/heads/ustclhx/t-1'],
     ['git push origin refs/heads/ustclhx/t-1'],
-    ['git push origin main:ustclhx/t-1'],
+    ['git push origin main:refs/heads/ustclhx/t-1'],
   ])('push_to：目标是任务分支的满足：%s', (command) => {
     expect(pushToTaskBranch({ ...pushInput, command })).toEqual({ ok: true })
   })
@@ -736,5 +738,103 @@ describe('第二轮审查：重定向、展开与 tag', () => {
         ghScopeWorkspaceRepo({ command, ghEnvOk: true, taskBranch: BRANCH, ...location }),
       ).toEqual({ ok: true })
     }
+  })
+})
+
+describe('第三轮审查：重定向位置、保留字、后台与推送来源', () => {
+  test.each([
+    ['>out gh pr merge 1', 'pr.merge'],
+    ['> /dev/null gh pr merge 1', 'pr.merge'],
+    ['2>&1 gh pr merge 1', 'pr.merge'],
+    ['gh >x pr merge 1', 'pr.merge'],
+    ['gh > x pr merge 1', 'pr.merge'],
+    ['gh 2>&1 pr merge 1', 'pr.merge'],
+    ['<in git push origin main', 'git.push'],
+    ['git 2>/dev/null push', 'git.push'],
+    ['git 2> /dev/null push', 'git.push'],
+    ['gh pr merge 1 2>&1', 'pr.merge'],
+    ['! gh pr merge 1', 'pr.merge'],
+    ['if gh pr merge 1; then :; fi', 'pr.merge'],
+    ['if true; then gh pr merge 1; fi', 'pr.merge'],
+    ['if false; then :; elif gh pr merge 1; then :; fi', 'pr.merge'],
+    ['if false; then :; else gh pr merge 1; fi', 'pr.merge'],
+    ['while gh pr merge 1; do :; done', 'pr.merge'],
+    ['while true; do gh pr merge 1; done', 'pr.merge'],
+    ['until gh pr merge 1; do :; done', 'pr.merge'],
+    ['true; then gh pr merge 1', 'pr.merge'],
+    ['coproc gh pr merge 1', 'pr.merge'],
+    ['! sudo gh pr merge 1', 'pr.merge'],
+    ['x=1; gh pr merge 1', 'pr.merge'],
+    ['(gh pr merge 1)', 'pr.merge'],
+    ['gh pr merge 1&&echo', 'pr.merge'],
+  ])('动作识别：%s → %s', (command, action) => {
+    expect(classifyAction({ tool: 'Bash', command })).toContain(action)
+  })
+
+  test.each([
+    ['{ gh pr merge 1; }'],
+    ['select x in a; do gh pr merge 1; done'],
+    ['case x in x) gh pr merge 1;; esac'],
+    ['function f { gh pr merge 1; }; f'],
+    ['f() { gh pr merge 1; }'],
+    ['gh>x pr merge 1'],
+    ["$'gh' pr merge 1"],
+    ['$"gh" pr merge 1'],
+    ["gh pr $'merge' 1"],
+    ['gh pr "$X" 1'],
+  ])('动作识别：复合命令、函数与无法拆分的重定向按不透明：%s', (command) => {
+    expect(classifyAction({ tool: 'Bash', command })).toContain('shell.opaque')
+  })
+
+  test.each([
+    ['git status'],
+    ['git log --since=yesterday'],
+    ['git stash list'],
+    ['gh pr view 1 --json title'],
+    ['bun test 2>&1'],
+    ['git status 2>&1 | head'],
+    ['npm run build -- --x'],
+  ])('动作识别：普通命令不额外标记：%s', (command) => {
+    expect(classifyAction({ tool: 'Bash', command })).not.toContain('shell.opaque')
+  })
+
+  test.each([
+    ['pnpm test &', false],
+    ['pnpm test 2>&1 &', false],
+    ['pnpm test & rm -rf x', false],
+    ['pnpm test 2>&1&rm x', false],
+    ['pnpm test |& tee x', false],
+    ['pnpm test && pnpm test', true],
+    ['pnpm test 2>&1', true],
+    ['pnpm test 2>&1 | tail -5', false],
+    ['pnpm test >&2', false],
+    ['pnpm test 1>&2', false],
+    ['pnpm test 2>&-', false],
+    ['pnpm test 0<&-', false],
+    ['pnpm test 2>&10', false],
+    ['pnpm test 9>&1', false],
+    ['pnpm test 2>&1>x', false],
+    ["pnpm test 2>'&1'", false],
+    ['pnpm test 2\\>\\&1', true],
+    ['pnpm test src/*.ts', false],
+    ['pnpm test "x?"', true],
+  ] as [string, boolean][])('command_prefix：%s → %p', (command, expected) => {
+    expect(commandPrefixMatches(command, 'pnpm test')).toBe(expected)
+  })
+
+  test.each([
+    ['git push origin main:ustclhx/t-1', 'source_not_task_branch'],
+    ['git push origin v1:ustclhx/t-1', 'source_not_task_branch'],
+    ['git push origin refs/heads/v1:ustclhx/t-1', 'source_not_task_branch'],
+  ])('push_to：短名目标要求来源也是任务分支：%s', (command, reason) => {
+    expect(pushToTaskBranch({ ...pushInput, command })).toEqual({ ok: false, reason })
+  })
+
+  test.each([
+    ['git push origin ustclhx/t-1:ustclhx/t-1'],
+    ['git push origin refs/heads/ustclhx/t-1:ustclhx/t-1'],
+    ['git push origin v1:refs/heads/ustclhx/t-1'],
+  ])('push_to：满足：%s', (command) => {
+    expect(pushToTaskBranch({ ...pushInput, command })).toEqual({ ok: true })
   })
 })

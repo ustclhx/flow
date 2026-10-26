@@ -15,6 +15,8 @@ const YES: ConditionResult = { ok: true }
 
 export interface PushTarget {
   remote: string
+  /** 目标显式写成 `refs/heads/…`。 */
+  dstQualified: boolean
   /** refspec 的来源 ref（无冒号时与 dst 相同）。 */
   src: string
   /** 推送的目标分支名（已去掉 `refs/heads/` 前缀）。 */
@@ -105,7 +107,7 @@ export function parsePushTarget(command: string): PushTargetResult {
   const rawDst = parts[1] ?? src
   if (rawDst.startsWith('refs/') && !rawDst.startsWith('refs/heads/')) return no('not_branch_ref')
   // 无冒号时目标由来源推出；来源若写成 refs/heads/x，目标同为 x。
-  return { ok: true, remote, src, dst }
+  return { ok: true, remote, src, dst, dstQualified: rawDst.startsWith('refs/heads/') }
 }
 
 /**
@@ -156,6 +158,10 @@ export function pushToTaskBranch(input: PushToInput): ConditionResult {
   if (!target.ok) return target
   if (!input.remotes.includes(target.remote)) return no('remote_not_registered')
   if (target.dst !== taskBranch) return no('not_task_branch')
+  // 目标是短名时 git 可能按来源推断或匹配到远端同名的其他 ref：要求来源也是任务分支。
+  if (!target.dstQualified && stripHeads(target.src) !== taskBranch) {
+    return no('source_not_task_branch')
+  }
   return commandInTaskWorktree(input)
 }
 
@@ -180,7 +186,8 @@ export function commandPrefixMatches(command: string, prefix: string): boolean {
   const prefixWords = head.commands[0]
   if (head.opaque || head.commands.length !== 1 || !prefixWords?.length) return false
   const parsed = splitCommands(command)
-  if (parsed.opaque || parsed.commands.length === 0) return false
+  if (parsed.opaque || parsed.background || parsed.commands.length === 0) return false
+  // 后台执行（单个 &）会在批准之后继续在沙箱外运行，不满足；&& 不受影响。
   // 任一段有文件重定向（只允许独立的 2>&1）或会展开的元字符（$ { [ * ? ~）：不满足。
   if (parsed.segments.some((seg) => hasFileRedirect(seg) || seg.some((w) => w.expands))) {
     return false

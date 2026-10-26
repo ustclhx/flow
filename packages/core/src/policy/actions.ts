@@ -100,6 +100,8 @@ export interface ParsedCommands {
   /** 与 commands 一一对应，带每个词的性质。 */
   segments: WordInfo[][]
   opaque: boolean
+  /** 出现了引号外的单个 `&`（后台执行，不含 `&&` 与重定向里的 `&`）。 */
+  background: boolean
 }
 
 const EXPANDING_CHARS = '${[*?~'
@@ -116,6 +118,7 @@ export function splitCommands(command: string): ParsedCommands {
   // 上一个字符是引号外的 < 或 >：随后的 & 属于重定向（`2>&1`、`>&`），不是分隔符。
   let afterRedirect = false
   let quote = ''
+  let background = false
   // 即使出现在引号、注释中也保守处理，避免静态分词遗漏动态执行。
   let opaque = /\$\(|`|[<>]\(/.test(command)
   const flushWord = () => {
@@ -160,7 +163,11 @@ export function splitCommands(command: string): ParsedCommands {
     } else if (char === '&' && wasAfterRedirect) {
       word += char
       started = true
-    } else if (';&|()\n'.includes(char)) flushCommand()
+    } else if (char === '&') {
+      if (next === '&') i++
+      else if (next !== '>') background = true
+      flushCommand()
+    } else if (';|()\n'.includes(char)) flushCommand()
     // 与 bash 一致只在空格与制表符处断词；NBSP、U+3000 等 Unicode 空白属于词的一部分。
     else if (char === ' ' || char === '\t') flushWord()
     else {
@@ -175,7 +182,36 @@ export function splitCommands(command: string): ParsedCommands {
   }
   if (quote || command.endsWith('\\')) opaque = true
   flushCommand()
-  return { commands: segments.map((seg) => seg.map((w) => w.text)), segments, opaque }
+  return {
+    commands: segments.map((seg) => seg.map((w) => w.text)),
+    segments,
+    opaque,
+    background,
+  }
+}
+
+/** 只有重定向操作符、目标在下一个词（`>`、`2>`、`<<`、`>&`……）。 */
+const REDIRECT_OPERATOR_RE = /^\d*[<>&|-]+$/
+/** 以重定向开头（可带文件描述符编号）：`>out`、`2>&1`、`<in`。 */
+const REDIRECT_START_RE = /^\d*[<>]/
+
+/**
+ * 去掉一段中的重定向词（任意位置，包括行首与词间）：只有操作符的词连同其后的目标词一起去掉。
+ * 重定向不在词首（如 `gh>x`）时无法可靠拆分，返回 opaque。
+ */
+export function stripRedirects(segment: readonly WordInfo[]): { words: string[]; opaque: boolean } {
+  const words: string[] = []
+  let opaque = false
+  for (let index = 0; index < segment.length; index++) {
+    const word = segment[index] as WordInfo
+    if (!word.redirect) {
+      words.push(word.text)
+      continue
+    }
+    if (!REDIRECT_START_RE.test(word.text)) opaque = true
+    else if (REDIRECT_OPERATOR_RE.test(word.text)) index++
+  }
+  return { words, opaque }
 }
 
 /** 引号外的重定向：只允许独立的 `2>&1`（只复制文件描述符，不涉及文件）。 */
@@ -215,8 +251,19 @@ const GLOBAL_OPTIONS = new Map<string, OptionTable>(
     gh: options('-R --repo --hostname', '-h --help --version'),
   }),
 )
-const WRAPPER_OPTIONS = new Map<string, OptionTable>(
-  Object.entries({
+const SHELL_RESERVED_PREFIXES = [
+  '!',
+  'if',
+  'then',
+  'elif',
+  'else',
+  'do',
+  'while',
+  'until',
+  'coproc',
+]
+const WRAPPER_OPTIONS = new Map<string, OptionTable>([
+  ...Object.entries({
     sudo: options(
       '-u --user -g --group -h --host -p --prompt -C --close-from -D --chdir -R --chroot -T --command-timeout -r --role -t --type',
       '-A --askpass -b --background -E --preserve-env -H --set-home -K --remove-timestamp -k --reset-timestamp -n --non-interactive -P --preserve-groups -S --stdin -s --shell -i --login -V --version -v --validate -l --list',
@@ -227,6 +274,7 @@ const WRAPPER_OPTIONS = new Map<string, OptionTable>(
     ),
     command: options('', '-p -v -V'),
     builtin: options('', ''),
+
     timeout: options(
       '-s --signal -k --kill-after',
       '--foreground --preserve-status -v --verbose --help --version',
@@ -245,7 +293,9 @@ const WRAPPER_OPTIONS = new Map<string, OptionTable>(
       '-e --eof -i --replace -l',
     ),
   }),
-)
+  // shell 保留字：其后的命令照常执行，按无选项的前缀剥离。
+  ...SHELL_RESERVED_PREFIXES.map((word): [string, OptionTable] => [word, options('', '')]),
+])
 
 function skipOptions(words: string[], table: OptionTable): { rest: string[]; opaque: boolean } {
   let index = 0
@@ -272,6 +322,8 @@ function skipOptions(words: string[], table: OptionTable): { rest: string[]; opa
   return { rest: words.slice(index), opaque: false }
 }
 
+const OPAQUE_KEYWORDS: ReadonlySet<string> = new Set(['function', 'select', 'case', '{', '}'])
+
 /** 消去已知包装前缀与环境变量赋值，执行文件的绝对路径归一为文件名。 */
 function unwrapCommand(input: string[]): { words: string[]; opaque: boolean } {
   let words = input
@@ -281,6 +333,8 @@ function unwrapCommand(input: string[]): { words: string[]; opaque: boolean } {
       words = words.slice(1)
       continue
     }
+    // 复合命令与函数定义：其中的命令无法按单条命令静态识别。
+    if (OPAQUE_KEYWORDS.has(word)) return { words, opaque: true }
     const executable = posix.basename(word)
     // 执行文件（含包装命令）带展开：实际执行什么无法静态确定。
     if (EXPANDING_RE.test(word)) return { words: [executable, ...words.slice(1)], opaque: true }
@@ -341,7 +395,7 @@ function expansionMayMatch(
 
 export const commandWords = (command: string): string[][] =>
   splitCommands(command)
-    .commands.map((words) => unwrapCommand(words).words)
+    .segments.map((segment) => unwrapCommand(stripRedirects(segment).words).words)
     .filter((words) => words.length > 0)
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish'])
@@ -531,8 +585,11 @@ export function classifyAction(
     }
     const parsed = splitCommands(command)
     if (parsed.opaque) markOpaque()
-    for (const input of parsed.commands) {
-      const { words, opaque } = unwrapCommand(input)
+    for (const segment of parsed.segments) {
+      // 先去掉重定向（`>out gh pr merge`、`gh 2>&1 pr merge`），再消去包装与保留字。
+      const stripped = stripRedirects(segment)
+      if (stripped.opaque) markOpaque()
+      const { words, opaque } = unwrapCommand(stripped.words)
       if (opaque) markOpaque()
       const nested = nestedScript(words)
       if (nested.opaque) markOpaque()
