@@ -4,6 +4,7 @@ import { defineOperation } from './operation.ts'
 
 export const kbSearchOp = defineOperation({
   name: 'kb_search',
+  access: 'read',
   cli: 'kb search',
   summary: '检索 brain 条目和工作日志',
   input: kbSearchInput,
@@ -15,6 +16,7 @@ export const kbSearchOp = defineOperation({
 
 export const kbGetOp = defineOperation({
   name: 'kb_get',
+  access: 'read',
   cli: 'kb get',
   summary: '按标识读取完整知识条目',
   input: kbGetInput,
@@ -24,6 +26,7 @@ export const kbGetOp = defineOperation({
 
 export const kbQueryOp = defineOperation({
   name: 'kb_query',
+  access: 'read',
   cli: 'kb query',
   summary: '按 frontmatter 字段筛选知识条目',
   input: kbQueryInput,

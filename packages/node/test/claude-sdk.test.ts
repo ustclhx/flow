@@ -25,8 +25,12 @@ import {
   createClaudeSdkExecutor,
   type ExecutorOutcome,
   FLOW_MCP_AUTO_ALLOWED,
+  FLOW_MCP_AUTO_ALLOWED_PENDING,
   type NodeClock,
   projectInstructions,
+  READ_ROLE_TOOLS,
+  readRoleMayUse,
+  SUPERVISOR_MCP_AUTO_ALLOWED,
   summarizeToolInput,
   systemClock,
 } from '../src/index.ts'
@@ -404,9 +408,26 @@ describe('注入 Flow MCP', () => {
     }
   })
 
-  test('放行清单与 flow 的实际工具名一致', () => {
+  test('放行清单与 flow 的实际工具名一致；PENDING 只列尚未实现的 supervisor 操作', () => {
     const names = new Set(operations.map((op) => op.name))
     for (const n of FLOW_MCP_AUTO_ALLOWED) expect(names.has(n)).toBe(true)
+    for (const n of SUPERVISOR_MCP_AUTO_ALLOWED) {
+      expect(names.has(n) || FLOW_MCP_AUTO_ALLOWED_PENDING.includes(n)).toBe(true)
+    }
+    // 已实现的名字不能留在 PENDING 中；PENDING 只能是 supervisor 清单的子集。
+    for (const n of FLOW_MCP_AUTO_ALLOWED_PENDING) {
+      expect(names.has(n)).toBe(false)
+      expect(SUPERVISOR_MCP_AUTO_ALLOWED as readonly string[]).toContain(n)
+    }
+    // tasks 4.1：supervisor 专属工具不在通用清单，只读角色也不认；建任务、请求合并仍走策略。
+    for (const n of SUPERVISOR_MCP_AUTO_ALLOWED) {
+      expect(FLOW_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
+      expect(readRoleMayUse(`mcp__flow__${n}`, false)).toBe(false)
+    }
+    for (const n of ['task_create', 'pr_merge_request']) {
+      expect(FLOW_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
+      expect(SUPERVISOR_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
+    }
   })
 
   test('worker 创建任务需要审批：task_create 进 canUseTool，批准前不创建', async () => {
@@ -1378,5 +1399,270 @@ describe('读边界 read_scope: cwd', () => {
     })
     const r = await bad.run(contract(), ctx()).done
     expect(r.ok && r.data.outcome === 'failed' && r.data.result.reason).toBe('invalid_role')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// supervisor 会话绑定（add-m1-supervisor 5.3；executor-claude-sdk "supervisor 会话绑定"）
+// ---------------------------------------------------------------------------
+
+describe('supervisor 会话绑定', () => {
+  /** 测试用的唤醒 token（形如中枢签发的 fwk_ token，不是真实凭证）。 */
+  const WAKE = `fwk_${'w'.repeat(43)}`
+  const SUP_PERMS = {
+    setting_sources: [],
+    read_scope: 'cwd',
+    allowedTools: ['Read', 'Grep', 'Glob'],
+    disallowedTools: ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
+  }
+  const supervisorRole = (permissions: Record<string, unknown> = SUP_PERMS): Role => ({
+    name: 'supervisor',
+    kind: 'supervisor',
+    executor: 'claude-sdk',
+    prompt: '你是 supervisor。',
+    permissions,
+  })
+  const wakeContract = (
+    origin: 'instruction' | 'reply' = 'instruction',
+    workspace = 'ws/product-res',
+  ) =>
+    contract({
+      goal: '处理唤醒',
+      workspace,
+      role: 'supervisor',
+      inputs: { wake: { origin, generation: 1, events: [] } },
+    } as Partial<TaskContract>)
+
+  /** 临时 flow-home 中的唤醒 token 文件与任务目录（互不包含）。 */
+  function files() {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-sup-sdk-')))
+    const home = join(root, 'flow-home')
+    const repo = join(root, 'repo')
+    mkdirSync(join(home, 'state', 'wake'), { recursive: true })
+    mkdirSync(repo)
+    const tokenFile = join(home, 'state', 'wake', 't-1.token')
+    writeFileSync(tokenFile, `${WAKE}\n`, { mode: 0o600 })
+    return {
+      root,
+      home,
+      repo,
+      tokenFile,
+      done: () => rmSync(root, { recursive: true, force: true }),
+    }
+  }
+
+  test('注入 --workspace --task、FLOW_WORKSPACE、FLOW_TASK_ID 与 FLOW_HUB_TOKEN_FILE；argv、env、活动与结果都不含 token', async () => {
+    const f = files()
+    try {
+      const { query, state } = mockSdk(async function* (io) {
+        await io.nextUser()
+        // 会话读不到 token：read_scope 下 Bash 被拒，Read token 文件被拒。
+        const pre = io.options.hooks?.PreToolUse?.[0]?.hooks[0]
+        if (!pre) throw new Error('缺少 PreToolUse hook')
+        const call = async (tool_name: string, tool_input: unknown) =>
+          (
+            (await pre(
+              {
+                session_id: SID,
+                transcript_path: '',
+                cwd: f.repo,
+                hook_event_name: 'PreToolUse',
+                tool_name,
+                tool_input,
+                tool_use_id: 'tu',
+              },
+              'tu',
+              { signal: new AbortController().signal },
+            )) as { hookSpecificOutput?: { permissionDecision?: string } }
+          ).hookSpecificOutput?.permissionDecision
+        expect(await call('Bash', { command: 'ps eww' })).toBe('deny')
+        expect(await call('Read', { file_path: f.tokenFile })).toBe('deny')
+        yield say('完成')
+        yield result()
+      })
+      const ex = createClaudeSdkExecutor({
+        home: f.home,
+        query,
+        resolveRole: roleResolver(supervisorRole()),
+        flowCommand: ['bun', '/x/flow.ts'],
+      })
+      const run = ex.run(wakeContract(), {
+        ...ctx({
+          taskId: 't-1',
+          cwd: f.repo,
+          env: { PATH: '/usr/bin', FLOW_HUB_TOKEN: 'leak', FLOW_HUB_TOKEN_FILE: '/leak' },
+        }),
+        wakeTokenFile: f.tokenFile,
+      })
+      const activities: unknown[] = []
+      for await (const a of run.activity) activities.push(a)
+      const done = await run.done
+      expect(done.ok && done.data.outcome).toBe('done')
+      const o = state.calls[0]
+      expect(o?.mcpServers?.flow).toEqual({
+        type: 'stdio',
+        command: 'bun',
+        args: [
+          '/x/flow.ts',
+          'mcp',
+          '--actor',
+          'supervisor',
+          '--workspace',
+          'ws/product-res',
+          '--task',
+          't-1',
+        ],
+        env: {
+          FLOW_HOME: f.home,
+          FLOW_WORKSPACE: 'ws/product-res',
+          FLOW_TASK_ID: 't-1',
+          FLOW_HUB_TOKEN_FILE: f.tokenFile,
+        },
+      })
+      // 会话进程的 env 不含任何中枢凭证或 token 文件路径，但带绑定信息。
+      expect(o?.env).not.toHaveProperty('FLOW_HUB_TOKEN')
+      expect(o?.env).not.toHaveProperty('FLOW_HUB_TOKEN_FILE')
+      expect(o?.env).toMatchObject({
+        FLOW_ACTOR: 'supervisor',
+        FLOW_WORKSPACE: 'ws/product-res',
+        FLOW_TASK_ID: 't-1',
+        ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
+      })
+      // 与只读角色一样锁定：只用注入的 MCP、内置工具白名单。
+      expect(o?.strictMcpConfig).toBe(true)
+      expect(o?.tools).toEqual([...READ_ROLE_TOOLS])
+      // token 不出现在 argv（MCP 配置整体）、env、提示词、活动与结果中。
+      const visible = JSON.stringify([
+        o?.mcpServers,
+        o?.env,
+        o?.systemPrompt,
+        state.prompts,
+        activities,
+        done,
+      ])
+      expect(visible).not.toContain('fwk_')
+      // supervisor 专属工具只在这里自动放行；task_create 仍走审批。
+      for (const n of SUPERVISOR_MCP_AUTO_ALLOWED)
+        expect(o?.allowedTools).toContain(`mcp__flow__${n}`)
+      expect(o?.allowedTools).toContain('mcp__flow__brief_update')
+      expect(o?.allowedTools).not.toContain('mcp__flow__task_create')
+    } finally {
+      f.done()
+    }
+  })
+
+  test('reply 唤醒：MCP 加 --reply-only', async () => {
+    const f = files()
+    try {
+      const { query, state } = mockSdk(async function* (io) {
+        await io.nextUser()
+        yield result()
+      })
+      const ex = createClaudeSdkExecutor({
+        home: f.home,
+        query,
+        resolveRole: roleResolver(supervisorRole()),
+      })
+      const r = await ex.run(wakeContract('reply'), {
+        ...ctx({ taskId: 't-7', cwd: f.repo }),
+        wakeTokenFile: f.tokenFile,
+      }).done
+      expect(r.ok && r.data.outcome).toBe('done')
+      expect((state.calls[0]?.mcpServers?.flow as { args: string[] } | undefined)?.args).toEqual([
+        'mcp',
+        '--actor',
+        'supervisor',
+        '--workspace',
+        'ws/product-res',
+        '--task',
+        't-7',
+        '--reply-only',
+      ])
+    } finally {
+      f.done()
+    }
+  })
+
+  test('注入前的核对：不满足时任务 failed，不启动 SDK', async () => {
+    const f = files()
+    try {
+      const { query, state } = mockSdk(async function* () {})
+      const cases: Array<[Role, TaskContract, Record<string, unknown>, string]> = [
+        // 没有 token 文件。
+        [supervisorRole(), wakeContract(), {}, 'wake_token_missing'],
+        // supervisor 角色缺 read_scope、可写、加载项目设置。
+        [
+          supervisorRole({ ...SUP_PERMS, read_scope: undefined }),
+          wakeContract(),
+          { wakeTokenFile: f.tokenFile },
+          'supervisor_role_not_read',
+        ],
+        [
+          supervisorRole({ ...SUP_PERMS, allowedTools: ['Bash'] }),
+          wakeContract(),
+          { wakeTokenFile: f.tokenFile },
+          'supervisor_role_not_read',
+        ],
+        [
+          supervisorRole({ ...SUP_PERMS, setting_sources: ['project'] }),
+          wakeContract(),
+          { wakeTokenFile: f.tokenFile },
+          'supervisor_role_not_read',
+        ],
+        // 合同 workspace 不合法。
+        [
+          supervisorRole(),
+          wakeContract('instruction', 'ws/Bad'),
+          { wakeTokenFile: f.tokenFile },
+          'invalid_workspace',
+        ],
+        // token 文件落在 cwd 或任务私有目录内（会话可读）。
+        [
+          supervisorRole(),
+          wakeContract(),
+          { wakeTokenFile: f.tokenFile, cwd: f.home },
+          'wake_token_unsafe',
+        ],
+        [
+          supervisorRole(),
+          wakeContract(),
+          { wakeTokenFile: f.tokenFile, readScope: { privateDir: join(f.home, 'state') } },
+          'wake_token_unsafe',
+        ],
+        // 不是 supervisor 角色却有 token 文件。
+        [reviewer(), contract(), { wakeTokenFile: f.tokenFile }, 'wake_token_unexpected'],
+      ]
+      for (const [role, c, over, reason] of cases) {
+        const ex = createClaudeSdkExecutor({ home: f.home, query, resolveRole: roleResolver(role) })
+        const r = await ex.run(c, { ...ctx({ cwd: f.repo }), ...over }).done
+        expect(r.ok && r.data.outcome === 'failed' && r.data.result.reason).toBe(reason)
+        expect(JSON.stringify(r)).not.toContain('fwk_')
+      }
+      expect(state.calls).toHaveLength(0)
+    } finally {
+      f.done()
+    }
+  })
+
+  test('其他角色：不绑定、不放行 supervisor 专属工具', async () => {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/tmp/flow-home-x',
+      query,
+      resolveRole: roleResolver(reviewer()),
+    })
+    const r = await ex.run(contract(), ctx()).done
+    expect(r.ok && r.data.outcome).toBe('done')
+    expect(state.calls[0]?.mcpServers?.flow).toEqual({
+      type: 'stdio',
+      command: 'flow',
+      args: ['mcp', '--actor', 'reviewer'],
+      env: { FLOW_HOME: '/tmp/flow-home-x' },
+    })
+    for (const n of SUPERVISOR_MCP_AUTO_ALLOWED)
+      expect(state.calls[0]?.allowedTools).not.toContain(`mcp__flow__${n}`)
   })
 })

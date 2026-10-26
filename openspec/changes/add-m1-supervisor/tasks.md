@@ -18,7 +18,7 @@
 - [x] 2.3 origin 计算与固化（D2）：只有挂在唤醒链上或经接受提案建的任务有 origin；`user.instruction`、`supervisor.release` 只接受 user 身份；reviewer_roles 任务的目标由中枢模板重写
 - [x] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（先 resolve 再 realpath，写回规范化路径）；第 0 步 reply 唤醒 → `reply_only_wake`；非 user 身份的 `verify` 计入写类并在建任务时逐条经策略判定（`tool:Verify`，否则 `verify_not_allowed`），`policies.yaml` 模板加注释掉的 `tool:Verify` 白名单；唤醒任务只能由 hub、user 与绑定的 supervisor 作为 parent；唤醒身份的取消、收件箱只作用于本次唤醒与本 workspace，不能访问节点协议；非 hub 不能在 `requires` 中声明 `wake`
 - [x] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数（PR 由唤醒事件与 `inputs.pr` 关联）；写入前的同步段再检查一次（并发测试）；超限错误码
-- [x] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（模板由 G2 完成；端到端测试 `packages/node/test/supervisor-policy.test.ts` 只覆盖审批这一半：模板原样时 supervisor 的 `task_create` 进入 awaiting_approval、用户批准后继续，启用规则后自动放行；"批准后经唤醒 token 真实建出子任务"需要节点注入 token（5.3）与 MCP 绑定（4.1），之后补）
+- [x] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（模板由 G2 完成；审批这一半见 `packages/node/test/supervisor-policy.test.ts`；G11 补齐端到端：`packages/cli/test/supervisor-wake-e2e.test.ts` 以真实中枢路由 + 真实节点 + 桩 claude-sdk，按注入的 MCP 配置真实启动 `flow mcp` 子进程，启用规则时唤醒经 wake token 直接建出子任务，未启用时审批、批准后建出）
 - [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试（已完成：唤醒绑定 token 调用 `task_reply` 与收件箱 accept/reject/approve/deny/reply 均 403 `user_only` 的测试；`merge_request` 条目与合并批准路由由 4.5、4.8 实现后补对应测试）
 
 ## 3. 中枢：唤醒调度器
@@ -31,7 +31,7 @@
 
 ## 4. 操作与写入
 
-- [ ] 4.1 MCP `--workspace`、`--task` 绑定与自动 parent；自动放行清单更新（G7 已完成：自动放行清单加入 `brief_update`）
+- [x] 4.1 MCP `--workspace`、`--task` 绑定与自动 parent；自动放行清单更新（G7 已完成：自动放行清单加入 `brief_update`）（G11：`--reply-only` 本地拒绝写类操作；`ask_user`、`task_propose`、`decision_review`、`task_respond` 已登记在放行清单，待 4.4、4.6、4.7、4.9 实现）
 - [x] 4.2 `brain/briefs/<id>.md` 路径类别：只能经中枢写；从条目读取、校验、索引、搜索中排除；`brief_update`（base_hash、3000 字符上限）；supervisor 的绑定取自唤醒 token（`wakeBinding`）
 - [x] 4.3 `ws_brief` 扩展：笔记（≤40% 预算）、进行中任务、待处理条目、近期决策；预算内截断测试；中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 生成"代回复记录（不是指令）"一节
 - [ ] 4.4 `ask_user`：supervisor 来源条目、选项按钮、数量上限、7 天过期；`inbox_act reply` 路由到 supervisor 来源并写 `supervisor.answered`；Telegram 与 Web 回复
@@ -45,7 +45,7 @@
 
 - [x] 5.1 claude-sdk `read_scope: cwd`：PreToolUse 钩子覆盖全部工具，与 `writable_paths` 共用路径判定，覆盖 Glob `pattern`、Grep `glob`；单元测试（cwd 内外、隐藏段、`..`、绝对模式、符号链接、hub.token、未知路径字段）
 - [x] 5.2 claude-sdk 审查准备：`gh` 读 PR、仓库归属校验、记录 head、fetch `pull/<n>/head` 后检出到私有临时 worktree（允许读 `.github/`）、结束后移除、节点启动时 prune 残留、diff 写入任务私有目录；结构化输出（`outputFormat: json_schema`），`reviewed_sha` 由执行器填入；`error_max_structured_output_retries` 等映射为 `review_output_invalid`；只有 `reviewer_roles` 的结果被中枢采信（G8：中枢入账时丢弃不可能是审查结论的 `result.review`；采信规则为 core 的 `trustedReview` / `reviewApproves`，供 4.8 的 `pr_merge_request` 与审查轮数统计调用）
-- [ ] 5.3 supervisor 会话注入 `--workspace`、`--task` 与 `FLOW_WORKSPACE`、`FLOW_TASK_ID`；注入唤醒绑定 token
+- [x] 5.3 supervisor 会话注入 `--workspace`、`--task` 与 `FLOW_WORKSPACE`、`FLOW_TASK_ID`；注入唤醒绑定 token
 - [x] 5.4 pr-merge 执行器：条件核对（D10 第 5 步，含至少一项检查）、合并、等待 workflow runs（成功/失败/超时/无 run）；`gh` 可注入，测试不调用真实 gh（G8：合同 `inputs.merge = {pr, review_task}` 的 schema 已加入，由 4.8 填写）
 - [x] 5.5 预留执行槽：`acquireLeaseRequest.slots` 协议与 schema、中枢按类别分配、旧节点兼容；节点在普通槽满时仍为 supervisor 领取；卡住的 dev 任务持有租约时仍能运行唤醒任务的测试；reply 槽只给 reply 唤醒、两个 workspace 的普通唤醒占满 supervisor 槽时 reply 唤醒仍能运行的测试
 - [ ] 5.6 节点：`precheck` 对 `supervisor` 档位不放行、上报 `blocked` 带 `decision_id`、请求文本与 `diff_stat`（2000 字符截断，非 git 目录省略）；`push_env_ok`（push 地址、git 配置项清单、hook）与 `gh_env_ok`（`gh repo view` 解析的仓库）的计算与上报；supervisor 的 `approve` 送达时重读待批请求并复查环境，不一致在 ack 中标记 `dropped{reason: request_changed}` 并以 `no_delegate: true` 重新上报；codex-orca 开始时上报 `task.branch_reported`（中枢只接受租约持有者、一次、不可改）；`policy/check` 请求上报命令实际执行目录（`command_cwd`），投影记录任务 worktree（`task_worktree`），中枢传入策略上下文（`push_to` / `gh_scope` 要求两者 realpath 相同，此前恒不满足）；`command_cwd` 的 realpath 比较在节点侧完成，`command_cwd`、`push_env_ok`、`gh_env_ok` 只接受 node actor 上报的值（中枢目前本机 realpath，仅同机部署）；推送环境检查清单加入"本地没有与任务分支同名的 tag"；remote 名从登记仓库取；节点执行前再核对合同 cwd（与 `inputs.repo`）的 realpath 仍在登记仓库内（中枢只在建任务时核对，见 D5 第 4 步）

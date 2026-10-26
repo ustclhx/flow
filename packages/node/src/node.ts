@@ -47,6 +47,7 @@ import {
 import { createFakeExecutor } from './fake.ts'
 import { createPolicyPrecheck } from './precheck.ts'
 import { verifyTask } from './verify.ts'
+import { cleanWakeTokenDir, removeWakeTokenFile, writeWakeTokenFile } from './wake-token.ts'
 import { resolveContractCwd } from './workdir.ts'
 
 /**
@@ -616,7 +617,13 @@ class LeaseRunner {
     } else {
       this.armTimeout()
       this.armIdle()
+      // 唤醒绑定 token 写进 state/wake/<task>.token，执行器只拿到路径（tasks 5.3；D6）：token 不进 argv、
+      // env、日志；执行结束（含失败、取消、放弃租约）即删除。
+      let wakeTokenFile: string | undefined
       try {
+        if (grant.wake_token) {
+          wakeTokenFile = await writeWakeTokenFile(env.home, grant.task_id, grant.wake_token)
+        }
         this.run = executor.run(grant.contract, {
           taskId: grant.task_id,
           attempt: grant.attempt,
@@ -625,6 +632,7 @@ class LeaseRunner {
           env: executorEnv(),
           signal: this.abort.signal,
           ...(grant.resume ? { resume: grant.resume } : {}),
+          ...(wakeTokenFile ? { wakeTokenFile } : {}),
           precheck: createPolicyPrecheck({
             client: env.client,
             taskId: grant.task_id,
@@ -645,7 +653,22 @@ class LeaseRunner {
         // 等执行器把剩余活动交出来（执行器结束时应关闭活动流），最多等一个续约周期。
         await Promise.race([pump, forced, sleep(env.clock, this.intervalMs)])
       } catch (err) {
-        outcome = fail('failure', 'executor_error', (err as Error).message)
+        outcome =
+          grant.wake_token && !wakeTokenFile
+            ? ok({
+                outcome: 'failed',
+                result: {
+                  summary: '无法写入唤醒绑定 token 文件',
+                  reason: 'wake_token_write_failed',
+                  artifacts: [],
+                  verify: [],
+                  executor: grant.contract.executor,
+                  node_id: env.nodeId,
+                },
+              })
+            : fail('failure', 'executor_error', (err as Error).message)
+      } finally {
+        if (wakeTokenFile) await removeWakeTokenFile(wakeTokenFile).catch(() => {})
       }
       this.cancelTimeout()
       this.cancelIdle()
@@ -827,6 +850,9 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     }
     token = (await readFile(path, 'utf8')).trim()
   }
+
+  // 上次运行残留的唤醒 token 文件（进程被杀时来不及删除）：启动时清理，租约早已失效。
+  await cleanWakeTokenDir(home)
 
   const id =
     options.nodeId !== undefined ? ok(options.nodeId) : await loadOrCreateNodeId(home, host)

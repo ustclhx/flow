@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { ok } from '../result.ts'
 import { appendCapture, appendJournal } from '../write/api.ts'
+import { checkBoundWorkspace } from './binding.ts'
 import { defineOperation } from './operation.ts'
 
 export const kbJournalOp = defineOperation({
@@ -12,6 +13,13 @@ export const kbJournalOp = defineOperation({
     workspace: z.string().optional().describe('关联的 workspace，例如 ws/product-res'),
   }),
   positional: ['text'],
+  // 会话绑定（tasks 4.1；D6）：本地执行，只有这一层检查——只能写绑定 workspace 的 journal，
+  // 未写 workspace 时记到绑定的 workspace。
+  bind: (input: { text: string; workspace?: string | undefined }, binding) => {
+    if (input.workspace === undefined) return ok({ ...input, workspace: binding.workspace })
+    const ws = checkBoundWorkspace(input.workspace, binding)
+    return ws.ok ? ok(input) : ws
+  },
   run: async (input: { text: string; workspace?: string | undefined }, ctx) => {
     const r = await appendJournal(
       ctx.home,

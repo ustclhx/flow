@@ -13,6 +13,7 @@ import { kbGetOp, kbQueryOp, kbSearchOp } from './search.ts'
 import { taskCancelOp, taskCreateOp, taskListOp, taskReplyOp, taskShowOp } from './tasks.ts'
 import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './workspace.ts'
 
+export * from './binding.ts'
 export * from './brief.ts'
 export * from './inbox.ts'
 export * from './journal.ts'

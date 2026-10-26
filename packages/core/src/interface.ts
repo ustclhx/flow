@@ -1,3 +1,4 @@
+import { applyBinding } from './ops/binding.ts'
 import type { OpContext, Operation } from './ops/operation.ts'
 import { fail, type Result } from './result.ts'
 
@@ -40,7 +41,10 @@ export async function invokeOperation<I, O>(
   raw: unknown,
   ctx: OpContext,
 ): Promise<Result<O>> {
-  const input = parseOperationInput<I>(op, raw)
+  const parsed = parseOperationInput<I>(op, raw)
+  if (!parsed.ok) return parsed
+  // MCP 会话绑定（tasks 4.1）：写别的 workspace、reply 唤醒的写类操作在本地就拒绝。
+  const input = applyBinding(op, parsed.data, ctx.binding)
   if (!input.ok) return input
   try {
     return await op.run(input.data, ctx)

@@ -53,4 +53,23 @@ describe('flow mcp（真实进程）', () => {
       expect(r.stderr).toContain('actor')
     }
   })
+
+  test('绑定参数不合法：--task / --reply-only 缺 --workspace、workspace 非法时用法错误，退出码 2', async () => {
+    const home = await initTempHome('flow-mcp-stdio-')
+    for (const extra of [
+      ['--task', 't-1'],
+      ['--reply-only'],
+      ['--workspace', 'ws/Bad Name'],
+      ['--workspace', 'ws/demo', '--task', '../x'],
+    ]) {
+      const r = spawnSync(process.execPath, [main, 'mcp', '--actor', 'supervisor', ...extra], {
+        env: { ...process.env, FLOW_HOME: home },
+        input: '',
+        encoding: 'utf8',
+      })
+      expect(r.status).toBe(2)
+      expect(r.stdout).toBe('')
+      expect(r.stderr).toContain('invalid_binding')
+    }
+  })
 })

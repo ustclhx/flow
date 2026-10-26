@@ -53,6 +53,12 @@ export interface ExecutorContext {
     /** 会话配置了结构化输出（审查任务）：只有这时 `StructuredOutput` 才可用。 */
     structuredOutput?: boolean
   }
+  /**
+   * 唤醒绑定 token 文件（add-m1-supervisor D6；tasks 5.3）：只在领到 supervisor 唤醒任务时存在，节点把
+   * 租约响应的 `lease.wake_token` 写进 `state/wake/<task>.token`（0600）并在执行结束后删除。执行器只能把
+   * 路径作为 `FLOW_HUB_TOKEN_FILE` 交给 Flow MCP 进程，不得读出 token 放进 argv、env、活动、结果或日志。
+   */
+  wakeTokenFile?: string
 }
 
 /** 节点交给 `classify` 的快照。 */

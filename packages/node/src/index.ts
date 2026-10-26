@@ -20,6 +20,7 @@ export {
   DEFAULT_APPROVAL_TIMEOUT_MINUTES,
   DEFAULT_CLAUDE_MODEL,
   FLOW_MCP_AUTO_ALLOWED,
+  FLOW_MCP_AUTO_ALLOWED_PENDING,
   FLOW_MCP_TOOL_PREFIX,
   PROJECT_INSTRUCTION_FILES,
   projectInstructions,
@@ -30,7 +31,9 @@ export {
   renderTaskPrompt,
   reviewOutputJsonSchema,
   STRUCTURED_OUTPUT_TOOL,
+  SUPERVISOR_MCP_AUTO_ALLOWED,
   summarizeToolInput,
+  supervisorSession,
 } from './claude-sdk.ts'
 export {
   createNodeHubClient,
@@ -189,3 +192,9 @@ export {
   reviewRef,
   reviewRoot,
 } from './review-prep.ts'
+export {
+  cleanWakeTokenDir,
+  removeWakeTokenFile,
+  wakeTokenDir,
+  writeWakeTokenFile,
+} from './wake-token.ts'

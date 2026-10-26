@@ -6,6 +6,7 @@ import { defineOperation } from './operation.ts'
 
 export const inboxListOp = defineOperation({
   name: 'inbox_list',
+  access: 'read',
   cli: 'inbox list',
   cliAliases: ['inbox'],
   summary: '按状态、级别和 workspace 列出收件箱条目',

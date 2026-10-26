@@ -10,9 +10,10 @@ import {
 } from '../ledger/protocol.ts'
 import { checkContractSecrets } from '../ledger/redact.ts'
 import type { TaskContractInput, TaskView } from '../ledger/task.ts'
-import { fail } from '../result.ts'
+import { fail, ok } from '../result.ts'
 import { loadRoles } from '../roles.ts'
 import { USER_ACTOR } from '../write/policy.ts'
+import { checkBoundWorkspace } from './binding.ts'
 import { defineOperation, type OpContext } from './operation.ts'
 
 const client = (ctx: OpContext) => new HubClient(ctx)
@@ -25,6 +26,16 @@ export const taskCreateOp = defineOperation({
   summary: '向中枢提交任务合同',
   input: createTaskRequest,
   fileInput: true,
+  // 会话绑定（tasks 4.1）：只能建绑定 workspace 的任务；未写 parent 时以绑定的任务为 parent。
+  bind: (input: TaskContractInput, binding) => {
+    const ws = checkBoundWorkspace(input.workspace, binding)
+    if (!ws.ok) return ws
+    return ok(
+      binding.task !== undefined && input.parent === undefined
+        ? { ...input, parent: binding.task }
+        : input,
+    )
+  },
   run: async (input: TaskContractInput, ctx) => {
     const loaded = await loadRoles(ctx.home)
     if (!loaded.ok) return loaded
@@ -46,6 +57,7 @@ export const taskCreateOp = defineOperation({
 
 export const taskListOp = defineOperation({
   name: 'task_list',
+  access: 'read',
   cli: 'task list',
   summary: '按 workspace 和状态列出任务',
   input: listTasksQuery,
@@ -61,6 +73,7 @@ export const taskListOp = defineOperation({
 
 export const taskShowOp = defineOperation({
   name: 'task_show',
+  access: 'read',
   cli: 'task show',
   summary: '查看任务合同、结果与事件',
   input: z.strictObject({ id: taskId }),

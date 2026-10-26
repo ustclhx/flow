@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, realpath } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   CanUseTool,
   EffortLevel,
@@ -20,8 +20,11 @@ import {
   type DeliveredReply,
   effectiveRoleKind,
   fail,
+  HUB_TOKEN_ENV,
+  HUB_TOKEN_FILE_ENV,
   loadRoles,
   loadWorkspaces,
+  normalizeBindingWorkspace,
   ok,
   type Result,
   type ReviewOutput,
@@ -33,6 +36,7 @@ import {
   reviewerRoleProblem,
   reviewOutput,
   type SupervisorConfig,
+  supervisorRoleProblem,
   type TaskContract,
   type TaskCost,
   type TaskResult,
@@ -124,6 +128,28 @@ export const FLOW_MCP_AUTO_ALLOWED = [
   'task_list',
   'task_show',
 ] as const
+/**
+ * 只在 supervisor 会话（`kind: supervisor`）中自动放行的 flow MCP 工具（design D7；tasks 4.1）：
+ * `ask_user`、`task_propose`、`decision_review` 只产生等待用户处理的内容；`task_respond` 的权限由中枢按
+ * D15 核对（不再经策略审批，否则会自我阻塞）。其他角色不放行它们（readRoleMayUse 也不认），
+ * `task_create`、`pr_merge_request` 对 supervisor 仍走策略。
+ */
+export const SUPERVISOR_MCP_AUTO_ALLOWED = [
+  'ask_user',
+  'task_propose',
+  'decision_review',
+  'task_respond',
+] as const
+/**
+ * 已登记在 supervisor 放行清单、但 `packages/core/src/ops` 中尚未实现的操作名（4.4、4.6、4.7、4.9
+ * 实现时必须从这里删除，测试会核对）。没有对应工具时清单项不起作用。
+ */
+export const FLOW_MCP_AUTO_ALLOWED_PENDING: readonly string[] = [
+  'ask_user',
+  'task_propose',
+  'decision_review',
+  'task_respond',
+]
 /** SDK 中 flow MCP 工具的全名前缀（服务名 flow），与 core 的动作识别共用。 */
 export const FLOW_MCP_TOOL_PREFIX = CORE_FLOW_MCP_TOOL_PREFIX
 /**
@@ -930,6 +956,19 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           )
           return
         }
+        // supervisor 会话绑定（tasks 5.3；D6）：中枢以唤醒绑定 token 认定调用方。注入 token 之前逐条核对，
+        // 任何一条不满足都直接失败、不启动 SDK。
+        const supervisor = await supervisorSession(role.data, contract, ctx)
+        if (!supervisor.ok) {
+          finish(
+            ok({
+              outcome: 'failed',
+              result: result(supervisor.error.message, { reason: supervisor.error.code }),
+            }),
+          )
+          return
+        }
+        if (finished) return
         const effort = role.data.effort
         if (effort !== undefined && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
           finish(
@@ -975,6 +1014,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           ctx: sessionCtx,
           home: options.home,
           flowCommand,
+          ...(supervisor.data ? { supervisor: supervisor.data } : {}),
           ...(review
             ? {
                 outputFormat: { type: 'json_schema', schema: reviewOutputJsonSchema() },
@@ -1118,8 +1158,90 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
   }
 }
 
+/** supervisor 唤醒会话的绑定（tasks 5.3）。 */
+export interface SupervisorSession {
+  /** 规范化的 workspace（`ws/<id>`）。 */
+  workspace: string
+  taskId: string
+  /** 唤醒绑定 token 文件：只以 `FLOW_HUB_TOKEN_FILE` 交给 flow MCP 进程，token 本身不进 argv 与 env。 */
+  wakeTokenFile: string
+  /** reply 唤醒：MCP 本地只放行只读操作（`--reply-only`）。 */
+  replyOnly: boolean
+}
+
+/** `child` 的真实路径是否在 `parent` 之内（含相等）；路径不存在时按词法比较。 */
+async function isWithin(child: string, parent: string): Promise<boolean> {
+  const real = async (p: string) => {
+    try {
+      return await realpath(p)
+    } catch {
+      return resolve(p)
+    }
+  }
+  const rel = relative(await real(parent), await real(child))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/**
+ * 注入唤醒 token 之前的核对（tasks 5.3；D6、D14）。不是 supervisor 角色返回 undefined；
+ * 不满足时返回失败原因码：
+ * - 有 token 文件但角色不是 supervisor → `wake_token_unexpected`；
+ * - supervisor 角色不是只读配置（`supervisorRoleProblem`）→ `supervisor_role_not_read`；
+ * - 租约没有下发 token → `wake_token_missing`；
+ * - 合同 workspace 不合法 → `invalid_workspace`；
+ * - token 文件落在会话可读的目录（cwd、任务私有目录）内 → `wake_token_unsafe`。
+ */
+export async function supervisorSession(
+  role: Role,
+  contract: TaskContract,
+  ctx: Pick<ExecutorContext, 'taskId' | 'cwd' | 'wakeTokenFile' | 'readScope'>,
+): Promise<Result<SupervisorSession | undefined>> {
+  if (role.kind !== 'supervisor') {
+    if (ctx.wakeTokenFile) {
+      return fail(
+        'failure',
+        'wake_token_unexpected',
+        `角色 ${role.name} 不是 supervisor，却领到了唤醒绑定 token`,
+      )
+    }
+    return ok(undefined)
+  }
+  const problem = supervisorRoleProblem(role)
+  if (problem) {
+    return fail('failure', 'supervisor_role_not_read', `supervisor 角色不是只读配置：${problem}`)
+  }
+  if (!ctx.wakeTokenFile) {
+    return fail(
+      'failure',
+      'wake_token_missing',
+      '租约没有下发唤醒绑定 token，无法以 supervisor 身份运行',
+    )
+  }
+  const workspace = normalizeBindingWorkspace(contract.workspace)
+  if (!workspace) {
+    return fail(
+      'failure',
+      'invalid_workspace',
+      `唤醒任务的 workspace 不合法：${JSON.stringify(contract.workspace)}`,
+    )
+  }
+  for (const dir of [ctx.cwd, ctx.readScope?.privateDir]) {
+    if (dir && (await isWithin(ctx.wakeTokenFile, dir))) {
+      return fail('failure', 'wake_token_unsafe', '唤醒 token 文件位于会话可读的目录内，拒绝运行')
+    }
+  }
+  return ok({
+    workspace,
+    taskId: ctx.taskId,
+    wakeTokenFile: ctx.wakeTokenFile,
+    replyOnly: contract.inputs?.wake?.origin === 'reply',
+  })
+}
+
 interface BuildOptionsInput {
   env: NodeJS.ProcessEnv
+  /** `kind: supervisor` 角色的唤醒会话绑定；其他角色缺省。 */
+  supervisor?: SupervisorSession
   role: Role
   perms: ClaudeSdkPermissions
   /** 角色的有效类别；read 时用 SDK `tools` 只提供只读工具（tasks 5.7）。缺省按角色计算。 */
@@ -1143,14 +1265,42 @@ interface BuildOptionsInput {
 /** 由角色与任务上下文拼出 SDK 的 `query()` 选项。 */
 export function buildOptions(i: BuildOptionsInput): Options & { model: string } {
   const [command = 'flow', ...prefix] = i.flowCommand
+  const sup = i.supervisor
+  // supervisor 会话：MCP 绑定 workspace 与唤醒任务（写类只作用于该 workspace、task_create 自动填 parent），
+  // MCP 进程经 FLOW_HUB_TOKEN_FILE 读取唤醒 token：token 不进 argv（--mcp-config）与任何 env（D6）。
   const flowMcp: McpStdioServerConfig = {
     type: 'stdio',
     command,
-    args: [...prefix, 'mcp', '--actor', i.role.name],
-    env: { FLOW_HOME: i.home },
+    args: [
+      ...prefix,
+      'mcp',
+      '--actor',
+      i.role.name,
+      ...(sup
+        ? [
+            '--workspace',
+            sup.workspace,
+            '--task',
+            sup.taskId,
+            ...(sup.replyOnly ? ['--reply-only'] : []),
+          ]
+        : []),
+    ],
+    env: {
+      FLOW_HOME: i.home,
+      ...(sup
+        ? {
+            FLOW_WORKSPACE: sup.workspace,
+            FLOW_TASK_ID: sup.taskId,
+            [HUB_TOKEN_FILE_ENV]: sup.wakeTokenFile,
+          }
+        : {}),
+    },
   }
   const kind = i.kind ?? effectiveRoleKind(i.role)
   const readOnly = kind === 'read'
+  // supervisor 会话与只读角色一样：只用注入的 Flow MCP、不加载 claude.ai connector、内置工具只有白名单。
+  const lockedDown = readOnly || sup !== undefined
   const review = i.reviewGitConfig !== undefined
   const structured = i.outputFormat !== undefined
   // 有效类别为 read：allowedTools 只保留 readRoleMayUse 为真的条目（规则取括号前的工具名），
@@ -1165,6 +1315,7 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     ...new Set([
       ...roleAllowed,
       ...FLOW_MCP_AUTO_ALLOWED.map((name) => `${FLOW_MCP_TOOL_PREFIX}${name}`),
+      ...(sup ? SUPERVISOR_MCP_AUTO_ALLOWED.map((name) => `${FLOW_MCP_TOOL_PREFIX}${name}`) : []),
       // 结构化输出（审查任务）只产生结论，不经审批。
       ...(i.outputFormat ? [STRUCTURED_OUTPUT_TOOL] : []),
     ]),
@@ -1176,16 +1327,24 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     cwd: i.ctx.cwd,
     // SDK 默认把 process.env 整个传给 Claude Code 子进程；改用去掉中枢凭证的 env（design D9）。
     // read_scope 下 Glob 不加 --hidden / --no-ignore（CLI 2.1.310 的 CLAUDE_CODE_GLOB_* 变量）。
-    env: {
-      ...i.env,
-      ...(i.perms.read_scope ? READ_SCOPE_ENV : {}),
-      // 只读角色与审查会话不加载 claude.ai connector（CLI 2.1.310 的 ENABLE_CLAUDEAI_MCP_SERVERS）。
-      ...(readOnly || review ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
-      // 审查会话中 Claude Code 自己运行的 git 同样不运行 hook、fsmonitor 与 filter driver。
-      ...(i.reviewGitConfig
-        ? { ...gitConfigEnv(i.reviewGitConfig, i.env), ...UNTRUSTED_CHECKOUT_ENV }
-        : {}),
-    },
+    env: (() => {
+      const env: NodeJS.ProcessEnv = {
+        ...i.env,
+        ...(i.perms.read_scope ? READ_SCOPE_ENV : {}),
+        // 只读角色与审查会话不加载 claude.ai connector（CLI 2.1.310 的 ENABLE_CLAUDEAI_MCP_SERVERS）。
+        ...(lockedDown || review ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
+        // 审查会话中 Claude Code 自己运行的 git 同样不运行 hook、fsmonitor 与 filter driver。
+        ...(i.reviewGitConfig
+          ? { ...gitConfigEnv(i.reviewGitConfig, i.env), ...UNTRUSTED_CHECKOUT_ENV }
+          : {}),
+        // supervisor 会话的绑定信息（不是凭证）。
+        ...(sup ? { FLOW_WORKSPACE: sup.workspace, FLOW_TASK_ID: sup.taskId } : {}),
+      }
+      // 防御：会话进程的 env 绝不带中枢凭证（执行器 env 已去掉，这里再删一次；token 文件路径只给 MCP）。
+      delete env[HUB_TOKEN_ENV]
+      delete env[HUB_TOKEN_FILE_ENV]
+      return env
+    })(),
     model: i.role.model ?? DEFAULT_CLAUDE_MODEL,
     ...(i.role.effort ? { effort: i.role.effort as EffortLevel } : {}),
     systemPrompt: { type: 'preset', preset: 'claude_code', append },
@@ -1193,14 +1352,14 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     settingSources: review ? [] : [...i.perms.setting_sources],
     mcpServers: { flow: flowMcp },
     // 只读角色与审查会话只用注入的 Flow MCP：忽略 .mcp.json、用户设置、插件中的 MCP 服务器。
-    ...(readOnly || review ? { strictMcpConfig: true } : {}),
+    ...(lockedDown || review ? { strictMcpConfig: true } : {}),
     // 角色显式写 auto / bypassPermissions 时照原样传递；缺省为 default（见 claudeSdkPermissions）。
     permissionMode: i.perms.permissionMode,
     ...(i.perms.permissionMode === 'bypassPermissions'
       ? { allowDangerouslySkipPermissions: true }
       : {}),
     // 有效类别为 read：可用的内置工具只有白名单（Flow MCP 不受 tools 影响）。
-    ...(readOnly ? { tools: [...READ_ROLE_TOOLS] } : {}),
+    ...(lockedDown ? { tools: [...READ_ROLE_TOOLS] } : {}),
     ...(i.outputFormat ? { outputFormat: i.outputFormat } : {}),
     allowedTools,
     disallowedTools: i.perms.disallowedTools,
