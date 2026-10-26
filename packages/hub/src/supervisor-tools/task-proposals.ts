@@ -5,7 +5,6 @@ import { isDeepStrictEqual } from 'node:util'
 import {
   checkContractSecrets,
   clipText,
-  createTaskRequest,
   decisionPathFor,
   type EventOf,
   fail,
@@ -257,20 +256,15 @@ export function proposalOf(
   return e?.type === 'task_proposal.created' ? e : null
 }
 
-/** 已建任务是否就是接受这条提案建出的（幂等命中时核对，防止命中别的任务）。 */
-function sameAsProposal(
-  task: TaskView,
-  expected: TaskContract,
-  wakeTaskId: string,
-  goals: readonly string[],
-): string | null {
+/**
+ * 幂等命中时核对已有任务是否就是接受这条提案建出的。`task-proposal:` 是保留前缀，只有中枢接受提案时
+ * 能用，命中即说明来自某次接受；这里只再核对身份、parent 与 origin（目标可能在 Web 上被改过）。
+ */
+function sameAsProposal(task: TaskView, wakeTaskId: string): string | null {
   if (task.created_by !== 'user') return `创建者为 ${task.created_by}`
   if (task.contract.parent !== wakeTaskId) return 'parent 不是提案所在的唤醒'
   if (task.origin !== 'instruction') return 'origin 不是 instruction'
-  if (!goals.includes(task.contract.goal)) return '目标与提案不一致'
-  const { goal: _a, ...have } = task.contract
-  const { goal: _b, ...want } = expected
-  return isDeepStrictEqual(have, want) ? null : '合同与提案不一致'
+  return null
 }
 
 /** 用户接受任务提案（actor 固定为 user，由收件箱入口核对）。 */
@@ -310,11 +304,7 @@ export async function acceptTaskProposal(
   const task = created.data.task
   if (!created.data.created) {
     // 幂等命中（重试）：已有任务必须正是接受本提案建出的，否则拒绝，不在别人的任务上继续。
-    const expected = createTaskRequest.parse(draft)
-    const mismatch = sameAsProposal(task, expected, p.wake_task_id, [
-      p.draft.goal,
-      ...(goal ? [goal] : []),
-    ])
+    const mismatch = sameAsProposal(task, p.wake_task_id)
     if (mismatch) {
       return fail(
         'failure',

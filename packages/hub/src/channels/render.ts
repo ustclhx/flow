@@ -22,8 +22,6 @@ export interface RenderOptions {
   /** 终端片段保留的末尾字符数；0 表示不发片段。 */
   snippetMax: number
   redact?: (text: string) => string
-  /** 条目在 Web 页面上的对外链接；没有配置 `ui.public_url` 时返回 null。 */
-  webUrl?: (itemId: string) => string | null
 }
 
 const VIA_LABEL: Readonly<Record<InboxVia, string>> = {
@@ -96,9 +94,6 @@ export function toOutbound(item: InboxItemView, o: RenderOptions): OutboundItem 
     snippet,
     actions: item.state === 'open' ? [...item.actions] : [],
     ...(item.state === 'open' && item.options ? { options: item.options.map(redact) } : {}),
-    ...(item.state === 'open' && item.source === 'task_proposal'
-      ? { web_url: o.webUrl?.(item.id) ?? null }
-      : {}),
     state: item.state,
     closed: item.closed ? { reason: item.closed.reason, label: closedLabel(item.closed) } : null,
   }

@@ -222,16 +222,15 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 **任务提案**：账本事件 `task_proposal.created|accepted|rejected`，收件箱新来源 `task_proposal`（不复用知识提案的 `proposal` 来源，避免动作路由与 `proposal_removed` 自动关闭的冲突）。
 
 - 草稿必须通过 `createTaskRequest` 校验；workspace 必须是绑定的 workspace；目标角色有效类别不能是 merge 或 supervisor；cwd / repo 必须在本 workspace 登记仓库内。
-- 条目展示角色、执行器、仓库与 cwd、验收命令、目标全文；Telegram 消息附 Web 链接，Web 上可以修改目标后再接受。
-- 接受 → 中枢以 user 身份建任务（`parent` 为提案所在唤醒任务，origin instruction，幂等键 `task-proposal:<id>`，重试安全）。`task-proposal:` 与 `supervisor:` 一样是保留前缀，任何身份经 HTTP / MCP 使用都返回 `reserved_idempotency_key`，只有中枢接受提案时内部放行；幂等命中时还要核对已有任务 `created_by=user`、`parent` 为该唤醒、origin instruction、合同与提案一致，否则 `conflict`。决策路径在提交时确定并记入 `task_proposal.created.decision_path`；草稿 `context` 不得引用 `decisions/`。接受已建出任务但收尾未完成时不能驳回，只能重新接受。
-- Telegram 的 Web 链接由渠道渲染时按 `hub.yaml` 的 `ui.public_url` 生成，不写进条目正文；未配置时注明 Web 页面仅本机可用。
+- 条目展示角色、执行器、仓库与 cwd、验收命令、目标全文；Web 上可以修改目标后再接受。Web 页面只接受本机访问（Host 与 Origin 必须是 127.0.0.1 / localhost），Telegram 消息因此不附链接，只注明“Web 页面仅本机可用（在电脑上运行 flow ui）”；从手机访问 Web 见 Open Questions。
+- 接受 → 中枢以 user 身份建任务（`parent` 为提案所在唤醒任务，origin instruction，幂等键 `task-proposal:<id>`，重试安全）。`task-proposal:` 与 `supervisor:` 一样是保留前缀，任何身份经 HTTP / MCP 使用都返回 `reserved_idempotency_key`，只有中枢接受提案时内部放行；幂等命中时还要核对已有任务 `created_by=user`、`parent` 为该唤醒、origin instruction（不比较目标与合同：保留前缀已能证明任务来自某次接受，目标可能在 Web 上被改过），否则 `conflict`。决策路径在提交时确定并记入 `task_proposal.created.decision_path`；草稿 `context` 不得引用 `decisions/`。接受已建出任务但收尾未完成时不能驳回，只能重新接受。
 - supervisor（非 reply 唤醒）可以忽略本 workspace 中由某次唤醒发起的提问条目（撤回提问）；任务提案的撤回只留给用户。
 - **验收命令不借 user 身份跳过判定**（二选一中选了更简单的一种）：接受时以 `enforceVerify` 建任务，`verify` 按非 user 身份的 D5 第 5 步规则逐条经策略判定，只有 `auto` / `auto-report` 放行，否则接受失败（`verify_not_allowed`），条目保持打开；提交提案时也先按同样规则预判，注定建不出来的提案直接拒绝。没有选"在 Web 上完整展示 verify 让用户确认"：Telegram 上的一键接受无法保证用户看过命令，且两条路径的行为会不一致。
 - 接受时再核对一次角色类别与仓库（配置可能在提交之后改动过）；`merge_request` 的批准 / 驳回经 `MergeRequestHandler` 接口路由（4.8 接入），未接入时返回 `action_not_available`。
 
 **决策**：提案可带 `title`、`expected_outcome`、`metric`、`review_date`（晚于当天，≤180 天）。接受时中枢以 user 身份写 `brain/decisions/<YYYY-MM-DD>-<slug>.md`（`type: decision`、`status: approved`、`workspace`、`sources` 引用任务 id），任务合同 `context` 引用它。
 
-**回看**：中枢注册一条每天 09:00（中枢时区）的内部规则（`decisions:review`），并在启动时扫描一次，扫描 `status: approved` 且回看日期已到（早于今天，或就是今天且已过 09:00）、尚未发过的决策，写 `decision.review_due{path, review_date}`（同一决策同一回看日期只写一次，以账本去重；停机错过的在启动或下一次扫描补发）。决策没有 workspace 或该 workspace 未启用 supervisor → 不写 `decision.review_due`，只生成一条 Digest 级的 `source: decision` 条目提醒用户（同样只生成一次，每日摘要列出）。修改 `review_date` 会重新到期；过期 14 天仍是 approved 的另补一条 Digest（兜底 supervisor 没完成回看）；决策被改为非 approved 后提醒条目自动关闭。回看结论整段写成引用块，策略层拒绝追加段中的标题行，防止伪造新的一节。`decision_review` 的"关联决策"以本次唤醒 `supervisor.wake_started.events` 中的 `decision.review_due` 为准，否则 `not_review_target`。supervisor 用 `decision_review` 追加 `## 回看 YYYY-MM-DD` 一节，并把 `status` 改为 `reviewed`、`last_verified` 改为当天；由中枢以 `hub` 身份代写，只允许本次唤醒关联的那条决策，其他字段与其他决策不可改。这是写入层"AI 不能写 decision"的唯一窄例外。
+**回看**：中枢注册一条每天 09:00（中枢时区）的内部规则（`decisions:review`），并在启动时扫描一次，扫描 `status: approved` 且回看日期已到（早于今天，或就是今天且已过 09:00）、尚未发过的决策，写 `decision.review_due{path, review_date}`（同一决策同一回看日期只写一次，以账本去重；停机错过的在启动或下一次扫描补发）。决策没有 workspace 或该 workspace 未启用 supervisor → 不写 `decision.review_due`，只生成一条 Digest 级的 `source: decision` 条目提醒用户（同样只生成一次，每日摘要列出）。修改 `review_date` 会重新到期；过期 14 天仍是 approved 的补一条 Digest（兜底 supervisor 没完成回看；与“到期回看”提醒共用同一个条目 id，同一决策同一回看日期最多一条）；决策被改为非 approved 后提醒条目自动关闭（本次读取有问题的文件跳过，不误关）。回看结论整段写成引用块，策略层拒绝追加段中的标题行，防止伪造新的一节。`decision_review` 的"关联决策"以本次唤醒 `supervisor.wake_started.events` 中的 `decision.review_due` 为准，否则 `not_review_target`。supervisor 用 `decision_review` 追加 `## 回看 YYYY-MM-DD` 一节，并把 `status` 改为 `reviewed`、`last_verified` 改为当天；由中枢以 `hub` 身份代写，只允许本次唤醒关联的那条决策，其他字段与其他决策不可改。这是写入层"AI 不能写 decision"的唯一窄例外。
 
 ### D12. 节点为 supervisor 预留执行槽
 
@@ -335,6 +334,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 ## Open Questions
 
+- 从手机访问 Web 页面（任务提案改目标后接受等）：Web 端目前只接受本机 Host / Origin，对外暴露（例如经 Tailscale 的 `ui.public_url`）涉及鉴权、CSRF 与暴露面的安全前提，需用户决定后作为单独任务实现（tasks 4.10）；在此之前 Telegram 只注明 Web 页面仅本机可用。
 - 巡检日报是否同时推送 Telegram（目前只进 Digest）。
 - `changes_requested` 后的修改任务复用原分支的方式，实现时以 codex-orca 现有能力为准。
 - 修改任务的推送是否限定到该 PR 的 head 分支（目前审查轮数只约束建任务，不约束修改任务推到哪里）：留作后续问题。

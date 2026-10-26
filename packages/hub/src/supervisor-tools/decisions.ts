@@ -144,7 +144,8 @@ export async function scanDecisionReviews(
           fm,
           `决策回看已逾期：${title}`,
           `回看日期已过 ${REVIEW_OVERDUE_DAYS} 天，决策仍为 approved：supervisor 未完成回看，请检查或自行回看。`,
-          decisionItemId(`${path}#overdue`, rd),
+          // 与"到期回看"提醒共用同一个 id：同一决策同一回看日期最多一条提醒（先生成的保留）。
+          decisionItemId(path, rd),
         )
       }
       continue
@@ -163,13 +164,17 @@ export async function scanDecisionReviews(
   }
 
   // 用户已手动改了决策（status 不再是 approved、换了回看日期或删除）：关闭对应的提醒条目。
+  // 本次读取有问题（例如正在编辑、frontmatter 暂时解析失败）的文件跳过，不误关它的提醒。
+  const unreadable = new Set(
+    read.data.issues.flatMap((i) => [
+      i.file.replace(/^brain\//, ''),
+      ...(i.id ? [`${i.id}.md`] : []),
+    ]),
+  )
   for (const item of deps.ledger.listInboxItems({ source: 'decision', state: 'open', limit: -1 })) {
+    if (unreadable.has(item.source_ref)) continue
     const rd = approved.get(item.source_ref)
-    const current =
-      rd !== undefined &&
-      (item.id === decisionItemId(item.source_ref, rd) ||
-        item.id === decisionItemId(`${item.source_ref}#overdue`, rd))
-    if (current) continue
+    if (rd !== undefined && item.id === decisionItemId(item.source_ref, rd)) continue
     deps.ledger.append(
       {
         type: 'inbox.item_closed',

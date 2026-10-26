@@ -50,8 +50,6 @@ export interface InboxServiceOptions {
   /** 渠道退避参数（测试用）。 */
   backoff?: { baseMs?: number; maxMs?: number }
   staleKnowledge?: () => number | Promise<number>
-  /** 条目在 Web 页面上的对外链接（渠道渲染时使用）。 */
-  webUrl?: (itemId: string) => string | null
 }
 
 export interface InboxService {
@@ -109,7 +107,6 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
     ...(o.resolve ? { resolve: o.resolve } : {}),
     ...(o.backoff ? { backoff: o.backoff } : {}),
     ...(o.logger ? { logger: o.logger } : {}),
-    ...(o.webUrl ? { webUrl: o.webUrl } : {}),
   })
   pusher = createInboxPusher({
     ledger: o.ledger,

@@ -37,11 +37,6 @@ export interface OutboundItem {
   actions: InboxItemAction[]
   /** supervisor 提问的候选答复（D11）：渠道显示为按钮，点选即以该选项答复；没有时省略。 */
   options?: string[]
-  /**
-   * 条目在 Web 页面上的链接（任务提案：在 Web 上修改目标后接受，D11）。null 表示没有配置
-   * `hub.yaml` 的 `ui.public_url`，页面只能在本机打开；不需要链接的条目省略。
-   */
-  web_url?: string | null
   state: 'open' | 'closed'
   /** 关闭信息；`label` 是给用户看的说明，例如"已处理（来自 CLI）"。 */
   closed: { reason: InboxCloseReason; label: string } | null

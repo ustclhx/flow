@@ -59,8 +59,6 @@ export interface ChannelManagerOptions {
   channels?: readonly ChannelSpec[]
   /** 当前的推送节奏（热加载时返回新值）。 */
   cadence?: () => InboxCadence
-  /** 条目在 Web 页面上的对外链接（`hub.yaml` 的 `ui.public_url`）；未配置时返回 null。 */
-  webUrl?: (itemId: string) => string | null
   /**
    * 收件箱操作：中枢里接的是 3.2 的 `actOnInbox`（以 user 身份，via 取渠道的 via），见 runHub。
    * 缺省时入站操作返回 `not_implemented`（只在单独使用管理器时出现）。
@@ -389,7 +387,6 @@ export function createChannelManager(o: ChannelManagerOptions): ChannelManager {
     ledger,
     snippetMax: cadence().snippet_max_chars,
     redact,
-    ...(o.webUrl ? { webUrl: o.webUrl } : {}),
   })
 
   /** 推送到期的条目。遇到传输层错误时抛出（由 runSlot 退避）。 */

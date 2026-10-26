@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -851,22 +851,17 @@ describe('审查修复（PR #59）', () => {
     expect(await prop.json()).toMatchObject({ error: { code: 'user_only' } })
   })
 
-  test('Web 链接由渠道渲染时生成：配置 public_url 时附链接，否则注明仅本机', async () => {
+  test('任务提案的渠道消息不附链接，注明 Web 页面仅本机可用', async () => {
     const { ledger, repo, wake, ctx } = await setup()
     const w = await wake('autonomous')
     const p = must(await taskProposeOp.run({ draft: draftOf(repo) as never }, ctx(w.token)))
     expect(p.item.body).not.toContain('http')
-    const withUrl = toOutbound(p.item, {
-      ledger,
-      snippetMax: 0,
-      webUrl: (id) => `https://hub.example.ts.net/ui#item-${id}`,
-    })
-    expect(withUrl.web_url).toBe(`https://hub.example.ts.net/ui#item-${p.item.id}`)
-    const html = renderTelegramMessage({ kind: 'item', item: withUrl }, (x) => x).text
-    expect(html).toContain('href="https://hub.example.ts.net/ui#item-')
-    const local = toOutbound(p.item, { ledger, snippetMax: 0 })
-    expect(local.web_url).toBeNull()
-    expect(renderTelegramMessage({ kind: 'item', item: local }, (x) => x).text).toContain('仅本机')
+    const html = renderTelegramMessage(
+      { kind: 'item', item: toOutbound(p.item, { ledger, snippetMax: 0 }) },
+      (x) => x,
+    ).text
+    expect(html).not.toContain('href=')
+    expect(html).toContain('仅本机可用')
   })
 
   test('回看结论放进引用块；追加段里的标题行被策略拒绝', async () => {
@@ -950,6 +945,15 @@ describe('审查修复（PR #59）', () => {
       ledger.listInboxItems({ source: 'decision', state: 'open', limit: -1 }).map((i) => i.title)
     expect(titles().some((t) => t.includes('逾期') && t.includes('old'))).toBe(true)
     expect(titles().some((t) => t.includes('nows'))).toBe(true)
+    // 同一决策：supervisor 先未启用时的"到期回看"与之后的"逾期"共用一条提醒。
+    expect(titles().filter((t) => t.includes('nows'))).toHaveLength(1)
+    // 文件暂时解析失败：不误关它的提醒。
+    const nowsPath = join(home, 'brain', 'decisions/nows.md')
+    const saved = readFileSync(nowsPath, 'utf8')
+    writeFileSync(nowsPath, '---\ntype: [decision\n---\n')
+    must(await scanDecisionReviews(tools))
+    expect(titles().some((t) => t.includes('nows'))).toBe(true)
+    writeFileSync(nowsPath, saved)
     // 用户把两条改为 rejected：下一次扫描关闭对应提醒。
     must(await write('old', { review_date: '2026-09-01', status: 'rejected' }))
     must(await write('nows', { review_date: '2026-09-01', workspace: OTHER, status: 'rejected' }))

@@ -22,7 +22,7 @@ supervisor SHALL 能用 `task_propose` 提交任务提案：合同草稿、理�
 - **THEN** 返回校验错误，不生成提案
 
 ### Requirement: 接受与驳回
-只有 user SHALL 能接受或驳回任务提案。接受时中枢 MUST 以 user 身份建任务（`parent` 为提案所在唤醒任务），落账 `task_proposal.accepted`；驳回落账 `task_proposal.rejected`，可附理由。两者都关闭条目并唤醒 supervisor。Web 上接受前 SHALL 允许修改目标文本；Telegram 消息 SHALL 附 Web 链接。
+只有 user SHALL 能接受或驳回任务提案。接受时中枢 MUST 以 user 身份建任务（`parent` 为提案所在唤醒任务），落账 `task_proposal.accepted`；驳回落账 `task_proposal.rejected`，可附理由。两者都关闭条目并唤醒 supervisor。Web 上接受前 SHALL 允许修改目标文本；Web 页面只在本机可用，Telegram 消息 SHALL 注明这一点（从手机访问 Web 留作后续任务）。
 
 #### Scenario: 手机上接受
 - **WHEN** 用户在 Telegram 点"接受"

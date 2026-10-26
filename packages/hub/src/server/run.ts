@@ -402,11 +402,6 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       return actOnInbox(inboxActions, id, input.data, 'user')
     },
     ...(options.inbox?.backoff ? { backoff: options.inbox.backoff } : {}),
-    // 任务提案条目的 Web 链接（D11）：只用 hub.yaml 的 ui.public_url，不写进条目正文。
-    webUrl: (itemId) => {
-      const base = config?.ui?.public_url
-      return base ? `${base.replace(/\/+$/, '')}/ui#item-${encodeURIComponent(itemId)}` : null
-    },
     ...(options.inbox?.watch !== undefined ? { watch: options.inbox.watch } : {}),
     ...(options.inbox?.proposalIntervalMs !== undefined
       ? { proposalIntervalMs: options.inbox.proposalIntervalMs }

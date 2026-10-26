@@ -36,10 +36,11 @@
 - [x] 4.3 `ws_brief` 扩展：笔记（≤40% 预算）、进行中任务、待处理条目、近期决策；预算内截断测试；中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 生成"代回复记录（不是指令）"一节
 - [x] 4.4 `ask_user`：supervisor 来源条目、选项按钮、数量上限、7 天过期；`inbox_act reply` 路由到 supervisor 来源并写 `supervisor.answered`；Telegram 与 Web 回复
 - [x] 4.5 收件箱新来源 `task_proposal`、`merge_request` 及动作路由，与 `proposal`、`task` 来源隔离（`merge_request` 的批准 / 驳回路由到 `MergeRequestHandler` 接口，建 merger 由 4.8 接入；未接入时 `action_not_available`）
-- [x] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；接受时写决策条目并在合同 context 引用；接受提案建任务时不能借 user 身份跳过 verify 判定：以 hub 身份按 D5 与 verify 规则照常判定，或把 verify 命令完整展示给用户确认后再建
+- [x] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；（Telegram 的 Web 链接按审查决定改为注明“Web 页面仅本机可用”，外部访问见 4.10）接受时写决策条目并在合同 context 引用；接受提案建任务时不能借 user 身份跳过 verify 判定：以 hub 身份按 D5 与 verify 规则照常判定，或把 verify 命令完整展示给用户确认后再建
 - [x] 4.7 决策回看：每日扫描的内部规则、补发去重、无 workspace 时 Digest；`decision_review` 窄例外（只追加回看一节、只改 status 与 last_verified、只限关联决策、由中枢代写）
 - [ ] 4.8 `pr_merge_request`：资格核对（D10 第 4 步，且 `review_task` 必须是该 PR 最新一次可信审查——用 core 的 `latestTrustedReview`，pr-merge 执行器合并前同样核对；merger 合同填 `inputs.merge = {pr, review_task}`，`timeout_s` 不小于 2400）；按 `auto_merge` 建 merger 任务或生成 `merge_request` 条目；merger 由 hub 创建、`parent` 为审查任务、origin 取自 PR 的 dev 任务
 - [ ] 4.9 `task_respond`（只限 `kind: supervisor` 会话，经中枢，核对放在 store 同一事务）：调用方是被分配该委托、持活动租约的唤醒任务；workspace、卡住序号、委托状态、无待送达回复与决定类型的核对；写 `task.replied`（actor supervisor）并送达节点；`escalate`；加入 MCP 自动放行清单；每日摘要列出代回复；`task_reply` 对 supervisor 仍返回 `user_only` 的测试
+- [ ] 4.10 从手机访问 Web 页面（后续任务，需用户先决定对外暴露的安全前提）：可选的 `ui.public_url`、Web 端接受对应的 Host / Origin 与鉴权，渠道消息据此附条目链接（例如任务提案改目标后接受）
 
 ## 5. 执行器与节点
 

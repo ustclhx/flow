@@ -146,12 +146,10 @@ function renderItem(item: OutboundItem, scale: number, r: Redact): string {
     const snippet = clipTail(r(item.snippet), Math.floor(1500 * scale))
     if (snippet) lines.push(`<pre>${escapeHtml(snippet)}</pre>`)
   }
-  if (item.state === 'open' && item.web_url !== undefined) {
-    lines.push(
-      item.web_url
-        ? `<a href="${escapeHtml(item.web_url)}">在 Web 上修改目标后接受</a>`
-        : '<i>要修改目标后再接受：在电脑上运行 flow ui（Web 页面仅本机可用）</i>',
-    )
+  // 任务提案可在 Web 上修改目标后接受（D11）。Web 页面只接受本机访问，从手机打开需要对外暴露，
+  // 留给用户决定（design Open Questions），这里只提示到电脑上操作。
+  if (item.state === 'open' && item.source === 'task_proposal') {
+    lines.push('<i>要修改目标后再接受：Web 页面仅本机可用（在电脑上运行 flow ui）</i>')
   }
   if (item.state === 'open' && item.actions.includes('reply')) {
     lines.push(
