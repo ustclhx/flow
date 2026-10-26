@@ -2,14 +2,10 @@ import { realpath } from 'node:fs/promises'
 import { homedir as osHomedir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
-  effectiveRoleKind,
   fail,
-  inferRoleKind,
   ok,
   PR_URL_RE,
   type Result,
-  type Role,
-  type RoleKind,
   type SupervisorConfig,
   type TaskContract,
   type TaskOrigin,
@@ -58,46 +54,8 @@ export const RESERVED_CAPABILITIES = ['wake'] as const
 export const reservedCapabilitiesIn = (requires: readonly string[]) =>
   requires.filter((c) => (RESERVED_CAPABILITIES as readonly string[]).includes(c.toLowerCase()))
 
-const KIND_RANK: Record<RoleKind, number> = { read: 0, write: 1, merge: 2, supervisor: 2 }
-const stricter = (a: RoleKind, b: RoleKind): RoleKind => (KIND_RANK[b] > KIND_RANK[a] ? b : a)
-
-/** 角色查找结果中参与类别判定的字段（测试注入的查找可以只给 name 与 creatable_by）。 */
-export type RoleForKind = Pick<Role, 'name'> &
-  Partial<Pick<Role, 'executor' | 'permissions' | 'kind'>>
-
-/**
- * 新任务的有效类别（D9）。节点按**合同**的 `executor` 运行、按角色取权限，所以取两者中更严格者：
- * 角色自身的有效类别，与"用角色权限跑合同执行器"推断出的类别。角色未定义（只有 user 会走到这里）时
- * 只按合同执行器推断。比如 `role: triage`（read）配 `executor: codex-orca` 时为 write。
- *
- * 合同 `verify` 由节点在沙箱外直接执行，所以**非 user 身份**建的任务只要带 verify，至少按 write 计
- * （`opts.actor` 缺省时按非 user 处理）。
- */
-export function taskKind(
-  role: RoleForKind | null,
-  contract: Pick<TaskContract, 'executor'> & Partial<Pick<TaskContract, 'verify'>>,
-  opts: { actor?: string } = {},
-): RoleKind {
-  const viaContract = inferRoleKind({
-    executor: contract.executor,
-    ...(role?.permissions === undefined ? {} : { permissions: role.permissions }),
-  })
-  let kind: RoleKind
-  if (!role || role.executor === undefined) {
-    kind = role?.kind ? stricter(role.kind, viaContract) : viaContract
-  } else {
-    const own = effectiveRoleKind({
-      executor: role.executor,
-      ...(role.permissions === undefined ? {} : { permissions: role.permissions }),
-      ...(role.kind === undefined ? {} : { kind: role.kind }),
-    })
-    kind = stricter(own, viaContract)
-  }
-  if (opts.actor !== USER_ACTOR && (contract.verify?.length ?? 0) > 0) {
-    kind = stricter(kind, 'write')
-  }
-  return kind
-}
+/** 角色查找结果中参与类别判定的字段与新任务的有效类别（D9）：定义在 core，中枢与 pr-merge 执行器共用。 */
+export { type RoleForKind, taskKind } from '@flow/core'
 
 const TERMINAL: ReadonlySet<TaskView['status']> = new Set(['done', 'failed', 'cancelled'])
 export const isTerminal = (t: Pick<TaskView, 'status'>) => TERMINAL.has(t.status)

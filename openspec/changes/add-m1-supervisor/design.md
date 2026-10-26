@@ -93,7 +93,7 @@ origin 只有两类：
 - 手动控制（user-only）：`flow supervisor wake <ws> <说明>` 写一条 `user.instruction`；`flow supervisor wake <ws> --release <instruction|autonomous>` 写 `supervisor.release{queue}`，立刻用该队列现有事件创建一次唤醒，origin 保持该队列的类别。手动放行不计入每日上限。
 - 一个 workspace 只能有一个 `kind: supervisor` 角色可用（全局最多一个，doctor 对多个报错）；唤醒任务使用它。
 - workspace 配置 `supervisor.enabled: false`、没有（或有多个、可写的）`kind: supervisor` 角色、或**没有登记仓库**（唤醒任务以登记仓库为工作目录，节点不会回退到 flow-home）时视为不可唤醒，`/ask` 回复未启用；doctor 对启用了 supervisor 却没有仓库的 workspace 给 warning。
-- 不可唤醒期间不无限积压：调度器发现某 workspace 不可唤醒而普通队列里有事件时，由 hub 写 `supervisor.queue_dropped{queue, up_to_seq, reason}`，投影据此清掉该队列中不大于 `up_to_seq` 的事件，重放结果确定，之后重新启用不会带出旧事件。稳定的原因（`disabled`、`global`、`no_repo`、没有 supervisor 角色 `no_role`、workspace 文件已不存在 `unknown_workspace`）立即静默丢弃（doctor 另有提示）；只有暂时性的原因（角色文件有错或有多个、可写的 supervisor 角色 `role_invalid`，该 workspace 的定义文件存在但有错误 `workspaces_invalid`——YAML 写到一半、校验失败、supervisor 段写错被降级为未启用，按文件判断，不看配置整体是否加载成功）先保留队列、按退避（1 分钟起翻倍、最长 1 小时）重查，持续超过 24 小时才丢弃早于宽限期的事件，并写一条 Interrupt；暂时不可用期间普通队列为空且没有委托时不再重查，等下一个事件触发。
+- 不可唤醒期间不无限积压：调度器发现某 workspace 不可唤醒而普通队列里有事件时，由 hub 写 `supervisor.queue_dropped{queue, up_to_seq, reason}`，投影据此清掉该队列中不大于 `up_to_seq` 的事件，重放结果确定，之后重新启用不会带出旧事件。稳定的原因（`disabled`、`global`、`no_repo`、没有 supervisor 角色 `no_role`、workspace 文件已不存在 `unknown_workspace`）立即静默丢弃（doctor 另有提示；`unknown_workspace` 隔 5 秒复查一次仍不存在才丢弃，避免编辑器保存时文件瞬时缺失）；只有暂时性的原因（角色文件有错或有多个、可写的 supervisor 角色 `role_invalid`，该 workspace 的定义文件存在但有错误 `workspaces_invalid`——YAML 写到一半、校验失败、supervisor 段写错被降级为未启用，按文件判断，不看配置整体是否加载成功）先保留队列、按退避（1 分钟起翻倍、最长 1 小时）重查，持续超过 24 小时才丢弃早于宽限期的事件，并写一条 Interrupt；暂时不可用期间普通队列为空且没有委托时不再重查，等下一个事件触发。因此 supervisor 段长期写错（被降级为未启用）不会被当作 `disabled` 立即丢弃，而是 24 小时后丢弃早于宽限期的事件并写 Interrupt 提醒用户修复。
 - 调度器首次启动时写一次初始化标记 `supervisor.scheduler_initialized{up_to_seq}`（取当时的账本 seq，可为 0，只能由 hub 写、只写一次）；只丢弃标记之前的普通队列事件（调度器上线前写下的 `user.instruction` 等），是否已初始化只看这条标记。之后即使首次唤醒还没建成就重启，指令也不会丢。
 - `ws/global` 固定不启用 supervisor（`supervisor.enabled` 恒为 false）：不唤醒，也不代回复其中任务的卡住；doctor 显示"global 不启用 supervisor"。workspace 文件的 `supervisor` 段校验失败时，该 workspace 照常加载，supervisor 视为未启用，问题由 doctor 报告。
 - 是否代回复统一由 `delegationEnabled(workspace)`（`enabled && delegate_replies`）判断。
@@ -144,7 +144,7 @@ claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor -
 - 经中枢的写（建任务、提案、提问、合并请求、简报、决策回看）由中枢独立校验（D5、D8）。
 - `kb_journal` 仍在本地经写入层执行（只追加），**只有 MCP 绑定这一层检查**；风险是写错 workspace 的 journal，可接受。
 - 绑定的 supervisor 仍可以对其他 workspace 的条目提交 `kb_propose`（输入不含 workspace，本地与中枢都不按绑定拦截）：提案需要用户接受才生效，属于已接受风险。
-- 唤醒 token 不经 argv 或 env 传递：节点写入 `state/wake/<task>.token`（0700/0600），MCP 进程以 `FLOW_HUB_TOKEN_FILE` 读取，任务结束即删除（见 `docs/hub-auth.md`）。
+- 唤醒 token 不经 argv 或 env 传递：节点写入 `state/wake/<task>.<lease_id>.token`（0700/0600），MCP 进程以 `FLOW_HUB_TOKEN_FILE` 读取，任务结束即删除（见 `docs/hub-auth.md`）。
 
 读边界：claude-sdk 新增权限字段 `read_scope: cwd`。设置后 PreToolUse 钩子（匹配全部工具，与 `writable_paths` 共用路径判定）只允许读合同工作目录与任务私有目录（见 D10 的 diff 文件）内的路径，拒绝 `.` 开头的路径段、`..`、符号链接越界。检查的字段包括 `file_path`、`path`、`notebook_path`，以及 Glob 的 `pattern`、Grep 的 `glob`（这两个不得是绝对路径、不得含 `..`）；输入中含其他路径类字段的非 MCP 工具一律拒绝。Flow MCP 不受影响。supervisor 与 pr-reviewer 模板都设 `read_scope: cwd`，防止读取 `state/hub.token`、密钥存储、`~/.config/gh`、`~/.ssh` 后经任务目标外传。
 
@@ -206,7 +206,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 3. `changes_requested` → supervisor 被唤醒，可以建修改任务（同一分支），受 D4 轮数上限。
 4. `approve` → supervisor 调用 `pr_merge_request{pr, review_task}`。中枢核对（全部取自账本与配置，任一项拿不准即 `merge_not_eligible`，`details.reasons` 列出原因）：
    - 该 PR 是本 workspace 内某个已 done、origin 为 instruction、有效类别恰为 write 的任务的 `kind: pr` 产物（唤醒、审查、合并任务的产物不算）；该任务上报过任务分支（`task.branch_reported`，投影 `branch`），多个候选任务的分支必须一致；
-   - PR 链接的 host/owner/repo 等于 merger 所用登记仓库 `remote.origin.url` 的仓库（纵深核对；pr-merge 合并前再核对一次）；
+   - PR 链接的 host/owner/repo 等于开出 PR 的任务在 worker 启动前采集的 `repo_snapshot.remote_url`（worker 在沙箱外运行，可能改写登记仓库的 remote，只认快照；没有快照即不合格），且等于 merger 所用登记仓库当前 `remote.origin.url` 的仓库（纵深核对；pr-merge 合并前两者都再核对一次）；
    - `review_task` 属于同一 workspace、角色在 `reviewer_roles` 中、`inputs.review.pr` 等于该 PR、`verdict = approve`，且是该 PR 最新一次可信审查（core `latestTrustedReview`）；同一 PR 没有未结束的审查任务；
    - 该审查任务的合并请求没有被驳回过（`rejected_before`：驳回后必须重新审查才能再请求）；
    - merger 的工作目录与唯一的 merge 角色能确定；
@@ -254,7 +254,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - `flow init` 在 `config/schedules.yaml` 生成注释掉的示例（`0 9 * * *`、`payload.kind: supervisor_patrol`，每个 workspace 一条，`ws/<id>` 占位）。默认不启用；已有文件不覆盖。
 - 巡检提示词：读简报 → 看进行中/卡住/失败任务、未合并 PR、过期事实、近期 raw/inbox → 写日报（journal，并作为 Digest 条目进入每日摘要）→ 写类工作只能提案（D5 强制）→ 更新简报。巡检唤醒的 `inputs.wake.events` 带 `type: schedule.fired` 与"定时巡检（规则 …）"说明，提示词据此区分巡检。以上流程是**提示词引导**的，不是确定性保证；确定性的只有下面的日报通道与 D5 的写类限制。
 - **日报通道**（确定性）：新增只限 supervisor 的 `patrol_report{workspace, text ≤3500}`，经中枢执行。中枢核对调用方是非 reply 唤醒（`reply_only_wake`）、绑定 workspace 一致、本次唤醒合并的事件中有 `schedule.fired{payload.kind: supervisor_patrol}`（否则 `not_patrol_wake`）、本次唤醒尚未提交（否则 `patrol_already_reported`）；然后对正文做 `redactSecrets`（已登记的密钥值与正则兜底）并转义行首的 `#` 标题标记（防止伪造 journal 记录标题），以 supervisor 身份经写入层追加一条 journal（首行 `巡检日报（唤醒 <id>）`，账本写入失败后重试时按唤醒 id 去重，不重复追加），并写一条 Digest 级、`source: supervisor`、无动作的条目 `patrol.<唤醒任务 id>`（固定 Digest，不推送）。每日摘要生成时列入"supervisor 巡检日报"一节，并以 `digested` 关闭。选它而不是"`kb_journal` 带标记"：`kb_journal` 在 MCP 进程本地执行、中枢看不到，标记也可被任何能写 journal 的身份伪造。**不扩大权限**：journal 本来就允许 supervisor 写，条目只是摘要里的展示，没有可执行动作；每次巡检唤醒最多一份，巡检本身受 `autonomous_wakes_per_day` 限制。`patrol_report` 加入 supervisor 会话的 MCP 自动放行清单。
-- **花费汇总**（确定性）：只统计唤醒任务本身（含 reply 唤醒）结果中的 `result.cost.usd`（claude-sdk 的估算），按时间范围查询 `supervisor.wake_started`、按唤醒开始时间归入日期，只计其中已结束的唤醒，按 workspace 汇总次数、金额（6 位小数）与未上报费用的次数；派生任务与未结束的唤醒不计入。每日摘要加"supervisor 花费（估算）"一节（覆盖摘要的"昨天"）；`flow supervisor status` 显示今日（中枢时区）开始且已结束的唤醒的花费（`today.cost_usd`、`cost_wakes`、`cost_unreported`）。
+- **花费汇总**（确定性）：只统计唤醒任务本身（含 reply 唤醒）结果中的 `result.cost.usd`（claude-sdk 的估算），按时间范围查询终态事件（`task.done` / `task.failed` / `task.cancelled`）中的唤醒任务（以 `supervisor.wake_started` 为准）、按唤醒**结束**时间归入日期（每个唤醒恰好计入一份摘要；按开始时间会漏掉昨天开始、摘要生成后才结束的唤醒），分批查询以 seq 为游标，按 workspace 汇总次数、金额（6 位小数）与未上报费用的次数；派生任务与未结束的唤醒不计入。每日摘要加"supervisor 花费（估算）"一节（覆盖摘要的"昨天"）；`flow supervisor status` 显示今日（中枢时区）结束的唤醒的花费（`today.cost_usd`、`cost_wakes`、`cost_unreported`）。
 - doctor 对启用 supervisor（非 global、有登记仓库、存在 supervisor 角色）却没有巡检规则的 workspace 给 info；`schedules.yaml` 读不出来时不给（由 `flow hub status` 报告）。
 
 ### D14. supervisor 角色模板

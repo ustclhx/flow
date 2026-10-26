@@ -35,6 +35,7 @@ import type { z } from 'zod'
 import type { EventInput, LeaseRecord, LedgerStore } from '../ledger/store.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { type HubClock, systemClock } from '../server/clock.ts'
+import type { HubLogger } from '../server/maintenance.ts'
 
 /**
  * 节点协议的中枢侧（tasks.md 4.1；node-protocol spec；design D4）。
@@ -80,6 +81,8 @@ export interface NodeServiceOptions extends NodeProtocolConfig {
    * （`wake_token`）；不是唤醒任务时返回 undefined。缺省不签发。
    */
   issueWakeToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
+  /** 不影响请求结果的失败（例如任务分支上报写入失败）只记日志。 */
+  logger?: Pick<HubLogger, 'warn'>
 }
 
 export interface AcquireOptions {
@@ -99,8 +102,11 @@ export interface NodeService {
   renew(leaseId: string, body: unknown): Result<RenewLeaseData>
   complete(leaseId: string, body: unknown): Result<CompleteLeaseData>
   ackReply(leaseId: string, body: unknown): Result<AckReplyData>
-  /** 处理全部已到期的活动租约，返回处理的数量。 */
-  expireDue(): number
+  /**
+   * 处理全部已到期的活动租约，返回处理的数量。`graceMs`：中枢自身最近被卡住（事件循环得不到调度）的
+   * 时长，到期不足这么久的租约这一轮先不处理——卡住期间节点的续约可能正排在后面等待处理。
+   */
+  expireDue(opts?: { graceMs?: number }): number
   /** 当前挂起的 long-poll 数（测试与诊断）。 */
   waiting(): number
   /** 结束全部等待（返回空结果）并取消订阅。 */
@@ -276,17 +282,22 @@ export function expiryDrafts(
       attempt: lease.attempt,
     },
   }
-  if (task.status === 'blocked') {
-    if (task.cancel_requested) {
-      return [
-        expired,
-        {
-          ...base,
-          type: 'task.cancelled',
-          payload: { reason: `已请求取消，节点 ${lease.node_id} 的租约在卡住期间过期` },
+  // 已请求取消：无论 running / verifying / blocked，租约过期一律取消，不重新排队、不转 node_lost
+  // （与 completionDrafts、ackReply 中"不让重新排队覆盖取消"一致）。节点没有确认，worker 可能仍在运行。
+  if (task.cancel_requested) {
+    return [
+      expired,
+      {
+        ...base,
+        type: 'task.cancelled',
+        payload: {
+          reason: `已请求取消；节点 ${lease.node_id} 的租约过期，未确认 worker 已停止`,
+          node_id: lease.node_id,
         },
-      ]
-    }
+      },
+    ]
+  }
+  if (task.status === 'blocked') {
     if (pendingReply) {
       const session = task.blocked?.session
       return [
@@ -713,8 +724,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       return after ? ok({ task: after }) : fail('failure', 'internal_error', '任务不可见')
     },
 
-    expireDue() {
-      const now = clock.now()
+    expireDue(opts = {}) {
+      const now = clock.now() - Math.max(0, opts.graceMs ?? 0)
       let handled = 0
       for (const lease of ledger.activeLeases()) {
         // activeLeases 按 expires_at 升序。
@@ -766,9 +777,13 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         },
         { actor: `node:${lease.node_id}` },
       )
-      return written.ok ? 'recorded' : 'ignored'
+      if (written.ok) return 'recorded'
+      o.logger?.warn('任务分支上报写入失败，忽略', { task_id: task.id, error: written.error })
+      return 'ignored'
     } catch (err) {
-      return isSqliteBusy(err) ? 'retry' : 'ignored'
+      if (isSqliteBusy(err)) return 'retry'
+      o.logger?.warn('任务分支上报写入失败，忽略', { task_id: task.id, error: String(err) })
+      return 'ignored'
     }
   }
 

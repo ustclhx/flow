@@ -70,6 +70,11 @@ const CREATE_FAILURES_ALERT = 3
 const UNAVAILABLE_RETRY_BASE_MS = 60_000
 const UNAVAILABLE_RETRY_MAX_MS = 60 * 60 * 1000
 export const UNAVAILABLE_GRACE_MS = 24 * 60 * 60 * 1000
+/**
+ * workspace 文件不存在时，隔这么久复查一次才按稳定原因丢弃积压：编辑器"写临时文件再改名"式保存、
+ * 或先删再写时，文件会短暂不存在。
+ */
+export const MISSING_RECHECK_MS = 5_000
 /** 稳定的不可唤醒原因：立即丢弃积压。其余（角色、workspace 文件）视为暂时的。 */
 /**
  * 稳定的不可唤醒原因：立即静默丢弃积压（doctor 已提示）。只有 `role_invalid`（角色文件有错、多个或可写的
@@ -101,6 +106,11 @@ export interface WakeSchedulerOptions {
    * 未启用）——暂时的，24 小时宽限；`ok` 正常。缺省按 `workspaces` 是否找到判断（找到为 ok，否则 missing）。
    */
   workspaceState?: (ref: string) => Promise<WorkspaceFileState>
+  /**
+   * 一次读取同时给出 `workspaces` 与 `workspaceState` 的结果（`workspaceConfigFromHome`）；给出时调度
+   * 判断可唤醒性只用它，不再分别调用上面两个（中枢用它，避免每次调度重复读盘）。
+   */
+  workspaceConfig?: (ref: string) => Promise<WorkspaceConfigView>
   /** 唯一的 supervisor 角色（core `findSupervisorRole`）：没有为 null，多个或可写时失败。 */
   supervisorRole: () => Promise<Result<Role | null>>
   /** 计"今天"用的日期（YYYY-MM-DD），默认中枢本地时区。 */
@@ -152,19 +162,36 @@ export type WorkspaceFileState = 'missing' | 'invalid' | 'ok'
  * - 否则 ok。
  */
 export function workspaceStateFromHome(home: string): (ref: string) => Promise<WorkspaceFileState> {
+  const config = workspaceConfigFromHome(home)
+  return async (ref) => (await config(ref)).state
+}
+
+/** 某 workspace 的定义文件状态与加载结果（找不到为 null）。 */
+export interface WorkspaceConfigView {
+  state: WorkspaceFileState
+  ws: WorkspaceInfo | null
+}
+
+/**
+ * 同时给出 `workspaceStateFromHome` 的状态与 `workspaceLookupFromHome` 的加载结果，只读一次
+ * `config/workspaces/`：调度器每次调度都要两者，分开读会重复解析全部 workspace 文件。
+ */
+export function workspaceConfigFromHome(
+  home: string,
+): (ref: string) => Promise<WorkspaceConfigView> {
   return async (ref) => {
-    if (ref === 'ws/global') return 'ok'
+    const loaded = await loadWorkspaces(home)
+    const ws = loaded.ok ? (loaded.data.workspaces.find((w) => w.ref === ref) ?? null) : null
+    if (ref === 'ws/global') return { state: 'ok', ws }
     const dir = flowPaths(home).workspaces
     const files = ['yaml', 'yml']
       .map((ext) => join(dir, `${wsId(ref)}.${ext}`))
       .filter((f) => existsSync(f))
-    if (files.length === 0) return 'missing'
-    const loaded = await loadWorkspaces(home)
-    if (!loaded.ok) return 'invalid'
+    if (files.length === 0) return { state: 'missing', ws }
+    if (!loaded.ok) return { state: 'invalid', ws }
     const rels = new Set(files.map((f) => relative(home, f)))
     const flagged = [...loaded.data.issues, ...loaded.data.warnings].some((i) => rels.has(i.file))
-    if (flagged || !loaded.data.workspaces.some((w) => w.ref === ref)) return 'invalid'
-    return 'ok'
+    return { state: flagged || !ws ? 'invalid' : 'ok', ws }
   }
 }
 
@@ -229,6 +256,8 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
   const createFailures = new Map<string, number>()
   /** 暂时不可唤醒时的重查次数（内存，用于退避；可唤醒后清零）。 */
   const unavailableRetries = new Map<string, number>()
+  /** 首次发现 workspace 文件不存在的时间（内存；复查前不丢弃积压）。 */
+  const missingSince = new Map<string, number>()
   let unsubscribe: (() => void) | undefined
   let stopped = false
   /** 每个 workspace 的调度串行执行；`dirty` 表示执行期间又有新事件，结束后再跑一次。 */
@@ -248,15 +277,21 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     }
   }
 
-  async function availability(ref: string): Promise<Availability> {
+  async function workspaceView(ref: string): Promise<WorkspaceConfigView> {
+    if (o.workspaceConfig) return o.workspaceConfig(ref)
     const ws = await o.workspaces(ref)
-    // 文件正在编辑（YAML 写到一半、supervisor 段写错被降级为未启用等）是暂时的，先于"未启用"判断；
-    // 只有文件确实不存在才是稳定的 unknown_workspace。
     const state: WorkspaceFileState = o.workspaceState
       ? await o.workspaceState(ref)
       : ws
         ? 'ok'
         : 'missing'
+    return { state, ws }
+  }
+
+  async function availability(ref: string): Promise<Availability> {
+    // 文件正在编辑（YAML 写到一半、supervisor 段写错被降级为未启用等）是暂时的，先于"未启用"判断；
+    // 只有文件确实不存在才是稳定的 unknown_workspace（调度时还要隔几秒复查一次，见 MISSING_RECHECK_MS）。
+    const { state, ws } = await workspaceView(ref)
     if (state === 'invalid') {
       return {
         ok: false,
@@ -756,6 +791,19 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         if (!valid) projection.forget(ref, 'reply', q.seq)
         return valid
       })
+    if (!a.ok && a.drop === 'unknown_workspace') {
+      // 文件不存在：可能是编辑器保存的瞬时缺失，隔 MISSING_RECHECK_MS 复查一次仍不存在才丢弃。
+      const since = missingSince.get(ref) ?? now
+      if (now - since < MISSING_RECHECK_MS) {
+        missingSince.set(ref, since)
+        const delegations = replyPending()
+        if (delegations.length)
+          o.onReplyUnavailable?.({ workspace: ref, reason: 'unavailable', delegations })
+        arm(ref, since + MISSING_RECHECK_MS)
+        return
+      }
+    }
+    missingSince.delete(ref)
     if (!a.ok) {
       const delegations = replyPending()
       if (delegations.length)
@@ -1065,7 +1113,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         }
         const limits = ws.supervisor.limits
         const todayKey = dayKey(now)
-        // 今天的唤醒：先按 36 小时窗口查询，再按 dayKey 精确筛选（dayKey 可注入，不假定时区）。
+        // 今天结束的唤醒：先按 36 小时窗口查询，再按 dayKey 精确筛选（dayKey 可注入，不假定时区）。
         const cost = wakeCosts(
           ledger,
           { from: now - 36 * 3600_000, to: now + 1, include: (at) => dayKey(at) === todayKey },

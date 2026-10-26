@@ -186,8 +186,9 @@ export interface CreateTaskOptions {
    * 只限 hub：以**另一个身份**在同一事务里写入的事件——`before` 在 `task.created` 之前、`after(taskId)`
    * 在 `withCreated` 之后。用于用户批准合并（D10）：`merge_request.approved`（actor user）、hub 建 merger、
    * 条目关闭（actor user）三者要么一起写入，要么都不写。只在真正新建任务时写入，幂等命中时不写。
+   * 身份只能是 `user`（目前唯一的用途；需要别的身份时再放开并补核对）。
    */
-  coWrite?: { actor: string; before?: EventInput[]; after?: (taskId: string) => EventInput[] }
+  coWrite?: { actor: 'user'; before?: EventInput[]; after?: (taskId: string) => EventInput[] }
   /**
    * 调用方所在的唤醒（D6）：**只由路由按唤醒绑定 token 填入**，不取自请求体、`--task` 或请求头。
    * actor 为 supervisor 时必须提供，其他身份不得提供。
@@ -282,6 +283,10 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         opts.actor !== HUB_ACTOR
       ) {
         return fail('failure', 'actor_mismatch', 'withCreated、coWrite 只限中枢（hub）使用')
+      }
+      // 类型已限定为 user；运行时再核对一次，不让别的身份借 hub 的事务写入。
+      if (opts.coWrite !== undefined && opts.coWrite.actor !== 'user') {
+        return fail('failure', 'actor_mismatch', 'coWrite 的身份只能是 user')
       }
       // inputs.wake 只由中枢的唤醒调度写入（D1）；其他身份携带即拒绝，避免伪造唤醒上下文。
       if (contract.inputs?.wake !== undefined && opts.actor !== HUB_ACTOR) {

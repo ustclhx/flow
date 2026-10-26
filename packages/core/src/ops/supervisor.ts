@@ -13,9 +13,10 @@ import {
   taskRespondRequest,
 } from '../ledger/protocol.ts'
 import { prUrl } from '../ledger/task.ts'
-import { fail, type Result } from '../result.ts'
+import { fail, ok, type Result } from '../result.ts'
 import { SUPERVISOR_ACTOR } from '../roles.ts'
 import { dateString } from '../schema/common.ts'
+import { checkBoundWorkspace } from './binding.ts'
 import { defineOperation, type OpContext } from './operation.ts'
 
 /**
@@ -48,6 +49,11 @@ export const askUserOp = defineOperation({
   summary: '经中枢向用户发一条提问（Decide 条目，可带 2–4 个选项）；不挂起本次唤醒',
   input: askUserInput,
   positional: ['workspace', 'question'],
+  // 会话绑定（tasks 4.1）：本地先拒绝向别的 workspace 提问；中枢仍按唤醒 token 校验。
+  bind: (input: AskUserInput, binding) => {
+    const ws = checkBoundWorkspace(input.workspace, binding)
+    return ws.ok ? ok(input) : ws
+  },
   run: async (input: AskUserInput, ctx) => {
     const denied = supervisorOnly('ask_user', ctx)
     if (denied) return denied
@@ -86,6 +92,11 @@ export const taskProposeOp = defineOperation({
   summary: '经中枢提交任务提案，由用户在收件箱接受后才建任务；可附决策与回看日期',
   input: taskProposeInput,
   fileInput: true,
+  // 会话绑定（tasks 4.1）：草稿只能是绑定 workspace 的任务；中枢仍按唤醒 token 校验。
+  bind: (input: TaskProposeInput, binding) => {
+    const ws = checkBoundWorkspace(input.draft.workspace, binding)
+    return ws.ok ? ok(input) : ws
+  },
   run: async (input: TaskProposeInput, ctx) => {
     const denied = supervisorOnly('task_propose', ctx)
     if (denied) return denied

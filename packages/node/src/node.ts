@@ -50,8 +50,14 @@ import {
   type StuckVerdict,
 } from './executor.ts'
 import { createFakeExecutor } from './fake.ts'
+import { acquireNodeLock } from './node-lock.ts'
 import { createPolicyPrecheck, type Precheck, type PrecheckRequest } from './precheck.ts'
-import { computeDiffStat, type NodeEnvReport, nodeEnvReport, snapshotRepo } from './push-env.ts'
+import {
+  computeDiffStat,
+  type NodeEnvReport,
+  nodeEnvReport,
+  snapshotRepoResult,
+} from './push-env.ts'
 import { verifyTask } from './verify.ts'
 import { cleanWakeTokenDir, removeWakeTokenFile, writeWakeTokenFile } from './wake-token.ts'
 import { resolveContractCwd, workspaceRepos } from './workdir.ts'
@@ -143,6 +149,22 @@ export interface RunningNode {
 }
 
 export const JUMP_THRESHOLD_MS = 30_000
+/**
+ * 中枢的 `invalid_arguments` 是否因为某个字段（旧中枢的 strict 校验不认识它）：只看 `details`
+ * 中逐字段的问题是否提到该字段，其他原因的参数错误不当作"旧中枢"。
+ */
+export function rejectsField(error: { code: string; details?: unknown }, field: string): boolean {
+  if (error.code !== 'invalid_arguments' || !Array.isArray(error.details)) return false
+  const re = new RegExp(`(^|[^A-Za-z0-9_])${field}([^A-Za-z0-9_]|$)`)
+  return error.details.some((d) => {
+    if (!d || typeof d !== 'object') return false
+    // `field` 是 `formatZodIssues` 给出的点分路径；未知字段（unrecognized_keys）没有路径，只在 message 中。
+    const { message, field: at } = d as { message?: unknown; field?: unknown }
+    if (typeof at === 'string' && (at === field || at.startsWith(`${field}.`))) return true
+    return typeof message === 'string' && re.test(message)
+  })
+}
+
 /** 中枢拒绝 slots 后预留槽循环的重试间隔。 */
 export const SLOTS_RETRY_MS = 5 * 60_000
 const JUMP_CHECK_MS = 1_000
@@ -771,14 +793,18 @@ class LeaseRunner {
    * 每个租约一次。中枢还没有快照时，对执行器解析出的登记仓库（`report.repo`）采集快照一并上报；
    * 已有快照（随租约下发）时只用它，不重新采集。
    */
-  private reportBranch(report: { branch: string; worktree: string; repo?: string }) {
-    if (this.branchReported) return
+  /**
+   * 返回的 Promise 在 realpath 与仓库快照采集完成、待上报内容就绪后结束（不等中枢确认）：执行器应等它
+   * 结束再启动 worker，快照因此反映 worker 改动之前的仓库状态（remote_url 等）。不会 reject。
+   */
+  private reportBranch(report: { branch: string; worktree: string; repo?: string }): Promise<void> {
+    if (this.branchReported) return Promise.resolve()
     if (!taskBranch.safeParse(report.branch).success) {
       this.env.logger.warn(`执行器上报的任务分支不合法，忽略：${report.branch}`)
-      return
+      return Promise.resolve()
     }
     this.branchReported = true
-    void (async () => {
+    return (async () => {
       let worktree: string
       try {
         worktree = await realpath(report.worktree)
@@ -788,14 +814,22 @@ class LeaseRunner {
       }
       let collected: RepoSnapshot | undefined
       if (!this.snapshot && report.repo) {
+        let why: string
         try {
-          collected = await snapshotRepo(report.repo, {
+          const r = await snapshotRepoResult(report.repo, {
             registeredRepos: this.repos,
             ...(this.env.envRunner ? { run: this.env.envRunner } : {}),
             env: this.env.envVars ?? executorEnv(),
           })
-        } catch {
+          collected = r.ok ? r.snapshot : undefined
+          why = r.ok ? '' : r.reason
+        } catch (err) {
           collected = undefined
+          why = String(err)
+        }
+        // 没有快照的任务之后不能走合并流程（中枢与 pr-merge 都只认快照），记下原因便于排查。
+        if (!collected) {
+          this.env.logger.warn(`登记仓库 ${report.repo} 的快照没有采到（${why}），任务分支照常上报`)
         }
       }
       if (this.released) return
@@ -808,7 +842,9 @@ class LeaseRunner {
         ...(collected ? { repo_snapshot: collected } : {}),
       }
       void this.renewNow()
-    })()
+    })().catch((err) => {
+      this.env.logger.warn('准备任务分支上报失败', String(err))
+    })
   }
 
   private enterRunning() {
@@ -921,7 +957,12 @@ class LeaseRunner {
       let wakeTokenFile: string | undefined
       try {
         if (grant.wake_token) {
-          wakeTokenFile = await writeWakeTokenFile(env.home, grant.task_id, grant.wake_token)
+          wakeTokenFile = await writeWakeTokenFile(
+            env.home,
+            grant.task_id,
+            grant.lease_id,
+            grant.wake_token,
+          )
         }
         this.run = executor.run(grant.contract, {
           taskId: grant.task_id,
@@ -1135,7 +1176,36 @@ class LeaseRunner {
   }
 }
 
+/**
+ * 启动节点。先取得节点单实例锁（`state/node.lock`）：启动清理（`state/wake/` 的 token 文件、执行器残留）
+ * 只在确认没有并行节点时进行；锁在节点停止或启动失败时释放。
+ */
 export async function startNode(options: StartNodeOptions): Promise<Result<RunningNode>> {
+  const lock = await acquireNodeLock(options.home)
+  if (!lock.ok) return lock
+  let started: Result<RunningNode>
+  try {
+    started = await startNodeLocked(options)
+  } catch (err) {
+    lock.data.release()
+    throw err
+  }
+  if (!started.ok) {
+    lock.data.release()
+    return started
+  }
+  const node = started.data
+  let stopping: Promise<void> | undefined
+  return ok({
+    ...node,
+    stop() {
+      stopping ??= node.stop().finally(() => lock.data.release())
+      return stopping
+    },
+  })
+}
+
+async function startNodeLocked(options: StartNodeOptions): Promise<Result<RunningNode>> {
   const { home } = options
   const clock = options.clock ?? systemClock
   const logger = options.logger ?? consoleLogger
@@ -1161,6 +1231,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
   }
 
   // 上次运行残留的唤醒 token 文件（进程被杀时来不及删除）：启动时清理，租约早已失效。
+  // 调用方（startNode）已持有节点单实例锁，不会误删并行节点的文件。
   await cleanWakeTokenDir(home)
 
   const id =
@@ -1320,7 +1391,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
         // 中枢丢失了注册（例如重建）：重新注册；多个循环同时发现时只重置一次。
         if (r.error.code === 'node_not_registered') {
           if (registration === current) registration = undefined
-        } else if (slots && r.error.code === 'invalid_arguments') {
+        } else if (slots && rejectsField(r.error, 'slots')) {
           // 旧中枢不认识 slots：只告警一次，长退避后再试（中枢升级后自动恢复）。
           if (!slotsRejected.has(kind)) {
             slotsRejected.add(kind)

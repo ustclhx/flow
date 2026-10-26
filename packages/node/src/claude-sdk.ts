@@ -1,5 +1,5 @@
 import { readFile, realpath } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type {
   CanUseTool,
   EffortLevel,
@@ -1202,7 +1202,8 @@ async function isWithin(child: string, parent: string): Promise<boolean> {
     }
   }
   const rel = relative(await real(parent), await real(child))
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  // 只有 `..` 本身或以 `../` 开头才在外面；`..foo/x` 是 parent 下名为 `..foo` 的目录。
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
 /**

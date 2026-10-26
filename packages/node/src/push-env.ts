@@ -222,17 +222,33 @@ export async function snapshotRepo(
   repo: string,
   o: Pick<RepoEnvOptions, 'registeredRepos' | 'run' | 'env' | 'timeoutMs'>,
 ): Promise<RepoSnapshot | undefined> {
+  const r = await snapshotRepoResult(repo, o)
+  return r.ok ? r.snapshot : undefined
+}
+
+/** 同 `snapshotRepo`，采不到时给出原因（供日志）。 */
+export async function snapshotRepoResult(
+  repo: string,
+  o: Pick<RepoEnvOptions, 'registeredRepos' | 'run' | 'env' | 'timeoutMs'>,
+): Promise<{ ok: true; snapshot: RepoSnapshot } | { ok: false; reason: string }> {
   const opened = await open(repo, o)
-  if (!opened.ok || opened.loc.workTree !== opened.loc.repo) return undefined
+  if (!opened.ok) return { ok: false, reason: opened.reason }
+  if (opened.loc.workTree !== opened.loc.repo) {
+    return { ok: false, reason: 'not_repo_root' }
+  }
   const url = single(await opened.git.run(['config', '--get-all', 'remote.origin.url']))
-  if (!url || parseRemoteUrl(url)?.host !== ALLOWED_HOST) return undefined
+  if (!url) return { ok: false, reason: 'origin_url_not_single' }
+  if (parseRemoteUrl(url)?.host !== ALLOWED_HOST) return { ok: false, reason: 'origin_not_github' }
   const head = (
     await opened.git.run(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
   )?.trim()
   const branch = head?.startsWith('origin/') ? head.slice('origin/'.length) : undefined
   return {
-    remote_url: url,
-    ...(branch && taskBranch.safeParse(branch).success ? { default_branch: branch } : {}),
+    ok: true,
+    snapshot: {
+      remote_url: url,
+      ...(branch && taskBranch.safeParse(branch).success ? { default_branch: branch } : {}),
+    },
   }
 }
 

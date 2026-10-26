@@ -229,6 +229,8 @@ describe('节点端到端（fake 执行器）', () => {
   })
 
   test('允许重试：过期后 requeued，被另一个节点再次领取', async () => {
+    // 同一 flow-home 只能有一个节点（state/node.lock）：先停掉主节点（单独运行本用例时它还在运行）。
+    await node.stop()
     const start = async (nodeId: string) => {
       const n = await startNode({ home, clock, logger: quiet, nodeId })
       if (!n.ok) throw new Error(n.error.message)

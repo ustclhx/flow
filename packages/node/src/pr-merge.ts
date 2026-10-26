@@ -4,10 +4,12 @@ import {
   fail,
   gitSha,
   latestTrustedReview,
+  loadRoles,
   loadWorkspaces,
   mergeInputs,
   ok,
   type Result,
+  type Role,
   redactSecrets,
   reviewApproves,
   type SupervisorConfig,
@@ -15,6 +17,7 @@ import {
   type TaskContract,
   type TaskResult,
   type TaskView,
+  taskKind,
 } from '@flow/core'
 import type { NodeHubClient } from './client.ts'
 import { nodeHubClientFromHome } from './client.ts'
@@ -36,6 +39,7 @@ import {
   type PrRef,
   type PrSnapshot,
   parsePrUrl,
+  parseRemoteUrl,
   type RepoRef,
   sameRepo,
 } from './github.ts'
@@ -48,6 +52,7 @@ import { resolveContractCwd } from './workdir.ts'
  * 合并前依次核对（任一不满足 → `failed(<原因码>)`，不合并）：
  * 1. 合同 `inputs.merge = {pr, review_task}` 合法（`invalid_inputs`）；
  * 2. 工作目录是本 workspace 登记的仓库，PR 链接的仓库等于其 `remote.origin.url`（`repo_not_in_workspace`）；
+ *    并且等于开出 PR 的任务在 worker 启动前采集的 `repo_snapshot.remote_url`（第 4 步读到任务列表后核对）；
  * 3. 本任务由 hub 或 user 创建、origin 为 instruction、`parent` 就是审查任务（`merge_not_eligible`）；
  * 4. 审查任务：同一 workspace、执行器 claude-sdk、角色在 `supervisor.reviewer_roles` 中、已 done、
  *    `inputs.review.pr` 等于该 PR、结论 approve，且是该 PR **最新一次**可信审查（`review_not_approved`）；
@@ -100,6 +105,8 @@ export interface PrMergeOptions {
   hub?: HubReader
   /** 读取 workspace 的 supervisor 配置；缺省读 `config/workspaces/`，没有该 workspace 时返回 undefined。 */
   resolveSupervisor?: (workspace: string) => Promise<Result<SupervisorConfig | undefined>>
+  /** 全部角色（核对开出 PR 的任务的有效类别）；缺省读 `config/roles/`。 */
+  resolveRoles?: () => Promise<Result<readonly Role[]>>
   /** 合并后等待流水线的最长毫秒数，缺省 30 分钟。 */
   pipelineTimeoutMs?: number
   /** 查询 workflow runs 的间隔，缺省 15 秒（也是心跳间隔，不得超过 2 分钟）。 */
@@ -155,6 +162,12 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
       const loaded = await loadWorkspaces(options.home)
       if (!loaded.ok) return loaded
       return ok(loaded.data.workspaces.find((w) => w.ref === workspace)?.supervisor)
+    })
+  const resolveRoles =
+    options.resolveRoles ??
+    (async () => {
+      const loaded = await loadRoles(options.home)
+      return loaded.ok ? ok(loaded.data.roles) : loaded
     })
   let hubClient: HubReader | undefined = options.hub
   const hub = async (): Promise<HubReader> => {
@@ -312,6 +325,13 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
             'review_not_approved',
             `审查任务 ${reviewTaskId} 不是该 PR 最新一次可信审查（最新为 ${latest?.id ?? '无'}）`,
           )
+        // 开出 PR 的任务启动前的仓库快照（与中枢相同的纵深核对）：worker 在沙箱外运行，可能改写登记仓库的
+        // remote，只认 worker 启动前采集的 `repo_snapshot.remote_url`。
+        const roles = await resolveRoles()
+        if (!roles.ok)
+          return failed('merge_not_eligible', `无法读取角色配置：${roles.error.message}`)
+        const snapshotProblem = devSnapshotProblem(listed.data.tasks, pr, branch, repo, roles.data)
+        if (snapshotProblem) return failed('repo_not_in_workspace', snapshotProblem)
         const reviewedSha = approves.reviewed_sha
         status(`审查任务 ${reviewTaskId} 结论 approve，审查的 head ${reviewedSha}`)
         if (signal.aborted) return cancelled('合并前已取消')
@@ -547,6 +567,36 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
       }
     },
   }
+}
+
+/**
+ * 开出 PR 的任务的仓库快照核对。候选与中枢的资格核对一致：所有已 done、产出该 PR、上报的任务分支等于
+ * `inputs.merge.branch`、origin 为 instruction、有效类别为 write（按当前角色配置）的任务。至少一个，且每个
+ * 都带可识别的 `repo_snapshot`，指向 PR 所在仓库与当前登记仓库。返回不满足的原因。
+ */
+export function devSnapshotProblem(
+  done: readonly TaskView[],
+  pr: PrRef,
+  branch: string,
+  current: RepoRef,
+  roles: readonly Role[],
+): string | null {
+  const devs = done.filter((t) => {
+    if (t.status !== 'done' || t.origin !== 'instruction' || t.branch !== branch) return false
+    if (!(t.result?.artifacts ?? []).some((a) => a.kind === 'pr' && samePrUrl(a.ref, pr.url)))
+      return false
+    const role = roles.find((r) => r.name === t.contract.role)
+    return role !== undefined && taskKind(role, t.contract, { actor: t.created_by }) === 'write'
+  })
+  if (devs.length === 0)
+    return `没有找到开出 PR ${pr.url}（任务分支 ${branch}）的已完成写类任务，无法核对它启动前的登记仓库快照`
+  for (const t of devs) {
+    const snap = t.repo_snapshot ? parseRemoteUrl(t.repo_snapshot.remote_url) : undefined
+    if (!snap) return `开出 PR 的任务 ${t.id} 没有可识别的登记仓库快照（repo_snapshot）`
+    if (!sameRepo(snap, pr) || !sameRepo(snap, current))
+      return `PR 不属于开出它的任务 ${t.id} 启动前的登记仓库 ${snap.host}/${snap.owner}/${snap.repo}`
+  }
+  return null
 }
 
 /** 本任务的资格：由 hub 或 user 创建、origin 为 instruction、parent 为审查任务。返回不满足的原因。 */

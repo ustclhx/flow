@@ -250,7 +250,7 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
         ),
       )
     }
-    // supervisor 花费（D13）：昨天开始的唤醒任务（含 reply 唤醒）中已结束的，按 workspace 汇总 result.cost.usd。
+    // supervisor 花费（D13）：昨天结束的唤醒任务（含 reply 唤醒），按 workspace 汇总 result.cost.usd（按结束时间归日，每个唤醒恰好计入一份摘要）。
     const costs = wakeCosts(ledger, { from, to })
     if (costs.length > 0) {
       const total = roundUsd(costs.reduce((n, c) => n + c.usd, 0))

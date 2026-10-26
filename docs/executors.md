@@ -357,7 +357,7 @@ pr-merge 执行器**不调用任何模型**，合同的 `inputs.merge = {pr, rev
 | 核对 | 原因码 |
 | --- | --- |
 | `inputs.merge` 合法 | `invalid_inputs` |
-| cwd 是本 workspace 登记仓库；PR 链接的仓库等于 `remote.origin.url`；GraphQL 报告的仓库一致 | `repo_not_in_workspace` |
+| cwd 是本 workspace 登记仓库；PR 链接的仓库等于 `remote.origin.url`，也等于开出 PR 的任务在 worker 启动前采集的 `repo_snapshot.remote_url`；GraphQL 报告的仓库一致 | `repo_not_in_workspace` |
 | 读到 workspace 配置；本任务由 hub 或 user 创建、origin 为 instruction、`parent` 是审查任务、中枢记录的 `inputs.merge` 与合同一致 | `merge_not_eligible` |
 | 审查任务：同一 workspace、claude-sdk、角色在 `reviewer_roles`、done、`inputs.review.pr` 等于该 PR、结论 approve，且是该 PR **最新一次**可信审查 | `review_not_approved` |
 | 同一 PR 没有未结束（queued / running / verifying / blocked）的审查任务 | `review_not_approved` |
@@ -400,7 +400,7 @@ pass / skipping 就不合并（进行中为 pending，其余为失败，都是 `
 **谁建 merger**（D10 第 4 步，tasks 4.8）：supervisor 不能直接建（`task_create` 返回 `role_not_allowed`），只能调用
 `pr_merge_request{pr, review_task}`。中枢按账本核对资格，任一项拿不准即 403 `merge_not_eligible`（`details.reasons` 列出原因）：
 PR 是本 workspace 内某个已 done、origin 为 instruction、有效类别恰为 write、上报过任务分支的任务的 `kind: pr` 产物（唤醒、审查、合并任务的产物不算）；
-PR 的 owner/repo 等于登记仓库 `remote.origin.url` 的仓库；
+PR 的 owner/repo 等于开出 PR 的任务在 worker 启动前采集的 `repo_snapshot.remote_url` 的仓库（worker 可能改写 remote，只认快照），且等于登记仓库当前 `remote.origin.url` 的仓库；
 `review_task` 同 workspace、角色在 `reviewer_roles`、执行器 claude-sdk、done、审查同一 PR、结论 approve，且是该 PR 最新一次可信审查；
 同一 PR 没有未结束的审查任务；该审查的合并请求没有被驳回过（`rejected_before`）；merger 的工作目录能唯一确定为登记仓库；有且只有一个有效类别为 merge、执行器为 pr-merge 的角色。
 通过后 `supervisor.auto_merge: true` 且请求来自 instruction 唤醒时中枢以 hub 直接建 merger；否则（含 autonomous 唤醒）生成

@@ -74,7 +74,7 @@ export interface AppendOptions {
   /**
    * 逐条覆盖操作者（与 drafts 按下标对应，缺省项用 `actor`）。只供中枢内部在同一事务里写入不同身份的
    * 事件（例如用户批准合并与 hub 建 merger，D10）；草稿自身的 `actor` 字段始终被忽略。每条事件仍按
-   * 写入身份白名单（`EVENT_ACTORS`）校验。
+   * 写入身份白名单（`EVENT_ACTORS`）校验。给出时长度必须等于 drafts，否则整体不写（`invalid_arguments`）。
    */
   actors?: readonly (string | undefined)[]
   /**
@@ -157,7 +157,14 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   /** 某 workspace 中给定类型的最近 limit 条事件，按 seq 倒序（简报的代回复记录等）。 */
   recentEvents(workspace: string, types: readonly EventType[], limit: number): LedgerEvent[]
   /** 某类型在时间窗 [fromIso, toIso) 内的事件，按 seq 升序，最多 limit 条（每日摘要等）。 */
-  eventsBetween(type: EventType, fromIso: string, toIso: string, limit?: number): LedgerEvent[]
+  /** 某类型、`ts` 在 [fromIso, toIso) 内、seq > afterSeq（缺省 0）的事件，按 seq 升序，最多 limit 条。 */
+  eventsBetween(
+    type: EventType,
+    fromIso: string,
+    toIso: string,
+    limit?: number,
+    afterSeq?: number,
+  ): LedgerEvent[]
   hasScheduleFire(ruleId: string, plannedAt: string): boolean
   /**
    * 某类型中载荷字段 `key`（顶层）等于 `value` 的事件，按 seq 升序（任务提案、决策回看去重等按载荷查找）。
@@ -676,7 +683,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         p.block_seq,
       )
     ) {
-      return invalidEvent(`策略判定 ${p.decision_id} 之后、卡住之前还有别的策略判定`)
+      // 正常的时序（worker 连续发出多个请求），不是数据错误：按不可委托处理，调用方不必告警。
+      return notDelegable(`策略判定 ${p.decision_id} 之后、卡住之前还有别的策略判定`)
     }
     const level = (JSON.parse(decision.payload_json) as { level?: string }).level
     if (level !== 'supervisor') {
@@ -1103,6 +1111,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
 
   function appendMany(drafts: readonly EventInput[], o: AppendOptions): Result<LedgerEvent[]> {
     if (drafts.length === 0) return ok([])
+    if (o.actors !== undefined && o.actors.length !== drafts.length) {
+      return fail(
+        'usage',
+        'invalid_arguments',
+        `actors 的长度 ${o.actors.length} 与事件数 ${drafts.length} 不一致`,
+      )
+    }
     const ts = iso()
     const result = inTransaction(() => {
       if (o.check) {
@@ -1228,12 +1243,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         )?.n ?? 0
       )
     },
-    eventsBetween(type, fromIso, toIso, limit = 1000) {
+    eventsBetween(type, fromIso, toIso, limit = 1000, afterSeq = 0) {
       return all<EventRow>(
-        'SELECT * FROM events WHERE type = ? AND ts >= ? AND ts < ? ORDER BY seq LIMIT ?',
+        'SELECT * FROM events WHERE type = ? AND ts >= ? AND ts < ? AND seq > ? ORDER BY seq LIMIT ?',
         type,
         fromIso,
         toIso,
+        afterSeq,
         limit,
       ).map(rowToEvent)
     },

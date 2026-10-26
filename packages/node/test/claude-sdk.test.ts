@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
@@ -1493,13 +1493,25 @@ describe('supervisor 会话绑定', () => {
     const repo = join(root, 'repo')
     mkdirSync(join(home, 'state', 'wake'), { recursive: true })
     mkdirSync(repo)
-    const tokenFile = join(home, 'state', 'wake', 't-1.token')
+    const tokenFile = join(home, 'state', 'wake', 't-1.l-1.token')
     writeFileSync(tokenFile, `${WAKE}\n`, { mode: 0o600 })
+    // 另一个 flow-home 的 state/wake 符号链接到 repo 内的目录。
+    const linkedHome = join(root, 'linked-home')
+    mkdirSync(join(repo, '.wake'))
+    mkdirSync(join(linkedHome, 'state'), { recursive: true })
+    symlinkSync(join(repo, '.wake'), join(linkedHome, 'state', 'wake'))
+    const linkedTokenFile = join(linkedHome, 'state', 'wake', 't-1.l-1.token')
+    writeFileSync(linkedTokenFile, `${WAKE}\n`, { mode: 0o600 })
+    mkdirSync(join(repo, '..wake'))
+    const dotdotTokenFile = join(repo, '..wake', 't-1.l-1.token')
+    writeFileSync(dotdotTokenFile, `${WAKE}\n`, { mode: 0o600 })
     return {
       root,
       home,
       repo,
       tokenFile,
+      linkedTokenFile,
+      dotdotTokenFile,
       done: () => rmSync(root, { recursive: true, force: true }),
     }
   }
@@ -1680,6 +1692,20 @@ describe('supervisor 会话绑定', () => {
           supervisorRole(),
           wakeContract(),
           { wakeTokenFile: f.tokenFile, readScope: { privateDir: join(f.home, 'state') } },
+          'wake_token_unsafe',
+        ],
+        // state/wake 是指向 cwd 内的符号链接：按真实路径判定为会话可读。
+        [
+          supervisorRole(),
+          wakeContract(),
+          { wakeTokenFile: f.linkedTokenFile },
+          'wake_token_unsafe',
+        ],
+        // cwd 下名为 `..x` 的目录仍在 cwd 内（不能按 `..` 前缀误判为外面）。
+        [
+          supervisorRole(),
+          wakeContract(),
+          { wakeTokenFile: f.dotdotTokenFile },
           'wake_token_unsafe',
         ],
         // 不是 supervisor 角色却有 token 文件。

@@ -1,7 +1,6 @@
 import type { Hono } from 'hono'
 import type { LedgerStore } from '../ledger/store.ts'
 import { type HubClock, systemClock } from '../server/clock.ts'
-import type { HubLogger } from '../server/maintenance.ts'
 import { createNodeRoutes } from './routes.ts'
 import {
   createNodeService,
@@ -10,6 +9,7 @@ import {
   type NodeServiceOptions,
 } from './service.ts'
 import { createSleepDetector, type SleepDetector } from './sleep.ts'
+import { createStarvationMonitor } from './starvation.ts'
 
 /**
  * 节点协议在中枢中的组合：服务 + 路由 + 定时器（每 5 秒过期扫描、每 1 秒睡眠检测）。
@@ -22,10 +22,9 @@ export const SLEEP_CHECK_MS = 1_000
 
 export interface NodeProtocolOptions
   extends NodeProtocolConfig,
-    Pick<NodeServiceOptions, 'issueWakeToken'> {
+    Pick<NodeServiceOptions, 'issueWakeToken' | 'logger'> {
   ledger: LedgerStore
   clock?: HubClock
-  logger?: Pick<HubLogger, 'warn'>
   onResume?: () => void
 }
 
@@ -56,6 +55,13 @@ export function createNodeProtocol(o: NodeProtocolOptions): NodeProtocol {
     : null
   const cancels: Array<() => void> = []
   let running = false
+  const starvation = monotonic
+    ? createStarvationMonitor({
+        monotonic,
+        intervalMs: SLEEP_CHECK_MS,
+        windowMs: o.leaseTtlS * 1000,
+      })
+    : null
 
   const guard = (what: string, fn: () => unknown) => {
     try {
@@ -67,7 +73,9 @@ export function createNodeProtocol(o: NodeProtocolOptions): NodeProtocol {
 
   const sweep = () => {
     sleep?.check()
-    return service.expireDue()
+    // 中枢自己被卡住（GC、同步 I/O、机器负载）的时间不计入租约：卡住结束时，过期扫描与节点的续约请求
+    // 谁先被处理是不确定的，不能因为扫描先跑就判节点掉线。
+    return service.expireDue({ graceMs: running ? (starvation?.starvedMs() ?? 0) : 0 })
   }
 
   const every = (ms: number, what: string, fn: () => unknown) => {
@@ -90,8 +98,14 @@ export function createNodeProtocol(o: NodeProtocolOptions): NodeProtocol {
     start() {
       if (running) return
       running = true
+      starvation?.reset()
       every(EXPIRY_SWEEP_MS, '租约过期扫描', sweep)
-      if (sleep) every(SLEEP_CHECK_MS, '睡眠检测', () => sleep.check())
+      if (sleep || starvation) {
+        every(SLEEP_CHECK_MS, '睡眠检测', () => {
+          starvation?.tick()
+          sleep?.check()
+        })
+      }
     },
     stop() {
       running = false

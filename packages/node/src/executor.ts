@@ -63,8 +63,14 @@ export interface ExecutorContext {
    * 上报执行器创建的任务分支与 worktree（D15，codex-orca 开始时调用）：节点随下一次续约上报，
    * 中枢写 `task.branch_reported`（每个任务一次、不可更改）。worktree 由节点 realpath 后上报；
    * `repo` 是执行器解析出的登记仓库（codex-orca 的 `resolveTaskRepo`），节点在任务首次上报时对它采集快照。
+   * 返回 Promise 时在快照采集完成后结束（不等中枢确认、不会 reject）：执行器应等它结束再启动 worker，
+   * 让快照反映 worker 改动之前的仓库状态。
    */
-  reportBranch?: (report: { branch: string; worktree: string; repo?: string }) => void
+  reportBranch?: (report: {
+    branch: string
+    worktree: string
+    repo?: string
+  }) => void | Promise<void>
   /**
    * 送达批准之前的复核（D15）：执行器先重新读取实时的待批请求（Codex 弹窗、待批的工具调用），
    * 再以它调用本函数（读不到待批请求时传 undefined）。返回 false 时**不得放行**，deliver 返回

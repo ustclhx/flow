@@ -309,9 +309,9 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 每次唤醒是一次 Opus 级别的 claude-sdk 会话；代回复唤醒、巡检、审查任务也各自是会话。claude-sdk 执行器在结果里记录
 `result.cost.usd`（SDK 给出的**估算值，不是账单**），Flow 据此汇总 supervisor 的花费：
 
-- **每日摘要**的"supervisor 花费（估算）"一节：昨天**开始**、且已结束的唤醒任务（含 reply 唤醒）按 workspace 列出次数、代回复次数、金额，
+- **每日摘要**的"supervisor 花费（估算）"一节：昨天**结束**的唤醒任务（含 reply 唤醒；按结束时间归日，每个唤醒恰好计入一份摘要）按 workspace 列出次数、代回复次数、金额，
   以及没有上报费用的次数（例如被取消的唤醒）；
-- **`flow supervisor status`** 的"今日花费（估算）"：今天（中枢时区）开始、且已结束的唤醒任务的金额与次数（`--json` 中 `today.cost_usd` 保留 6 位小数）。
+- **`flow supervisor status`** 的"今日花费（估算）"：今天（中枢时区）结束的唤醒任务的金额与次数（`--json` 中 `today.cost_usd` 保留 6 位小数）。
 
 只统计唤醒任务本身；supervisor 建的 dev、审查等任务不计入，未结束的唤醒也不计入。实际账单以 Anthropic 控制台为准。
 控制费用的手段：

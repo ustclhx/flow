@@ -235,6 +235,23 @@ describe('动作识别', () => {
     'git send-email x.patch',
     'git help --web push',
     'git instaweb',
+    // 长选项的唯一前缀缩写（git parse-options 接受）。
+    'git fetch --upload=evil origin',
+    'git fetch --uploa evil origin',
+    'git push --recei=evil origin x',
+    'git push --exe=evil origin x',
+    'git rebase --exe=make main',
+    'git grep --open-files=vim foo',
+    'git archive --exe=evil --remote=x HEAD',
+    'git help --brow=x push',
+    // 短选项直接接参数。
+    'git clone -uevil x',
+    'git clone -qu evil x',
+    // clone 的 -c / --config 写入新仓库配置并立即生效。
+    'git clone -c core.sshCommand=evil https://example.com/x.git',
+    'git clone --config core.fsmonitor=evil https://example.com/x.git',
+    'git clone --config=core.fsmonitor=evil https://example.com/x.git',
+    'git clone --conf=core.fsmonitor=evil https://example.com/x.git',
   ])('间接执行器按不透明处理：%s', (command) => {
     expect(classifyAction({ tool: 'Bash', command })).toContain('shell.opaque')
   })
@@ -257,6 +274,18 @@ describe('动作识别', () => {
     'git push origin x',
     'git archive HEAD',
     'git help push',
+    'git fetch --prune origin',
+    'git fetch --unshallow origin',
+    'git push --force-with-lease origin x',
+    'git pull --rebase origin main',
+    'git rebase --onto main x',
+    'git clone https://example.com/x.git',
+    'git clone --depth 1 https://example.com/x.git',
+    // 带值的短选项之后是值，不是选项字母。
+    'git clone -bfeature/cool https://example.com/x.git',
+    'git clone -oupstream https://example.com/x.git',
+    'git rebase -Xours main',
+    'git rebase -Sexample main',
   ])('普通命令不因间接执行器规则变为不透明：%s', (command) => {
     expect(classifyAction({ tool: 'Bash', command })).not.toContain('shell.opaque')
   })

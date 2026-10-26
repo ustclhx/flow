@@ -91,10 +91,31 @@ export async function gitInit(dir: string, opts: GitOptions = {}): Promise<Resul
     : fail('failure', 'git_failed', `git init 失败：${r.stderr.trim()}`)
 }
 
-/** 仓库是否已有提交。 */
+/** 仓库是否已有提交。任何 git 失败都按"没有提交"处理；需要区分出错时用 `headState`。 */
 export async function hasCommits(dir: string, opts: GitOptions = {}): Promise<boolean> {
   const r = await git(dir, ['rev-parse', '--verify', '-q', 'HEAD'], opts)
   return r.code === 0
+}
+
+/**
+ * HEAD 的状态：`present` 有提交；`unborn` HEAD 指向一个还不存在的分支（新仓库，尚无提交）；
+ * `error` 其他任何情况（不是仓库、HEAD 损坏、git 无法运行……），调用方应当报错而不是当作空仓库。
+ */
+export async function headState(
+  dir: string,
+  opts: GitOptions = {},
+): Promise<'present' | 'unborn' | 'error'> {
+  // `^{commit}`：要求对象确实存在且是提交，而不只是引用里写着一个 sha。
+  const r = await git(dir, ['rev-parse', '--verify', '-q', 'HEAD^{commit}'], opts)
+  if (r.code === 0) return 'present'
+  // `-q` 下引用不存在时退出码为 1 且无输出；不是仓库等错误为 128。
+  if (r.code !== 1) return 'error'
+  const ref = await git(dir, ['symbolic-ref', '-q', 'HEAD'], opts)
+  const name = ref.stdout.trim()
+  if (ref.code !== 0 || !name.startsWith('refs/heads/')) return 'error'
+  // 分支引用确实不存在才是 unborn；引用存在却解析不出提交说明仓库损坏。
+  const shown = await git(dir, ['show-ref', '--verify', '-q', name], opts)
+  return shown.code === 1 ? 'unborn' : 'error'
 }
 
 /** 当前生效的 pre-commit 钩子路径（考虑 `core.hooksPath`）。 */

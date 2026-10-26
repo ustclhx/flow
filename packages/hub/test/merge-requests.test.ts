@@ -210,6 +210,8 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       status?: 'done' | 'failed' | 'queued'
       /** codex-orca 任务上报的任务分支（task.branch_reported）。 */
       branch?: string
+      /** 随分支上报的登记仓库快照的 origin 地址；null 表示不带快照。缺省为 acme/demo。 */
+      remoteUrl?: string | null
     } = {},
   ) => {
     clock.time += 1000
@@ -252,7 +254,22 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
             },
           },
           ...(opts.branch
-            ? [{ ...base, type: 'task.branch_reported', payload: { branch: opts.branch } }]
+            ? [
+                {
+                  ...base,
+                  type: 'task.branch_reported',
+                  payload: {
+                    branch: opts.branch,
+                    ...(opts.remoteUrl === null
+                      ? {}
+                      : {
+                          repo_snapshot: {
+                            remote_url: opts.remoteUrl ?? 'https://github.com/acme/demo.git',
+                          },
+                        }),
+                  },
+                },
+              ]
             : []),
           status === 'done'
             ? { ...base, type: 'task.done', payload: { result: { node_id: 'nr', ...result } } }
@@ -277,6 +294,8 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       ws?: string
       /** 任务分支；null 表示没有上报。 */
       branch?: string | null
+      /** 仓库快照的 origin 地址；null 表示没有快照。 */
+      remoteUrl?: string | null
     } = {},
     status: 'done' | 'failed' = 'done',
   ) =>
@@ -291,7 +310,10 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
         ...(o.origin === undefined && 'origin' in o ? {} : { origin: o.origin ?? 'instruction' }),
         ...(o.ws ? { ws: o.ws } : {}),
         ...((o.executor ?? 'codex-orca') === 'codex-orca' && o.branch !== null
-          ? { branch: o.branch ?? BRANCH }
+          ? {
+              branch: o.branch ?? BRANCH,
+              ...(o.remoteUrl === undefined ? {} : { remoteUrl: o.remoteUrl }),
+            }
           : {}),
         status,
       },
@@ -571,6 +593,40 @@ describe('PR 归属（fork、任务分支、登记仓库 origin）', () => {
     expect(code(await s.request(w.token, rv))).toBe('ok')
   })
 
+  test('只认开出 PR 的任务启动前的仓库快照：没有快照或快照是别的仓库 → merge_not_eligible', async () => {
+    const s = await setup()
+    // 当前 origin 被改成与 PR 一致也不行：快照（worker 启动前采集）才是依据。
+    s.dev({ remoteUrl: 'https://github.com/someone/demo.git' })
+    const rv = s.review()
+    const w = await s.wake('instruction')
+    expect(reasonsOf(await s.request(w.token, rv)).join()).toContain(
+      '启动前的登记仓库 github.com/someone/demo',
+    )
+
+    const s2 = await setup()
+    s2.dev({ remoteUrl: null })
+    const rv2 = s2.review()
+    const w2 = await s2.wake('instruction')
+    const r2 = await s2.request(w2.token, rv2)
+    expect(code(r2)).toBe('merge_not_eligible')
+    expect(reasonsOf(r2).join()).toContain('没有可识别的登记仓库快照')
+
+    // 多个候选（分支相同）时每一个都要有匹配的快照。
+    const s4 = await setup()
+    s4.dev()
+    s4.dev({ remoteUrl: null })
+    const rv4 = s4.review()
+    const w4 = await s4.wake('instruction')
+    expect(reasonsOf(await s4.request(w4.token, rv4)).join()).toContain('没有可识别的登记仓库快照')
+
+    // 快照写法不同（SSH、大小写）但指向同一仓库：照常通过。
+    const s3 = await setup()
+    s3.dev({ remoteUrl: 'git@github.com:ACME/Demo.git' })
+    const rv3 = s3.review()
+    const w3 = await s3.wake('instruction')
+    expect(code(await s3.request(w3.token, rv3))).toBe('ok')
+  })
+
   test('repoOriginFromGit：读真实仓库的 remote.origin.url；没有或有多个 origin 时失败', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'flow-merge-git-'))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
@@ -826,6 +882,29 @@ describe('批准与驳回（只有 user）', () => {
       ['task.created', 'hub'],
       ['inbox.item_closed', 'user'],
     ])
+  })
+
+  test('并发的两次批准：都返回同一个 merger，只写一次批准事件', async () => {
+    const s = await setup()
+    const { item, rv } = await pendingItem(s)
+    const [a, b] = await Promise.all([
+      approveMergeRequest(s.tools, item, { via: 'cli' }),
+      approveMergeRequest(s.tools, item, { via: 'web' }),
+    ])
+    const merger = s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)
+    expect(merger?.created_by).toBe('hub')
+    expect([must(a).task_id, must(b).task_id]).toEqual([merger?.id ?? '', merger?.id ?? ''])
+    expect(s.events('merge_request.approved')).toHaveLength(1)
+    expect(s.ledger.getInboxItem(item.id)?.state).toBe('closed')
+  })
+
+  test('coWrite 的身份只能是 user（运行时核对）', async () => {
+    const s = await setup()
+    const r = await s.tools.tasks.createTask(
+      { goal: 'x', workspace: WS, role: 'dev', executor: 'fake' },
+      { actor: 'hub', coWrite: { actor: 'supervisor' as 'user' } },
+    )
+    expect(code(r)).toBe('actor_mismatch')
   })
 
   test('幂等命中的 merger 不是本审查的（不可能经接口抢注，这里直接写账本模拟）→ conflict', async () => {

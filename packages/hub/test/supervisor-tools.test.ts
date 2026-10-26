@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  appendJournal,
   askUserOp,
   decisionReviewOp,
   defaultSupervisorConfig,
@@ -1144,7 +1145,37 @@ describe('巡检日报 patrol_report 与 supervisor 花费（D13；tasks 6.2）'
     pusher.stop()
   })
 
-  test('wakeCosts 按唤醒开始时间查询 wake_started：只计已结束的唤醒，金额保留 6 位小数', async () => {
+  test('wakeCosts 按唤醒结束时间归入时段：前一天开始、范围内结束的计入；范围内开始、之后才结束的计入下一段', async () => {
+    const { ledger, wake, protocol, clock } = await setup()
+    const finish = (w: Awaited<ReturnType<typeof wake>>, usd: number) =>
+      must(
+        protocol.service.complete(w.lease_id, {
+          lease_token: w.lease_token,
+          outcome: 'done',
+          result: { summary: '完成', executor: 'fake', node_id: 'nw', cost: { usd } },
+        }),
+      )
+    const early = await wake('instruction')
+    clock.time += 3600_000
+    const boundary = clock.now()
+    finish(early, 0.4)
+    const late = await wake('instruction')
+    clock.time += 3600_000
+    const next = clock.now()
+    finish(late, 0.6)
+    const first = { from: boundary - 1, to: next }
+    const second = { from: next, to: next + 3600_000 }
+    expect(wakeCosts(ledger, first)).toEqual([
+      { workspace: WS, wakes: 1, reply: 0, usd: 0.4, unreported: 0 },
+    ])
+    expect(wakeCosts(ledger, second)).toEqual([
+      { workspace: WS, wakes: 1, reply: 0, usd: 0.6, unreported: 0 },
+    ])
+    // 两段合起来恰好每个唤醒一次。
+    expect(wakeCosts(ledger, { from: boundary - 1, to: next + 3600_000 })[0]?.wakes).toBe(2)
+  })
+
+  test('wakeCosts 只计已结束的唤醒，金额保留 6 位小数', async () => {
     const { ledger, wake, protocol, clock } = await setup()
     const before = clock.now()
     const done = (w: Awaited<ReturnType<typeof wake>>, usd: number) =>
@@ -1228,6 +1259,30 @@ describe('巡检日报 patrol_report 与 supervisor 花费（D13；tasks 6.2）'
     expect(journal.split(`巡检日报（唤醒 ${w.id}）`)).toHaveLength(2)
     expect(r.journal.sha).toMatch(/^[0-9a-f]{40}$/)
     expect(ledger.getInboxItem(`patrol.${w.id}`)?.state).toBe('open')
+  })
+
+  test('去重只认 supervisor 写的记录：用户写了同样的标题文字也照常追加日报', async () => {
+    const { home, ledger, wake, tools } = await setup()
+    const w = await wake('autonomous', { events: [patrolFired(ledger)] })
+    must(
+      await appendJournal(
+        home,
+        { text: `巡检日报（唤醒 ${w.id}）\n\n伪造的日报`, workspace: WS },
+        { actor: 'user', now: new Date(tools.now()) },
+      ),
+    )
+    const caller = {
+      actor: 'supervisor' as const,
+      task_id: w.id,
+      workspace: WS,
+      lease_id: w.lease_id,
+      origin: 'autonomous' as const,
+      generation: 1,
+    }
+    const r = must(await reportPatrol(tools, caller, { workspace: WS, text: '真正的日报' }))
+    const journal = readFileSync(join(home, r.journal.file), 'utf8')
+    expect(journal).toContain('真正的日报')
+    expect(journal.split(`巡检日报（唤醒 ${w.id}）`)).toHaveLength(3)
   })
 
   test('巡检日报条目不能被当作提问答复（answerQuestion 只认提问条目）', async () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { rmSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   fail,
   ok,
@@ -100,6 +101,8 @@ interface Setup {
   hubDown: boolean
   /** 列表中额外出现的任务（例如同一 PR 更新的审查）。 */
   others: TaskView[]
+  /** 开出 PR 的 dev 任务（已 done、带任务分支与启动前的仓库快照）。 */
+  dev: TaskView
 }
 
 function setup(
@@ -107,6 +110,11 @@ function setup(
 ): Setup {
   const r = tempRepo(opts.workspaceExtra ?? '')
   repos.push(r)
+  // 角色模板：pr-merge 按当前角色配置核对开出 PR 的任务的有效类别。
+  mkdirSync(join(r.home, 'config', 'roles'), { recursive: true })
+  for (const [name, text] of Object.entries(DEFAULT_ROLE_FILES)) {
+    writeFileSync(join(r.home, 'config', 'roles', name), text)
+  }
   const contract = taskContract.parse({
     goal: '合并已审查的 PR',
     workspace: 'ws/demo',
@@ -148,6 +156,27 @@ function setup(
     hubCalls: [],
     hubDown: false,
     others: [],
+    dev: view(
+      taskContract.parse({
+        goal: '实现功能',
+        workspace: 'ws/demo',
+        role: 'dev',
+        executor: 'codex-orca',
+        cwd: r.repo,
+      }),
+      {
+        id: 't-dev',
+        created_by: 'supervisor',
+        branch: TASK_BRANCH,
+        repo_snapshot: { remote_url: 'https://github.com/acme/demo.git', default_branch: 'main' },
+        result: taskResult.parse({
+          summary: '开了 PR',
+          executor: 'codex-orca',
+          node_id: 'n-1',
+          artifacts: [{ kind: 'pr', ref: PR_URL }],
+        }),
+      },
+    ),
   }
 }
 
@@ -191,7 +220,7 @@ function fakeHub(s: Setup) {
     async listTasks(q: { status?: string }): Promise<Result<{ tasks: TaskView[] }>> {
       s.hubCalls.push(`list:${q.status ?? ''}`)
       if (s.hubDown) return fail('retryable', 'hub_unavailable', '中枢不可用')
-      const all = [...s.others, s.review, s.self]
+      const all = [...s.others, s.dev, s.review, s.self]
       return ok({ tasks: q.status ? all.filter((t) => t.status === q.status) : all })
     },
   }
@@ -365,6 +394,45 @@ describe('合并前的条件核对', () => {
     sh(local.r.repo, 'remote', 'set-url', 'origin', local.r.bare)
     expect(reason((await execute(local)).outcome)).toBe('repo_not_in_workspace')
     for (const s of [renamed, local]) expect(mergeCalls(s)).toEqual([])
+  })
+
+  test('开出 PR 的任务启动前的仓库快照：找不到任务、没有快照或快照是别的仓库 → repo_not_in_workspace', async () => {
+    const cases: Array<(s: Setup) => void> = [
+      (s) => {
+        s.dev = { ...s.dev, status: 'failed' }
+      },
+      (s) => {
+        s.dev = { ...s.dev, branch: 'flow/other' }
+      },
+      (s) => {
+        s.dev = { ...s.dev, repo_snapshot: null }
+      },
+      // 候选与中枢一致：origin 不是 instruction、有效类别不是 write 的不算开出 PR 的任务。
+      (s) => {
+        s.dev = { ...s.dev, origin: 'autonomous' }
+      },
+      (s) => {
+        s.dev = {
+          ...s.dev,
+          contract: { ...s.dev.contract, role: 'pr-reviewer', executor: 'claude-sdk' },
+        }
+      },
+      // 多个候选时每一个都要有匹配的快照。
+      (s) => {
+        s.others.push({ ...s.dev, id: 't-dev-2', repo_snapshot: null })
+      },
+      (s) => {
+        // worker 启动前登记仓库指向别的仓库（之后被改成与 PR 一致也不行）。
+        s.dev = { ...s.dev, repo_snapshot: { remote_url: 'https://github.com/evil/demo.git' } }
+      },
+    ]
+    for (const edit of cases) {
+      const s = setup()
+      edit(s)
+      const { outcome } = await execute(s)
+      expect(reason(outcome)).toBe('repo_not_in_workspace')
+      expect(mergeCalls(s)).toEqual([])
+    }
   })
 
   test('审查结论不被采信或不是 approve：failed(review_not_approved)', async () => {
