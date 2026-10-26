@@ -43,6 +43,11 @@ export interface ExecutorContext {
    * 节点为每个租约绑定任务 id；缺省（例如单元测试直接运行执行器）时执行器一律交给用户。
    */
   precheck?: Precheck
+  /**
+   * claude-sdk `read_scope: cwd` 的附加参数（add-m1-supervisor D6）：任务私有目录（审查 diff 等），
+   * 以及是否允许读 cwd 根下的 `.github/`（审查 worktree）。缺省只允许 cwd，`.github/` 不可读。
+   */
+  readScope?: { privateDir?: string; allowDotGithub?: boolean }
 }
 
 /** 节点交给 `classify` 的快照。 */

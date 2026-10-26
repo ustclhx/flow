@@ -1,7 +1,6 @@
-import { lstat, realpath } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { BUILTIN_TOOL_NAMES } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import { scopedPath } from './claude-path-scope.ts'
 
 export const CLAUDE_FILE_WRITE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] as const
 export const CLAUDE_FILE_WRITE_MATCHER = '^(Edit|Write|MultiEdit|NotebookEdit)$'
@@ -16,18 +15,7 @@ export const CLAUDE_READ_ONLY_TOOLS = [
   'ReadMcpResourceDirTool',
 ] as const satisfies readonly (typeof BUILTIN_TOOL_NAMES)[number][]
 
-const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const
-const AGENT_INSTRUCTION_FILES = new Set([
-  'claude.md',
-  'claude.local.md',
-  'agent.md',
-  'agents.md',
-  'agents.override.md',
-  'conventions.md',
-  'gemini.md',
-  'copilot-instructions.md',
-])
-
+export const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const
 const fileInput = z.looseObject({ file_path: z.string().min(1) })
 
 /** 与 Flow 策略路径相同的简化 glob：* 不跨目录，** 跨目录，? 匹配单字符。 */
@@ -49,60 +37,13 @@ function matches(pattern: string, path: string): boolean {
   return new RegExp(`^${source}$`).exec(path)?.[0] === path
 }
 
-/** 禁止越界、隐藏路径段及代理指令文件；比较兼容字符与 Unicode 大小写折叠，但不改写实际路径。 */
-function insidePath(root: string, path: string): string | undefined {
-  const rel = relative(root, path)
-  if (
-    !rel ||
-    isAbsolute(rel) ||
-    rel.split(sep).some((p) => {
-      const folded = p.normalize('NFKC').toUpperCase().toLowerCase()
-      return folded.startsWith('.') || AGENT_INSTRUCTION_FILES.has(folded)
-    })
-  )
-    return undefined
-  return rel.split(sep).join('/')
-}
-
-/**
- * 逐段解析符号链接；新文件解析到最近的已存在祖先。只把 ENOENT 当作新路径，
- * 悬空链接、循环链接、非目录祖先及其他 I/O 错误均拒绝，不借用策略预检的宽松回退。
- */
-async function writablePath(cwd: string, path: string, patterns: readonly string[]) {
-  if (path.includes('\0') || path.split(/[\\/]/).includes('..')) return undefined
-  try {
-    const root = await realpath(cwd)
-    // cwd 自身可能是链接（例如 macOS 的 /var）；也接受 cwd 真实位置下的绝对路径。
-    const lexical =
-      insidePath(resolve(cwd), resolve(cwd, path)) ??
-      (isAbsolute(path) ? insidePath(root, resolve(path)) : undefined)
-    if (!lexical || !patterns.some((p) => matches(p, lexical))) return undefined
-    const parts = lexical.split('/')
-    let current = root
-    for (let i = 0; i < parts.length; i++) {
-      current = join(current, parts[i] as string)
-      let exists = true
-      try {
-        await lstat(current)
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return undefined
-        exists = false
-      }
-      if (!exists) {
-        current = join(current, ...parts.slice(i + 1))
-        break
-      }
-      current = await realpath(current)
-      if (!insidePath(root, current)) return undefined
-      const info = await lstat(current)
-      if (i < parts.length - 1 ? !info.isDirectory() : !info.isFile()) return undefined
-    }
-    const resolved = insidePath(root, current)
-    return resolved && patterns.some((p) => matches(p, resolved)) ? current : undefined
-  } catch {
-    // 权限边界无法确认时直接拒绝，绝不转交审批或策略自动放行。
-    return undefined
-  }
+/** 原路径与真实路径都须匹配白名单；越界、隐藏段、代理指令文件与符号链接越界的判定见 claude-path-scope。 */
+function writablePath(cwd: string, path: string, patterns: readonly string[]) {
+  return scopedPath(cwd, cwd, path, {
+    denyInstructionFiles: true,
+    accept: (rel) => patterns.some((p) => matches(p, rel)),
+    leaf: 'file',
+  })
 }
 
 /** 缺省不改变既有角色审批；配置后，文件工具只允许白名单路径且永不进入审批。 */

@@ -65,7 +65,7 @@ describe('flow init', () => {
     for (const [file, v] of before) expect(after.get(file)).toEqual(v)
   })
 
-  test('旧 home 补齐三个默认角色及提示词，在 config 提交；已有角色和提示词不覆盖', async () => {
+  test('旧 home 补齐六个默认角色及提示词，在 config 提交；已有角色和提示词不覆盖', async () => {
     const home = tempHome('flow-init-roles-')
     await init(home)
     const config = join(home, 'config')
@@ -76,8 +76,14 @@ describe('flow init', () => {
     const expected = [
       'dev.md',
       'dev.yaml',
+      'merger.md',
+      'merger.yaml',
+      'pr-reviewer.md',
+      'pr-reviewer.yaml',
       'reviewer.md',
       'reviewer.yaml',
+      'supervisor.md',
+      'supervisor.yaml',
       'triage.md',
       'triage.yaml',
     ]
@@ -98,6 +104,29 @@ describe('flow init', () => {
         model: 'gpt-6.1-sol',
         effort: 'high',
         permissions: { approval: 'never', sandbox: 'danger-full-access' },
+        creatable_by: ['supervisor'],
+      }),
+      expect.objectContaining({ name: 'merger', kind: 'merge', executor: 'pr-merge' }),
+      expect.objectContaining({
+        name: 'pr-reviewer',
+        kind: 'read',
+        executor: 'claude-sdk',
+        creatable_by: ['supervisor'],
+        permissions: {
+          permissionMode: 'default',
+          setting_sources: [],
+          read_scope: 'cwd',
+          allowedTools: ['Read', 'Grep', 'Glob'],
+          disallowedTools: [
+            'Bash',
+            'Edit',
+            'Write',
+            'MultiEdit',
+            'NotebookEdit',
+            'WebFetch',
+            'WebSearch',
+          ],
+        },
       }),
       expect.objectContaining({
         name: 'reviewer',
@@ -109,6 +138,27 @@ describe('flow init', () => {
           allowedTools: ['Read', 'Glob', 'Grep', 'Bash(gh pr comment:*)', 'Bash(gh pr review:*)'],
           disallowedTools: ['NotebookEdit'],
           writable_paths: [...DEFAULT_REVIEWER_WRITABLE_PATHS],
+        },
+      }),
+      expect.objectContaining({
+        name: 'supervisor',
+        kind: 'supervisor',
+        executor: 'claude-sdk',
+        model: 'claude-opus-5-5',
+        permissions: {
+          permissionMode: 'default',
+          setting_sources: [],
+          read_scope: 'cwd',
+          allowedTools: ['Read', 'Grep', 'Glob'],
+          disallowedTools: [
+            'Bash',
+            'Edit',
+            'Write',
+            'MultiEdit',
+            'NotebookEdit',
+            'WebFetch',
+            'WebSearch',
+          ],
         },
       }),
       expect.objectContaining({
