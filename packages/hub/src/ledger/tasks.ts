@@ -286,7 +286,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       const isUser = opts.actor === USER_ACTOR
       const isSupervisor = opts.actor.toLowerCase() === SUPERVISOR_ACTOR
 
-      // D3：`supervisor:` 幂等键前缀只保留给 hub（唤醒任务的幂等键），防止抢注或借幂等键拿到唤醒任务。
+      // D3、D10：`supervisor:`、`merge:` 幂等键前缀只保留给 hub（唤醒任务、merger 任务的幂等键），防止抢注或借幂等键拿到它们。
       // 例外：中枢接受任务提案时（`proposalKey`）以 user 身份使用 `task-proposal:<id>`，且必须恰好是该键。
       const proposalKeyOk =
         key !== undefined &&
@@ -298,7 +298,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           return fail(
             'failure',
             'reserved_idempotency_key',
-            '幂等键前缀 supervisor:、task-proposal: 保留给中枢内部（唤醒任务、接受任务提案）',
+            '幂等键前缀 supervisor:、task-proposal:、merge: 保留给中枢内部（唤醒任务、接受任务提案、merger 任务）',
             { field: 'idempotency_key' },
           )
         }

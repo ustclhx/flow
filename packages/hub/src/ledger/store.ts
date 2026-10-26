@@ -172,6 +172,11 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
    * 只统计角色在 `roles` 中、执行器为 claude-sdk 的任务的 `result.review.verdict`。
    */
   countChangesRequested(workspace: string, pr: string, roles: readonly string[]): number
+  /**
+   * 合并请求的资格核对（D10 第 4 步）用：workspace 中合同带 `inputs.review`，或结果中有 `kind: pr`
+   * 产物的全部任务（不分页，按创建先后）。只是预筛，PR 是否相同由调用方用 `samePrUrl` 判断。
+   */
+  prRelatedTasks(workspace: string): TaskView[]
   /** 某任务的全部事件（按 seq）。 */
   taskEvents(taskId: string): LedgerEvent[]
   /**
@@ -446,8 +451,8 @@ function rowToNode(r: NodeRow): NodeView {
 
 /**
  * 新事件的写入身份白名单（store 层兜底；路由层另有 user-only 等检查）：
- * - 用户的决定：指令、放行、接受 / 驳回提案、批准合并只接受 user；
- * - 中枢内部：唤醒、丢弃队列积压、定时触发、提案登记、决策回看、代回复委托只接受 hub；
+ * - 用户的决定：指令、放行、接受 / 驳回提案、批准 / 驳回合并只接受 user；
+ * - 中枢内部：唤醒、丢弃队列积压、定时触发、提案登记、合并请求登记、决策回看、代回复委托只接受 hub；
  * - `task.reply_escalated` 按 reason 区分（见 `ESCALATION_BY_USER`）：user_replied、user_dismissed
  *   在用户回复或忽略的同一次 append 中写入，只接受 user；其他原因只接受 hub；
  * - `supervisor.answered`（D11）由收件箱回复路由写入：路由以 user 身份直接写，
@@ -462,6 +467,8 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'task_proposal.accepted': ['user'],
   'task_proposal.rejected': ['user'],
   'merge_request.approved': ['user'],
+  'merge_request.rejected': ['user'],
+  'merge_request.created': ['hub'],
   'supervisor.wake_started': ['hub'],
   'supervisor.answered': ['hub', 'user'],
   'task_proposal.created': ['hub'],
@@ -1212,6 +1219,16 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           ...roles,
         )?.n ?? 0
       )
+    },
+    prRelatedTasks(workspace) {
+      return all<TaskRow>(
+        `${TASK_SELECT} WHERE t.workspace = ?
+           AND (json_extract(t.contract_json, '$.inputs.review') IS NOT NULL
+             OR EXISTS (SELECT 1 FROM json_each(t.result_json, '$.artifacts') AS a
+                        WHERE json_extract(a.value, '$.kind') = 'pr'))
+         ORDER BY t.created_seq ASC`,
+        workspace,
+      ).map(rowToTask)
     },
     taskEvents(taskId) {
       return taskEventsOf(taskId)

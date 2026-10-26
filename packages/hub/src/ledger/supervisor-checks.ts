@@ -35,7 +35,16 @@ export const RESERVED_IDEMPOTENCY_PREFIX = 'supervisor:'
  * 防止抢先注册同名任务让接受命中别人的任务。
  */
 export const TASK_PROPOSAL_IDEMPOTENCY_PREFIX = 'task-proposal:'
-const RESERVED_PREFIXES = [RESERVED_IDEMPOTENCY_PREFIX, TASK_PROPOSAL_IDEMPOTENCY_PREFIX]
+/**
+ * `merge:` 幂等键前缀只保留给 hub（D10）：merger 任务的幂等键为 `merge:<审查任务 id>`，同一次审查最多建一个
+ * merger。其他身份使用即拒绝，防止抢先注册同名任务让中枢的批准命中别人的任务。
+ */
+export const MERGE_IDEMPOTENCY_PREFIX = 'merge:'
+const RESERVED_PREFIXES = [
+  RESERVED_IDEMPOTENCY_PREFIX,
+  TASK_PROPOSAL_IDEMPOTENCY_PREFIX,
+  MERGE_IDEMPOTENCY_PREFIX,
+]
 export const isReservedIdempotencyKey = (key: string) =>
   RESERVED_PREFIXES.some((p) => key.toLowerCase().startsWith(p))
 export const isTaskProposalKey = (key: string) =>

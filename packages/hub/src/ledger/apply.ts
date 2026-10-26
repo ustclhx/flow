@@ -420,7 +420,9 @@ export function createApplier(db: Database): Applier {
       case 'task_proposal.accepted':
       case 'task_proposal.rejected':
       case 'decision.review_due':
+      case 'merge_request.created':
       case 'merge_request.approved':
+      case 'merge_request.rejected':
       case 'channel.rebound':
       case 'channel.unlinked':
         // 中枢运维事件、用户指令与 supervisor 事件（由 ④ 的调度器与收件箱消费）不影响这些投影（租约顺延属于软状态，由调用方直接更新 expires_at）。

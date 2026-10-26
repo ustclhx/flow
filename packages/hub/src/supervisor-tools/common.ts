@@ -9,7 +9,7 @@ import {
 } from '@flow/core'
 import type { Context } from 'hono'
 import type { LedgerStore } from '../ledger/store.ts'
-import type { RepoCheckOptions } from '../ledger/supervisor-checks.ts'
+import type { RepoCheckOptions, RoleForKind } from '../ledger/supervisor-checks.ts'
 import type {
   RoleLookup,
   TaskService,
@@ -37,6 +37,10 @@ export interface SupervisorToolsDeps {
   /** workspace 是否启用了 supervisor（配置开启且存在 kind: supervisor 角色，D3）。 */
   supervisorActive: (workspace: string) => Promise<boolean>
   repoCheck?: RepoCheckOptions
+  /**
+   * 全部角色（合并请求按有效类别 merge 查找唯一的 merger 角色，D10）；缺省读 flow-home 的 `config/roles/`。
+   */
+  mergeRoles?: () => Promise<Result<RoleForKind[]>>
   now: () => number
 }
 

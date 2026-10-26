@@ -536,6 +536,18 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
           ),
           data: { proposal_id: ev.payload.proposal_id },
         }
+      case 'merge_request.rejected':
+        return {
+          summary: clip(
+            `用户驳回了 PR ${ev.payload.pr} 的合并请求（审查任务 ${ev.payload.review_task}）${ev.payload.note ? `：${ev.payload.note}` : ''}`,
+            WAKE_EVENT_SUMMARY_MAX,
+          ),
+          data: {
+            pr: ev.payload.pr,
+            review_task: ev.payload.review_task,
+            item_id: ev.payload.item_id,
+          },
+        }
       case 'task.reply_delegated':
         return { ...base, ...describeDelegation(ev) }
       case 'inbox.item_closed':

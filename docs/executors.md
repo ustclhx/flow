@@ -368,7 +368,7 @@ pr-merge 执行器**不调用任何模型**，合同的 `inputs.merge = {pr, rev
 | 目标分支没有启用合并队列 | `merge_queue_unsupported` |
 | 当前 head 等于 `reviewed_sha`，快照中的检查就是这个提交的；读完检查、合并前再读一次 head 仍相等 | `head_moved` |
 | 不是草稿且 `mergeable = MERGEABLE`（`UNKNOWN` 时每 5 秒重读，最多 3 次） | `not_mergeable` |
-| 至少一项检查且全部 `pass`（`skipping` / NEUTRAL 不算失败，但不计入"至少一项"），没有进行中的；检查超过 100 项无法确认时判失败；`supervisor.allow_no_checks: true` 时允许没有检查 | `checks_not_green` |
+| 至少一项检查且全部 `pass`（`skipping` 不算失败，但不计入"至少一项"；结论为 SKIPPED 与 NEUTRAL 的检查都归为 `skipping`），没有进行中的；检查超过 100 项无法确认时判失败；`supervisor.allow_no_checks: true` 时允许没有检查 | `checks_not_green` |
 
 PR 状态与检查来自**同一次** GraphQL 读取（`gh api graphql`：`headRefOid`、`mergeable`、`isMergeQueueEnabled`、
 `autoMergeRequest` 与最新提交的 `statusCheckRollup`），不会出现"读检查之后 head 变了"的错位；合并前再读一次 head，
@@ -393,6 +393,16 @@ pass / skipping 就不合并（进行中为 pending，其余为失败，都是 `
 结果附 run 链接；有其他结论 → `failed(pipeline_failed)`，其中 cancelled 的 run 附说明（可能是被同一并发组中更新的提交取代，
 请确认默认分支最新提交的流水线）；30 分钟仍未结束 → `failed(pipeline_timeout)`，附 run 链接；合并后 2 分钟内一直没有任何 run →
 `done`，注明未发现发布流水线（查询失败不算"没有 run"）。合并后被取消时，cancelled 的结果带合并提交与 artifacts。
+
+**谁建 merger**（D10 第 4 步，tasks 4.8）：supervisor 不能直接建（`task_create` 返回 `role_not_allowed`），只能调用
+`pr_merge_request{pr, review_task}`。中枢按账本核对资格，任一项拿不准即 403 `merge_not_eligible`（`details.reasons` 列出原因）：
+PR 是本 workspace 内某个已 done、origin 为 instruction、有效类别恰为 write 的任务的 `kind: pr` 产物（唤醒、审查、合并任务的产物不算）；
+`review_task` 同 workspace、角色在 `reviewer_roles`、执行器 claude-sdk、done、审查同一 PR、结论 approve，且是该 PR 最新一次可信审查；
+同一 PR 没有未结束的审查任务；merger 的工作目录能唯一确定为登记仓库；有且只有一个有效类别为 merge、执行器为 pr-merge 的角色。
+通过后 `supervisor.auto_merge: true` 时中枢以 hub 直接建 merger；否则生成 `merge_request` 收件箱条目，只有用户能批准（写
+`merge_request.approved` 后以 hub 建 merger，批准时再核对一次资格）或驳回（写 `merge_request.rejected`，唤醒 supervisor）。
+merger 合同：`parent` 为审查任务、origin instruction（取自开出 PR 的任务）、`inputs.merge = {pr, review_task}`、`timeout_s` 3600、
+幂等键 `merge:<审查任务>`（同一次审查最多一个 merger；要重试合并需要重新审查）。合并审批条目不轮询 PR 状态。
 
 **timeout_s**：merger 合同的 `timeout_s` 不得小于 2400 秒（40 分钟：核对与合并之外还要等最长 30 分钟的流水线），
 否则执行器在合并前以 `timeout_too_short` 失败；角色文件不支持 `timeout_s`，由创建 merger 任务的中枢保证（缺省 3600）。

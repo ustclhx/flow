@@ -234,6 +234,10 @@ export class WakeProjection {
         return 'instruction'
       case 'task_proposal.rejected':
         return this.normalOriginOf(this.proposals.get(e.payload.proposal_id))
+      // G14：用户驳回合并请求 → 唤醒 supervisor。资格核对要求 PR 出自 origin instruction 的任务，
+      // 所以驳回进 instruction 队列（D10 第 4 步）。
+      case 'merge_request.rejected':
+        return e.actor === 'user' ? 'instruction' : null
       case 'task.reply_delegated':
         return 'reply'
       default:

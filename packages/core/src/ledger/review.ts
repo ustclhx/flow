@@ -18,21 +18,23 @@ import {
 
 export const REVIEW_EXECUTOR = 'claude-sdk'
 
-/** PR 链接的规范形式：host 小写并去掉 `www.` 前缀与 `:443`，owner/repo 小写；不符合 `PR_URL_RE` 时返回 undefined。 */
+/**
+ * PR 链接的规范形式：host 小写并去掉 `:443`，owner/repo 小写；`www.github.com` 归为 `github.com`
+ * （GitHub 的已知别名）。其他 host 的 `www.` 前缀保留：GitHub Enterprise 等主机上 `www.<host>` 与 `<host>`
+ * 不一定是同一个服务，不确定时不视为相同。不符合 `PR_URL_RE` 时返回 undefined。
+ */
 export function normalizePrUrl(url: string): string | undefined {
   if (!PR_URL_RE.test(url)) return undefined
   const m = /^https:\/\/([^/]+)\/(.+)$/.exec(url)
   if (!m?.[1] || !m[2]) return undefined
-  const host = m[1]
-    .toLowerCase()
-    .replace(/:443$/, '')
-    .replace(/^www\./, '')
+  let host = m[1].toLowerCase().replace(/:443$/, '')
+  if (host === 'www.github.com') host = 'github.com'
   return `https://${host}/${m[2].toLowerCase()}`
 }
 
 /**
  * 两个 PR 链接是否指向同一个 PR。两边都必须符合 `PR_URL_RE`（否则返回 false，fail-closed）；比较前做规范化：
- * host 去掉 `www.` 与 `:443`，host、owner、repo 按 GitHub 规则不区分大小写。
+ * host 去掉 `:443`（`www.github.com` 视为 `github.com`），host、owner、repo 按 GitHub 规则不区分大小写。
  */
 export function samePrUrl(a: string, b: string): boolean {
   const x = normalizePrUrl(a)

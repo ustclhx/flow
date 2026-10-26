@@ -19,7 +19,7 @@
 - [x] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（先 resolve 再 realpath，写回规范化路径）；第 0 步 reply 唤醒 → `reply_only_wake`；非 user 身份的 `verify` 计入写类并在建任务时逐条经策略判定（`tool:Verify`，否则 `verify_not_allowed`），`policies.yaml` 模板加注释掉的 `tool:Verify` 白名单；唤醒任务只能由 hub、user 与绑定的 supervisor 作为 parent；唤醒身份的取消、收件箱只作用于本次唤醒与本 workspace，不能访问节点协议；非 hub 不能在 `requires` 中声明 `wake`
 - [x] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数（PR 由唤醒事件与 `inputs.pr` 关联）；写入前的同步段再检查一次（并发测试）；超限错误码
 - [x] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（模板由 G2 完成；审批这一半见 `packages/node/test/supervisor-policy.test.ts`；G11 补齐端到端：`packages/cli/test/supervisor-wake-e2e.test.ts` 以真实中枢路由 + 真实节点 + 桩 claude-sdk，按注入的 MCP 配置真实启动 `flow mcp` 子进程，启用规则时唤醒经 wake token 直接建出子任务，未启用时审批、批准后建出）
-- [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试（已完成：唤醒绑定 token 调用 `task_reply` 与收件箱 accept/reject/approve/deny/reply 均 403 `user_only` 的测试；`merge_request` 条目与合并批准路由由 4.5、4.8 实现后补对应测试）（G13 补：supervisor 对 `merge_request` 条目 approve、对 `task_proposal` 条目 accept 均 `user_only` 的测试；merger 创建后的测试留给 4.8）
+- [x] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试（已完成：唤醒绑定 token 调用 `task_reply` 与收件箱 accept/reject/approve/deny/reply 均 403 `user_only` 的测试；`merge_request` 条目与合并批准路由由 4.5、4.8 实现后补对应测试）（G13 补：supervisor 对 `merge_request` 条目 approve、对 `task_proposal` 条目 accept 均 `user_only` 的测试；merger 创建后的测试留给 4.8）（G14 补：supervisor 以唤醒 token 对真实 `merge_request` 条目 approve / reject 均 403 `user_only`、不写批准事件、不建 merger 的测试，见 `packages/hub/test/merge-requests.test.ts`）
 
 ## 3. 中枢：唤醒调度器
 
@@ -38,7 +38,7 @@
 - [x] 4.5 收件箱新来源 `task_proposal`、`merge_request` 及动作路由，与 `proposal`、`task` 来源隔离（`merge_request` 的批准 / 驳回路由到 `MergeRequestHandler` 接口，建 merger 由 4.8 接入；未接入时 `action_not_available`）
 - [x] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；（Telegram 的 Web 链接按审查决定改为注明“Web 页面仅本机可用”，外部访问见 4.10）接受时写决策条目并在合同 context 引用；接受提案建任务时不能借 user 身份跳过 verify 判定：以 hub 身份按 D5 与 verify 规则照常判定，或把 verify 命令完整展示给用户确认后再建
 - [x] 4.7 决策回看：每日扫描的内部规则、补发去重、无 workspace 时 Digest；`decision_review` 窄例外（只追加回看一节、只改 status 与 last_verified、只限关联决策、由中枢代写）
-- [ ] 4.8 `pr_merge_request`：资格核对（D10 第 4 步，且 `review_task` 必须是该 PR 最新一次可信审查——用 core 的 `latestTrustedReview`，pr-merge 执行器合并前同样核对；merger 合同填 `inputs.merge = {pr, review_task}`，`timeout_s` 不小于 2400）；按 `auto_merge` 建 merger 任务或生成 `merge_request` 条目；merger 由 hub 创建、`parent` 为审查任务、origin 取自 PR 的 dev 任务
+- [x] 4.8 `pr_merge_request`：资格核对（D10 第 4 步，且 `review_task` 必须是该 PR 最新一次可信审查——用 core 的 `latestTrustedReview`，pr-merge 执行器合并前同样核对；merger 合同填 `inputs.merge = {pr, review_task}`，`timeout_s` 不小于 2400）；按 `auto_merge` 建 merger 任务或生成 `merge_request` 条目；merger 由 hub 创建、`parent` 为审查任务、origin 取自 PR 的 dev 任务（G14：资格核对全部取自账本与配置，另要求同一 PR 没有未结束的审查任务、开出 PR 的任务已 done 且有效类别恰为 write、merger 仓库与角色可唯一确定；批准时再核对一次；驳回写 `merge_request.rejected` 进 instruction 队列；merger 幂等键 `merge:<审查任务>` 为 hub 保留前缀；同时修正 `normalizePrUrl` 只对 github.com 去 `www.`）
 - [ ] 4.9 `task_respond`（只限 `kind: supervisor` 会话，经中枢，核对放在 store 同一事务）：调用方是被分配该委托、持活动租约的唤醒任务；workspace、卡住序号、委托状态、无待送达回复与决定类型的核对；写 `task.replied`（actor supervisor）并送达节点；`escalate`；加入 MCP 自动放行清单；每日摘要列出代回复；`task_reply` 对 supervisor 仍返回 `user_only` 的测试
 - [ ] 4.10 从手机访问 Web 页面（后续任务，需用户先决定对外暴露的安全前提）：可选的 `ui.public_url`、Web 端接受对应的 Host / Origin 与鉴权，渠道消息据此附条目链接（例如任务提案改目标后接受）
 

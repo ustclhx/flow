@@ -425,6 +425,8 @@ describe('注入 Flow MCP', () => {
       expect(readRoleMayUse(`mcp__flow__${n}`, false)).toBe(false)
     }
     for (const n of ['task_create', 'pr_merge_request']) {
+      // 4.8：pr_merge_request 已是真实工具，但不自动放行，supervisor 调用时仍走策略审批。
+      expect(names.has(n)).toBe(true)
       expect(FLOW_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
       expect(SUPERVISOR_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
     }

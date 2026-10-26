@@ -140,7 +140,7 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 
 - **parent**：合同带 `parent` 时，任务必须存在（否则 422 `parent_not_found`）且与新任务同一 workspace（否则 403 `workspace_mismatch`），
   所有身份（包括 user 与 hub）都检查。
-- **保留幂等键**：`supervisor:` 前缀（不分大小写）只允许 hub（唤醒任务），其他身份 403 `reserved_idempotency_key`。
+- **保留幂等键**：`supervisor:` 与 `merge:` 前缀（不分大小写）只允许 hub（唤醒任务、merger 任务 `merge:<审查任务>`），`task-proposal:` 只供中枢接受任务提案时内部使用，其他身份 403 `reserved_idempotency_key`。
 - **保留能力**：非 hub 身份不能在 `requires` 中声明 `wake`（不分大小写），否则 400 `invalid_arguments`。
 - **唤醒任务作为 parent**：只有 hub、user，以及绑定该唤醒的 supervisor 可以；其他身份 403 `parent_required`。
 - **hub**：显式跳过 `creatable_by`（角色仍须已定义）。
