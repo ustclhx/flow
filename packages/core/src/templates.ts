@@ -131,7 +131,9 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
 ## supervisor 拿不准时转交用户，超时或无法唤醒时同样转交用户。
 ## 只写具体 scope 加精确 action 的 supervisor 规则，不要写 scope: * 或通配 action 的 supervisor 规则。
 ## 命令前缀严格按原始词匹配（pnpm test --x 命中；pnpm test:e2e、sudo pnpm test、./pnpm test、
-## FOO=1 pnpm test 都不命中），串联命令的每段都须满足同一前缀。
+## FOO=1 pnpm test、pnpm test > file、pnpm test $X 都不命中；只允许 2>&1），串联命令的每段都须满足同一前缀。
+## 风险：批准 pnpm test 等命令，等于批准在沙箱外执行仓库中的脚本，包括 worker 改过的 package.json
+## scripts、测试配置与 --reporter、--preload 等参数引入的代码；supervisor 需结合 diff_stat 判断。
 # - scope: ws/<id>
 #   action: tool:CodexCommand
 #   level: supervisor
@@ -158,7 +160,8 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
 #   when: {command_prefix: pnpm lint}
 ##
 ## gh 只作用于本 workspace 的登记仓库：不带 -R/--repo、无环境变量前缀、节点核对 gh 解析出的仓库，
-## 命令须在任务 worktree 中执行；不接受 --body-file / -F（正文用 --body 或 --fill），--head 只能是任务分支。
+## 命令须在任务 worktree 中执行；不接受 --body-file / -F（正文用 --body 或 --fill），--head 只能是任务分支；
+## gh pr view / diff 不接受 --jq / -q / --template / -t。
 ## 注意：gh 在有 TTY 时可能提示推送分支，supervisor 批准 pr create 不等于批准推送。
 # - scope: ws/<id>
 #   action: pr.create

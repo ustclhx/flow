@@ -622,3 +622,119 @@ describe('policies.yaml 模板的代回复白名单', () => {
     ).toBe('user')
   })
 })
+
+describe('第二轮审查：重定向、展开与 tag', () => {
+  const prefixRules = indexed(rule(WS, 'tool:Bash', 'auto', { command_prefix: 'pnpm test' }))
+
+  test.each([
+    ['pnpm test > ~/.zshrc'],
+    ['pnpm test >x'],
+    ['pnpm test >> ~/.bashrc'],
+    ['pnpm test >| x'],
+    ['pnpm test 1>x'],
+    ['pnpm test 2>x'],
+    ['pnpm test &>/tmp/x'],
+    ['pnpm test >&x'],
+    ['pnpm test 2>"&1"'],
+    ['pnpm test 2\\>&1'],
+    ['pnpm test <x'],
+    ['pnpm test << EOF'],
+    ['pnpm test <<< x'],
+    ['pnpm test <(id)'],
+    ['pnpm test >(id)'],
+    ['pnpm test 2>&1 >x'],
+    ['pnpm test && pnpm test >x'],
+    ['pnpm test $IFS'],
+    ['pnpm test "$HOME"'],
+    [`pnpm$${'{'}IFS}test`],
+    ['pnpm test *'],
+    ['pnpm test ?'],
+    ['pnpm test [a]'],
+    ['pnpm test {a,b}'],
+    ['pnpm test ~'],
+  ])('command_prefix 不命中：%s', (command) => {
+    expect(check(prefixRules, 'Bash', command).level).not.toBe('auto')
+  })
+
+  test.each([
+    ['pnpm test 2>&1'],
+    ["pnpm test '>x'"],
+    ['pnpm test "a*b"'],
+    ["pnpm test '$HOME'"],
+    ['pnpm test -- --grep "x?"'],
+  ])('command_prefix 命中（引号内、2>&1）：%s', (command) => {
+    expect(check(prefixRules, 'Bash', command).level).toBe('auto')
+  })
+
+  test.each([
+    ['{gh,pr} merge 1', 'pr.merge'],
+    ['gh $X pr merge 1', 'pr.merge'],
+    ['gh "$X" pr merge 1', 'pr.merge'],
+    ['g[h] pr merge 1', 'pr.merge'],
+    ['gh pr mer[g]e 1', 'pr.merge'],
+    ['gh pr {merge,1}', 'pr.merge'],
+    ['gh pr m* 1', 'pr.merge'],
+    ['wrangler $X deploy', 'deploy'],
+    ['flow $X policy set', 'flow.admin'],
+    ['{git,push} origin main', 'git.push'],
+    ['git $IFS push origin main', 'git.push'],
+    ['~/bin/gh pr merge 1', 'pr.merge'],
+    ['sudo {gh,pr} merge 1', 'pr.merge'],
+  ])('动作识别：展开可能拼出受保护动作时按不透明处理：%s', (command) => {
+    const actions = classifyAction({ tool: 'Bash', command })
+    expect(actions).toContain('shell.opaque')
+    expect(check(indexed(rule(WS, 'tool:Bash', 'auto')), 'Bash', command).level).not.toBe('auto')
+  })
+
+  test.each([
+    ['ls *.ts'],
+    ['git commit -m "$MSG"'],
+    ['echo $HOME'],
+    ['cat ~/x'],
+    ['git push origin {main,}'],
+  ])('动作识别：展开不在映射前缀位置时不额外标记：%s', (command) => {
+    expect(classifyAction({ tool: 'Bash', command })).not.toContain('shell.opaque')
+  })
+
+  test.each([
+    ['git push origin refs/tags/v1:ustclhx/t-1', 'not_branch_ref'],
+    ['git push origin refs/tags/ustclhx/t-1', 'not_branch_ref'],
+    ['git push origin ustclhx/t-1:refs/tags/ustclhx/t-1', 'not_branch_ref'],
+    ['git push origin refs/remotes/origin/x:ustclhx/t-1', 'not_branch_ref'],
+    ['git push origin ustclhx/t-1:refs/remotes/ustclhx/t-1', 'not_branch_ref'],
+    ['git push origin ustclhx/t-1 2>&1', 'unsafe_characters'],
+  ])('push_to：tag 与非分支 ref 不满足：%s', (command, reason) => {
+    expect(pushToTaskBranch({ ...pushInput, command })).toEqual({ ok: false, reason })
+  })
+
+  test.each([
+    ['git push origin ustclhx/t-1:refs/heads/ustclhx/t-1'],
+    ['git push origin refs/heads/ustclhx/t-1'],
+    ['git push origin main:ustclhx/t-1'],
+  ])('push_to：目标是任务分支的满足：%s', (command) => {
+    expect(pushToTaskBranch({ ...pushInput, command })).toEqual({ ok: true })
+  })
+
+  test.each([
+    ['gh pr view 1 --jq .body', 'unknown_option'],
+    ['gh pr view 1 -q .body', 'unknown_option'],
+    ['gh pr view 1 --json body --jq env', 'unknown_option'],
+    ['gh pr view 1 --template x', 'unknown_option'],
+    ['gh pr view 1 -t x', 'unknown_option'],
+    ['gh pr diff 1 --jq x', 'unknown_option'],
+    ['gh pr view 1 --web', 'unknown_option'],
+    ['gh pr view 1 2>&1', 'unsafe_characters'],
+  ])('gh_scope：view / diff 禁用 jq 与模板：%s', (command, reason) => {
+    expect(
+      ghScopeWorkspaceRepo({ command, ghEnvOk: true, taskBranch: BRANCH, ...location }),
+    ).toEqual({ ok: false, reason })
+  })
+
+  test('gh_scope：view 只带 --json 与 --comments 仍满足', () => {
+    for (const command of ['gh pr view 1 --json title,body', 'gh pr view 1 -c']) {
+      expect(
+        ghScopeWorkspaceRepo({ command, ghEnvOk: true, taskBranch: BRANCH, ...location }),
+      ).toEqual({ ok: true })
+    }
+  })
+})

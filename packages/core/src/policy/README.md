@@ -100,11 +100,17 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 赋值、包装命令（`sudo`、`env`、`command`、`exec`、`nohup`、`timeout`、`nice`、`time`、`stdbuf`、
 `xargs`……）或执行文件路径，因此首词必须与前缀首词完全相同（`./pnpm`、`/usr/bin/git` 不命中）；
 命令与前缀只能含空格与可见 ASCII（制表符、换行、NBSP、U+3000 等不命中）；解析不确定时不命中；
-串联命令的每段都须满足。
+串联命令的每段都须满足；任一段含引号外的文件重定向（`>`、`>>`、`>|`、`N>`、`&>`、`<`、`<<`、`<<<`、
+`<(`，只允许独立的 `2>&1`）或会展开的元字符（`$`（含双引号内）、`{`、`[`、`*`、`?`、`~`）时不命中。
+
+批准 `pnpm test` 这类命令等于批准在沙箱外执行仓库中的脚本（包括 worker 改过的 `package.json`
+scripts、测试配置与 `--reporter`、`--preload` 等参数），这是已接受的风险，supervisor 需结合 `diff_stat` 判断。
 
 **行为变更**：此前前缀匹配先消去包装与赋值，`FOO=1 sudo /usr/bin/git push` 能命中 `git push`
 前缀。现在它不命中，请求落到其他规则或交给用户（只会更保守）。动作识别（`classifyAction`）仍然
-消去包装，保守识别敏感动作。分词只在空格与制表符处断词（与 bash 一致），命令中出现其他空白时
+消去包装，保守识别敏感动作；执行文件（含包装命令）或用于匹配映射前缀的词含会展开的元字符时
+（`{gh,pr} merge`、`gh $X pr merge`、`gh pr mer[g]e`、`git $IFS push`；含展开的词可代表任意多个词），
+整段按 `shell.opaque` 处理。分词只在空格与制表符处断词（与 bash 一致），命令中出现其他空白时
 `classifyAction` 按 `shell.opaque` 处理。
 
 ### 条件 `push_to` 与 `gh_scope`（`conditions.ts`，D15）
@@ -129,18 +135,20 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
   `--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*` 等以及任何未列出的选项
   （包括短选项连写、`--`）都不满足；
 - 恰好一个 remote 加一个 refspec；remote 是名字（不是 URL 或路径），且在 `remotes` 中；
-- refspec 不以 `+` 或 `:` 开头，来源与目标都不是 `HEAD`、不含 `@`，是普通分支名；目标（去掉
-  `refs/heads/`，无冒号时等于来源）等于 `task_branch`；
+- refspec 不以 `+` 或 `:` 开头，来源与目标都不是 `HEAD`、不含 `@`，是普通分支名；来源与目标都不能是
+  `refs/tags/…` 等非分支 ref；目标（规范为 `refs/heads/<分支>` 或短名，无冒号时等于来源）等于 `task_branch`；
+  节点另需确认本地没有与任务分支同名的 tag；
 - `task_branch` 存在且不等于 `default_branch`（缺默认分支即不满足）；`push_env_ok` 严格为 `true`；
 - 命令在任务 worktree 中执行。
 
 `when.gh_scope: workspace_repo` 由 `ghScopeWorkspaceRepo` 判定：
 - `gh_env_ok` 严格为 `true`；
-- 只含空格与可见 ASCII，且没有 shell 元字符：引号外的 `` $ ` \ < > { } * ? [ ] ~ ; & | ( ) # ``，
+- 没有引号外的重定向与展开；只含空格与可见 ASCII，且没有 shell 元字符：引号外的 `` $ ` \ < > { } * ? [ ] ~ ; & | ( ) # ``，
   双引号内的 `` $ ` \ ``，未闭合的引号（单引号内按字面）；
 - 只有一段，第一个词就是 `gh`（没有 `GH_REPO`、`GH_HOST`、`GH_TOKEN` 等环境变量赋值或包装），
   第二、三个词是 `pr create`、`pr view` 或 `pr diff`；
-- 只带白名单选项：不含 `-R` / `--repo`、`--recover`、`--web`、`--editor`、`--template`；
+- 只带白名单选项：不含 `-R` / `--repo`、`--recover`、`--web`、`--editor`、`--template`；view / diff
+  不接受 `--jq` / `-q` / `--template` / `-t`（jq 的 `env` / `$ENV` 能输出沙箱外进程的环境变量）；
   **不接受 `-F` / `--body-file`**（文件在核对与 gh 读取之间可能被替换，正文用 `--body` 或 `--fill`）；
 - `--head` 缺省或等于 `task_branch`（任务分支缺失时带 `--head` 不满足）；create 没有位置参数，
   view / diff 最多一个 PR 编号或分支名（不接受 URL）；

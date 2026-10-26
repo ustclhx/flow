@@ -30,7 +30,8 @@ const REGISTERED_REMOTES = ['origin'] as const
 /**
  * `push_to`、`gh_scope` 条件的判定上下文；任何缺失的字段都使对应条件不满足。
  * - `push_env_ok`、`gh_env_ok`：节点随请求上报的字段，这里只认严格的 `true`。
- *   TODO(5.6)：只接受 node actor（持有该任务活动租约的节点）上报的值；user 的请求一律视为缺失。
+ *   TODO(5.6)：`push_env_ok`、`gh_env_ok` 与 `command_cwd` 只接受 node actor（持有该任务活动租约的节点）
+ *   上报的值；user 的请求一律视为缺失。
  * - TODO(1.6 账本)：任务分支取自投影中的 `task.branch_reported`，仓库默认分支待登记仓库提供。
  * - TODO(5.6)：`command_cwd`（节点上报命令实际执行目录）与 `task_worktree`（投影记录的任务
  *   worktree）尚无来源。两者缺失时 `push_to` 与 `gh_scope` 恒不满足（保守）。
@@ -41,6 +42,7 @@ function policyContext(body: object): PolicyContext {
     remotes: REGISTERED_REMOTES,
     push_env_ok: reported.push_env_ok === true,
     gh_env_ok: reported.gh_env_ok === true,
+    // 仅同机部署：中枢在本机解析路径；远程节点时 command_cwd 的 realpath 比较须改在节点侧完成。
     realpath: (path) => realpathSync(path),
   }
 }

@@ -83,34 +83,61 @@ export const GUARDED_TOOLS: readonly string[] = [
 export const isGuardedTool = (action: string): boolean =>
   GUARDED_TOOLS.includes(action) || action.startsWith('tool:mcp__')
 
+/** 一个词在 shell 中的性质（只看引号外；双引号内的 `$` 仍会展开，也算）。 */
+export interface WordInfo {
+  /** 去掉引号与转义后的文本。 */
+  text: string
+  /** 含会展开的元字符：`$`（含双引号内）、`{`、`[`、`*`、`?`、`~`。 */
+  expands: boolean
+  /** 含引号外的 `<` 或 `>`（重定向、here-doc、进程替换）。 */
+  redirect: boolean
+  /** 用过引号或反斜杠转义。 */
+  quoted: boolean
+}
+
 export interface ParsedCommands {
   commands: string[][]
+  /** 与 commands 一一对应，带每个词的性质。 */
+  segments: WordInfo[][]
   opaque: boolean
 }
 
+const EXPANDING_CHARS = '${[*?~'
+
 /** 只做静态分词，不执行 shell；保留引号内的空格和分隔符，支持反斜杠续行。 */
 export function splitCommands(command: string): ParsedCommands {
-  const commands: string[][] = []
-  let words: string[] = []
+  const segments: WordInfo[][] = []
+  let words: WordInfo[] = []
   let word = ''
   let started = false
+  let expands = false
+  let redirect = false
+  let quoted = false
+  // 上一个字符是引号外的 < 或 >：随后的 & 属于重定向（`2>&1`、`>&`），不是分隔符。
+  let afterRedirect = false
   let quote = ''
   // 即使出现在引号、注释中也保守处理，避免静态分词遗漏动态执行。
   let opaque = /\$\(|`|[<>]\(/.test(command)
   const flushWord = () => {
-    if (started) words.push(word)
+    if (started) words.push({ text: word, expands, redirect, quoted })
     word = ''
     started = false
+    expands = false
+    redirect = false
+    quoted = false
   }
   const flushCommand = () => {
     flushWord()
-    if (words.length) commands.push(words)
+    if (words.length) segments.push(words)
     words = []
   }
   for (let i = 0; i < command.length; i++) {
     const char = command[i] as string
     const next = command[i + 1]
+    const wasAfterRedirect = afterRedirect
+    afterRedirect = false
     if (char === '\\' && quote !== "'" && next !== undefined) {
+      quoted = true
       if (next === '\n') i++
       else if (!quote || next === '"' || next === '\\' || next === '$' || next === '`') {
         word += next
@@ -119,25 +146,41 @@ export function splitCommands(command: string): ParsedCommands {
       } else word += char
     } else if (quote) {
       if (char === quote) quote = ''
-      else word += char
+      else {
+        if (quote === '"' && char === '$') expands = true
+        word += char
+      }
     } else if (char === '"' || char === "'") {
       quote = char
+      quoted = true
       started = true
     } else if (char === '#' && !started) {
       while (i < command.length && command[i] !== '\n') i++
       flushCommand()
+    } else if (char === '&' && wasAfterRedirect) {
+      word += char
+      started = true
     } else if (';&|()\n'.includes(char)) flushCommand()
     // 与 bash 一致只在空格与制表符处断词；NBSP、U+3000 等 Unicode 空白属于词的一部分。
     else if (char === ' ' || char === '\t') flushWord()
     else {
+      if (EXPANDING_CHARS.includes(char)) expands = true
+      if (char === '<' || char === '>') {
+        redirect = true
+        afterRedirect = true
+      }
       word += char
       started = true
     }
   }
   if (quote || command.endsWith('\\')) opaque = true
   flushCommand()
-  return { commands, opaque }
+  return { commands: segments.map((seg) => seg.map((w) => w.text)), segments, opaque }
 }
+
+/** 引号外的重定向：只允许独立的 `2>&1`（只复制文件描述符，不涉及文件）。 */
+export const hasFileRedirect = (segment: readonly WordInfo[]): boolean =>
+  segment.some((w) => w.redirect && (w.quoted || w.text !== '2>&1'))
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 type OptionKind = 'value' | 'flag' | 'optional'
@@ -183,6 +226,7 @@ const WRAPPER_OPTIONS = new Map<string, OptionTable>(
       '-i --ignore-environment -0 --null -v --debug --help --version',
     ),
     command: options('', '-p -v -V'),
+    builtin: options('', ''),
     timeout: options(
       '-s --signal -k --kill-after',
       '--foreground --preserve-status -v --verbose --help --version',
@@ -238,11 +282,13 @@ function unwrapCommand(input: string[]): { words: string[]; opaque: boolean } {
       continue
     }
     const executable = posix.basename(word)
+    // 执行文件（含包装命令）带展开：实际执行什么无法静态确定。
+    if (EXPANDING_RE.test(word)) return { words: [executable, ...words.slice(1)], opaque: true }
     const wrapper = WRAPPER_OPTIONS.get(executable)
     const global = GLOBAL_OPTIONS.get(executable)
     const table = wrapper ?? global
     if (!table) {
-      return { words: [executable, ...words.slice(1)], opaque: /[$*?]/.test(word) }
+      return { words: [executable, ...words.slice(1)], opaque: false }
     }
     words = words.slice(1)
     if (executable === 'nice' && /^-\d+$/.test(words[0] ?? '')) words = words.slice(1)
@@ -263,6 +309,34 @@ function unwrapCommand(input: string[]): { words: string[]; opaque: boolean } {
     }
   }
   return { words: [], opaque: false }
+}
+
+/** 会展开的元字符（按去引号后的文本，比按引号外判断更保守）。 */
+const EXPANDING_RE = /[$*?{[~]/
+
+/**
+ * 词中的展开可能拼出映射前缀（`gh $X pr merge`、`gh pr mer[g]e`、`{gh,pr} merge`、`git $IFS push`）：
+ * 执行文件含展开，或某条映射在逐词比较时，把每个含展开的词当作"任意多个（含零个）前缀词"后能够匹配。
+ */
+function expansionMayMatch(
+  words: readonly string[],
+  mappings: readonly CommandActionMapping[],
+): boolean {
+  if (words[0] !== undefined && EXPANDING_RE.test(words[0])) return true
+  if (!words.some((word) => EXPANDING_RE.test(word))) return false
+  const matches = (prefix: readonly string[], wi: number, pi: number, used: boolean): boolean => {
+    if (pi === prefix.length) return used
+    const word = words[wi]
+    if (word === undefined) return false
+    if (EXPANDING_RE.test(word)) {
+      for (let next = pi; next <= prefix.length; next++) {
+        if (matches(prefix, wi + 1, next, true)) return true
+      }
+      return false
+    }
+    return word === prefix[pi] && matches(prefix, wi + 1, pi + 1, used)
+  }
+  return mappings.some(({ prefix }) => matches(prefix, 0, 0, false))
 }
 
 export const commandWords = (command: string): string[][] =>
@@ -463,8 +537,10 @@ export function classifyAction(
       const nested = nestedScript(words)
       if (nested.opaque) markOpaque()
       if (nested.script !== undefined) pending.push(nested.script)
+      if (expansionMayMatch(words, mappings)) markOpaque()
       const flow = flowInvocation(words)
       if (flow.opaque) markOpaque()
+      if (flow.words && expansionMayMatch(flow.words, mappings)) markOpaque()
       for (const { prefix, action } of mappings) {
         if (hasCommandPrefix(words, prefix)) actions.add(action)
         if (flow.words && hasCommandPrefix(flow.words, prefix)) actions.add(action)

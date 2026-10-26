@@ -1,5 +1,5 @@
 import { posix } from 'node:path'
-import { splitCommands } from './actions.ts'
+import { hasFileRedirect, splitCommands } from './actions.ts'
 
 /**
  * 规则条件 `when.push_to: task_branch` 与 `when.gh_scope: workspace_repo` 的判定（design D15）。
@@ -68,6 +68,8 @@ export function parsePushTarget(command: string): PushTargetResult {
   const parsed = splitCommands(command)
   if (parsed.opaque) return no('opaque')
   if (parsed.commands.length !== 1) return no('not_single_command')
+  const segment = parsed.segments[0] ?? []
+  if (hasFileRedirect(segment) || segment.some((w) => w.expands)) return no('unsafe_characters')
   const words = parsed.commands[0] as string[]
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? '')) return no('env_prefix')
   if (words[0] !== 'git') return no('not_git_push')
@@ -97,6 +99,11 @@ export function parsePushTarget(command: string): PushTargetResult {
     return no('head_refspec')
   }
   if (!isPlainBranchName(src) || !isPlainBranchName(dst)) return no('invalid_refspec')
+  // 来源只能是分支短名或 refs/heads/…（不能是 refs/tags/… 等其他 ref）；目标同样只能是分支：
+  // 规范后为 refs/heads/<分支> 或分支短名，refs/tags/… 等写法去前缀后不等于任务分支。
+  if (src.startsWith('refs/') && !src.startsWith('refs/heads/')) return no('not_branch_ref')
+  const rawDst = parts[1] ?? src
+  if (rawDst.startsWith('refs/') && !rawDst.startsWith('refs/heads/')) return no('not_branch_ref')
   // 无冒号时目标由来源推出；来源若写成 refs/heads/x，目标同为 x。
   return { ok: true, remote, src, dst }
 }
@@ -162,7 +169,9 @@ const VISIBLE_ASCII_RE = /^[\x20-\x7e]*$/
 /**
  * `when.command_prefix` 的严格匹配（所有档位通用）：按原始词比较，**不**消去环境变量赋值、包装命令
  * （sudo、env、command、exec、nohup、timeout、nice、xargs……）或执行文件路径，因此首词必须与前缀
- * 首词完全相同；命令与前缀都只能含空格与可见 ASCII，解析不确定（命令替换、未闭合引号等）不满足。
+ * 首词完全相同；命令与前缀都只能含空格与可见 ASCII，解析不确定（命令替换、未闭合引号等）不满足；
+ * 任一段含引号外的文件重定向（`>`、`>>`、`>|`、`N>`、`&>`、`<`、`<<`、`<<<`……，独立的 `2>&1` 除外）
+ * 或会展开的元字符（`$`（含双引号内）、`{`、`[`、`*`、`?`、`~`）时不满足。
  * 串联命令的每一段都必须满足。动作识别（classifyAction）仍消去包装，保守识别敏感动作。
  */
 export function commandPrefixMatches(command: string, prefix: string): boolean {
@@ -172,6 +181,10 @@ export function commandPrefixMatches(command: string, prefix: string): boolean {
   if (head.opaque || head.commands.length !== 1 || !prefixWords?.length) return false
   const parsed = splitCommands(command)
   if (parsed.opaque || parsed.commands.length === 0) return false
+  // 任一段有文件重定向（只允许独立的 2>&1）或会展开的元字符（$ { [ * ? ~）：不满足。
+  if (parsed.segments.some((seg) => hasFileRedirect(seg) || seg.some((w) => w.expands))) {
+    return false
+  }
   return parsed.commands.every(
     (words) =>
       words.length >= prefixWords.length && prefixWords.every((word, i) => words[i] === word),
@@ -210,16 +223,20 @@ const ghOptions = (values: string, flags: string): ReadonlyMap<string, GhOptionK
   ])
 
 /**
- * 允许的子命令与选项（白名单）。没有列出的选项（`-R/--repo`、`--recover`、`--web`、`--editor`、
- * `--template` 等）一律不满足。`-F/--body-file` 在表中只为给出明确原因：读取文件存在检查与使用之间的
- * 竞态（TOCTOU），一律不满足。短选项只接受单独写法，带值选项接受分离写法与长选项 `=value`。
+ * 允许的子命令与选项（白名单），没有列出的选项一律不满足；短选项只接受单独写法，带值选项接受分离
+ * 写法与长选项 `=value`。所有子命令都不接受 `-R/--repo`。
+ * - `create`：不接受 `--recover`（读文件）、`--web`、`--editor`、`-T/--template`；`-F/--body-file`
+ *   在表中只为给出明确原因：文件在核对与 gh 读取之间可能被替换（TOCTOU），一律不满足。
+ * - `view`：只接受 `--json` 与 `-c/--comments`；不接受 `--jq/-q`、`--template/-t`（jq 的 `env` /
+ *   `$ENV` 能输出沙箱外进程的环境变量）与 `--web`。
+ * - `diff`：只接受 `--color`、`--name-only`、`--patch`；不接受 `--web`。
  */
 const GH_PR_SUBCOMMANDS: Readonly<Record<string, ReadonlyMap<string, GhOptionKind>>> = {
   create: ghOptions(
     '-t --title -b --body -F --body-file -B --base -H --head -a --assignee -l --label -m --milestone -p --project -r --reviewer',
     '-d --draft -f --fill --fill-first --fill-verbose --no-maintainer-edit --dry-run',
   ),
-  view: ghOptions('--json -q --jq -t --template', '-c --comments'),
+  view: ghOptions('--json', '-c --comments'),
   diff: ghOptions('--color', '--name-only --patch'),
 }
 /** view / diff 的位置参数：PR 编号或分支名；不接受 URL（可能指向其他仓库）。 */
@@ -245,6 +262,8 @@ export function ghScopeWorkspaceRepo(input: GhScopeInput): ConditionResult {
   const parsed = splitCommands(input.command)
   if (parsed.opaque) return no('opaque')
   if (parsed.commands.length !== 1) return no('not_single_command')
+  const segment = parsed.segments[0] ?? []
+  if (hasFileRedirect(segment) || segment.some((w) => w.expands)) return no('unsafe_characters')
   const words = parsed.commands[0] as string[]
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? '')) return no('env_prefix')
   if (words[0] !== 'gh') return no('not_gh_pr')
