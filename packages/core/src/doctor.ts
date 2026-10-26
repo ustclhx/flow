@@ -25,7 +25,7 @@ import {
   SUPERVISOR_ACTOR,
 } from './roles.ts'
 import type { SupervisorConfig } from './schema/supervisor.ts'
-import { loadWorkspaces } from './workspaces.ts'
+import { loadWorkspaces, reviewerRoleIssues } from './workspaces.ts'
 
 /** gitleaks 需 staged/stdin；Codex 需 exec --json/resume；Codex、Orca 下限取已验证的 fixture 版本。 */
 export const MIN_VERSIONS = {
@@ -434,7 +434,7 @@ export async function runDoctor(
     checks.push(...checkRoleKinds(roles.data.roles))
   }
 
-  checks.push(...(await checkWorkspaces(home)))
+  checks.push(...(await checkWorkspaces(home, roles.ok ? roles.data.roles : undefined)))
 
   checks.push(...(await checkExecutors(roles.ok ? roles.data.roles : [], env, opts, run, find)))
 
@@ -480,9 +480,19 @@ export function describeSupervisorConfig(c: SupervisorConfig): string {
 }
 
 /** workspace 定义文件的问题与每个 workspace 的 supervisor 设置。 */
-async function checkWorkspaces(home: string): Promise<DoctorCheck[]> {
+async function checkWorkspaces(home: string, roles?: Role[]): Promise<DoctorCheck[]> {
   const loaded = await loadWorkspaces(home)
   if (!loaded.ok) return [{ id: 'workspaces.config', ok: false, message: loaded.error.message }]
+  // 审查角色必须是只读配置（D10）：否则执行器拒绝审查任务、结论不会产生。
+  const reviewers: DoctorCheck[] = roles
+    ? reviewerRoleIssues(loaded.data.workspaces, roles).map((issue) => ({
+        id: `workspaces.config.${issue.file}.${issue.field ?? ''}.${issue.code}`,
+        ok: false,
+        severity: 'error' as const,
+        message: `${issue.file}：${issue.field}：${issue.message}`,
+        hint: `审查角色参考 flow init 生成的 pr-reviewer.yaml（kind: read、setting_sources: []、read_scope: cwd）；${claudeReadHint}`,
+      }))
+    : []
   const checks: DoctorCheck[] = loaded.data.issues.map((issue) => ({
     id: `workspaces.config.${issue.file}.${issue.field ?? ''}`,
     ok: false,
@@ -515,6 +525,7 @@ async function checkWorkspaces(home: string): Promise<DoctorCheck[]> {
       message: `${ws.ref} supervisor：${describeSupervisorConfig(ws.supervisor)}`,
     })
   }
+  checks.push(...reviewers)
   return checks
 }
 

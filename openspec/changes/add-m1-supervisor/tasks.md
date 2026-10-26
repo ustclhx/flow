@@ -38,22 +38,22 @@
 - [ ] 4.5 收件箱新来源 `task_proposal`、`merge_request` 及动作路由，与 `proposal`、`task` 来源隔离
 - [ ] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；接受时写决策条目并在合同 context 引用；接受提案建任务时不能借 user 身份跳过 verify 判定：以 hub 身份按 D5 与 verify 规则照常判定，或把 verify 命令完整展示给用户确认后再建
 - [ ] 4.7 决策回看：每日扫描的内部规则、补发去重、无 workspace 时 Digest；`decision_review` 窄例外（只追加回看一节、只改 status 与 last_verified、只限关联决策、由中枢代写）
-- [ ] 4.8 `pr_merge_request`：资格核对（D10 第 4 步）；按 `auto_merge` 建 merger 任务或生成 `merge_request` 条目；merger 由 hub 创建、`parent` 为审查任务、origin 取自 PR 的 dev 任务
+- [ ] 4.8 `pr_merge_request`：资格核对（D10 第 4 步，且 `review_task` 必须是该 PR 最新一次可信审查——用 core 的 `latestTrustedReview`，pr-merge 执行器合并前同样核对；merger 合同填 `inputs.merge = {pr, review_task}`，`timeout_s` 不小于 2400）；按 `auto_merge` 建 merger 任务或生成 `merge_request` 条目；merger 由 hub 创建、`parent` 为审查任务、origin 取自 PR 的 dev 任务
 - [ ] 4.9 `task_respond`（只限 `kind: supervisor` 会话，经中枢，核对放在 store 同一事务）：调用方是被分配该委托、持活动租约的唤醒任务；workspace、卡住序号、委托状态、无待送达回复与决定类型的核对；写 `task.replied`（actor supervisor）并送达节点；`escalate`；加入 MCP 自动放行清单；每日摘要列出代回复；`task_reply` 对 supervisor 仍返回 `user_only` 的测试
 
 ## 5. 执行器与节点
 
 - [x] 5.1 claude-sdk `read_scope: cwd`：PreToolUse 钩子覆盖全部工具，与 `writable_paths` 共用路径判定，覆盖 Glob `pattern`、Grep `glob`；单元测试（cwd 内外、隐藏段、`..`、绝对模式、符号链接、hub.token、未知路径字段）
-- [ ] 5.2 claude-sdk 审查准备：`gh` 读 PR、仓库归属校验、记录 head、fetch `pull/<n>/head` 后检出到私有临时 worktree（允许读 `.github/`）、结束后移除、节点启动时 prune 残留、diff 写入任务私有目录；结构化输出（`outputFormat: json_schema`），`reviewed_sha` 由执行器填入；`error_max_structured_output_retries` 等映射为 `review_output_invalid`；只有 `reviewer_roles` 的结果被中枢采信
+- [x] 5.2 claude-sdk 审查准备：`gh` 读 PR、仓库归属校验、记录 head、fetch `pull/<n>/head` 后检出到私有临时 worktree（允许读 `.github/`）、结束后移除、节点启动时 prune 残留、diff 写入任务私有目录；结构化输出（`outputFormat: json_schema`），`reviewed_sha` 由执行器填入；`error_max_structured_output_retries` 等映射为 `review_output_invalid`；只有 `reviewer_roles` 的结果被中枢采信（G8：中枢入账时丢弃不可能是审查结论的 `result.review`；采信规则为 core 的 `trustedReview` / `reviewApproves`，供 4.8 的 `pr_merge_request` 与审查轮数统计调用）
 - [ ] 5.3 supervisor 会话注入 `--workspace`、`--task` 与 `FLOW_WORKSPACE`、`FLOW_TASK_ID`；注入唤醒绑定 token
-- [ ] 5.4 pr-merge 执行器：条件核对（D10 第 5 步，含至少一项检查）、合并、等待 workflow runs（成功/失败/超时/无 run）；`gh` 可注入，测试不调用真实 gh
+- [x] 5.4 pr-merge 执行器：条件核对（D10 第 5 步，含至少一项检查）、合并、等待 workflow runs（成功/失败/超时/无 run）；`gh` 可注入，测试不调用真实 gh（G8：合同 `inputs.merge = {pr, review_task}` 的 schema 已加入，由 4.8 填写）
 - [x] 5.5 预留执行槽：`acquireLeaseRequest.slots` 协议与 schema、中枢按类别分配、旧节点兼容；节点在普通槽满时仍为 supervisor 领取；卡住的 dev 任务持有租约时仍能运行唤醒任务的测试；reply 槽只给 reply 唤醒、两个 workspace 的普通唤醒占满 supervisor 槽时 reply 唤醒仍能运行的测试
 - [ ] 5.6 节点：`precheck` 对 `supervisor` 档位不放行、上报 `blocked` 带 `decision_id`、请求文本与 `diff_stat`（2000 字符截断，非 git 目录省略）；`push_env_ok`（push 地址、git 配置项清单、hook）与 `gh_env_ok`（`gh repo view` 解析的仓库）的计算与上报；supervisor 的 `approve` 送达时重读待批请求并复查环境，不一致在 ack 中标记 `dropped{reason: request_changed}` 并以 `no_delegate: true` 重新上报；codex-orca 开始时上报 `task.branch_reported`（中枢只接受租约持有者、一次、不可改）；`policy/check` 请求上报命令实际执行目录（`command_cwd`），投影记录任务 worktree（`task_worktree`），中枢传入策略上下文（`push_to` / `gh_scope` 要求两者 realpath 相同，此前恒不满足）；`command_cwd` 的 realpath 比较在节点侧完成，`command_cwd`、`push_env_ok`、`gh_env_ok` 只接受 node actor 上报的值（中枢目前本机 realpath，仅同机部署）；推送环境检查清单加入"本地没有与任务分支同名的 tag"；remote 名从登记仓库取；节点执行前再核对合同 cwd（与 `inputs.repo`）的 realpath 仍在登记仓库内（中枢只在建任务时核对，见 D5 第 4 步）
-- [ ] 5.7 read 角色由执行器强制只读（D9：推断只是配置层判断）：codex-exec 对有效类别为 read 的角色用 `-c` 覆盖 `mcp_servers={}`、`notify=[]`，或使用隔离的 `CODEX_HOME`，防止用户级或项目级 `.codex/config.toml` 引入沙箱外进程；claude-sdk 的 read 角色用 SDK `tools` 选项把可用工具限定为白名单（Read/Grep/Glob + Flow MCP），canUseTool 对非只读工具一律拒绝、不进审批
+- [x] 5.7 read 角色由执行器强制只读（D9：推断只是配置层判断）：codex-exec 对有效类别为 read 的角色用 `-c` 覆盖 `mcp_servers={}`、`notify=[]`，或使用隔离的 `CODEX_HOME`，防止用户级或项目级 `.codex/config.toml` 引入沙箱外进程；claude-sdk 的 read 角色用 SDK `tools` 选项把可用工具限定为白名单（Read/Grep/Glob + Flow MCP），canUseTool 对非只读工具一律拒绝、不进审批（G8：实测 Codex 0.164 的 `-c mcp_servers={}` 与用户级配置合并、不能阻止 MCP 服务器启动，codex-exec 改用隔离的 `CODEX_HOME`，`auth.json` 链接到用户凭证；导出 `codexExecPermissions` 并有防漂移测试）
 
 ## 6. 文档
 
-- [ ] 6.1 `docs/supervisor.md`：唤醒来源、origin 与权限、上限、简报、提问、提案与决策、PR 验收链、自动合并的风险与开关、代回复的范围与白名单及其已接受风险（含沙箱外运行 worker 代码与 git hook）；`docs/hub-auth.md` 身份表加保留 actor `supervisor` 与 `task_respond`；policy README 更新合并次序、`push_to`、`gh_scope`、巡检配置、费用说明、已接受风险（hub.token 可读）；`docs/executors.md` 增加 pr-reviewer、pr-merge、`read_scope`；升级步骤（改 `dev.yaml`、启用策略规则与巡检）（已完成：`docs/executors.md` 的 `read_scope` 一节）
+- [ ] 6.1 `docs/supervisor.md`：唤醒来源、origin 与权限、上限、简报、提问、提案与决策、PR 验收链、自动合并的风险与开关、代回复的范围与白名单及其已接受风险（含沙箱外运行 worker 代码与 git hook）；`docs/hub-auth.md` 身份表加保留 actor `supervisor` 与 `task_respond`；policy README 更新合并次序、`push_to`、`gh_scope`、巡检配置、费用说明、已接受风险（hub.token 可读）；`docs/executors.md` 增加 pr-reviewer、pr-merge、`read_scope`；升级步骤（改 `dev.yaml`、启用策略规则与巡检）（已完成：`docs/executors.md` 的 `read_scope` 一节；G8 补充了 `docs/executors.md` 的 pr-reviewer 审查准备、pr-merge 与只读角色的执行器强制）
 
 ## 7. 真实环境验收
 

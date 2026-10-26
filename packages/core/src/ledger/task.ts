@@ -414,6 +414,19 @@ export const reviewResult = z
   .meta({ title: 'Review result', description: '审查任务结果的 result.review' })
 export type ReviewResult = z.infer<typeof reviewResult>
 
+/**
+ * merger 任务的 `inputs.merge`（D10 第 4、5 步）：要合并的 PR 与给出 approve 结论的审查任务。
+ * 由中枢在合并请求通过资格核对后填写（4.8）；pr-merge 执行器据此再次核对，**不信任其中任何结论**：
+ * 审查结论、head 与仓库都由执行器重新读取。
+ */
+export const mergeInputs = z
+  .strictObject({
+    pr: prUrl,
+    review_task: taskId.meta({ description: '给出 approve 结论的审查任务（merger 的 parent）' }),
+  })
+  .meta({ title: 'Merge inputs', description: 'merger 任务的 inputs.merge' })
+export type MergeInputs = z.infer<typeof mergeInputs>
+
 /** 卡住时附带的改动摘要入账上限（node-protocol "卡住时附带改动摘要"）。 */
 export const DIFF_STAT_MAX = 2000
 /** 协议中改动摘要的上限：节点可多报，中枢入账前截到 `DIFF_STAT_MAX`。 */
@@ -561,11 +574,14 @@ export const taskContract = z
           description:
             '写类任务针对的 PR（例如按审查意见修改）；中枢据此统计同一 PR 的修改轮数（D4）',
         }),
+        merge: mergeInputs.optional().meta({
+          description: 'merger 任务要合并的 PR 与审查任务（pr-merge 执行器会重新核对）',
+        }),
       })
       .optional()
       .meta({
         description:
-          '执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review 见 supervisor',
+          '执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review、inputs.merge 见 supervisor',
       }),
   })
   .superRefine((c, ctx) => {

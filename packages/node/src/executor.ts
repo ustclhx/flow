@@ -47,7 +47,12 @@ export interface ExecutorContext {
    * claude-sdk `read_scope: cwd` 的附加参数（add-m1-supervisor D6）：任务私有目录（审查 diff 等），
    * 以及是否允许读 cwd 根下的 `.github/`（审查 worktree）。缺省只允许 cwd，`.github/` 不可读。
    */
-  readScope?: { privateDir?: string; allowDotGithub?: boolean }
+  readScope?: {
+    privateDir?: string
+    allowDotGithub?: boolean
+    /** 会话配置了结构化输出（审查任务）：只有这时 `StructuredOutput` 才可用。 */
+    structuredOutput?: boolean
+  }
 }
 
 /** 节点交给 `classify` 的快照。 */
@@ -91,7 +96,8 @@ export type ExecutorOutcome =
       /** 会话 id：回复后下一次执行据此恢复（无头执行器，D6）。 */
       session?: string
     }
-  | { outcome: 'cancelled'; message?: string }
+  /** `result`：取消前已产生的结果（例如 pr-merge 已合并后被取消），随 cancelled 一起提交。 */
+  | { outcome: 'cancelled'; message?: string; result?: TaskResult }
   /** worker 进程意外退出：节点上报 blocked(crashed)，附退出码与末尾输出。 */
   | { outcome: 'exited'; exit_code: number | null; signal?: string; message?: string }
 
@@ -121,6 +127,11 @@ export interface ExecutorPlugin {
   run(contract: TaskContract, ctx: ExecutorContext): ExecutorRun
   /** 执行器自己的卡住识别规则；无法识别时返回 null（节点归为 other 或 no_progress）。 */
   classify?(snapshot: StuckSnapshot): StuckVerdict | null
+  /**
+   * 节点启动时（领取任务之前）调用一次：清理上一次运行留下的残留（例如 claude-sdk 的审查 worktree）。
+   * 失败只记警告，不阻止节点启动。
+   */
+  prepare?(info: { nodeId: string }): Promise<void>
 }
 
 /** 活动是否为"worker 停下了"的信号。 */

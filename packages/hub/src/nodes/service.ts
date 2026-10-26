@@ -24,6 +24,7 @@ import {
   renewLeaseRequest,
   sanitizeMessage,
   sanitizeTail,
+  stripUntrustedReview,
   type TaskView,
   type WakeOrigin,
 } from '@flow/core'
@@ -164,6 +165,7 @@ function delegationFields(b: {
 
 /**
  * 提交结束对应的事件（纯函数）。
+ * 不可能是审查结论的 `result.review`（合同没有 inputs.review 或执行器不是 claude-sdk）不入账（D10）。
  * 任务已处于 blocked（交互式卡住期间 worker 崩溃或这一轮直接以 blocked 结束）时，
  * 写 blocked → blocked（lease_held=false）；此时若有待送达的回复，同一事务带着回复重新排队，
  * 回复不会被静默丢弃（PR #16 审查第 5 条）。末尾输出与说明入账前脱敏、限长（第 7 条）。
@@ -177,9 +179,21 @@ export function completionDrafts(
   const base = { task_id: task.id, workspace: task.workspace }
   switch (req.outcome) {
     case 'done':
-      return [{ ...base, type: 'task.done', payload: { result: req.result } }]
+      return [
+        {
+          ...base,
+          type: 'task.done',
+          payload: { result: stripUntrustedReview(task.contract, req.result, 'done') },
+        },
+      ]
     case 'failed':
-      return [{ ...base, type: 'task.failed', payload: { result: req.result } }]
+      return [
+        {
+          ...base,
+          type: 'task.failed',
+          payload: { result: stripUntrustedReview(task.contract, req.result, 'failed') },
+        },
+      ]
     case 'blocked': {
       const session = req.session ?? task.blocked?.session
       const blocked: EventInput = {
@@ -227,7 +241,9 @@ export function completionDrafts(
           type: 'task.cancelled',
           payload: {
             ...(req.message ? { reason: req.message } : {}),
-            ...(req.result ? { result: req.result } : {}),
+            ...(req.result
+              ? { result: stripUntrustedReview(task.contract, req.result, 'cancelled') }
+              : {}),
             node_id: lease.node_id,
           },
         },

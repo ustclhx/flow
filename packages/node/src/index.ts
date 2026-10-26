@@ -23,8 +23,13 @@ export {
   FLOW_MCP_TOOL_PREFIX,
   PROJECT_INSTRUCTION_FILES,
   projectInstructions,
+  READ_ROLE_TOOLS,
+  REVIEW_OUTPUT_INVALID,
+  readRoleMayUse,
   renderReply,
   renderTaskPrompt,
+  reviewOutputJsonSchema,
+  STRUCTURED_OUTPUT_TOOL,
   summarizeToolInput,
 } from './claude-sdk.ts'
 export {
@@ -36,7 +41,14 @@ export {
   type RegisterRequest,
 } from './client.ts'
 export { type NodeClock, sleep, systemClock } from './clock.ts'
-export { type CodexExecOptions, createCodexExecExecutor } from './codex-exec.ts'
+export {
+  CODEX_EXEC_REJECTED_PERMISSION_KEYS,
+  type CodexExecOptions,
+  codexExecPermissions,
+  createCodexExecExecutor,
+  prepareReadCodexHome,
+  readCodexHome,
+} from './codex-exec.ts'
 export {
   analyzeTail,
   BUSY_RE,
@@ -104,6 +116,29 @@ export {
 } from './executor.ts'
 export { classifyFake, createFakeExecutor, type FakeExecutorOptions } from './fake.ts'
 export {
+  createGitHubCli,
+  type GhCheck,
+  type GhPrMergeState,
+  type GhPrView,
+  type GhRun,
+  type GitConfigPair,
+  type GitHubCli,
+  type GitHubCliOptions,
+  type GitOptions,
+  git,
+  gitConfigEnv,
+  originRepo,
+  type PrRef,
+  type PrSnapshot,
+  parsePrUrl,
+  parseRemoteUrl,
+  type RepoRef,
+  repoSpec,
+  sameRepo,
+  UNTRUSTED_CHECKOUT_ENV,
+  untrustedCheckoutConfig,
+} from './github.ts'
+export {
   DELIVER_GIVE_UP_MS,
   DELIVER_TIMEOUT_MS,
   generateNodeId,
@@ -119,6 +154,20 @@ export {
   TIMEOUT_GRACE_MS,
 } from './node.ts'
 export {
+  createPrMergeExecutor,
+  DEFAULT_PIPELINE_POLL_MS,
+  DEFAULT_PIPELINE_TIMEOUT_MS,
+  DEFAULT_RUN_DISCOVERY_MS,
+  evaluateChecks,
+  evaluateRuns,
+  MERGEABLE_RETRIES,
+  MERGEABLE_RETRY_MS,
+  MIN_MERGER_TIMEOUT_S,
+  PIPELINE_EVENTS,
+  PR_MERGE_EXECUTOR,
+  type PrMergeOptions,
+} from './pr-merge.ts'
+export {
   autoApprovedText,
   createPolicyPrecheck,
   expandPolicyPaths,
@@ -131,3 +180,12 @@ export {
   type PrecheckVerdict,
   realPolicyPath,
 } from './precheck.ts'
+export {
+  cleanupStaleReviews,
+  type PreparedReview,
+  prepareReview,
+  REVIEW_DIFF_FILE,
+  REVIEW_REF_PREFIX,
+  reviewRef,
+  reviewRoot,
+} from './review-prep.ts'

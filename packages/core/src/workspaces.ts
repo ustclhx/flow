@@ -4,6 +4,7 @@ import { join, relative } from 'node:path'
 import { parse } from 'yaml'
 import { flowPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
+import { type Role, reviewerRoleProblem } from './roles.ts'
 import {
   disabledSupervisorConfig,
   globalSupervisorConfig,
@@ -120,4 +121,30 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
     })
   }
   return ok({ workspaces: [GLOBAL_WORKSPACE, ...workspaces], issues, warnings })
+}
+
+/**
+ * `supervisor.reviewer_roles` 中已存在、但不是只读审查配置的角色（add-m1-supervisor D10，见 `reviewerRoleProblem`）。
+ * 不存在的角色不报（默认值 `[pr-reviewer]` 在未运行 flow init 的 home 中也合法，任务会因没有角色而失败）。执行器对这类角色的审查任务一律 `failed(review_role_not_read)`；doctor 报 error。
+ */
+export function reviewerRoleIssues(
+  workspaces: readonly Workspace[],
+  roles: readonly Role[],
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+  for (const ws of workspaces) {
+    if (ws.file === null) continue
+    for (const name of ws.supervisor.reviewer_roles) {
+      const role = roles.find((r) => r.name === name)
+      const problem = role ? reviewerRoleProblem(role) : undefined
+      if (problem === undefined) continue
+      issues.push({
+        file: ws.file,
+        field: 'supervisor.reviewer_roles',
+        code: 'review_role_not_read',
+        message: `审查角色 ${name}：${problem}`,
+      })
+    }
+  }
+  return issues
 }

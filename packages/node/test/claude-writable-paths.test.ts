@@ -209,3 +209,26 @@ describe('文档路径边界', () => {
     ).toBeUndefined()
   })
 })
+
+describe('~ 开头与首尾空白（#47 收紧，read_scope 与 writable_paths 共用路径判定）', () => {
+  test('写边界拒绝 ~ 开头与首尾空白的路径，即使去掉后会落在白名单内', async () => {
+    mkdirSync(join(cwd, '~'), { recursive: true })
+    for (const path of [
+      '~/docs/report.md',
+      '~',
+      '~root/docs/report.md',
+      ' docs/report.md',
+      'docs/report.md ',
+      '\tREADME.md',
+      'README.md\n',
+    ]) {
+      expect(await checkWritableTool('Write', { file_path: path }, cwd, patterns)).toMatchObject({
+        behavior: 'deny',
+      })
+    }
+    // 中间含 ~ 或空格的普通文件名不受影响。
+    expect(
+      await checkWritableTool('Write', { file_path: 'docs/a~b c.md' }, cwd, patterns),
+    ).toMatchObject({ behavior: 'allow' })
+  })
+})

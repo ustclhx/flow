@@ -13,6 +13,7 @@ import {
   createCodexExecExecutor,
   createCodexOrcaExecutor,
   createFakeExecutor,
+  createPrMergeExecutor,
   nodeHubClientFromHome,
   startNode,
 } from '@flow/node'
@@ -33,7 +34,7 @@ export const nodeStartCommand = defineCommand({
     if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.flow.node') {
       return fail('retryable', 'log_rotated', '日志已轮转，等待 launchd 重新启动节点')
     }
-    // fake 用于端到端测试；其余执行器调用本机的 Orca / Codex 与 Claude Agent SDK。
+    // fake 用于端到端测试；其余执行器调用本机的 Orca / Codex、Claude Agent SDK 与 gh。
     const started = await startNode({
       home,
       executors: [
@@ -41,6 +42,8 @@ export const nodeStartCommand = defineCommand({
         createCodexOrcaExecutor({ home }),
         createClaudeSdkExecutor({ home }),
         createCodexExecExecutor({ home }),
+        // 不调用模型，按确定性条件合并 PR（add-m1-supervisor D10）。
+        createPrMergeExecutor({ home }),
       ],
     })
     if (!started.ok) return started

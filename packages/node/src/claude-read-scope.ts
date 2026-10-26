@@ -32,6 +32,8 @@ export interface ReadScopeContext {
   privateDir?: string
   /** 允许 cwd 根下的 `.github/`（审查 worktree 用），默认关闭。 */
   allowDotGithub?: boolean
+  /** 会话配置了结构化输出（`outputFormat`）：只有这时才放行 `StructuredOutput`（审查任务）。 */
+  structuredOutput?: boolean
 }
 
 /** 钩子或 canUseTool 提供的调用上下文。 */
@@ -108,9 +110,14 @@ const TOOL_FIELDS: Record<string, Record<string, FieldKind>> = {
   },
   TodoWrite: { todos: 'value' },
   ToolSearch: { query: 'value', max_results: 'value' },
+  // 等待仍在连接的 MCP 服务器（CLI 2.1.310 内置工具，入参只有服务器名列表），不访问文件。
+  WaitForMcpServers: { servers: 'value' },
 }
 
-/** 输入为调用方定义的 JSON Schema（审查结论等），只产生输出、不访问文件，不按字段白名单检查。 */
+/**
+ * 输入为调用方定义的 JSON Schema（审查结论等），只产生输出、不访问文件，不按字段白名单检查；
+ * 只在会话配置了 `outputFormat` 时放行（`ReadScopeContext.structuredOutput`），否则拒绝。
+ */
 const OPAQUE_OUTPUT_TOOLS = new Set(['StructuredOutput'])
 
 /** 注入的 Flow MCP 是 stdio 进程服务器，SDK 文档中其来源为 `dynamic`；`sdk` 只能由宿主注册。 */
@@ -232,7 +239,10 @@ export async function checkReadScope(
   if (input === null || typeof input !== 'object' || Array.isArray(input))
     return deny('工具输入不是对象')
   const record = input as Record<string, unknown>
-  if (OPAQUE_OUTPUT_TOOLS.has(toolName)) return { behavior: 'pass', updatedInput: record }
+  if (OPAQUE_OUTPUT_TOOLS.has(toolName)) {
+    if (scope.structuredOutput !== true) return deny(`${toolName} 只在配置了结构化输出时可用`)
+    return { behavior: 'pass', updatedInput: record }
+  }
   const fields = Object.hasOwn(TOOL_FIELDS, toolName) ? TOOL_FIELDS[toolName] : undefined
   if (fields === undefined) return deny(`${toolName} 不在读边界允许的工具中`)
   if (call.sessionCwd !== undefined && !(await sameDir(call.sessionCwd, scope.cwd)))

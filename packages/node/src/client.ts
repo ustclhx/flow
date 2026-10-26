@@ -17,7 +17,9 @@ import {
   HEADERS,
   HUB_TOKEN_ENV,
   HUB_UNAVAILABLE,
+  type ListTasksData,
   listNodesData,
+  listTasksData,
   loadHubConfig,
   loadNodeConfig,
   type NodeView,
@@ -32,6 +34,9 @@ import {
   registerNodeData,
   renewLeaseData,
   resolveHubUrl,
+  type ShowTaskData,
+  showTaskData,
+  type TaskStatus,
 } from '@flow/core'
 import type { z } from 'zod'
 
@@ -79,6 +84,17 @@ export interface NodeHubClient {
     req: Omit<PolicyCheckRequest, 'dry_run'>,
     opts?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<Result<PolicyCheckData>>
+  /**
+   * 任务详情（pr-merge 再次核对审查任务用）。本机节点以 user token 访问；绑定 token 的节点身份只能看
+   * 自己持有租约的任务，读不到审查任务时调用方按核对失败处理。
+   */
+  showTask(id: string): Promise<Result<ShowTaskData>>
+  /** 任务列表（按创建时间倒序）；pr-merge 用它核对"最新一次可信审查"。 */
+  listTasks(query: {
+    workspace?: string
+    status?: TaskStatus
+    limit?: number
+  }): Promise<Result<ListTasksData>>
 }
 
 /** 注册请求（调用方形态：带默认值的字段可省略）。 */
@@ -176,5 +192,14 @@ export function createNodeHubClient(o: NodeHubClientOptions): NodeHubClient {
       call('POST', leasePath(ENDPOINTS['leases-ack-reply'].path, id), ackReplyData, req),
     policyCheck: (req, opts = {}) =>
       call('POST', ENDPOINTS['policy-check'].path, policyCheckData, req, opts),
+    showTask: (id) => call('GET', leasePath(ENDPOINTS['tasks-show'].path, id), showTaskData),
+    listTasks: (query) => {
+      const params = new URLSearchParams()
+      if (query.workspace) params.set('workspace', query.workspace)
+      if (query.status) params.set('status', query.status)
+      if (query.limit) params.set('limit', String(query.limit))
+      const qs = params.toString()
+      return call('GET', `${ENDPOINTS['tasks-list'].path}${qs ? `?${qs}` : ''}`, listTasksData)
+    },
   }
 }
