@@ -288,6 +288,8 @@ interface TaskRow {
   created_by: string
   origin: TaskView['origin']
   branch: string | null
+  worktree: string | null
+  repo_snapshot_json: string | null
   last_activity_at: string | null
   lease_id: string | null
   lease_node_id: string | null
@@ -439,6 +441,8 @@ function rowToTask(r: TaskRow): TaskView {
     created_by: r.created_by,
     origin: r.origin ?? null,
     branch: r.branch ?? null,
+    worktree: r.worktree ?? null,
+    repo_snapshot: r.repo_snapshot_json ? JSON.parse(r.repo_snapshot_json) : null,
     last_activity_at: r.last_activity_at,
   }
 }
@@ -830,10 +834,11 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       case 'task.branch_reported': {
         // D15：只有自己创建任务分支的执行器（codex-orca）上报；只接受持有该任务活动租约的节点写入；
         // 每个任务只写一次、不可更改。
-        const row = get<{ contract_json: string; branch: string | null }>(
-          'SELECT contract_json, branch FROM tasks WHERE id = ?',
-          draft.task_id ?? null,
-        )
+        const row = get<{
+          contract_json: string
+          branch: string | null
+          worktree: string | null
+        }>('SELECT contract_json, branch, worktree FROM tasks WHERE id = ?', draft.task_id ?? null)
         const executor = row
           ? (JSON.parse(row.contract_json) as { executor?: string }).executor
           : null
@@ -852,7 +857,16 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
             { task_id: draft.task_id },
           )
         }
-        if (row?.branch != null) {
+        // worktree 缺失的旧任务（G9 之前上报）可以补报一次：分支必须相同，补上 worktree 与快照。
+        const backfill =
+          row?.branch != null &&
+          row.worktree == null &&
+          draft.payload.worktree !== undefined &&
+          draft.payload.branch === row.branch
+        if (backfill && draft.payload.repo_snapshot !== undefined) {
+          return invalidEvent('补报只补 worktree，不补登记仓库快照')
+        }
+        if (row?.branch != null && !backfill) {
           return fail('failure', 'invalid_transition', '任务分支已上报，不能更改', {
             from: task?.status ?? null,
             type: draft.type,

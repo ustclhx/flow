@@ -11,6 +11,7 @@ import {
   type Role,
   redactLines,
   redactSecrets,
+  SUPERVISOR_ACTOR,
   type TaskContract,
   type TaskResult,
 } from '@flow/core'
@@ -138,6 +139,8 @@ const replyStateSchema = z.object({
   request_id: z.string().optional(),
   esc_sent: z.boolean().optional(),
   done: z.boolean().optional(),
+  /** supervisor 的批准被拒收（待批请求已变或环境复查未通过，D15）：没有发送任何按键。 */
+  dropped: z.boolean().optional(),
 })
 type ReplyState = z.infer<typeof replyStateSchema>
 
@@ -317,6 +320,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       let prechecked: string | undefined
       /** 连续"预检期间界面变化"的次数；达到上限后不再重试，交给用户（避免一直不上报）。 */
       let precheckChanges = 0
+      /** 当前弹窗预检得到的 supervisor 判定（D15）：上报停下时放进 hint，界面离开该弹窗后清空。 */
+      let decision: { popup: string; id: number } | undefined
       const inflight = new Map<string, Promise<DeliverResult>>()
 
       const iso = () => new Date(clock.now()).toISOString()
@@ -519,6 +524,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (!handle || finished || !state) return 'not_running'
         const st = replyState(reply.reply_id)
         if (st.done) return 'delivered'
+        if (st.dropped) return 'dropped'
         // 按实时的末尾内容判断（PR #24 审查第 5 条），不用上一次轮询的分析。
         const now = await orca.terminalRead({ handle, limit: 200 })
         if (!now.ok) {
@@ -529,6 +535,48 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const h = handle
         const live = analyzeTail(now.data.tail)
         const approval = live.kind === 'awaiting_approval'
+        if (reply.kind === 'approve' && ctx.confirmApproval) {
+          // D15：放行前重读实时的待批弹窗交给节点复核（supervisor 的批准须与判定时的请求一致、
+          // 推送或 gh 环境复查通过）；不一致时不发送任何按键，回复标记为拒收。
+          const prompt = approval ? approvalForPrecheck(now.data.tail) : undefined
+          const confirmed = await ctx.confirmApproval(
+            reply,
+            prompt
+              ? {
+                  tool: CODEX_ORCA_PRECHECK_TOOL,
+                  command: prompt.command,
+                  cwd: state.worktree_path,
+                }
+              : undefined,
+          )
+          if (finished) return 'not_running'
+          const drop = async (): Promise<DeliverResult> => {
+            st.dropped = true
+            await saveState()
+            // 新的卡住直接交给用户：当前弹窗不再预检，监控循环随后照常上报停下。
+            prechecked = approval ? live.last_message.join('\n') : undefined
+            decision = undefined
+            reported = false
+            idlePolls = 0
+            status(
+              `回复 ${reply.reply_id}（${reply.by} 批准）未送达：待批请求已变化或环境复查未通过`,
+            )
+            return 'dropped'
+          }
+          if (!confirmed) return drop()
+          if (reply.by === SUPERVISOR_ACTOR) {
+            // 复核期间界面可能已变：发回车之前再读一次终端，弹窗全文与复核时一致才放行（TOCTOU）。
+            const again = await orca.terminalRead({ handle: h, limit: 200 })
+            if (finished) return 'not_running'
+            const latest =
+              again.ok && again.data.status === 'running'
+                ? approvalForPrecheck(again.data.tail)
+                : undefined
+            if (!prompt || !latest || latest.prompt.join('\n') !== prompt.prompt.join('\n')) {
+              return drop()
+            }
+          }
+        }
         if (approval && reply.kind === 'approve') {
           // 授权弹窗的默认选项是"Yes, proceed"，只发回车（发 "1" 或 "y" 会被 Orca 拦下）。
           await sendOrThrow({ handle: h, enter: true })
@@ -555,6 +603,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       const deliver = (reply: DeliveredReply): Promise<DeliverResult> => {
         if (finished) return Promise.resolve('not_running')
         if (state?.replies[reply.reply_id]?.done) return Promise.resolve('delivered')
+        if (state?.replies[reply.reply_id]?.dropped) return Promise.resolve('dropped')
         const running = inflight.get(reply.reply_id)
         if (running) return running
         // 失败后允许重送；已持久化的 request id 与 Esc 状态保证重送不会让 Codex 收到第二次。
@@ -562,6 +611,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         inflight.set(reply.reply_id, p)
         return p
       }
+
+      /** 停下的是预检过的同一个授权弹窗时，把 supervisor 判定 id 放进 hint（节点核对后上报）。 */
+      const decisionHint = (a: TailAnalysis): Record<string, unknown> =>
+        decision && a.kind === 'awaiting_approval' && decision.popup === a.last_message.join('\n')
+          ? { decision_id: decision.id }
+          : {}
 
       const idleHint = (
         a: TailAnalysis,
@@ -580,6 +635,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
        */
       const precheckApproval = async (
         tail: readonly string[],
+        popup: string,
       ): Promise<'approved' | 'changed' | 'user'> => {
         const precheck = ctx.precheck
         if (!precheck) return 'user'
@@ -588,9 +644,16 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           status('授权请求中提取不到可核对的命令，交给用户审批')
           return 'user'
         }
-        const verdict = await precheck({ tool: CODEX_ORCA_PRECHECK_TOOL, command: p.command })
+        const verdict = await precheck({
+          tool: CODEX_ORCA_PRECHECK_TOOL,
+          command: p.command,
+          // 命令在 Orca worktree 中执行（D15：节点据此上报 command_cwd、检查推送与 gh 环境）。
+          ...(state ? { cwd: state.worktree_path } : {}),
+          ...(p.reason ? { reason: p.reason } : {}),
+        })
         if (finished || stopping || !handle) return 'user'
         if (!verdict.allow) {
+          if (verdict.decision_id !== undefined) decision = { popup, id: verdict.decision_id }
           status(needsUserText(verdict))
           return 'user'
         }
@@ -648,6 +711,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             prechecked = undefined
             precheckChanges = 0
           }
+          if (
+            decision &&
+            (a.kind !== 'awaiting_approval' || decision.popup !== a.last_message.join('\n'))
+          ) {
+            decision = undefined
+          }
           if (term.status !== 'running') {
             const pr = await checkPr()
             if ('pr' in pr) return finishWithPr(pr.pr)
@@ -694,7 +763,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           ) {
             // 新的授权弹窗：交给用户之前先问策略引擎（同一个弹窗只问一次）。
             prechecked = a.last_message.join('\n')
-            const r = await precheckApproval(term.tail)
+            decision = undefined
+            const r = await precheckApproval(term.tail, prechecked)
             if (finished || stopping) return
             if (r === 'approved') precheckChanges = 0
             if (r === 'approved' || (r === 'changed' && ++precheckChanges < PRECHECK_CHANGE_MAX)) {
@@ -709,12 +779,15 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             if (finished || stopping) return
             if ('pr' in pr) return finishWithPr(pr.pr)
             reported = true
-            const extra = 'error' in pr ? { gh_error: pr.error } : {}
+            const extra = {
+              ...('error' in pr ? { gh_error: pr.error } : {}),
+              ...decisionHint(a),
+            }
             const text = 'error' in pr ? `Codex 已停下，gh 不可用：${pr.error}` : a.message
             queue.push(idleSignal(iso(), text, idleHint(a, term.tail, extra)))
           } else if (reported && reemit && idlePolls >= 6) {
             reemit = false
-            queue.push(idleSignal(iso(), a.message, idleHint(a, term.tail)))
+            queue.push(idleSignal(iso(), a.message, idleHint(a, term.tail, decisionHint(a))))
           }
         }
       }
@@ -773,6 +846,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           status(`已创建 worktree ${state.worktree_path}（分支 ${state.branch}，基于 ${base}）`)
         }
         const st = state
+        // D15：codex-orca 开始时上报任务分支与 worktree（中枢每个任务只记录一次）。
+        ctx.reportBranch?.({ branch: st.branch, worktree: st.worktree_path, repo })
         if (fresh) {
           const ready = await waitForSetup(st.worktree_path, ctx.signal)
           if (finished || stopping) return

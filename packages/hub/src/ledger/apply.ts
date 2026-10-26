@@ -161,6 +161,7 @@ export function createApplier(db: Database): Applier {
           ...(p.session ? { session: p.session } : {}),
           ...(p.prior_reason ? { prior_reason: p.prior_reason } : {}),
           ...(p.decision_id !== undefined ? { decision_id: p.decision_id } : {}),
+          ...(p.request ? { request: p.request } : {}),
           ...(p.diff_stat ? { diff_stat: p.diff_stat } : {}),
           ...(p.no_delegate !== undefined ? { no_delegate: p.no_delegate } : {}),
         }
@@ -234,7 +235,13 @@ export function createApplier(db: Database): Applier {
         touchTask(e, '')
         return
       case 'task.branch_reported':
-        touchTask(e, ', branch = ?', e.payload.branch)
+        touchTask(
+          e,
+          ', branch = ?, worktree = ?, repo_snapshot_json = ?',
+          e.payload.branch,
+          e.payload.worktree ?? null,
+          e.payload.repo_snapshot ? JSON.stringify(e.payload.repo_snapshot) : null,
+        )
         return
       case 'task.reply_delegated':
       case 'task.reply_escalated':

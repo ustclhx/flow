@@ -46,3 +46,10 @@ export async function resolveContractCwd(
   }
   return ok(normalized)
 }
+
+/** workspace 登记的仓库（规范化后的本地路径）；读取失败时返回空列表（环境检查随之不通过）。 */
+export async function workspaceRepos(home: string, workspace: string): Promise<string[]> {
+  const loaded = await loadWorkspaces(home)
+  if (!loaded.ok) return []
+  return loaded.data.workspaces.find((w) => w.ref === workspace)?.repos.map(normalizeRepo) ?? []
+}

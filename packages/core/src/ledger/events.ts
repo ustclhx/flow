@@ -30,11 +30,13 @@ import {
   prUrl,
   replyId,
   replyKind,
+  repoSnapshot,
   type TaskStatus,
   taskBranch,
   taskContract,
   taskOrigin,
   taskResult,
+  taskWorktree,
   wakeGeneration,
   wakeOrigin,
 } from './task.ts'
@@ -176,6 +178,9 @@ export const eventPayloads = {
         .boolean()
         .optional()
         .meta({ description: '节点上报的 gh 仓库解析检查结果（D15）；缺失视为不满足' }),
+      command_cwd: taskWorktree
+        .optional()
+        .meta({ description: '节点上报的命令实际执行目录（realpath，D15）' }),
     }),
   }),
   'task.created': z.strictObject({
@@ -296,7 +301,16 @@ export const eventPayloads = {
    * 执行器创建的任务分支（D15，codex-orca 开始时上报）：只接受持有该任务活动租约的节点写入，
    * 每个任务只写一次、不可更改。`when.push_to: task_branch` 以它为准。
    */
-  'task.branch_reported': z.strictObject({ branch: taskBranch }),
+  'task.branch_reported': z.strictObject({
+    branch: taskBranch,
+    worktree: taskWorktree.optional().meta({
+      description:
+        '任务 worktree（节点 realpath 后的绝对路径）；push_to / gh_scope 要求命令在其中执行，缺失即不满足',
+    }),
+    repo_snapshot: repoSnapshot.optional().meta({
+      description: '租约开始、worker 启动前节点对登记仓库的快照；push_to 的默认分支只取这里的值',
+    }),
+  }),
   'lease.granted': z.strictObject({
     lease_id: leaseId,
     node_id: nodeId,

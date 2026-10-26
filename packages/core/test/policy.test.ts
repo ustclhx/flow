@@ -140,10 +140,8 @@ describe('策略配置', () => {
 describe('动作识别', () => {
   test.each([
     ['git -C dir push', 'git.push'],
-    ['git -c k=v push', 'git.push'],
     ['git --git-dir=x push', 'git.push'],
     ['git --work-tree dir --namespace ns --no-pager push', 'git.push'],
-    ['git -Cdir -ck=v push', 'git.push'],
     ['gh -R o/r pr merge', 'pr.merge'],
     ['gh --repo o/r pr merge', 'pr.merge'],
     ['gh --repo=o/r pr merge', 'pr.merge'],
@@ -159,12 +157,6 @@ describe('动作识别', () => {
     ['exec git push', 'git.push'],
     ['exec -a worker git push', 'git.push'],
     ['stdbuf -oL -e 0 git push', 'git.push'],
-    ['xargs gh pr merge', 'pr.merge'],
-    ['xargs -n 1 -P2 -I{} gh -R o/r pr merge {}', 'pr.merge'],
-    [
-      'sudo timeout 10 env X=1 nice -n5 nohup time exec stdbuf -oL xargs git -C dir push',
-      'git.push',
-    ],
   ])('绕过回归：%s', (command, action) => {
     const actions = classifyAction({ tool: 'Bash', command })
     expect(actions).toEqual(['tool:Bash', action])
@@ -175,6 +167,98 @@ describe('动作识别', () => {
         command,
       }).level,
     ).toBe('draft-approve')
+  })
+
+  // 第五轮审查：间接执行器与 `git -c` 照常识别其后的动作，整段另按不透明处理。
+  test.each([
+    ['git -c k=v push', 'git.push'],
+    ['git -Cdir -ck=v push', 'git.push'],
+    ['xargs gh pr merge', 'pr.merge'],
+    ['xargs -n 1 -P2 -I{} gh -R o/r pr merge {}', 'pr.merge'],
+    [
+      'sudo timeout 10 env X=1 nice -n5 nohup time exec stdbuf -oL xargs git -C dir push',
+      'git.push',
+    ],
+  ])('间接执行仍识别动作并按不透明处理：%s', (command, action) => {
+    const actions = classifyAction({ tool: 'Bash', command })
+    expect(actions).toContain(action)
+    expect(actions).toContain('shell.opaque')
+  })
+
+  test.each([
+    'xargs rm -rf',
+    'find . -name x -exec rm {} ;',
+    'find . -execdir sh x ;',
+    'find . -ok rm {} ;',
+    'find . -okdir rm {} ;',
+    'git rebase --exec "make" main',
+    'git rebase --exec=make main',
+    'git rebase -x make main',
+    'git rebase -ix make main',
+    'git bisect run make',
+    'git submodule foreach make',
+    'git filter-branch --tree-filter x',
+    'git difftool -x meld',
+    'git -c alias.st=!sh st',
+    'git --config-env=core.sshCommand=X push origin main',
+    'git --exec-path=/tmp push origin main',
+    'watch make',
+    'parallel make ::: a b',
+    'script -c make /dev/null',
+    'su -c make root',
+    'ssh host make',
+    'doas make',
+    'env xargs make',
+    'git difftool HEAD~1',
+    'git mergetool',
+    'GIT_SSH_COMMAND=evil git push origin x',
+    'GIT_DIR=/tmp/x git status',
+    'LD_PRELOAD=/tmp/x.so ls',
+    'DYLD_INSERT_LIBRARIES=/tmp/x.dylib ls',
+    'BASH_ENV=/tmp/x bash script.sh',
+    'ENV=/tmp/x sh script.sh',
+    'PYTHONSTARTUP=/tmp/x python3 -V',
+    'NODE_OPTIONS=--require=/tmp/x.js pnpm test',
+    'env NODE_OPTIONS=--require=/tmp/x.js pnpm test',
+    'arch -arm64 make',
+    'sandbox-exec -p x make',
+    'osascript -e x',
+    'FOO=1 pnpm test',
+    'git grep -O foo',
+    'git grep --open-files-in-pager=vim foo',
+    'git fetch --upload-pack=evil origin',
+    'git clone -u evil x',
+    'git ls-remote --upload-pack evil origin',
+    'git archive --exec=evil --remote=x HEAD',
+    'git push --receive-pack=evil origin x',
+    'git push --exec=evil origin x',
+    'git send-email x.patch',
+    'git help --web push',
+    'git instaweb',
+  ])('间接执行器按不透明处理：%s', (command) => {
+    expect(classifyAction({ tool: 'Bash', command })).toContain('shell.opaque')
+  })
+
+  test('caffeinate 按包装剥离，识别其后的动作', () => {
+    expect(classifyAction({ tool: 'Bash', command: 'caffeinate -i git push origin x' })).toEqual([
+      'tool:Bash',
+      'git.push',
+    ])
+  })
+
+  test.each([
+    'find . -name x',
+    'git rebase main',
+    'git status',
+    'pnpm test',
+    'CI=1 NODE_ENV=test TZ=UTC LANG=C LC_ALL=C NO_COLOR=1 FORCE_COLOR=0 pnpm test',
+    'git grep foo',
+    'git fetch origin',
+    'git push origin x',
+    'git archive HEAD',
+    'git help push',
+  ])('普通命令不因间接执行器规则变为不透明：%s', (command) => {
+    expect(classifyAction({ tool: 'Bash', command })).not.toContain('shell.opaque')
   })
 
   test.each([
@@ -287,18 +371,18 @@ describe('动作识别', () => {
     ['command git push', ['git.push']],
     ['command -p git push', ['git.push']],
     ['command -- /usr/bin/git push', ['git.push']],
-    ['FOO=1 BAR="two words" git push', ['git.push']],
-    ['env FOO=1 git push', ['git.push']],
-    ['/usr/bin/env -u TOKEN FOO=1 git push', ['git.push']],
+    ['CI=1 LANG="en_US UTF-8" git push', ['git.push']],
+    ['env CI=1 git push', ['git.push']],
+    ['/usr/bin/env -u TOKEN CI=1 git push', ['git.push']],
     ['sudo git push', ['git.push']],
-    ['sudo -u root -- env FOO=1 command /usr/bin/git push', ['git.push']],
+    ['sudo -u root -- env CI=1 command /usr/bin/git push', ['git.push']],
     ['"/usr/bin/git" p"u"sh', ['git.push']],
     ['git \\\npush', ['git.push']],
     [
       'git push && gh pr create; gh pr merge | wrangler deploy',
       ['git.push', 'pr.create', 'pr.merge', 'deploy'],
     ],
-    ['git push || env X=1 gh pr merge\nflow secrets list', ['git.push', 'pr.merge', 'secrets']],
+    ['git push || env TZ=UTC gh pr merge\nflow secrets list', ['git.push', 'pr.merge', 'secrets']],
     ['git push; git push | git push', ['git.push']],
     ['echo "git push; gh pr merge"; git status', []],
     ["echo 'git push && gh pr merge'", []],
@@ -728,7 +812,6 @@ describe('Bash 调 flow CLI、直接访问中枢与 config.edit 词法变体（P
     ['bun /Users/x/flow/packages/cli/src/main.ts task create --role admin', 'task.create'],
     ['bun run packages/cli/src/main.ts hub token issue node:x', 'flow.admin'],
     ['bun x flow hub token issue node:x', 'flow.admin'],
-    ['cd /repo && FLOW_ACTOR=user flow task create --role admin', 'task.create'],
   ])('flow CLI：%s → %s，tool:Bash 的 auto 不能放行', (command, action) => {
     const r = judge([], command)
     expect(r.ids).toContain(action)
@@ -739,6 +822,12 @@ describe('Bash 调 flow CLI、直接访问中枢与 config.edit 词法变体（P
     const explicit = judge([rule('dev', action), rule('dev', 'tool:Bash')], command)
     expect(explicit.ids.filter((a) => a !== 'tool:Bash' && a !== action)).toEqual([])
     expect(explicit.level).toBe('auto')
+  })
+
+  test('白名单之外的环境变量赋值：照常识别动作，整段按不透明处理', () => {
+    const r = judge([], 'cd /repo && FLOW_ACTOR=user flow task create --role admin')
+    expect(r.ids).toContain('task.create')
+    expect(r.ids).toContain('shell.opaque')
   })
 
   test('bun -e / --eval 执行任意代码：按不透明处理', () => {

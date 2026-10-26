@@ -1,0 +1,49 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`推送环境检查清单（常量） 清单内容固定（变更须同步文档与测试） 1`] = `
+[
+  "^include\\.",
+  "^includeif\\.",
+  "^core\\.fsmonitor$",
+  "^core\\.hookspath$",
+  "^core\\.sshcommand$",
+  "^hook\\.",
+  "^core\\.gitproxy$",
+  "^core\\.askpass$",
+  "^core\\.alternaterefscommand$",
+  "^remote\\..+\\.receivepack$",
+  "^remote\\..+\\.uploadpack$",
+  "^remote\\..+\\.push$",
+  "^remote\\..+\\.vcs$",
+  "^remote\\..+\\.proxy$",
+  "^remote\\..+\\.mirror$",
+  "^submodule\\.recurse$",
+  "^push\\.",
+  "^filter\\.",
+  "^diff\\.",
+  "^http\\.",
+  "^url\\.",
+  "^pager\\.",
+  "^gpg\\.",
+  "^protocol\\.",
+  "^core\\.pager$",
+]
+`;
+
+exports[`推送环境检查清单（常量） 清单内容固定（变更须同步文档与测试） 2`] = `
+[
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "GIT_ASKPASS",
+  "SSH_ASKPASS",
+  "GIT_PROXY_COMMAND",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_EXEC_PATH",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+]
+`;

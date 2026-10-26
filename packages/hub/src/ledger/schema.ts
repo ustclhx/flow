@@ -80,7 +80,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   activity_json    TEXT NOT NULL DEFAULT '[]',
   resume_json      TEXT,
   origin           TEXT,
-  branch           TEXT
+  branch           TEXT,
+  worktree         TEXT,
+  repo_snapshot_json TEXT
 );
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, created_seq);
 CREATE INDEX IF NOT EXISTS tasks_workspace ON tasks (workspace, created_seq);
@@ -207,6 +209,13 @@ export const LEDGER_COLUMN_MIGRATIONS: ReadonlyArray<{
   // add-m1-supervisor：task.created 的 origin（D2）与 task.branch_reported 的分支（D15）。
   { table: 'tasks', column: 'origin', ddl: 'ALTER TABLE tasks ADD COLUMN origin TEXT' },
   { table: 'tasks', column: 'branch', ddl: 'ALTER TABLE tasks ADD COLUMN branch TEXT' },
+  // add-m1-supervisor 5.6：task.branch_reported 一并上报的任务 worktree。
+  { table: 'tasks', column: 'worktree', ddl: 'ALTER TABLE tasks ADD COLUMN worktree TEXT' },
+  {
+    table: 'tasks',
+    column: 'repo_snapshot_json',
+    ddl: 'ALTER TABLE tasks ADD COLUMN repo_snapshot_json TEXT',
+  },
   // add-m1-supervisor：supervisor 提问的选项（D11）。
   {
     table: 'inbox_items',

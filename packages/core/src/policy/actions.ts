@@ -238,6 +238,11 @@ export const hasFileRedirect = (segment: readonly WordInfo[]): boolean =>
   segment.some((w) => w.redirect && (w.quoted || w.text !== '2>&1'))
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+/**
+ * 命令前允许的环境变量赋值（白名单，第七轮审查）：只有这些不会改变程序加载或解释方式；
+ * 其余赋值（GIT_*、LD_*、DYLD_*、BASH_ENV、PYTHON*、NODE_OPTIONS……）整段按不透明处理。
+ */
+export const SAFE_ASSIGNMENT_RE = /^(?:CI|FORCE_COLOR|NODE_ENV|TZ|LANG|LC_[A-Za-z0-9_]*|NO_COLOR)=/
 type OptionKind = 'value' | 'flag' | 'optional'
 type OptionTable = Readonly<Record<string, OptionKind>>
 
@@ -300,12 +305,14 @@ const WRAPPER_OPTIONS = new Map<string, OptionTable>([
     ),
     nice: options('-n --adjustment', '--help --version'),
     nohup: options('', '--help --version'),
+    caffeinate: options('-t -w', '-d -i -m -s -u'),
     time: options(
       '-f --format -o --output',
       '-a --append -p --portability -v --verbose -q --quiet -l -h --help -V --version',
     ),
     exec: options('-a', '-c -l'),
     stdbuf: options('-i --input -o --output -e --error', '--help --version'),
+    // xargs 仍按包装剥离以识别其后的动作，但整段另按间接执行处理（见 runsIndirectly）。
     xargs: options(
       '-a --arg-file -d --delimiter -E -I -L --max-lines -n --max-args -P --max-procs -s --max-chars --process-slot-var -J -R -S',
       '-0 --null -p --interactive -r --no-run-if-empty -t --verbose -x --exit --show-limits --help --version -o --open-tty',
@@ -343,45 +350,60 @@ function skipOptions(words: string[], table: OptionTable): { rest: string[]; opa
 
 const OPAQUE_KEYWORDS: ReadonlySet<string> = new Set(['function', 'select', 'case', '{', '}'])
 
-/** 消去已知包装前缀与环境变量赋值，执行文件的绝对路径归一为文件名。 */
+/**
+ * 消去已知包装前缀与环境变量赋值，执行文件的绝对路径归一为文件名。
+ * 剥离过的包装里有间接执行器（xargs）时，其后的动作照常识别，但整段仍按不透明处理。
+ */
 function unwrapCommand(input: string[]): { words: string[]; opaque: boolean } {
+  let indirect = false
+  const done = (words: string[], opaque: boolean) => ({ words, opaque: opaque || indirect })
   let words = input
   while (words.length) {
     const word = words[0] as string
     if (ASSIGNMENT.test(word)) {
+      // 白名单之外的环境变量都可能改变程序加载或解释方式（GIT_*、LD_*、PYTHON*、NODE_OPTIONS……）：
+      // 其后的命令实际执行什么无法静态确定。
+      if (!SAFE_ASSIGNMENT_RE.test(word)) indirect = true
       words = words.slice(1)
       continue
     }
     // 复合命令与函数定义：其中的命令无法按单条命令静态识别。
-    if (OPAQUE_KEYWORDS.has(word)) return { words, opaque: true }
+    if (OPAQUE_KEYWORDS.has(word)) return done(words, true)
     const executable = posix.basename(word)
     // 执行文件（含包装命令）带展开：实际执行什么无法静态确定。
-    if (EXPANDING_RE.test(word)) return { words: [executable, ...words.slice(1)], opaque: true }
+    if (EXPANDING_RE.test(word)) return done([executable, ...words.slice(1)], true)
     const wrapper = WRAPPER_OPTIONS.get(executable)
     const global = GLOBAL_OPTIONS.get(executable)
     const table = wrapper ?? global
-    if (!table) {
-      return { words: [executable, ...words.slice(1)], opaque: false }
-    }
+    if (!table) return done([executable, ...words.slice(1)], false)
+    if (wrapper && INDIRECT_EXECUTORS.has(executable)) indirect = true
     words = words.slice(1)
     if (executable === 'nice' && /^-\d+$/.test(words[0] ?? '')) words = words.slice(1)
     const parsed = skipOptions(words, table)
-    if (parsed.opaque) return { words: [executable, ...parsed.rest], opaque: true }
+    if (parsed.opaque) return done([executable, ...parsed.rest], true)
+    // `git -c alias.x='!sh …'`、`-c core.sshCommand=…`、`--config-env`、`--exec-path`：配置项可以让 git
+    // 执行任意命令，无法逐项判断，一律按不透明处理。
+    if (executable === 'git') {
+      const consumed = words.slice(0, words.length - parsed.rest.length)
+      if (consumed.some((w) => /^(?:-c|--config-env|--exec-path)/.test(w))) {
+        return done([executable, ...parsed.rest], true)
+      }
+    }
     if (global) {
       // gh 的继承选项也可以放在 pr 与 create/merge 之间。
       if (executable === 'gh' && parsed.rest[0] === 'pr') {
         const subcommand = skipOptions(parsed.rest.slice(1), global)
-        return { words: [executable, 'pr', ...subcommand.rest], opaque: subcommand.opaque }
+        return done([executable, 'pr', ...subcommand.rest], subcommand.opaque)
       }
-      return { words: [executable, ...parsed.rest], opaque: false }
+      return done([executable, ...parsed.rest], false)
     }
     words = parsed.rest
     if (executable === 'timeout') {
-      if (!/^\d+(?:\.\d+)?[smhd]?$/.test(words[0] ?? '')) return { words, opaque: true }
+      if (!/^\d+(?:\.\d+)?[smhd]?$/.test(words[0] ?? '')) return done(words, true)
       words = words.slice(1)
     }
   }
-  return { words: [], opaque: false }
+  return done([], false)
 }
 
 /** 会展开的元字符（按去引号后的文本，比按引号外判断更保守）。 */
@@ -420,6 +442,73 @@ export const commandWords = (command: string): string[][] =>
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish'])
 const EVALUATORS = new Set(['eval', 'source', '.'])
 const SCRIPT_INTERPRETER = /^(?:python(?:\d+(?:\.\d+)*)?|node(?:js)?|ruby|perl)$/
+
+/**
+ * 间接执行器（第五轮审查）：把参数当作命令执行，或在别处（远端、其他用户）执行命令。
+ * 动作识别是尽力而为（见 policy README），这里只覆盖常见写法，命中即按不透明处理。
+ */
+export const INDIRECT_EXECUTORS: ReadonlySet<string> = new Set([
+  'xargs',
+  'watch',
+  'parallel',
+  'script',
+  'su',
+  'ssh',
+  'doas',
+  'pkexec',
+  'runuser',
+  'chroot',
+  'setsid',
+  'flock',
+  'unbuffer',
+  'expect',
+  'tmux',
+  'screen',
+  'at',
+  'batch',
+  'arch',
+  'sandbox-exec',
+  'osascript',
+])
+/** `find` 中执行命令的谓词。 */
+const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir)$/
+/** git 子命令中执行任意命令的写法（`git rebase -x/--exec`、`bisect run`、`submodule foreach`……）。 */
+function gitRunsCommands(words: readonly string[]): boolean {
+  const sub = words[1]
+  const rest = words.slice(2)
+  if (sub === 'rebase') {
+    return rest.some((w) => w === '-x' || /^--exec(?:=|$)/.test(w) || /^-[^-]*x/.test(w))
+  }
+  if (sub === 'bisect') return rest[0] === 'run'
+  if (sub === 'submodule') return rest.includes('foreach')
+  // difftool / mergetool 总会启动配置的外部工具。
+  if (sub === 'difftool' || sub === 'mergetool') return true
+  // grep -O / --open-files-in-pager：用分页程序打开命中的文件。
+  if (sub === 'grep') {
+    return rest.some((w) => /^--open-files-in-pager(?:=|$)/.test(w) || /^-[^-]*O/.test(w))
+  }
+  // 远端执行的程序：--upload-pack / -u、--receive-pack / --exec。
+  if (sub === 'fetch' || sub === 'clone' || sub === 'ls-remote' || sub === 'pull') {
+    return rest.some(
+      (w) => /^--upload-pack(?:=|$)/.test(w) || w === '-u' || /^--exec(?:=|$)/.test(w),
+    )
+  }
+  if (sub === 'archive') return rest.some((w) => /^--exec(?:=|$)/.test(w))
+  if (sub === 'push') return rest.some((w) => /^--(?:receive-pack|exec)(?:=|$)/.test(w))
+  if (sub === 'help') return rest.some((w) => w === '--web' || w === '-w' || /^--browser/.test(w))
+  return (
+    sub === 'filter-branch' || sub === 'filter-repo' || sub === 'send-email' || sub === 'instaweb'
+  )
+}
+
+/** 间接执行：命中时整段按不透明处理。 */
+export function runsIndirectly(words: readonly string[]): boolean {
+  const executable = words[0] ?? ''
+  if (INDIRECT_EXECUTORS.has(executable)) return true
+  if (executable === 'find') return words.some((w) => FIND_EXEC_RE.test(w))
+  if (executable === 'git') return gitRunsCommands(words)
+  return false
+}
 
 /** 只递归能直接取出的 shell 字符串；解释器代码始终保持 opaque。 */
 function nestedScript(words: string[]): { opaque: boolean; script?: string } {
@@ -612,6 +701,7 @@ export function classifyAction(
       if (opaque) markOpaque()
       const nested = nestedScript(words)
       if (nested.opaque) markOpaque()
+      if (runsIndirectly(words)) markOpaque()
       if (nested.script !== undefined) pending.push(nested.script)
       if (expansionMayMatch(words, mappings)) markOpaque()
       const flow = flowInvocation(words)

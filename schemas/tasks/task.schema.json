@@ -919,6 +919,43 @@
               "minimum": 1,
               "maximum": 9007199254740991
             },
+            "request": {
+              "description": "带 decision_id 时：判定所针对的请求（工具、命令与理由）",
+              "type": "object",
+              "properties": {
+                "tool": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "command": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "paths": {
+                  "description": "请求涉及的路径（与预检时送去判定的路径相同）",
+                  "maxItems": 200,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  }
+                },
+                "reason": {
+                  "description": "执行器给出的请求理由（例如 Codex 弹窗的 Reason 一行）",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              },
+              "required": [
+                "tool"
+              ],
+              "additionalProperties": false,
+              "title": "Blocked request"
+            },
             "no_delegate": {
               "description": "true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）",
               "type": "boolean"
@@ -1236,6 +1273,53 @@
         }
       ],
       "description": "执行器上报的任务分支（task.branch_reported）；没有上报时为 null"
+    },
+    "repo_snapshot": {
+      "description": "租约开始、worker 启动前节点对登记仓库的快照（随任务分支上报，之后不变）；没有上报时为 null",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "remote_url": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "description": "登记仓库 origin 的地址（只接受 github.com）"
+            },
+            "default_branch": {
+              "description": "登记仓库的默认分支；取不到时省略（push_to 随之不满足）",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
+            }
+          },
+          "required": [
+            "remote_url"
+          ],
+          "additionalProperties": false,
+          "title": "Repo snapshot"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "worktree": {
+      "description": "执行器随任务分支上报的任务 worktree（节点侧 realpath）；没有上报时为 null。旧版中枢的响应没有该字段",
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 4096,
+          "pattern": "^\\/[^\\0\\n\\r]*$",
+          "description": "节点上解析符号链接后的绝对路径"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "last_activity_at": {
       "anyOf": [

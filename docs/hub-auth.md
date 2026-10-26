@@ -97,6 +97,10 @@ CLI 固定传 cli。读取密钥等只有用户能做的接口使用 `userOnly`�
 策略检查的 `dry_run` 默认 false；user 可传 true 只判定不入账。节点只能省略或传 false，
 传 true 返回 400 `invalid_arguments`，不产生事件。CLI 默认 dry run，只有 `--record` 才入账。
 所有权限拒绝均不产生事件。任务不存在时，策略检查返回 404 `not_found`。
+策略检查中节点上报的环境字段（`push_env_ok`、`gh_env_ok`、`command_cwd`，D15）只在
+调用方确为该任务的租约持有者时采信：`node:<id>` 身份持有未过期的活动租约，或请求带的 `lease_token`
+与该任务未过期的活动租约匹配（本机节点用 user token 调用，租约令牌只在节点进程内存中）。否则这些字段
+视为缺失、不入账，`push_to` / `gh_scope` 条件随之不满足；`lease_token` 本身从不入账。
 MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有读取密钥的工具）保留，作为第一道防线。
 
 ## 唤醒绑定 token（add-m1-supervisor D6）

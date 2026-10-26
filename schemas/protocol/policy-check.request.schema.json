@@ -37,6 +37,19 @@
     "gh_env_ok": {
       "description": "gh 命令的仓库检查（D15）：gh 实际解析出的仓库与登记仓库一致；缺失视为不满足",
       "type": "boolean"
+    },
+    "command_cwd": {
+      "description": "命令实际执行目录（D15），节点解析符号链接后上报；push_to / gh_scope 要求它与任务 worktree 相同",
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^\\/[^\\0\\n\\r]*$"
+    },
+    "lease_token": {
+      "description": "持有该任务活动租约的节点证明身份（本机节点用 user token 调用）；push_env_ok、gh_env_ok、command_cwd 只在 node actor 持有租约或令牌匹配时采信。不入账",
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 512
     }
   },
   "required": [

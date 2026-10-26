@@ -313,7 +313,15 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
             now: () => clock.now(),
           }),
         },
-        { path: '/', app: createPolicyRoutes({ home: options.home, ledger, leaseHolders }) },
+        {
+          path: '/',
+          app: createPolicyRoutes({
+            home: options.home,
+            ledger,
+            leaseHolders,
+            now: () => clock.now(),
+          }),
+        },
         { path: '/', app: protocol.routes },
       ]
     },
