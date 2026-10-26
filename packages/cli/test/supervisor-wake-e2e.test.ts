@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   defaultSupervisorConfig,
   flowPaths,
@@ -381,7 +381,10 @@ function checkSecrecy(s: Awaited<ReturnType<typeof setup>>, extraArgs: string[] 
   expect(call.env.FLOW_WORKSPACE).toBe(WS)
   expect(call.env.FLOW_TASK_ID).toBe(s.wakeId)
   const tokenFile = call.env[HUB_TOKEN_FILE_ENV] as string
-  expect(tokenFile).toBe(join(wakeTokenDir(s.home), `${s.wakeId}.token`))
+  // `<task>.<lease_id>.token`：按租约区分文件。
+  expect(dirname(tokenFile)).toBe(wakeTokenDir(s.home))
+  expect(basename(tokenFile).startsWith(`${s.wakeId}.l-`)).toBe(true)
+  expect(tokenFile.endsWith('.token')).toBe(true)
   expect(call.fileMode).toBe(0o600)
   expect(call.dirMode).toBe(0o700)
   // 任务结束后文件已删除。

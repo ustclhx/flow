@@ -204,7 +204,10 @@ describe('中枢不接受 slots（旧中枢）', () => {
 describe('rejectsField：只有 details 提到 slots 才当作旧中枢', () => {
   test.each([
     [[{ code: 'invalid_field', message: 'Unrecognized key: "slots"' }], true],
-    [[{ code: 'invalid_field', field: 'slots.general', message: '字段 slots.general：类型错误' }], true],
+    [
+      [{ code: 'invalid_field', field: 'slots.general', message: '字段 slots.general：类型错误' }],
+      true,
+    ],
     [[{ code: 'invalid_field', field: 'wait_s', message: '字段 wait_s：类型错误' }], false],
     [[{ code: 'invalid_field', message: 'Unrecognized key: "reserved_slots"' }], false],
     [undefined, false],

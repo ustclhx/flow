@@ -50,6 +50,7 @@ import {
   type StuckVerdict,
 } from './executor.ts'
 import { createFakeExecutor } from './fake.ts'
+import { acquireNodeLock } from './node-lock.ts'
 import { createPolicyPrecheck, type Precheck, type PrecheckRequest } from './precheck.ts'
 import { computeDiffStat, type NodeEnvReport, nodeEnvReport, snapshotRepo } from './push-env.ts'
 import { verifyTask } from './verify.ts'
@@ -937,7 +938,12 @@ class LeaseRunner {
       let wakeTokenFile: string | undefined
       try {
         if (grant.wake_token) {
-          wakeTokenFile = await writeWakeTokenFile(env.home, grant.task_id, grant.wake_token)
+          wakeTokenFile = await writeWakeTokenFile(
+            env.home,
+            grant.task_id,
+            grant.lease_id,
+            grant.wake_token,
+          )
         }
         this.run = executor.run(grant.contract, {
           taskId: grant.task_id,
@@ -1151,7 +1157,36 @@ class LeaseRunner {
   }
 }
 
+/**
+ * 启动节点。先取得节点单实例锁（`state/node.lock`）：启动清理（`state/wake/` 的 token 文件、执行器残留）
+ * 只在确认没有并行节点时进行；锁在节点停止或启动失败时释放。
+ */
 export async function startNode(options: StartNodeOptions): Promise<Result<RunningNode>> {
+  const lock = await acquireNodeLock(options.home)
+  if (!lock.ok) return lock
+  let started: Result<RunningNode>
+  try {
+    started = await startNodeLocked(options)
+  } catch (err) {
+    lock.data.release()
+    throw err
+  }
+  if (!started.ok) {
+    lock.data.release()
+    return started
+  }
+  const node = started.data
+  let stopping: Promise<void> | undefined
+  return ok({
+    ...node,
+    stop() {
+      stopping ??= node.stop().finally(() => lock.data.release())
+      return stopping
+    },
+  })
+}
+
+async function startNodeLocked(options: StartNodeOptions): Promise<Result<RunningNode>> {
   const { home } = options
   const clock = options.clock ?? systemClock
   const logger = options.logger ?? consoleLogger
@@ -1177,6 +1212,7 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
   }
 
   // 上次运行残留的唤醒 token 文件（进程被杀时来不及删除）：启动时清理，租约早已失效。
+  // 调用方（startNode）已持有节点单实例锁，不会误删并行节点的文件。
   await cleanWakeTokenDir(home)
 
   const id =

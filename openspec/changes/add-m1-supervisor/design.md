@@ -144,7 +144,7 @@ claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor -
 - 经中枢的写（建任务、提案、提问、合并请求、简报、决策回看）由中枢独立校验（D5、D8）。
 - `kb_journal` 仍在本地经写入层执行（只追加），**只有 MCP 绑定这一层检查**；风险是写错 workspace 的 journal，可接受。
 - 绑定的 supervisor 仍可以对其他 workspace 的条目提交 `kb_propose`（输入不含 workspace，本地与中枢都不按绑定拦截）：提案需要用户接受才生效，属于已接受风险。
-- 唤醒 token 不经 argv 或 env 传递：节点写入 `state/wake/<task>.token`（0700/0600），MCP 进程以 `FLOW_HUB_TOKEN_FILE` 读取，任务结束即删除（见 `docs/hub-auth.md`）。
+- 唤醒 token 不经 argv 或 env 传递：节点写入 `state/wake/<task>.<lease_id>.token`（0700/0600），MCP 进程以 `FLOW_HUB_TOKEN_FILE` 读取，任务结束即删除（见 `docs/hub-auth.md`）。
 
 读边界：claude-sdk 新增权限字段 `read_scope: cwd`。设置后 PreToolUse 钩子（匹配全部工具，与 `writable_paths` 共用路径判定）只允许读合同工作目录与任务私有目录（见 D10 的 diff 文件）内的路径，拒绝 `.` 开头的路径段、`..`、符号链接越界。检查的字段包括 `file_path`、`path`、`notebook_path`，以及 Glob 的 `pattern`、Grep 的 `glob`（这两个不得是绝对路径、不得含 `..`）；输入中含其他路径类字段的非 MCP 工具一律拒绝。Flow MCP 不受影响。supervisor 与 pr-reviewer 模板都设 `read_scope: cwd`，防止读取 `state/hub.token`、密钥存储、`~/.config/gh`、`~/.ssh` 后经任务目标外传。
 
