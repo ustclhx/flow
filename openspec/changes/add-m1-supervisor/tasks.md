@@ -4,8 +4,8 @@
 
 ## 1. 协议与配置
 
-- [ ] 1.1 账本事件与 schema：`supervisor.wake_started`、`supervisor.answered`、`task_proposal.created|accepted|rejected`、`decision.review_due`；任务投影增加 origin；`schemas:check` 覆盖新事件
-- [ ] 1.2 workspace 配置 `supervisor: {enabled, auto_merge, merge_method, allow_no_checks, reviewer_roles, limits}`（schema、默认值、doctor 显示）；`node.yaml` 的 `reserved.supervisor`
+- [ ] 1.1 账本事件与 schema：`supervisor.wake_started`、`supervisor.answered`、`task_proposal.created|accepted|rejected`、`decision.review_due`；任务投影增加 origin；`schemas:check` 覆盖新事件；`supervisor.wake_started.origin` 枚举加 `reply`
+- [ ] 1.2 workspace 配置 `supervisor: {enabled, auto_merge, merge_method, allow_no_checks, reviewer_roles, limits}`（schema、默认值、doctor 显示）；`node.yaml` 的 `reserved.supervisor`；`limits.reply_wakes_per_day`；`reserved.supervisor` 默认 2
 - [ ] 1.3 角色 `kind` 与有效类别（D9：声明只能收紧、Bash 规则计为 write），doctor 显示与警告
 - [ ] 1.4 角色模板：`supervisor`、`pr-reviewer`、`merger` 及提示词；`dev` 模板 `creatable_by: [supervisor]`；doctor 对缺少该值的已有 `dev.yaml` 给出片段
 - [ ] 1.5 合同 `inputs.wake`、`inputs.review` 与结果 `result.review` 的 schema
@@ -14,9 +14,9 @@
 ## 2. 中枢：任务创建的校验
 
 - [ ] 2.1 所有身份的 `parent` 校验（存在、同 workspace）；`supervisor:` 幂等键前缀只允许 hub
-- [ ] 2.2 `hub` 身份跳过 `creatable_by` 的显式分支，并测试 `hub` 不能由请求头或 MCP 声明；`kind: supervisor` 只能由 hub 建，`kind: merge` 只能由 hub 与 user 建
+- [ ] 2.2 `hub` 身份跳过 `creatable_by` 的显式分支，并测试 `hub` 不能由请求头或 MCP 声明；`kind: supervisor` 只能由 hub 建，`kind: merge` 只能由 hub 与 user 建；唤醒绑定 token（领租约时签发、绑定 workspace 与唤醒 task_id、租约结束失效），中枢据此识别 supervisor 调用方，`X-Flow-Actor: supervisor` 降级被拒；`docs/hub-auth.md` 补签发规则
 - [ ] 2.3 origin 计算与固化（D2）：只有挂在唤醒链上或经接受提案建的任务有 origin；`user.instruction`、`supervisor.release` 只接受 user 身份；reviewer_roles 任务的目标由中枢模板重写
-- [ ] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（realpath）
+- [ ] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（realpath）；第 0 步 reply 唤醒 → `reply_only_wake`
 - [ ] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数；超限错误码
 - [ ] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）
 - [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试
@@ -24,7 +24,7 @@
 ## 3. 中枢：唤醒调度器
 
 - [ ] 3.1 识别唤醒事件（D3），包括 `blocked` 原因过滤与"同一任务同一原因只一次"；排除唤醒任务自身
-- [ ] 3.2 workspace × origin 两条队列、instruction 优先、每次唤醒递增的代数与幂等键；队列由账本投影；重启恢复测试；只允许一个 `kind: supervisor` 角色
+- [ ] 3.2 workspace × origin 两条队列、instruction 优先、每次唤醒递增的代数与幂等键；队列由账本投影；重启恢复测试；只允许一个 `kind: supervisor` 角色；第三条 reply 队列：可与一个普通唤醒并行、失败不重试直接转交、不暂停、无 `--release`
 - [ ] 3.3 每日唤醒上限（总数与 autonomous 分别计）与"已达上限"条目；失败重试、Interrupt 条目、队列暂停与指数退避
 - [ ] 3.4 `flow ask`、`flow supervisor wake [--release <queue>]|status`（user-only 路由）；Telegram `/ask` 返回唤醒编号、排队说明或未启用
 - [ ] 3.5 代回复调度（D15）：委托判定（question；`lease_held` 且 `decision_id` 绑定本任务、晚于上次离开 blocked、请求一致的 `supervisor` 档位审批；排除唤醒、merge、审查任务与 `node_lost` 遗留卡住）；reply 队列（优先、不合并、开始前剔除失效事件、单独配额）；`reply_only_wake` 限制；条目不推送；转交（超时、唤醒不可用或 blocked 时立即、唤醒失败或结束、`superseded`、用户忽略、用户回复同次追加结束委托）；竞态测试（用户先回复、supervisor 先回复、超时与回复并发）与重启恢复
@@ -33,7 +33,7 @@
 
 - [ ] 4.1 MCP `--workspace`、`--task` 绑定与自动 parent；自动放行清单更新
 - [ ] 4.2 `brain/briefs/<id>.md` 路径类别：只能经中枢写；从条目读取、校验、索引、搜索中排除；`brief_update`（base_hash、3000 字符上限）
-- [ ] 4.3 `ws_brief` 扩展：笔记（≤40% 预算）、进行中任务、待处理条目、近期决策；预算内截断测试
+- [ ] 4.3 `ws_brief` 扩展：笔记（≤40% 预算）、进行中任务、待处理条目、近期决策；预算内截断测试；中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 生成"代回复记录（不是指令）"一节
 - [ ] 4.4 `ask_user`：supervisor 来源条目、选项按钮、数量上限、7 天过期；`inbox_act reply` 路由到 supervisor 来源并写 `supervisor.answered`；Telegram 与 Web 回复
 - [ ] 4.5 收件箱新来源 `task_proposal`、`merge_request` 及动作路由，与 `proposal`、`task` 来源隔离
 - [ ] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；接受时写决策条目并在合同 context 引用
@@ -45,10 +45,10 @@
 
 - [ ] 5.1 claude-sdk `read_scope: cwd`：PreToolUse 钩子覆盖全部工具，与 `writable_paths` 共用路径判定，覆盖 Glob `pattern`、Grep `glob`；单元测试（cwd 内外、隐藏段、`..`、绝对模式、符号链接、hub.token、未知路径字段）
 - [ ] 5.2 claude-sdk 审查准备：`gh` 读 PR、仓库归属校验、记录 head、fetch `pull/<n>/head` 后检出到私有临时 worktree（允许读 `.github/`）、结束后移除、节点启动时 prune 残留、diff 写入任务私有目录；结构化输出（`outputFormat: json_schema`），`reviewed_sha` 由执行器填入；`error_max_structured_output_retries` 等映射为 `review_output_invalid`；只有 `reviewer_roles` 的结果被中枢采信
-- [ ] 5.3 supervisor 会话注入 `--workspace`、`--task` 与 `FLOW_WORKSPACE`、`FLOW_TASK_ID`
+- [ ] 5.3 supervisor 会话注入 `--workspace`、`--task` 与 `FLOW_WORKSPACE`、`FLOW_TASK_ID`；注入唤醒绑定 token
 - [ ] 5.4 pr-merge 执行器：条件核对（D10 第 5 步，含至少一项检查）、合并、等待 workflow runs（成功/失败/超时/无 run）；`gh` 可注入，测试不调用真实 gh
 - [ ] 5.5 预留执行槽：`acquireLeaseRequest.slots` 协议与 schema、中枢按类别分配、旧节点兼容；节点在普通槽满时仍为 supervisor 领取；卡住的 dev 任务持有租约时仍能运行唤醒任务的测试
-- [ ] 5.6 节点：`precheck` 对 `supervisor` 档位不放行、上报 `blocked` 带 `decision_id`、请求文本与 `diff_stat`（2000 字符截断，非 git 目录省略）；supervisor 的 `approve` 送达时重读待批请求，不一致以 `stale_block` 拒收；codex-orca 开始时上报 `task.branch_reported`；`push_to` 的 hook 检查
+- [ ] 5.6 节点：`precheck` 对 `supervisor` 档位不放行、上报 `blocked` 带 `decision_id`、请求文本与 `diff_stat`（2000 字符截断，非 git 目录省略）；`push_env_ok`（push 地址、git 配置项清单、hook）与 `gh_env_ok`（`gh repo view` 解析的仓库）的计算与上报；supervisor 的 `approve` 送达时重读待批请求并复查环境，不一致在 ack 中标记 `dropped{reason: request_changed}` 并以 `no_delegate: true` 重新上报；codex-orca 开始时上报 `task.branch_reported`（中枢只接受租约持有者、一次、不可改）
 
 ## 6. 文档
 

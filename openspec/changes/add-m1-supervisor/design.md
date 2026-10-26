@@ -62,14 +62,14 @@ origin 只有两类：
 | 派生任务状态变化 | 该任务的 origin |
 | `supervisor.answered`（用户回答提问） | 提问所在唤醒的 origin |
 | `task_proposal.accepted` / `rejected` | instruction（接受）/ 提案所在唤醒的 origin（驳回） |
-| `task.reply_delegated` | 无 origin：进 reply 队列，唤醒只能回复（D15） |
+| `task.reply_delegated` | `reply`：进 reply 队列，唤醒只能回复（D15）；reply 不会传给任何任务 |
 
 任务的 origin 在创建时由中枢写入任务投影，之后不可变：
 
 - 接受任务提案所建的任务 → instruction（接受就是用户的决定）；
 - `parent` 是唤醒任务 → 该唤醒的 origin；
 - `parent` 是有 origin 的任务 → 继承它的 origin；
-- 其他（包括用户手动建、没有挂到 supervisor 链上的任务）→ **无 origin**：不属于 supervisor 链，它的状态变化不唤醒 supervisor（D15 的委托卡住除外，那是只能回复的 reply 唤醒），它的 PR 也不能被 supervisor 请求合并。
+- 其他（包括用户手动建、没有挂到 supervisor 链上的任务）→ **无 origin**：不属于 supervisor 链，它的状态变化不唤醒 supervisor（D15 的委托卡住除外，那是 origin 为 `reply`、只能回复的唤醒），它的 PR 也不能被 supervisor 请求合并。
 
 **所有身份**建任务时，中枢都校验 `parent`：必须存在、与新任务同一 workspace，否则 `parent_not_found` / `workspace_mismatch`。这堵住"把任意任务挂到唤醒任务或用户任务下面伪造来源"。
 
@@ -81,10 +81,10 @@ origin 只有两类：
 
 调度器订阅账本，识别上表中的唤醒事件。"派生任务状态变化"指 origin 不为空的任务进入 `done`、`failed`、`cancelled`，或进入 `blocked` 且原因是 `crashed`、`node_lost`、`no_progress`、`other`（同一任务同一原因只唤醒一次）。`awaiting_approval`、`question` 不走这条规则：委托给 supervisor 的卡住按 D15 进入独立的 reply 队列（范围是本 workspace 全部任务，不限于有 origin 的任务），未委托的直接进用户收件箱，不唤醒。唤醒任务自身的状态变化不触发唤醒。
 
-- 每个 workspace 有两条队列：instruction、autonomous（另有只用于代回复的 reply 队列，见 D15）。同一 workspace 同时最多一个未结束（含 `blocked`）的唤醒任务；空闲时**先处理 instruction 队列**。一次唤醒只合并同一条队列里的事件，所以每次唤醒恰好有一个 origin。
+- 每个 workspace 有三条队列：instruction、autonomous、reply（reply 只用于代回复，规则见 D15）。同一 workspace 同时最多一个未结束（含 `blocked`）的**普通唤醒**（instruction 或 autonomous），空闲时**先处理 instruction 队列**；另可并行最多一个 reply 唤醒。一次唤醒只合并同一条队列里的事件，所以每次唤醒恰好有一个 origin（`instruction`、`autonomous` 或 `reply`）。
 - 队列与代数（generation，每创建一次唤醒加一）由账本投影，中枢重启后恢复。唤醒任务的幂等键为 `supervisor:<ws>:<generation>`；`supervisor:` 前缀保留给 `hub`，其他身份使用返回 `reserved_idempotency_key`。
 - 唤醒任务 `blocked` 时新事件继续排队；用户取消它即放行队列。
-- 唤醒任务失败：按重试设置重试一次；仍失败则进收件箱（Interrupt），该队列暂停：新事件继续排队但不触发唤醒，直到用户 `--release`，或暂停满 1 小时后自动恢复一次（再失败则回到暂停，退避时间翻倍，最长 24 小时）。
+- 普通唤醒任务失败（reply 唤醒见 D15）：按重试设置重试一次；仍失败则进收件箱（Interrupt），该队列暂停：新事件继续排队但不触发唤醒，直到用户 `--release`，或暂停满 1 小时后自动恢复一次（再失败则回到暂停，退避时间翻倍，最长 24 小时）。
 - 手动控制（user-only）：`flow supervisor wake <ws> <说明>` 写一条 `user.instruction`；`flow supervisor wake <ws> --release <instruction|autonomous>` 写 `supervisor.release{queue}`，立刻用该队列现有事件创建一次唤醒，origin 保持该队列的类别。手动放行不计入每日上限。
 - 一个 workspace 只能有一个 `kind: supervisor` 角色可用（全局最多一个，doctor 对多个报错）；唤醒任务使用它。
 - workspace 配置 `supervisor.enabled: false` 或没有 `kind: supervisor` 角色时不唤醒，`/ask` 回复未启用。
@@ -96,7 +96,8 @@ workspace 配置 `supervisor.limits`，默认值：
 | 上限 | 默认 | 超出时 |
 | --- | --- | --- |
 | 每次唤醒创建的任务数 | 5 | `limit_exceeded` |
-| 每个 workspace 每天的唤醒次数 | 24（其中 autonomous 最多 4） | 事件留在队列，收件箱出现一条 Decide："今日唤醒已达上限"，用户可以用 `--release` 放行一次 |
+| 每个 workspace 每天的普通唤醒次数（不含 reply 唤醒） | 24（其中 autonomous 最多 4） | 事件留在队列，收件箱出现一条 Decide："今日唤醒已达上限"，用户可以用 `--release` 放行一次 |
+| 每个 workspace 每天的 reply 唤醒次数（`reply_wakes_per_day`） | 48 | 委托立即转交用户（`wake_unavailable`） |
 | `parent` 链深度 | 8 | `limit_exceeded` |
 | 同一 PR 的 `changes_requested` 轮数 | 2 | 对该 PR 再建 write 任务返回 `review_rounds_exceeded` |
 | 同一 workspace 未回答的提问 | 3 | `too_many_questions` |
@@ -107,7 +108,8 @@ workspace 配置 `supervisor.limits`，默认值：
 
 `TaskService.createTask` 对 `created_by = supervisor` 的请求，在 `creatable_by` 之后依次检查：
 
-1. `parent` 必须是本 workspace 未结束的唤醒任务（由 `supervisor.wake_started` 判定），否则 `parent_required`；
+0. 调用方是 reply 唤醒 → 403 `reply_only_wake`；
+1. `parent` 必须是本 workspace 未结束的普通唤醒任务（由 `supervisor.wake_started` 判定），否则 `parent_required`；
 2. 目标角色的有效类别（D9）为 `write` 且唤醒 origin 为 `autonomous` → 403 `proposal_required`；
 3. 目标角色类别为 `merge` 或 `supervisor` → 403 `role_not_allowed`；
 4. 合同 `cwd` / `inputs.repo` 必须位于本 workspace 登记的仓库内（realpath 比较），否则 `repo_not_in_workspace`；
@@ -117,7 +119,7 @@ workspace 配置 `supervisor.limits`，默认值：
 
 ### D6. MCP 会话绑定与读边界
 
-claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor --workspace <ws> --task <id>`，并设置 `FLOW_WORKSPACE`、`FLOW_TASK_ID`：
+claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor --workspace <ws> --task <id>`，并设置 `FLOW_WORKSPACE`、`FLOW_TASK_ID`。**中枢以唤醒绑定 token 认定调用方**：节点领到唤醒任务的租约时，中枢签发只对这次唤醒有效的 token（actor `supervisor`、绑定 workspace 与唤醒 task_id、租约结束或任务结束即失效），节点把它注入 MCP 环境；中枢据此判定调用方是哪个唤醒、origin 是什么，**不信任** `--task`、`FLOW_TASK_ID` 或 `X-Flow-Actor`。`supervisor` 因此成为保留 actor：user token 加 `X-Flow-Actor: supervisor` 的降级请求被拒绝（`docs/hub-auth.md` 补签发与失效规则）。
 
 - 写类操作只能作用于该 workspace（否则 `workspace_mismatch`）；`task_create` 自动以绑定的任务为 `parent`。
 - 经中枢的写（建任务、提案、提问、合并请求、简报、决策回看）由中枢独立校验（D5、D8）。
@@ -205,7 +207,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 ### D12. 节点为 supervisor 预留执行槽
 
 - 协议：`acquireLeaseRequest` 增加可选字段 `slots: {general: n, supervisor: m}`；中枢只把 `kind: supervisor` 的任务分给 supervisor 空位，普通空位也能接 supervisor 任务。没有该字段的旧节点视为全部是普通空位（版本兼容）。
-- 节点：`node.yaml` 的 `reserved.supervisor`（默认 1）；领取循环在普通槽满时仍为 supervisor 空位发起领取。
+- 节点：`node.yaml` 的 `reserved.supervisor`（默认 2：一个普通唤醒加一个 reply 唤醒）；领取循环在普通槽满时仍为 supervisor 空位发起领取。
 - pr-merge 很短，用普通空位。
 
 ### D13. 巡检
@@ -233,19 +235,22 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 **策略档位**：策略引擎新增档位 `supervisor`，合并次序为 `notify > user > draft-approve > supervisor > auto-report > auto`。
 
-- 受保护的动作（`shell.opaque`、`pr.merge`、`deploy`、`secrets`、`policy.edit`、`config.edit`、`flow.admin`，以及 flow 中会扩大权限的操作，含新增的 `task.respond`）MUST NOT 判为 `supervisor`：命中 `supervisor` 规则时提升为 `draft-approve` 并标 `guarded`。
+- 受保护的动作（`shell.opaque`、`pr.merge`、`deploy`、`secrets`、`policy.edit`、`config.edit`、`flow.admin`，以及 flow 中会扩大权限的操作；新增的 `task.respond` 也加入受保护动作主列表）MUST NOT 判为 `supervisor`：命中 `supervisor` 规则时提升为 `draft-approve` 并标 `guarded`。
 - 受保护的工具（`tool:CodexCommand`、`tool:mcp__*`、外发工具、派生子 agent）只有具体 scope 加精确 action 的规则才能判为 `supervisor`，通配规则最多 `draft-approve`。`supervisor` 在 guarded 逻辑中与 `auto`、`auto-report` 同属"自动档位"。
-- 新条件 `when.push_to: task_branch`（只用于 `git.push`），由 core 纯函数 `parsePushTarget` 加中枢投影中的任务分支判定，**以下全部满足才算满足，任何不确定都不满足**：整条命令只有一段且就是 `git push`（不允许串联）；没有任何 git 全局选项（`-c`、`-C`、`--exec-path`、`--git-dir`、`--config-env` 等都会执行或改变配置）；远端是登记仓库的 remote 名（如 `origin`），不是 URL 或路径；恰好一个显式 refspec，目标 ref 等于任务分支；不带 `--all`、`--mirror`、`--tags`、`--prune`、`--delete`、`--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*`，refspec 不以 `+` 或 `:` 开头，`HEAD` 视为不确定。另外节点核对仓库没有启用的 git hook（`core.hooksPath` 未设置、hooks 目录只有 `.sample`），否则不满足：pre-push hook 会在沙箱外运行。
-- **任务分支**：只有自己创建任务分支的执行器（codex-orca 的 worktree 分支）在开始时写 `task.branch_reported{branch}`，中枢写入投影；没有上报分支的任务 `push_to` 永不满足。
-- 新条件 `when.gh_scope: workspace_repo`（用于 `pr.create` 与只读的 `gh pr view` / `gh pr diff`）：不带 `-R` / `--repo`、cwd 的 origin 是本 workspace 登记仓库；`--body-file` / `-F` 只能指向 cwd 或系统临时目录内的文件（realpath 比较）。防止把凭证文件当 PR 正文外传、或读写其他仓库。
+- 新条件 `when.push_to: task_branch`（只用于 `git.push`），在中枢由 core 纯函数 `parsePushTarget` 加投影中的任务分支、以及节点随请求上报的 `push_env_ok` 判定，**以下全部满足才算满足，任何不确定都不满足**：整条命令只有一段且就是 `git push`（不允许串联）；没有任何 git 全局选项（`-c`、`-C`、`--exec-path`、`--git-dir`、`--config-env` 等都会执行或改变配置）；远端是登记仓库的 remote 名（如 `origin`），不是 URL 或路径；恰好一个显式 refspec，目标 ref 等于任务分支，且任务分支不是仓库默认分支；不带 `--all`、`--mirror`、`--tags`、`--prune`、`--delete`、`--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*`，refspec 不以 `+` 或 `:` 开头，`HEAD` 视为不确定；命令前没有环境变量赋值。
+- **推送环境检查**（节点，precheck 时）：`git remote get-url --push <remote>` 解析出的地址与登记仓库一致；仓库与全局配置里没有 `core.sshCommand`、`url.*.insteadOf` / `pushInsteadOf`、`remote.*.receivepack`、`remote.*.pushurl` 指向别处、`credential.helper` 之外的非默认项（清单在实现时固定并测试）；`core.hooksPath` 未设置、hooks 目录只有 `.sample`（pre-push hook 会在沙箱外运行）。结果以 `push_env_ok` 字段随 `policy/check` 请求上报，缺失即不满足；节点在执行 supervisor 的 `approve` 前再查一次（委托最长可等 10 分钟），不通过则拒收。
+- **任务分支**：只有自己创建任务分支的执行器（codex-orca 的 worktree 分支）在开始时写 `task.branch_reported{branch}`：只接受持有该任务活动租约的节点写入，每个任务只写一次、不可更改；中枢写入投影。没有上报分支的任务 `push_to` 永不满足。
+- 新条件 `when.gh_scope: workspace_repo`（用于 `pr.create` 与只读的 `gh pr view` / `gh pr diff`）：不带 `-R` / `--repo`、命令前没有环境变量赋值（`GH_REPO`、`GH_HOST`、`GH_TOKEN` 等）；节点在 precheck 时用 `gh repo view --json nameWithOwner` 取得 gh 实际解析出的仓库（会考虑 `upstream` remote 与 `gh-resolved` 配置），与登记仓库一致时上报 `gh_env_ok`，缺失即不满足；`--body-file` / `-F` 只能指向 cwd 内的文件（realpath 比较）。防止把凭证文件当 PR 正文外传、或读写其他仓库。
 - `flow init` 在 `policies.yaml` 中生成一组**注释掉的**白名单模板（按 workspace 启用）：`tool:CodexCommand` 与 `tool:Bash` 下的 `pnpm check`、`pnpm test`、`pnpm lint` 前缀（串联请求每段都须满足，沿用现有规则；前缀按现有词边界匹配，模板中每个前缀在 1.6 的测试中覆盖 `pnpm test --x`、`pnpm test:e2e` 等写法）；带 `gh_scope` 的 `pr.create`、`gh pr view`、`gh pr diff`；带 `push_to` 的 `git.push`。
 
-**判定与卡住绑定**：`POST /v1/policy/check` 的响应增加 `decision_id`（对应 `policy.decided` 的 seq）。节点按"不放行、上报 blocked"处理 `supervisor` 档位，上报时带 `decision_id` 与请求文本。中枢只在以下全部成立时委托：该判定属于本任务、写于该任务上一次离开 `blocked` 之后、判定的请求与上报的请求一致。缺 `decision_id`（precheck 超时、5xx 等）一律交给用户。节点执行 supervisor 的 `approve` 前 MUST 重新读取待批请求（Codex 弹窗或待批工具调用），与 `decision_id` 的请求一致才放行，否则以 `stale_block` 拒收并上报。`block_seq` 定义为该次 `task.blocked` 事件的账本 seq。
+**判定与卡住绑定**：`POST /v1/policy/check` 的响应增加 `decision_id`（对应 `policy.decided` 的 seq）。节点按"不放行、上报 blocked"处理 `supervisor` 档位，上报时带 `decision_id` 与请求文本。中枢只在以下全部成立时委托：该判定属于本任务、写于该任务上一次离开 `blocked` 之后、判定的请求与上报的请求一致。缺 `decision_id`（precheck 超时、5xx 等）一律交给用户。节点执行 supervisor 的 `approve` 前 MUST 重新读取待批请求（Codex 弹窗或待批工具调用），与 `decision_id` 的请求一致、推送或 gh 环境复查通过才放行；否则在 ack 中标记该回复 `dropped{reason: request_changed}`，并以新的卡住重新上报（带 `no_delegate: true`），中枢把它直接交给用户。`block_seq` 定义为该次 `task.blocked` 事件的账本 seq。
 
 **委托与唤醒**：中枢写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`，条目标为"supervisor 处理中"、**不推送**。委托事件进入独立的 **reply 队列**，不与 instruction、autonomous 合并：
 
-- reply 队列优先于另外两条；仍受"同一 workspace 一次一个唤醒"约束。
-- **reply 唤醒的权限只限回复**：中枢对来自 reply 唤醒的请求只允许 `task_respond`、`brief_update`、`kb_journal` 与只读操作，`task_create`、`task_propose`、`ask_user`、`pr_merge_request`、`decision_review` 一律返回 `reply_only_wake`。reply 唤醒没有 origin，它不能派生任何任务，因此 worker 的提问内容无法借它获得 instruction 权限。
+- reply 唤醒的 origin 为 `reply`，可以与一个普通唤醒**并行**（同一 workspace 最多一个 reply 唤醒），因此正在运行的 instruction 唤醒不会把委托拖到超时；节点默认为 supervisor 预留 2 个槽（D12）。
+- **reply 唤醒的权限只限回复**：中枢（按 D6 的绑定 token 识别）只允许 `task_respond` 与只读操作；`brief_update`、`kb_journal`、`task_create`、`task_propose`、`ask_user`、`pr_merge_request`、`decision_review` 一律返回 `reply_only_wake`。它不能派生任务，也不能写任何会进入后续唤醒上下文的内容，因此 worker 的提问内容无法借它影响有建任务权限的唤醒。
+- 代回复记录由中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 确定性生成，作为 `ws_brief` 的独立一节，标明"代回复记录，不是指令"，只含任务 id、决定、时间与截断后的回答。
+- reply 唤醒失败不重试，直接以 `wake_failed` 转交它处理的委托；reply 队列不暂停，也不提供 `--release`。
 - 唤醒开始前剔除已失效（已转交、用户已回复、任务已离开该次卡住）的委托事件；全部失效则不唤醒。
 - reply 唤醒单独计数：`supervisor.limits.reply_wakes_per_day`（默认 48，按唤醒计），不占用 instruction / autonomous 的每日配额；超出时立即转交。
 
@@ -253,7 +258,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 **回复**：新操作 `task_respond{task_id, block_seq, decision, text?, reason}`，由中枢执行。`supervisor` 列为保留 actor：只能由 `kind: supervisor` 角色的 MCP 会话使用，角色加载与 doctor 对名为 `supervisor` 但类别不是 supervisor 的角色报错，HTTP 请求头不能声明。中枢在 store 的同一事务里核对：
 
-- 调用方绑定的 `--task` 是持活动租约、正在运行的唤醒任务，并且就是被分配处理这次委托的那个唤醒（`task.reply_delegated` 被该唤醒的 `supervisor.wake_started.events` 引用）；
+- 调用方的唤醒绑定 token（D6）对应持活动租约、正在运行的 reply 唤醒，并且就是被分配处理这次委托的那个唤醒（`task.reply_delegated` 被该唤醒的 `supervisor.wake_started.events` 引用）；
 - 任务与绑定 workspace 一致；任务当前 `blocked` 且序号等于 `block_seq`；委托仍有效；该任务没有待送达的回复；
 - `approve` / `deny` 只用于 `awaiting_approval`，`answer` 只用于 `question`（`text` 必填，≤2000 字符），`escalate` 两者都可。
 
@@ -261,10 +266,10 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 提示词边界：只在任务目标的范围内选方案；需要扩大范围、改变完成条件、涉及不可逆动作、或拿不准时一律 `escalate`。这一条只能靠提示词，中枢无法确定性强制；回答本身不扩大任何权限，worker 仍受沙箱与策略约束。
 
-**转交与竞态**（中枢写 `task.reply_escalated{reason}`，委托随之结束，条目按原级别推送）：
+**转交与竞态**（中枢写 `task.reply_escalated{reason}`，委托随之结束；除 `user_replied`、`user_dismissed` 外，条目按原级别推送）：
 
 - 超过 `supervisor.reply_timeout_s`（默认 600）仍未回复（`timeout`）；
-- 唤醒无法开始或无法及时开始：未启用、没有 supervisor 角色、队列暂停、reply 配额用尽、当前唤醒任务处于 `blocked`（`wake_unavailable`，立即转交，不等超时）；
+- 唤醒无法开始：未启用、没有 supervisor 角色、reply 配额用尽、当前 reply 唤醒处于 `blocked`（`wake_unavailable`，立即转交，不等超时）；
 - 处理该委托的唤醒失败或结束时仍未回复（`wake_failed`、`wake_ended`）；
 - 任务从这次卡住直接进入新的卡住（`superseded`），旧委托失效，新卡住重新判定；
 - 用户忽略该条目（`user_dismissed`）。

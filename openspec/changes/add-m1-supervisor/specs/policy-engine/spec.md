@@ -19,7 +19,7 @@
 各档位 SHALL 按以下方式处理命中的请求：
 - `auto`：系统以 `policy` 身份直接批准，不生成条目；
 - `auto-report`：直接批准，并生成一条 Digest 条目；
-- `supervisor`：任务在代回复范围内（所在 workspace 开启了代回复，且不是唤醒任务或合并任务）时委托给 supervisor 判断（条目不推送，超时或无法唤醒时转交用户）；否则按 `draft-approve` 处理；节点对 `supervisor` 结果不放行、上报 `blocked` 并带上判定的 `decision_id`；
+- `supervisor`：任务与这次卡住在代回复范围内（见 supervisor 能力的"卡住时代用户回复"）时委托给 supervisor 判断（条目不推送，超时或无法唤醒时转交用户）；否则按 `draft-approve` 处理；节点对 `supervisor` 结果不放行、上报 `blocked` 并带上判定的 `decision_id`；
 - `draft-approve`：生成 Decide 级别以上的条目，等用户批准或驳回；
 - `notify`：同 `draft-approve`，但条目级别为 Interrupt。
 
@@ -34,7 +34,7 @@
 - **THEN** 判定为 `supervisor`，请求委托给 product-res 的 supervisor，用户没有收到推送
 
 ### Requirement: 不可自动放行的动作
-`pr.merge`、`deploy`、`secrets`、`shell.opaque`、策略文件的修改（`policy.edit`）、flow-home `config/` 下任何文件的修改（`config.edit`），以及 flow MCP 中会扩大权限的操作（`task.create`、`task.cancel`、`task.reply`、`proposal.decide`、`resource.transfer`），在用户没有显式配置时 SHALL 一律交给用户；即使命中了 `scope: *` 或通配 action 的 `auto` 规则，也 MUST 只有 scope 为具体 workspace 或角色、且 action 不含通配符的规则才能自动放行它们。这些动作（含 `task.respond`）MUST NOT 被判为 `supervisor`：命中 `supervisor` 规则时提升为 `draft-approve` 并标 `guarded`；在受保护判定中 `supervisor` 与 `auto`、`auto-report` 同属自动档位。
+`pr.merge`、`deploy`、`secrets`、`shell.opaque`、策略文件的修改（`policy.edit`）、flow-home `config/` 下任何文件的修改（`config.edit`），以及 flow MCP 中会扩大权限的操作（`task.create`、`task.cancel`、`task.reply`、`task.respond`、`proposal.decide`、`resource.transfer`），在用户没有显式配置时 SHALL 一律交给用户；即使命中了 `scope: *` 或通配 action 的 `auto` 规则，也 MUST 只有 scope 为具体 workspace 或角色、且 action 不含通配符的规则才能自动放行它们。这些动作 MUST NOT 被判为 `supervisor`：命中 `supervisor` 规则时提升为 `draft-approve` 并标 `guarded`；在受保护判定中 `supervisor` 与 `auto`、`auto-report` 同属自动档位。
 
 请求涉及受保护的工具时——Codex 越出沙箱的命令（`tool:CodexCommand`）、所有 MCP 工具（`tool:mcp__*`）、外发工具（`tool:WebFetch`、`tool:WebSearch`）、派生子 agent（`tool:Task`）——参与判定的每个动作 MUST 只由 action 不含通配符的规则自动放行；`*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为 `draft-approve`；`supervisor` 档位同样只能由具体 scope 加精确 action 的规则给出。
 
@@ -61,7 +61,7 @@
 ## ADDED Requirements
 
 ### Requirement: 推送目标条件
-规则 SHALL 支持条件 `when.push_to: task_branch`，只用于 `git.push`，由 core 纯函数解析命令并对照中枢投影中执行器上报的任务分支（`task.branch_reported`）。以下全部满足时才满足，任何不确定 MUST 视为不满足：整条命令只有一段且就是 `git push`；没有 git 全局选项；远端是登记仓库的 remote 名而不是 URL 或路径；恰好一个显式 refspec 且目标 ref 等于任务分支；没有 `--all`、`--mirror`、`--tags`、`--prune`、`--delete`、`--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*`；refspec 不以 `+` 或 `:` 开头、不是 `HEAD`；仓库没有启用的 git hook。没有上报分支的任务 MUST 不满足。
+规则 SHALL 支持条件 `when.push_to: task_branch`，只用于 `git.push`，由 core 纯函数解析命令，对照中枢投影中执行器上报的任务分支（`task.branch_reported`）与节点随请求上报的 `push_env_ok`。以下全部满足时才满足，任何不确定 MUST 视为不满足：整条命令只有一段且就是 `git push`；没有 git 全局选项；远端是登记仓库的 remote 名而不是 URL 或路径；恰好一个显式 refspec 且目标 ref 等于任务分支，任务分支不是仓库默认分支；没有 `--all`、`--mirror`、`--tags`、`--prune`、`--delete`、`--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*`；refspec 不以 `+` 或 `:` 开头、不是 `HEAD`；命令前没有环境变量赋值；`push_env_ok` 为真。没有上报分支或缺少 `push_env_ok` 的请求 MUST 不满足。
 
 #### Scenario: 推到任务分支
 - **WHEN** 任务分支为 `ustclhx/t-1`，Codex 请求 `git push -u origin ustclhx/t-1`，命中 `git.push level: supervisor when: {push_to: task_branch}`
@@ -76,7 +76,7 @@
 - **THEN** 条件都不满足，请求交给用户
 
 ### Requirement: gh 作用范围条件
-规则 SHALL 支持条件 `when.gh_scope: workspace_repo`，用于 `pr.create` 与 `gh pr view`、`gh pr diff`：命令不带 `-R` / `--repo`，工作目录的 origin 是本 workspace 登记仓库，`--body-file` / `-F` 只指向工作目录或系统临时目录内的文件（解析符号链接后比较）。不满足 MUST 视为规则不命中。
+规则 SHALL 支持条件 `when.gh_scope: workspace_repo`，用于 `pr.create` 与 `gh pr view`、`gh pr diff`：命令不带 `-R` / `--repo`、前面没有环境变量赋值，节点上报的 `gh_env_ok` 为真（gh 实际解析出的仓库是本 workspace 登记仓库），`--body-file` / `-F` 只指向工作目录内的文件（解析符号链接后比较）。不满足 MUST 视为规则不命中。
 
 #### Scenario: 用凭证文件做 PR 正文
 - **WHEN** 请求 `gh pr create --body-file ~/.config/gh/hosts.yml`
