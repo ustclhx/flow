@@ -74,8 +74,9 @@ describe('预检函数：只有明确的 auto / auto-report 才放行', () => {
     }
   })
 
-  test('draft-approve / notify / user：交给用户，带上档位', async () => {
-    for (const level of ['draft-approve', 'notify', 'user'] as const) {
+  test('draft-approve / supervisor / notify / user：交给用户，带上档位', async () => {
+    // supervisor 档位节点不放行，按卡住上报（D15）。
+    for (const level of ['draft-approve', 'supervisor', 'notify', 'user'] as const) {
       const { precheck } = precheckWith(async () => json(200, { ok: true, data: decision(level) }))
       expect(await precheck({ tool: 'Bash', command: 'git push' })).toEqual({ allow: false, level })
     }

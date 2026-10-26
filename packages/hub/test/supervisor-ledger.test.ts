@@ -396,9 +396,8 @@ describe('task.reply_delegated 的不变量', () => {
       expect(message(r)).toContain('不是 supervisor')
     })
 
-    // supervisor 档位由策略引擎组（G2）加入档位枚举；合入后此用例自动启用。
-    const supervisorLevel = policyDecisionSchema.shape.level.safeParse('supervisor').success
-    test.skipIf(!supervisorLevel)('supervisor 档位、绑定本次卡住：委托成功', async () => {
+    test('supervisor 档位、绑定本次卡住：委托成功', async () => {
+      expect(policyDecisionSchema.shape.level.safeParse('supervisor').success).toBe(true)
       const { store, id } = await approval()
       const d = decide(store, id, 'supervisor')
       const b = block(store, id, { reason: 'awaiting_approval', decision_id: d.seq })

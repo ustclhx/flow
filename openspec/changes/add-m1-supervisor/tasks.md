@@ -9,7 +9,7 @@
 - [x] 1.3 角色 `kind` 与有效类别（D9：声明只能收紧、Bash 规则计为 write），doctor 显示与警告
 - [x] 1.4 角色模板：`supervisor`、`pr-reviewer`、`merger` 及提示词；`dev` 模板 `creatable_by: [supervisor]`；doctor 对缺少该值的已有 `dev.yaml` 给出片段
 - [x] 1.5 合同 `inputs.wake`、`inputs.review` 与结果 `result.review` 的 schema
-- [ ] 1.6 策略档位 `supervisor`（合并次序；受保护动作含 `task.respond` 提升为 `draft-approve` 并标 `guarded`；通配规则不能给出）；`when.push_to: task_branch`（core 纯函数 `parsePushTarget`：单段、无 git 全局选项、登记 remote 名、单一显式 refspec、禁用选项清单、无启用的 hook，不确定即不满足）与 `when.gh_scope: workspace_repo`；`policy/check` 响应加 `decision_id`；`policies.yaml` 模板加入注释掉的代回复白名单，每个前缀写法有测试；`FLOW_TOOL_ACTIONS` 与 CLI 映射加 `task_respond` → `task.respond`；账本事件 `task.reply_delegated`、`task.reply_escalated`、`task.branch_reported`，`task.blocked` 加 `decision_id`、`diff_stat`、`no_delegate`，`policy/check` 请求加 `push_env_ok`、`gh_env_ok`，`task.replied.via` 加 `supervisor`；workspace 配置 `supervisor.delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；`supervisor` 列为保留 actor（角色加载与 doctor 报错）（G3 已完成：`supervisor` 列为保留 actor，名为 supervisor 但类别不是 supervisor 的角色在角色加载与 doctor 报错）。（G1 已完成账本/协议部分：`task.reply_delegated`、`task.reply_escalated`、`task.branch_reported` 事件与写入校验，`task.blocked` 的 `decision_id`/`diff_stat`/`no_delegate`，`policy/check` 请求的 `push_env_ok`/`gh_env_ok` 与响应的 `decision_id`，`task.replied.via` 的 `supervisor`，workspace `delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；策略档位、`push_to`/`gh_scope`、模板与 `FLOW_TOOL_ACTIONS` 映射由 G2 完成）
+- [ ] 1.6 策略档位 `supervisor`（合并次序；受保护动作含 `task.respond` 提升为 `draft-approve` 并标 `guarded`；通配规则不能给出）；`when.push_to: task_branch`（core 纯函数 `parsePushTarget`：单段、无 git 全局选项、登记 remote 名、单一显式 refspec、禁用选项清单、无启用的 hook，不确定即不满足）与 `when.gh_scope: workspace_repo`；`policy/check` 响应加 `decision_id`；`policies.yaml` 模板加入注释掉的代回复白名单，每个前缀写法有测试；`FLOW_TOOL_ACTIONS` 与 CLI 映射加 `task_respond` → `task.respond`；账本事件 `task.reply_delegated`、`task.reply_escalated`、`task.branch_reported`，`task.blocked` 加 `decision_id`、`diff_stat`、`no_delegate`，`policy/check` 请求加 `push_env_ok`、`gh_env_ok`，`task.replied.via` 加 `supervisor`；workspace 配置 `supervisor.delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；`supervisor` 列为保留 actor（角色加载与 doctor 报错）（G3 已完成：`supervisor` 列为保留 actor，名为 supervisor 但类别不是 supervisor 的角色在角色加载与 doctor 报错）。（G1 已完成账本/协议部分：`task.reply_delegated`、`task.reply_escalated`、`task.branch_reported` 事件与写入校验，`task.blocked` 的 `decision_id`/`diff_stat`/`no_delegate`，`policy/check` 请求的 `push_env_ok`/`gh_env_ok` 与响应的 `decision_id`，`task.replied.via` 的 `supervisor`，workspace `delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；策略档位、`push_to`/`gh_scope`、模板与 `FLOW_TOOL_ACTIONS` 映射由 G2 完成）（G2 已完成策略引擎部分：`supervisor` 档位与合并次序、受保护动作/工具的提升、`parsePushTarget` 与 `push_to` / `gh_scope` 条件及 decide 上下文、`FLOW_TOOL_ACTIONS` 与 CLI 的 `task.respond`、`policies.yaml` 注释模板与逐条测试、policy README；协议字段、账本事件、workspace 配置、保留 actor 不在此组）
 
 ## 2. 中枢：任务创建的校验
 
@@ -18,7 +18,7 @@
 - [ ] 2.3 origin 计算与固化（D2）：只有挂在唤醒链上或经接受提案建的任务有 origin；`user.instruction`、`supervisor.release` 只接受 user 身份；reviewer_roles 任务的目标由中枢模板重写
 - [ ] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（realpath）；第 0 步 reply 唤醒 → `reply_only_wake`
 - [ ] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数；超限错误码
-- [ ] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）
+- [ ] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（G2 已完成模板部分；端到端测试未做）
 - [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试
 
 ## 3. 中枢：唤醒调度器
@@ -48,7 +48,7 @@
 - [ ] 5.3 supervisor 会话注入 `--workspace`、`--task` 与 `FLOW_WORKSPACE`、`FLOW_TASK_ID`；注入唤醒绑定 token
 - [ ] 5.4 pr-merge 执行器：条件核对（D10 第 5 步，含至少一项检查）、合并、等待 workflow runs（成功/失败/超时/无 run）；`gh` 可注入，测试不调用真实 gh
 - [ ] 5.5 预留执行槽：`acquireLeaseRequest.slots` 协议与 schema、中枢按类别分配、旧节点兼容；节点在普通槽满时仍为 supervisor 领取；卡住的 dev 任务持有租约时仍能运行唤醒任务的测试；reply 槽只给 reply 唤醒、两个 workspace 的普通唤醒占满 supervisor 槽时 reply 唤醒仍能运行的测试
-- [ ] 5.6 节点：`precheck` 对 `supervisor` 档位不放行、上报 `blocked` 带 `decision_id`、请求文本与 `diff_stat`（2000 字符截断，非 git 目录省略）；`push_env_ok`（push 地址、git 配置项清单、hook）与 `gh_env_ok`（`gh repo view` 解析的仓库）的计算与上报；supervisor 的 `approve` 送达时重读待批请求并复查环境，不一致在 ack 中标记 `dropped{reason: request_changed}` 并以 `no_delegate: true` 重新上报；codex-orca 开始时上报 `task.branch_reported`（中枢只接受租约持有者、一次、不可改）
+- [ ] 5.6 节点：`precheck` 对 `supervisor` 档位不放行、上报 `blocked` 带 `decision_id`、请求文本与 `diff_stat`（2000 字符截断，非 git 目录省略）；`push_env_ok`（push 地址、git 配置项清单、hook）与 `gh_env_ok`（`gh repo view` 解析的仓库）的计算与上报；supervisor 的 `approve` 送达时重读待批请求并复查环境，不一致在 ack 中标记 `dropped{reason: request_changed}` 并以 `no_delegate: true` 重新上报；codex-orca 开始时上报 `task.branch_reported`（中枢只接受租约持有者、一次、不可改）；`policy/check` 请求上报命令实际执行目录（`command_cwd`），投影记录任务 worktree（`task_worktree`），中枢传入策略上下文（`push_to` / `gh_scope` 要求两者 realpath 相同，此前恒不满足）；`command_cwd` 的 realpath 比较在节点侧完成，`command_cwd`、`push_env_ok`、`gh_env_ok` 只接受 node actor 上报的值（中枢目前本机 realpath，仅同机部署）；推送环境检查清单加入"本地没有与任务分支同名的 tag"；remote 名从登记仓库取
 - [ ] 5.7 read 角色由执行器强制只读（D9：推断只是配置层判断）：codex-exec 对有效类别为 read 的角色用 `-c` 覆盖 `mcp_servers={}`、`notify=[]`，或使用隔离的 `CODEX_HOME`，防止用户级或项目级 `.codex/config.toml` 引入沙箱外进程；claude-sdk 的 read 角色用 SDK `tools` 选项把可用工具限定为白名单（Read/Grep/Glob + Flow MCP），canUseTool 对非只读工具一律拒绝、不进审批
 
 ## 6. 文档

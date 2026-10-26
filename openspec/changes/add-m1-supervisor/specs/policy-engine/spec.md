@@ -61,7 +61,7 @@
 ## ADDED Requirements
 
 ### Requirement: 推送目标条件
-规则 SHALL 支持条件 `when.push_to: task_branch`，只用于 `git.push`，由 core 纯函数解析命令，对照中枢投影中执行器上报的任务分支（`task.branch_reported`）与节点随请求上报的 `push_env_ok`。以下全部满足时才满足，任何不确定 MUST 视为不满足：整条命令只有一段且就是 `git push`；没有 git 全局选项；远端是登记仓库的 remote 名而不是 URL 或路径；恰好一个显式 refspec 且目标 ref 等于任务分支，任务分支不是仓库默认分支；没有 `--all`、`--mirror`、`--tags`、`--prune`、`--delete`、`--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*`；refspec 不以 `+` 或 `:` 开头、不是 `HEAD`；命令前没有环境变量赋值；`push_env_ok` 为真。没有上报分支或缺少 `push_env_ok` 的请求 MUST 不满足。
+规则 SHALL 支持条件 `when.push_to: task_branch`，只用于 `git.push`，由 core 纯函数解析命令，对照中枢投影中执行器上报的任务分支（`task.branch_reported`）与节点随请求上报的 `push_env_ok`。以下全部满足时才满足，任何不确定 MUST 视为不满足：整条命令只有一段且就是 `git push`；没有 git 全局选项；远端是登记仓库的 remote 名而不是 URL 或路径；恰好一个显式 refspec 且目标 ref（规范为 `refs/heads/<分支>` 或短名）等于任务分支、来源不是 `refs/tags/…`（目标写成短名时来源也必须是任务分支），任务分支不是仓库默认分支；没有 `--all`、`--mirror`、`--tags`、`--prune`、`--delete`、`--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*`；refspec 不以 `+` 或 `:` 开头、不是 `HEAD`；命令前没有环境变量赋值；`push_env_ok` 为真。命令在任务 worktree 中执行（见"命令执行目录"）。没有上报分支或缺少 `push_env_ok` 的请求 MUST 不满足。
 
 #### Scenario: 推到任务分支
 - **WHEN** 任务分支为 `ustclhx/t-1`，Codex 请求 `git push -u origin ustclhx/t-1`，命中 `git.push level: supervisor when: {push_to: task_branch}`
@@ -76,8 +76,26 @@
 - **THEN** 条件都不满足，请求交给用户
 
 ### Requirement: gh 作用范围条件
-规则 SHALL 支持条件 `when.gh_scope: workspace_repo`，用于 `pr.create` 与 `gh pr view`、`gh pr diff`：命令不带 `-R` / `--repo`、前面没有环境变量赋值，节点上报的 `gh_env_ok` 为真（gh 实际解析出的仓库是本 workspace 登记仓库），`--body-file` / `-F` 只指向工作目录内的文件（解析符号链接后比较）。不满足 MUST 视为规则不命中。
+规则 SHALL 支持条件 `when.gh_scope: workspace_repo`，用于 `pr.create` 与 `gh pr view`、`gh pr diff`：命令只含空格与可见 ASCII、没有重定向与展开、不带 `-R` / `--repo`、不带 `--body-file` / `-F`、`gh pr view` / `diff` 不带 `--jq` / `-q` / `--template` / `-t`、前面没有环境变量赋值，`pr create` 的 `--head` 缺省或等于任务分支，节点上报的 `gh_env_ok` 为真（gh 实际解析出的仓库是本 workspace 登记仓库），命令在任务 worktree 中执行（见"命令执行目录"）。不满足 MUST 视为规则不命中。
 
 #### Scenario: 用凭证文件做 PR 正文
 - **WHEN** 请求 `gh pr create --body-file ~/.config/gh/hosts.yml`
 - **THEN** 条件不满足，请求交给用户
+
+#### Scenario: 用文件做 PR 正文
+- **WHEN** 请求 `gh pr create --body-file body.md`，`body.md` 位于工作目录内
+- **THEN** 条件不满足（文件在核对与读取之间可能被替换），请求交给用户
+
+### Requirement: 命令执行目录
+`push_to` 与 `gh_scope` 条件 SHALL 要求节点上报的命令实际执行目录与中枢投影记录的任务 worktree 都存在，且两者解析符号链接后相同；任一缺失、无法解析或不同 MUST 视为不满足。
+
+#### Scenario: 在其他目录推送
+- **WHEN** 任务 worktree 为 `/w/t-1`，Codex 在 `/w/other` 中请求 `git push origin ustclhx/t-1`
+- **THEN** `push_to` 条件不满足，请求交给用户
+
+### Requirement: 命令前缀严格匹配
+`when.command_prefix` SHALL 按原始命令词匹配：首词 MUST 与前缀首词完全相同（不带路径），前面 MUST NOT 有环境变量赋值或包装命令（`sudo`、`env`、`command`、`exec`、`nohup`、`timeout`、`nice`、`xargs` 等），命令只能含空格与可见 ASCII；任一段含引号外的文件重定向（独立的 `2>&1` 除外）、后台执行的单个 `&`，或会展开的元字符（`$`、`{`、`[`、`*`、`?`、`~`）MUST 不满足；串联命令的每一段都须满足。动作识别中执行文件或用于匹配映射前缀的词含这些元字符时 MUST 按 `shell.opaque` 处理；重定向位于最后一个普通词之前（开头或中间）时 MUST 按 `shell.opaque` 处理，只有段末尾的重定向可剥离后识别；识别前 MUST 剥离 shell 保留字前缀（`!`、`if`、`then`、`elif`、`else`、`do`、`while`、`until`、`coproc`），`function`、`select`、`case`、`{`、`}` 开头的段 MUST 按 `shell.opaque` 处理。动作识别仍消去包装命令，保守识别敏感动作。
+
+#### Scenario: 包装命令不命中前缀
+- **WHEN** 有规则 `scope: ws/a action: tool:Bash level: auto when: {command_prefix: pnpm test}`，请求 `sudo pnpm test`、`./pnpm test` 或 `NODE_OPTIONS=--require=./x.js pnpm test`
+- **THEN** 规则不命中，请求交给用户

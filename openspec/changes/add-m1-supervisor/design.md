@@ -117,7 +117,7 @@ workspace 配置 `supervisor.limits`，默认值：
 4. 合同 `cwd` / `inputs.repo` 必须位于本 workspace 登记的仓库内（realpath 比较），否则 `repo_not_in_workspace`；
 5. D4 的数量和深度上限。
 
-策略引擎：`task.create` 仍是受保护动作。`flow init` 生成的 `policies.yaml` 带一条注释掉的模板（精确 workspace、`role: supervisor`、动作 `task.create`、`auto`），用户按 workspace 启用；不启用时 supervisor 建任务走审批，流程能走通但多一次批准。验收（7.1）要求先启用它。
+策略引擎：`task.create` 仍是受保护动作。`flow init` 生成的 `policies.yaml` 带一条注释掉的模板（角色 scope `supervisor`、动作 `task.create`、`auto`；workspace 由本节的 parent、仓库检查约束；同一 workspace 的 ws 级 `task.create` 规则会覆盖它，偏保守。不用 ws scope，因为它会同时放行该 workspace 内其他角色建任务），用户启用；不启用时 supervisor 建任务走审批，流程能走通但多一次批准。验收（7.1）要求先启用它。
 
 ### D6. MCP 会话绑定与读边界
 
@@ -248,10 +248,15 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - 受保护的动作（`shell.opaque`、`pr.merge`、`deploy`、`secrets`、`policy.edit`、`config.edit`、`flow.admin`，以及 flow 中会扩大权限的操作；新增的 `task.respond` 也加入受保护动作主列表）MUST NOT 判为 `supervisor`：命中 `supervisor` 规则时提升为 `draft-approve` 并标 `guarded`。
 - 受保护的工具（`tool:CodexCommand`、`tool:mcp__*`、外发工具、派生子 agent）只有具体 scope 加精确 action 的规则才能判为 `supervisor`，通配规则最多 `draft-approve`。`supervisor` 在 guarded 逻辑中与 `auto`、`auto-report` 同属"自动档位"。
 - 新条件 `when.push_to: task_branch`（只用于 `git.push`），在中枢由 core 纯函数 `parsePushTarget` 加投影中的任务分支、以及节点随请求上报的 `push_env_ok` 判定，**以下全部满足才算满足，任何不确定都不满足**：整条命令只有一段且就是 `git push`（不允许串联）；没有任何 git 全局选项（`-c`、`-C`、`--exec-path`、`--git-dir`、`--config-env` 等都会执行或改变配置）；远端是登记仓库的 remote 名（如 `origin`），不是 URL 或路径；恰好一个显式 refspec，目标 ref 等于任务分支，且任务分支不是仓库默认分支；不带 `--all`、`--mirror`、`--tags`、`--prune`、`--delete`、`--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*`，refspec 不以 `+` 或 `:` 开头，`HEAD` 视为不确定；命令前没有环境变量赋值。
-- **推送环境检查**（节点，precheck 时）：`git remote get-url --push <remote>` 解析出的地址与登记仓库一致；仓库与全局配置里没有 `core.sshCommand`、`url.*.insteadOf` / `pushInsteadOf`、`remote.*.receivepack`、`remote.*.pushurl` 指向别处、`credential.helper` 之外的非默认项（清单在实现时固定并测试）；`core.hooksPath` 未设置、hooks 目录只有 `.sample`（pre-push hook 会在沙箱外运行）。结果以 `push_env_ok` 字段随 `policy/check` 请求上报，缺失即不满足；节点在执行 supervisor 的 `approve` 前再查一次（委托最长可等 10 分钟），不通过则拒收。
+- **推送环境检查**（节点，precheck 时）：`git remote get-url --push <remote>` 解析出的地址与登记仓库一致；仓库与全局配置里没有 `core.sshCommand`、`url.*.insteadOf` / `pushInsteadOf`、`remote.*.receivepack`、`remote.*.pushurl` 指向别处、`credential.helper` 之外的非默认项（清单在实现时固定并测试）；`core.hooksPath` 未设置、hooks 目录只有 `.sample`（pre-push hook 会在沙箱外运行）；本地没有与任务分支同名的 tag（避免短名解析到 tag）。结果以 `push_env_ok` 字段随 `policy/check` 请求上报，缺失即不满足；节点在执行 supervisor 的 `approve` 前再查一次（委托最长可等 10 分钟），不通过则拒收。
 - **任务分支**：只有自己创建任务分支的执行器（codex-orca 的 worktree 分支）在开始时写 `task.branch_reported{branch}`：只接受持有该任务活动租约的节点写入，每个任务只写一次、不可更改；中枢写入投影。没有上报分支的任务 `push_to` 永不满足。
-- 新条件 `when.gh_scope: workspace_repo`（用于 `pr.create` 与只读的 `gh pr view` / `gh pr diff`）：不带 `-R` / `--repo`、命令前没有环境变量赋值（`GH_REPO`、`GH_HOST`、`GH_TOKEN` 等）；节点在 precheck 时用 `gh repo view --json nameWithOwner` 取得 gh 实际解析出的仓库（会考虑 `upstream` remote 与 `gh-resolved` 配置），与登记仓库一致时上报 `gh_env_ok`，缺失即不满足；`--body-file` / `-F` 只能指向 cwd 内的文件（realpath 比较）。防止把凭证文件当 PR 正文外传、或读写其他仓库。
-- `flow init` 在 `policies.yaml` 中生成一组**注释掉的**白名单模板（按 workspace 启用）：`tool:CodexCommand` 与 `tool:Bash` 下的 `pnpm check`、`pnpm test`、`pnpm lint` 前缀（串联请求每段都须满足，沿用现有规则；前缀按现有词边界匹配，模板中每个前缀在 1.6 的测试中覆盖 `pnpm test --x`、`pnpm test:e2e` 等写法）；带 `gh_scope` 的 `pr.create`、`gh pr view`、`gh pr diff`；带 `push_to` 的 `git.push`。
+- 新条件 `when.gh_scope: workspace_repo`（用于 `pr.create` 与只读的 `gh pr view` / `gh pr diff`）：不带 `-R` / `--repo`、命令前没有环境变量赋值（`GH_REPO`、`GH_HOST`、`GH_TOKEN` 等）；节点在 precheck 时用 `gh repo view --json nameWithOwner` 取得 gh 实际解析出的仓库（会考虑 `upstream` remote 与 `gh-resolved` 配置），与登记仓库一致时上报 `gh_env_ok`，缺失即不满足；不接受 `--body-file` / `-F`（核对与 gh 读取之间文件可能被替换，正文只能用 `--body`、`--fill` 等）；`pr create` 的 `--head` 只能缺省或等于任务分支（任务分支缺失时带 `--head` 不满足）；整条命令只能含空格与可见 ASCII。防止把凭证文件当 PR 正文外传、或读写其他仓库。gh 在有 TTY 时可能提示推送，批准 `pr create` 不等于批准推送。
+- **命令执行目录**：`push_to` 与 `gh_scope` 都要求节点上报的命令实际执行目录（`command_cwd`）与投影记录的任务 worktree（`task_worktree`）都存在、且 realpath 相同，否则不满足（remote、分支与 gh 仓库都取决于命令在哪个仓库执行）。两者的上报与投影在 5.6 实现，此前两个条件恒不满足。`command_cwd` 的 realpath 比较应在节点侧完成；`command_cwd`、`push_env_ok`、`gh_env_ok` 只认节点（持有该任务活动租约的 node actor）上报的值。目前中枢在本机对路径做 realpath，只适用于中枢与节点同机部署。
+- **重定向与展开**：`command_prefix`、`push_to`、`gh_scope` 对任一段中引号外的文件重定向（`>`、`>>`、`>|`、`N>`、`&>`、`<`、`<<`、`<<<`、`<(`）都判不满足，只允许独立的 `2>&1`；含引号外会展开的元字符（`$`、`{`、`[`、`*`、`?`、`~`）的词同样判不满足。`command_prefix` 还拒绝后台执行的单个 `&`。动作识别中，执行文件或用于匹配映射前缀的词含这些元字符时整段按 `shell.opaque` 处理；开头或中间的重定向整段按 `shell.opaque` 处理（默认拒绝），只有段末尾的重定向剥离后识别；剥离 shell 保留字前缀，复合命令与函数定义（`function`、`select`、`case`、`{`、`}`）按 `shell.opaque` 处理。
+- **推送目标只能是分支**：refspec 的目标规范后必须是 `refs/heads/<任务分支>` 或等于任务分支的短名；来源不得是 `refs/tags/…` 等非分支 ref；目标写成短名时来源也必须是任务分支。
+- **gh view / diff 不接受 `--jq` / `-q` / `--template` / `-t`**：jq 的 `env` / `$ENV` 能输出沙箱外进程的环境变量。
+- **命令前缀严格匹配**（所有档位）：`command_prefix` 按原始词比较，不消去环境变量赋值、包装命令（sudo、env、exec、nohup、timeout、nice、xargs 等）或执行文件路径，首词必须与前缀首词完全相同，只接受空格与可见 ASCII；动作识别仍消去包装、保守识别。
+- `flow init` 在 `policies.yaml` 中生成一组**注释掉的**白名单模板（按 workspace 启用）：`tool:CodexCommand` 与 `tool:Bash` 下的 `pnpm check`、`pnpm test`、`pnpm lint` 前缀（串联请求每段都须满足；前缀按上述严格规则匹配，模板中每个前缀在 1.6 的测试中覆盖 `pnpm test --x`、`pnpm test:e2e` 等写法）；带 `gh_scope` 的 `pr.create`、`gh pr view`、`gh pr diff`；带 `push_to` 的 `git.push`。
 
 **判定与卡住绑定**：`POST /v1/policy/check` 的响应在判定为 `supervisor` 档位时返回 `decision_id`（对应 `policy.decided` 的 seq）；其他档位与 dry_run 不返回该字段（旧节点以 strict schema 解析响应，而旧节点不会遇到 `supervisor` 档位；新版响应 schema 改为非 strict，便于以后扩展）。节点按"不放行、上报 blocked"处理 `supervisor` 档位，上报时带 `decision_id` 与请求文本。中枢只在以下全部成立时委托：该判定属于本任务、写于该任务上一次离开 `blocked` 之后、判定的请求与上报的请求一致。缺 `decision_id`（precheck 超时、5xx 等）一律交给用户。节点执行 supervisor 的 `approve` 前 MUST 重新读取待批请求（Codex 弹窗或待批工具调用），与 `decision_id` 的请求一致、推送或 gh 环境复查通过才放行；否则在 ack 中标记该回复 `dropped{reason: request_changed}`，并以新的卡住重新上报（带 `no_delegate: true`），中枢把它直接交给用户。`block_seq` 定义为该次 `task.blocked` 事件的账本 seq。
 
@@ -296,7 +301,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - **唤醒风暴** → 串行合并、D4 上限、唤醒任务不自激、`blocked` 只唤醒一次。
 - **费用** → 合并事件、巡检默认关闭、每日唤醒上限；结果记录花费，日报汇总。
 - **hub.token 可读** → 见 D2 的已接受风险。
-- **代回复被诱导**（worker 的提问或请求理由里夹带指令）→ 授权请求先由确定性白名单限定，受保护动作永远不委托，推送只能是单段、无全局选项、推到登记 remote 的任务分支，gh 只能作用于登记仓库；判定与具体卡住绑定，节点放行前重读请求；reply 唤醒不能建任务、提案或请求合并；审查任务不委托。回答只能靠提示词约束，是残余风险。**已接受的风险**：批准在沙箱外运行 `pnpm check` 等于在沙箱外执行 worker 写的代码，与用户直接点批准的风险相同，写入文档。
+- **代回复被诱导**（worker 的提问或请求理由里夹带指令）→ 授权请求先由确定性白名单限定，受保护动作永远不委托，推送只能是单段、无全局选项、推到登记 remote 的任务分支，gh 只能作用于登记仓库；判定与具体卡住绑定，节点放行前重读请求；reply 唤醒不能建任务、提案或请求合并；审查任务不委托。回答只能靠提示词约束，是残余风险。**已接受的风险**：批准在沙箱外运行 `pnpm check`、`pnpm test` 等于批准在沙箱外执行仓库中的脚本，包括 worker 改过的 `package.json` scripts、测试配置与 `--reporter`、`--preload` 等参数引入的代码，与用户直接点批准的风险相同；supervisor 需要结合 `diff_stat` 判断改动是否触及这些文件，写入文档。
 - **决策回看例外** → 只追加、只改 status 与 last_verified、只限关联决策、由中枢代写。
 - **单机假设**：中枢和节点读同一份 roles；⑤ 远程节点前需要重新评估。
 

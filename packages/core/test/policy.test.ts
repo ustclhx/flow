@@ -522,14 +522,19 @@ describe('策略条件、保护与审计明细', () => {
 
   test('when 的命令前缀按词匹配，缺失条件或任一串联段不满足则规则不生效', () => {
     const rules = indexed({ ...rule(), when: { command_prefix: 'git push' } })
-    for (const command of [
-      'git push origin x',
-      'FOO=1 sudo command /usr/bin/git  push',
-      'git push && git push origin y',
-    ]) {
+    for (const command of ['git push origin x', 'git  push', 'git push && git push origin y']) {
       expect(decide(rules, { ...request, command }).level).toBe('auto')
     }
-    for (const command of [undefined, 'git pushy', 'git push && gh pr merge', 'echo "git push"']) {
+    // 严格匹配：环境变量赋值、包装命令与执行文件路径都不再被消去（行为变更，见 README）。
+    for (const command of [
+      undefined,
+      'git pushy',
+      'git push && gh pr merge',
+      'echo "git push"',
+      'FOO=1 sudo command /usr/bin/git  push',
+      'sudo git push',
+      '/usr/bin/git push',
+    ]) {
       expect(
         decide(rules, { ...request, ...(command === undefined ? {} : { command }) }).level,
       ).toBe('user')
