@@ -80,6 +80,10 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 
 ### 信任边界与局限
 
+- **已接受风险：`hub.token` 可读**。能读 `state/hub.token` 的同用户进程（包括沙箱外运行的 worker）就是 user：它可以绕过策略直接以 user 身份建任务、批准合并条目，
+  也能把任务挂到 instruction 链上继承 origin（见 `docs/hub-auth.md`）。`supervisor` 档位、代回复白名单与 `auto_merge` 的所有约束都建立在 worker 不会主动攻击中枢这一前提上；
+  把 `hub.token` 移出执行器可读范围留到后续变更。supervisor 的用法、风险与升级步骤见 `docs/supervisor.md`。
+
 - **策略执行点在节点**：判定在中枢，放行（allow / 回车）由节点上的执行器完成，节点属于
   可信计算基。节点被攻破或节点代码有误，策略就不再成立。
 - **对 Bash 和 CodexCommand 的识别是尽力而为的静态分析**。`tool:Bash` 的 `auto` 实质上等于
@@ -250,7 +254,7 @@ scope（workspace 或角色）加精确 action 的规则才能判为 `supervisor
 规则，按档位和原始序号排序；汇总按动作顺序去重。保留原始规则内容供后续审计，判定
 本身不写事件、不调用 HTTP、不生成收件箱条目。
 
-中枢的 `POST /v1/policy/check` 接受 `{ task_id, tool, command?, paths?, dry_run? }`，从任务合同取得
+中枢的 `POST /v1/policy/check` 接受 `{ task_id, tool, command?, paths?, dry_run? }`（节点另可上报 `push_env_ok`、`gh_env_ok`、`command_cwd`、`lease_token`、`no_delegate` 等，见上文与 `docs/hub-auth.md`；判定为 `supervisor` 档位时响应多一个 `decision_id`），从任务合同取得
 workspace 和角色，每次请求重新读取策略文件，返回原有 `decide` 结果。`dry_run` 默认 false，先写入
 `policy.decided`。事件载荷为 `{ task_id, request: { tool, actions, command?, paths? },
 level, matched_rules, actions }`：`request.actions` 是动作 id，外层 `actions` 是逐动作明细，

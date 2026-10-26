@@ -80,6 +80,9 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | `POST /v1/briefs`（`brief_update`） | ✓ | 仅经**唤醒绑定 token** 认证的 `supervisor`：只能写绑定的 workspace（否则 403 `workspace_mismatch`），reply 唤醒 403 `reply_only_wake`；没有唤醒绑定的 supervisor（例如 user token 降级声明）403 `scope_denied`；其他身份 403 `role_not_allowed` | 403 `scope_denied` | 403 |
 | `GET /v1/briefs/context`（`ws_brief` 的中枢部分） | ✓ | ✓（经唤醒 token 认证的 supervisor 只能读绑定的 workspace，否则 403 `workspace_mismatch`） | 403 `scope_denied` | 403 |
 | `POST /v1/supervisor/questions`（`ask_user`）、`POST /v1/task-proposals`（`task_propose`）、`POST /v1/decisions/review`（`decision_review`） | 403 `role_not_allowed`（这三个操作只属于 supervisor；接受 / 驳回提案与答复提问走 `POST /v1/inbox/:id/act`，只有 user） | 仅经**唤醒绑定 token** 认证、非 reply 的 `supervisor`：只能作用于绑定的 workspace（否则 403 `workspace_mismatch`），reply 唤醒 403 `reply_only_wake`，没有唤醒绑定 403 `scope_denied`；`decision_review` 只限本次唤醒关联的决策（否则 403 `not_review_target`）；其他身份 403 `role_not_allowed` | 403 `role_not_allowed` | 403 |
+| `POST /v1/merge-requests`（`pr_merge_request`） | 403 `role_not_allowed`（只属于 supervisor；批准 / 驳回合并条目走 `POST /v1/inbox/:id/act`，只有 user） | 仅经**唤醒绑定 token** 认证、非 reply 的 `supervisor`：资格由中枢按账本核对（`merge_not_eligible`），reply 唤醒 403 `reply_only_wake`，没有唤醒绑定 403 `scope_denied`；其他身份 403 `role_not_allowed` | 403 `scope_denied` | 403 |
+| `POST /v1/supervisor/respond`（`task_respond`） | 同上，非 supervisor 一律拒绝 | 仅经**唤醒绑定 token** 认证、**且是被分配该委托的 reply 唤醒**的 `supervisor`：核对在 store 同一事务内完成，不满足返回 `not_delegated` / `stale_block` / `invalid_arguments`；非 reply 唤醒与其他身份被拒绝 | 403 `scope_denied` | 403 |
+| `POST /v1/supervisor/wake`、`GET /v1/supervisor/status`（`flow ask`、`flow supervisor wake\|status`、Telegram `/ask`） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/tasks/:id/reply` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/hub/rebuild` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `/v1/hub/tokens`（签发、列出、撤销） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |

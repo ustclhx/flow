@@ -1,13 +1,14 @@
 # 执行器与角色
 
 节点按任务合同的 `executor` 选择执行器，按 `role` 读取 `$FLOW_HOME/config/roles/<name>.yaml`。
-`flow init` 补齐下面的三个默认角色及同名提示词文件，已有文件不覆盖。
+`flow init` 补齐下面的三个默认角色，以及 ④ 新增的 `supervisor`（AI 主管，见 [supervisor.md](supervisor.md)）、`pr-reviewer`（只读 PR 审查，claude-sdk）、`merger`（合并，pr-merge 执行器）和同名提示词文件，已有文件不覆盖。
 
 | 执行器 | 默认角色 | 适用场景 | 依赖与交互 |
 | --- | --- | --- | --- |
 | `codex-orca` | `dev` | 交互式的长开发任务，在独立 worktree 中修改、提交、推送并开 PR | Codex CLI、Orca CLI 和正在运行的 Orca 应用；用 gh 检查 PR；提问或审批时保持终端和租约 |
 | `claude-sdk` | `reviewer` | 审查等无头任务，不需要盯着终端 | Claude Agent SDK、SDK 随包安装的原生 claude CLI 和 Claude 凭证；需要审批时挂起等待 |
 | `codex-exec` | `triage` | 在只读沙箱中收集证据、做分诊 | Codex CLI 的 `exec --json` 和 `exec resume`；提问后结束一轮，回复后恢复同一会话 |
+| `pr-merge` | `merger` | 合并已审查通过的 PR 并等待主分支流水线；不调用模型，只由中枢（或 user）创建 | gh；只能在本机节点运行，见下文「merger：pr-merge」 |
 
 中枢和节点需要运行；前台命令分别是 `flow hub start`、`flow node start`，各占一个终端。
 常驻方式见 [守护进程](daemon.md)。Orca 模式的仓库必须登记在合同所属 workspace 的 `repos` 中，
