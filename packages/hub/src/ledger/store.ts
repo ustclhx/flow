@@ -447,7 +447,7 @@ function rowToNode(r: NodeRow): NodeView {
 /**
  * 新事件的写入身份白名单（store 层兜底；路由层另有 user-only 等检查）：
  * - 用户的决定：指令、放行、接受 / 驳回提案、批准合并只接受 user；
- * - 中枢内部：唤醒、提案登记、决策回看、代回复委托只接受 hub；
+ * - 中枢内部：唤醒、丢弃队列积压、定时触发、提案登记、决策回看、代回复委托只接受 hub；
  * - `task.reply_escalated` 按 reason 区分（见 `ESCALATION_BY_USER`）：user_replied、user_dismissed
  *   在用户回复或忽略的同一次 append 中写入，只接受 user；其他原因只接受 hub；
  * - `supervisor.answered`（D11）由收件箱回复路由写入：路由以 user 身份直接写，
@@ -456,6 +456,9 @@ function rowToNode(r: NodeRow): NodeView {
 const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>> = {
   'user.instruction': ['user'],
   'supervisor.release': ['user'],
+  'supervisor.queue_dropped': ['hub'],
+  'supervisor.scheduler_initialized': ['hub'],
+  'schedule.fired': ['hub'],
   'task_proposal.accepted': ['user'],
   'task_proposal.rejected': ['user'],
   'merge_request.approved': ['user'],
@@ -845,8 +848,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       case 'supervisor.wake_started': {
         // 必须与唤醒任务的 task.created 在同一次 appendMany 中写入（D1：唤醒身份以本事件为准，
         // 不能留下"已建但没有 wake_started"的窗口）；这里要求任务创建后还没有其他任务事件。
-        // TODO(3.2)：G3 的 effectiveRoleKind 已合入，但 store 不读角色配置；唤醒调度在 createTask
-        // 前用 findSupervisorRole / effectiveRoleKind 确认角色有效类别为 supervisor。
+        // store 不读角色配置：唤醒调度器（supervisor/scheduler.ts）在 createTask 前用 findSupervisorRole
+        // （按 effectiveRoleKind）确认唯一的、只读的 supervisor 角色；createTask 再按有效类别只许 hub 建。
         const p = draft.payload
         if (p.task_id !== draft.task_id || p.workspace !== draft.workspace) {
           return invalidEvent('supervisor.wake_started 的 task_id、workspace 必须与信封一致')
@@ -880,6 +883,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'supervisor.scheduler_initialized':
+        // 只写一次：重复写入会让"初始化之前的事件"边界后移，丢掉真实指令。
+        // 重建时重放的事件自身已在表中：只看更早的。
+        return get(
+          `SELECT 1 FROM events WHERE type = 'supervisor.scheduler_initialized' AND seq < ? LIMIT 1`,
+          (draft as { seq?: number }).seq ?? Number.MAX_SAFE_INTEGER,
+        )
+          ? fail('failure', 'duplicate_event', '唤醒调度器已初始化')
+          : ok(null)
       case 'schedule.fired': {
         const dup = get(
           'SELECT 1 FROM schedule_fires WHERE rule_id = ? AND planned_at = ?',

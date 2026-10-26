@@ -293,9 +293,27 @@ describe('ask_user（4.4）', () => {
     ).toBe('workspace_mismatch')
   })
 
-  test('未回答提问达到上限 too_many_questions', async () => {
-    const { wake, ctx } = await setup()
+  test('未回答提问达到上限 too_many_questions（唤醒调度器的 wake.* 提醒条目不计入）', async () => {
+    const { ledger, wake, ctx } = await setup()
     const w = await wake('instruction')
+    // G10 的上限 / 失败提醒同样是 source: supervisor，但没有 reply，不占提问配额
+    must(
+      ledger.append(
+        {
+          type: 'inbox.item_created',
+          workspace: WS,
+          payload: {
+            item_id: 'wake.limit.x.2026-10-26.instruction',
+            level: 'decide',
+            source: 'supervisor',
+            source_ref: WS,
+            title: '今日唤醒已达上限',
+            actions: [],
+          },
+        },
+        { actor: 'hub' },
+      ),
+    )
     for (let i = 0; i < 3; i++) {
       must(await askUserOp.run({ workspace: WS, question: `问题 ${i}` }, ctx(w.token)))
     }

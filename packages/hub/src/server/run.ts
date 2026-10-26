@@ -3,6 +3,7 @@ import {
   chatDigest,
   EMPTY_INBOX_CONFIG,
   fail,
+  findSupervisorRole,
   flowPaths,
   type HubConfig,
   type HubStatusData,
@@ -10,6 +11,8 @@ import {
   loadChannelsConfig,
   loadHubConfig,
   loadPoliciesConfig,
+  loadRoles,
+  loadWorkspaces,
   ok,
   type Result,
   redactSecrets,
@@ -53,6 +56,12 @@ import { redactingLogger } from '../secrets/logger.ts'
 import { SecretRedactor } from '../secrets/redactor.ts'
 import { createHubSecrets, type HubSecretsOptions } from '../secrets/service.ts'
 import { currentRuntime } from '../serve.ts'
+import { createSupervisorRoutes } from '../supervisor/routes.ts'
+import {
+  createWakeScheduler,
+  type WakeScheduler,
+  workspaceStateFromHome,
+} from '../supervisor/scheduler.ts'
 import {
   acceptTaskProposal,
   createSupervisorToolRoutes,
@@ -125,6 +134,9 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let stopWatch: (() => void) | undefined
   const startedAt = clock.now()
   let scheduler: Scheduler | undefined
+  /** supervisor 唤醒调度器（add-m1-supervisor 3.1–3.4）：hub.started 之后启动。 */
+  let wakes: WakeScheduler | undefined
+  let taskService: ReturnType<typeof createTaskService> | undefined
   let inbox: InboxService | undefined
   /** 收件箱操作的依赖：HTTP 路由与中枢内渠道共用同一个实现（actOnInbox）。 */
   let inboxActions: InboxActionDeps | undefined
@@ -195,6 +207,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         now: () => clock.now(),
       }
       supervisorTools = tools
+      taskService = tasks
       protocol = createNodeProtocol({
         ledger,
         clock,
@@ -258,6 +271,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         { path: '/', app: status },
         { path: '/', app: createTaskRoutes({ ledger, tasks }) },
         { path: '/', app: createInboxRoutes(inboxDeps) },
+        { path: '/', app: createSupervisorRoutes({ scheduler: () => wakes }) },
         {
           path: '/',
           app: createBriefRoutes({
@@ -300,6 +314,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     },
     onStop: async () => {
       stopSupervisorTools?.()
+      wakes?.stop()
       await inbox?.stop()
       scheduler?.stop()
       protocol?.stop()
@@ -353,6 +368,25 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     ...(options.logger ? { logger: options.logger } : {}),
   })
   const activeLedger = ledger
+  if (taskService) {
+    wakes = createWakeScheduler({
+      ledger,
+      tasks: taskService,
+      clock,
+      logger,
+      workspaces: workspaceLookupFromHome(options.home),
+      workspaceState: workspaceStateFromHome(options.home),
+      listWorkspaces: async () => {
+        const loaded = await loadWorkspaces(options.home)
+        return loaded.ok ? loaded.data.workspaces : []
+      },
+      supervisorRole: async () => {
+        const loaded = await loadRoles(options.home)
+        return loaded.ok ? findSupervisorRole(loaded.data.roles) : loaded
+      },
+    })
+    wakes.start()
+  }
   const channels =
     options.inbox?.channels ??
     (await defaultChannels({
@@ -373,16 +407,11 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
             version: options.version ?? VERSION,
             channels: inbox?.channels.status() ?? [],
           }),
-        ask: async (workspace, text) => {
-          if (!(await workspaceCheckFromHome(options.home)(workspace))) {
-            return fail('failure', 'workspace_not_found', `workspace ${workspace} 不存在`)
-          }
-          const r = activeLedger.append(
-            { type: 'user.instruction', workspace, payload: { text, via: 'telegram' } },
-            { actor: 'user' },
-          )
-          return r.ok ? ok({ seq: r.data.seq }) : r
-        },
+        // /ask：写 user.instruction（user 身份、via telegram）并调度唤醒（3.4）。
+        ask: async (workspace, text) =>
+          wakes
+            ? wakes.instruct(workspace, text, 'telegram')
+            : fail('retryable', 'hub_busy', '中枢尚未就绪，请稍后重试'),
       },
     }))
   // 收件箱（add-m1-inbox 3.1）：hub.started 之后补处理停机期间的事件，再开始监听。

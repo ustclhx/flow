@@ -23,10 +23,10 @@
 
 ## 3. 中枢：唤醒调度器
 
-- [ ] 3.1 识别唤醒事件（D3），包括 `blocked` 原因过滤与"同一任务同一原因只一次"；排除唤醒任务自身
-- [ ] 3.2 workspace × origin 三条队列（instruction、autonomous、reply）、instruction 优先、每次唤醒递增的代数与幂等键；队列由账本投影；重启恢复测试；只允许一个 `kind: supervisor` 角色；第三条 reply 队列：可与一个普通唤醒并行、失败不重试直接转交、不暂停、无 `--release`
-- [ ] 3.3 每日唤醒上限（总数与 autonomous 分别计）与"已达上限"条目；失败重试、Interrupt 条目、队列暂停与指数退避
-- [ ] 3.4 `flow ask`、`flow supervisor wake [--release <queue>]|status`（user-only 路由）；Telegram `/ask` 返回唤醒编号、排队说明或未启用
+- [x] 3.1 识别唤醒事件（D3），包括 `blocked` 原因过滤与"同一任务同一原因只一次"；排除唤醒任务自身
+- [ ] 3.2 workspace × origin 三条队列（instruction、autonomous、reply）、instruction 优先、每次唤醒递增的代数与幂等键；队列由账本投影；重启恢复测试；只允许一个 `kind: supervisor` 角色；第三条 reply 队列：可与一个普通唤醒并行、失败不重试直接转交、不暂停、无 `--release`（G10 已完成：三条队列与账本投影、instruction 优先、代数与幂等键、重启恢复、唯一 supervisor 角色核对；reply 队列可并行、开始前按 `activeDelegation` 剔除失效委托、失败不重试不暂停、无 `--release`；失败或配额用尽时的转交属于 3.5，调度器只留 `onReplyUnavailable` 钩子）
+- [x] 3.3 每日唤醒上限（总数与 autonomous 分别计）与"已达上限"条目；失败重试、Interrupt 条目、队列暂停与指数退避
+- [x] 3.4 `flow ask`、`flow supervisor wake [--release <queue>]|status`（user-only 路由）；Telegram `/ask` 返回唤醒编号、排队说明或未启用
 - [ ] 3.5 代回复调度（D15）：委托判定（question；`lease_held` 且 `decision_id` 绑定本任务、晚于上次离开 blocked、请求一致的 `supervisor` 档位审批；排除唤醒、merge、审查任务与 `node_lost` 遗留卡住）；reply 队列（不合并、开始前剔除失效事件、单独配额）；`reply_only_wake` 限制；条目不推送；转交（超时、唤醒不可用或 blocked 时立即、唤醒失败或结束、离开该次卡住时隐式失效（`activeDelegation`，不写事件）、用户忽略、用户回复同次追加结束委托）；竞态测试（用户先回复、supervisor 先回复、超时与回复并发）与重启恢复
 
 ## 4. 操作与写入

@@ -20,6 +20,12 @@ import {
 } from './events.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import {
+  supervisorStatusData,
+  supervisorStatusQuery,
+  supervisorWakeData,
+  supervisorWakeRequest,
+} from './supervisor-api.ts'
+import {
   activity,
   blockedReason,
   deliveredReply,
@@ -120,6 +126,8 @@ export const PROTOCOL_ERRORS = {
   too_many_questions: { status: 429, kind: 'failure' },
   /** decision_review 的目标不是本次回看唤醒关联的决策（D11）。 */
   not_review_target: { status: 403, kind: 'failure' },
+  /** 该 workspace 不能唤醒 supervisor（未启用、global、没有或有多个 supervisor 角色等，D3）。 */
+  supervisor_disabled: { status: 409, kind: 'failure' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
 export type ProtocolErrorCode = keyof typeof PROTOCOL_ERRORS
@@ -981,6 +989,21 @@ export const ENDPOINTS = {
     path: '/v1/telegram/unlink',
     auth: true,
     response: telegramUnlinkData,
+  },
+  // supervisor 唤醒调度的用户接口（add-m1-supervisor 3.4，仅 user）。
+  'supervisor-wake': {
+    method: 'POST',
+    path: '/v1/supervisor/wake',
+    auth: true,
+    request: supervisorWakeRequest,
+    response: supervisorWakeData,
+  },
+  'supervisor-status': {
+    method: 'GET',
+    path: '/v1/supervisor/status',
+    auth: true,
+    request: supervisorStatusQuery,
+    response: supervisorStatusData,
   },
   'tasks-create': {
     method: 'POST',

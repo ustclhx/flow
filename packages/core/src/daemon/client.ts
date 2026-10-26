@@ -23,6 +23,7 @@ import {
   type TaskProposeRequest,
   type TelegramLinkCodeRequest,
 } from '../ledger/protocol.ts'
+import type { SupervisorWakeRequest } from '../ledger/supervisor-api.ts'
 import type { TaskContractInput } from '../ledger/task.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { loadHubConfig, resolveHubUrl } from './config.ts'
@@ -210,6 +211,14 @@ export class HubClient {
   }
   telegramUnlink() {
     return this.request('telegram-unlink', {})
+  }
+  /** `flow ask` / `flow supervisor wake`（仅 user）。 */
+  supervisorWake(input: SupervisorWakeRequest) {
+    return this.request('supervisor-wake', input)
+  }
+  /** `flow supervisor status`（仅 user）。 */
+  supervisorStatus(input: { workspace?: string } = {}) {
+    return this.request('supervisor-status', input)
   }
 
   /** 旧中枢没有 status 路由时，用 health 加本地文件补足可观测信息。 */

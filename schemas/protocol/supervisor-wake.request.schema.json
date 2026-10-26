@@ -1,0 +1,41 @@
+{
+  "$id": "https://flow.local/schemas/protocol/supervisor-wake.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "text": {
+      "description": "指令原文；省略且不带 release 时写入一条\"手动唤醒\"指令",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "release": {
+      "description": "放行一条普通唤醒队列：写 supervisor.release，立刻用该队列现有事件创建一次唤醒（不计入每日上限）；不能与 text 同时给出",
+      "type": "string",
+      "enum": [
+        "instruction",
+        "autonomous"
+      ]
+    },
+    "via": {
+      "default": "cli",
+      "description": "指令来自哪个渠道，默认 cli",
+      "type": "string",
+      "enum": [
+        "telegram",
+        "web",
+        "cli"
+      ]
+    }
+  },
+  "required": [
+    "workspace"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/supervisor/wake"
+}

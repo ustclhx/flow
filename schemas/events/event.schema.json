@@ -4449,6 +4449,149 @@
         },
         "type": {
           "type": "string",
+          "const": "supervisor.scheduler_initialized"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "up_to_seq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "初始化时账本的最新 seq（空账本为 0）"
+            }
+          },
+          "required": [
+            "up_to_seq"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "supervisor.scheduler_initialized"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "supervisor.queue_dropped"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "queue": {
+              "type": "string",
+              "enum": [
+                "instruction",
+                "autonomous"
+              ]
+            },
+            "up_to_seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "清掉该队列中 seq 不大于它的事件"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "unknown_workspace",
+                "global",
+                "disabled",
+                "no_role",
+                "role_invalid",
+                "no_repo",
+                "workspaces_invalid"
+              ],
+              "description": "global / disabled / no_repo / no_role / unknown_workspace：稳定地不可唤醒，立即丢弃；role_invalid / workspaces_invalid（定义文件有错）：暂时不可唤醒持续超过 24 小时，丢弃早于宽限期的事件"
+            }
+          },
+          "required": [
+            "queue",
+            "up_to_seq",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "supervisor.queue_dropped"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
           "const": "task_proposal.created"
         },
         "workspace": {

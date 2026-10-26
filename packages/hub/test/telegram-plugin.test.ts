@@ -131,7 +131,21 @@ async function rig(o: RigOptions = {}) {
     ask: async (ws, text) => {
       if (ws !== 'ws/demo') return fail('failure', 'workspace_not_found', `workspace ${ws} 不存在`)
       asks.push([ws, text])
-      return ok({ seq: 1 })
+      return ok({
+        workspace: ws,
+        state: 'started' as const,
+        instruction_seq: 1,
+        wake: {
+          task_id: 't-wake-1',
+          origin: 'instruction' as const,
+          generation: 1,
+          status: 'queued' as const,
+          events: 1,
+          started_at: '2026-10-26T10:00:00.000Z',
+          finished_at: null,
+        },
+        message: '已唤醒',
+      })
     },
     apiBase: fake.url,
     ...(o.realFetch ? {} : { fetch: (url: string, init?: RequestInit) => fetch(url, init) }),
@@ -553,7 +567,7 @@ describe('命令（telegram-channel "命令"）', () => {
     expect(replies[2]).toBe('已记下：raw/inbox/2026-10-26T100000-abc123.md')
     expect(r.captures).toEqual(['东方站可以加日语'])
     expect(replies[3]).toContain('用法：/capture')
-    expect(replies[4]).toBe('已记录，supervisor 尚未启用')
+    expect(replies[4]).toBe('已唤醒 supervisor，任务 t-wake-1')
     expect(r.asks).toEqual([['ws/demo', '看看昨天的部署']])
     expect(replies[5]).toContain('workspace ws/nope 不存在')
     expect(replies[6]).toContain('用法：/ask')

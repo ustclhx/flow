@@ -243,6 +243,20 @@ const samples: Record<
     valid: { workspace: 'ws/product-res', payload: { queue: 'autonomous' } },
     invalid: { workspace: 'ws/product-res', payload: { queue: 'reply' } },
   },
+  'supervisor.scheduler_initialized': {
+    valid: { payload: { up_to_seq: 0 } },
+    invalid: { payload: { up_to_seq: -1 } },
+  },
+  'supervisor.queue_dropped': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: { queue: 'instruction', up_to_seq: 12, reason: 'disabled' },
+    },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: { queue: 'reply', up_to_seq: 12, reason: 'disabled' },
+    },
+  },
   'task_proposal.created': {
     valid: {
       workspace: 'ws/product-res',

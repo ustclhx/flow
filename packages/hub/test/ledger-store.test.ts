@@ -164,8 +164,8 @@ describe('append：事件与投影同事务写入', () => {
       workspace: WS,
       payload: { rule_id: 'daily', planned_at: '2026-10-24T03:30:00.000Z' },
     } as const
-    expect(code(store.append(fire, { actor: 'scheduler' }))).toBe('ok')
-    expect(code(store.append(fire, { actor: 'scheduler' }))).toBe('duplicate_fire')
+    expect(code(store.append(fire, { actor: 'hub' }))).toBe('ok')
+    expect(code(store.append(fire, { actor: 'hub' }))).toBe('duplicate_fire')
     expect(store.snapshot().schedule_fires).toHaveLength(1)
   })
 

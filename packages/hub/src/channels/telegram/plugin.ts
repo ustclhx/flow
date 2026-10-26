@@ -3,6 +3,7 @@ import {
   chatDigest,
   type Result,
   redactSecrets,
+  type SupervisorWakeData,
   type TelegramBinding,
   type TelegramChannelConfig,
 } from '@flow/core'
@@ -102,8 +103,8 @@ export interface TelegramDeps {
   status: () => TelegramStatusSnapshot
   /** `/capture`：以 user 身份随手记，来源 telegram。 */
   capture: (text: string) => Promise<Result<{ file: string }>>
-  /** `/ask`：写入 `user.instruction`。 */
-  ask: (workspace: string, text: string) => Promise<Result<{ seq: number }>>
+  /** `/ask`：写入 `user.instruction` 并调度 supervisor 唤醒（add-m1-supervisor 3.4）。 */
+  ask: (workspace: string, text: string) => Promise<Result<SupervisorWakeData>>
   /** 测试注入：替换 fetch（默认按代理配置构造）。 */
   fetch?: OutboundFetch
   /** 测试注入：指向假的 Telegram 服务。 */
@@ -694,16 +695,27 @@ export class TelegramChannel implements ChannelPlugin {
         }
         const ws = match[1].startsWith('ws/') ? match[1] : `ws/${match[1]}`
         const r = await this.deps.ask(ws, this.redact(match[2].trim()))
-        return this.reply(
-          chatId,
-          r.ok ? '已记录，supervisor 尚未启用' : `没有记录：${r.error.message}`,
-          m.message_id,
-        )
+        return this.reply(chatId, askReplyText(r), m.message_id)
       }
       default:
         return this.reply(chatId, HELP_TEXT)
     }
   }
+}
+
+/** `/ask` 的回复：唤醒任务编号、排队说明或未启用（telegram-channel "/ask 唤醒 supervisor"）。 */
+export function askReplyText(r: Result<SupervisorWakeData>): string {
+  if (!r.ok) {
+    return r.error.code === 'supervisor_disabled'
+      ? `该 workspace 未启用 supervisor：${r.error.message}`
+      : `没有记录：${r.error.message}`
+  }
+  const d = r.data
+  if (d.state === 'started' && d.wake) return `已唤醒 supervisor，任务 ${d.wake.task_id}`
+  if (d.reason === 'busy') {
+    return `已排队，前面有一次唤醒在运行${d.running ? `（${d.running.task_id}）` : ''}`
+  }
+  return d.message
 }
 
 /** 注册 Telegram 渠道：`config` 是 channels.yaml 的 telegram 段，`bot_token` 是 `secret://` 引用。 */
