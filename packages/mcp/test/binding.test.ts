@@ -173,6 +173,34 @@ describe('brief_update', () => {
   })
 })
 
+describe('ask_user / task_propose（#59 遗留：本地 bind 预检）', () => {
+  test.each([
+    [
+      'ask_user',
+      { workspace: 'xuanxue-saas', question: '用哪个方案？' },
+      { workspace: 'product-res', question: '用哪个方案？' },
+    ],
+    ['task_propose', { draft: contract({ workspace: 'ws/xuanxue-saas' }) }, { draft: contract() }],
+  ] as const)(
+    '%s 写别的 workspace：workspace_mismatch，不发请求；绑定的照常发出',
+    async (tool, other, own) => {
+      const h = await home()
+      const requests = await recordingHub(h)
+      const client = await connect({
+        actor: 'supervisor',
+        home: h,
+        binding: { workspace: 'ws/product-res', task: 't-1' },
+      })
+      const { isError, doc } = await callJson(client, tool, other)
+      expect(isError).toBe(true)
+      expect(doc).toMatchObject({ ok: false, error: { code: 'workspace_mismatch' } })
+      expect(requests).toHaveLength(0)
+      await callJson(client, tool, own)
+      expect(requests).toHaveLength(1)
+    },
+  )
+})
+
 describe('kb_journal（本地执行，只有绑定这一层检查）', () => {
   test('只能写绑定 workspace 的 journal；未写 workspace 时记到绑定的 workspace', async () => {
     const h = await home()
