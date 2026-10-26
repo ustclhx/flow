@@ -26,6 +26,7 @@ import {
   run as ghRun,
   gitEnv,
   PR_URL,
+  TASK_BRANCH,
   type TempRepo,
   tempRepo,
 } from './github-helpers.ts'
@@ -113,7 +114,7 @@ function setup(
     executor: 'pr-merge',
     cwd: r.repo,
     parent: 't-review',
-    inputs: { merge: { pr: PR_URL, review_task: 't-review' } },
+    inputs: { merge: { pr: PR_URL, review_task: 't-review', branch: TASK_BRANCH } },
   })
   const reviewContract = taskContract.parse({
     goal: '审查 PR',
@@ -308,6 +309,25 @@ describe('合并前的条件核对', () => {
     }
   })
 
+  test('fork PR 或 head 分支不是开出它的任务的分支：不合并', async () => {
+    const fork = setup()
+    fork.gh.state.pr.isCrossRepository = true
+    expect(reason((await execute(fork)).outcome)).toBe('repo_not_in_workspace')
+    expect(mergeCalls(fork)).toEqual([])
+    const other = setup()
+    other.gh.state.pr.headRefName = 'attacker/branch'
+    expect(reason((await execute(other)).outcome)).toBe('head_branch_mismatch')
+    expect(mergeCalls(other)).toEqual([])
+    // 合同缺少 inputs.merge.branch：invalid_inputs，不读 PR
+    const missing = setup()
+    missing.contract = {
+      ...missing.contract,
+      inputs: { merge: { pr: PR_URL, review_task: 't-review' } },
+    } as typeof missing.contract
+    expect(reason((await execute(missing)).outcome)).toBe('invalid_inputs')
+    expect(missing.gh.state.calls).toEqual([])
+  })
+
   test('base 不是默认分支、草稿或不可合并：不合并', async () => {
     const base = setup()
     base.gh.state.pr.baseRefName = 'release'
@@ -327,7 +347,13 @@ describe('合并前的条件核对', () => {
     const other = setup()
     other.contract = {
       ...other.contract,
-      inputs: { merge: { pr: 'https://github.com/evil/demo/pull/7', review_task: 't-review' } },
+      inputs: {
+        merge: {
+          pr: 'https://github.com/evil/demo/pull/7',
+          review_task: 't-review',
+          branch: TASK_BRANCH,
+        },
+      },
     }
     other.self = { ...other.self, contract: other.contract }
     expect(reason((await execute(other)).outcome)).toBe('repo_not_in_workspace')

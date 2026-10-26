@@ -40,6 +40,8 @@ const SAMPLE_INPUTS: Record<string, Json> = {
     draft: { goal: '一致性提案', workspace: 'ws/product-res', role: 'dev', executor: 'fake' },
   },
   decision_review: { path: 'decisions/2026-10-26-parity.md', text: '一致性回看' },
+  // PR 链接与任务 id 带正则；MCP actor 不是 supervisor，两端同为 role_not_allowed。
+  pr_merge_request: { pr: 'https://github.com/acme/demo/pull/7', review_task: 't-parity' },
   // content 与 file 二选一，schema 采样器无法推断。
   kb_propose: {
     target: 'notes/parity',

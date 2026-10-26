@@ -141,6 +141,8 @@ export class WakeProjection {
   private readonly blockedSeen = new Set<string>()
   /** 任务提案 id → 提交它的唤醒任务。 */
   private readonly proposals = new Map<string, string>()
+  /** 合并请求条目 id → 发起它的唤醒任务（`merge_request.created.wake_task_id`）。 */
+  private readonly mergeRequests = new Map<string, string>()
   /** 普通唤醒合并的原始事件（出队时记下，失败放回队列时用）。 */
   private readonly originals = new Map<string, QueuedEvent[]>()
   private last = 0
@@ -234,6 +236,10 @@ export class WakeProjection {
         return 'instruction'
       case 'task_proposal.rejected':
         return this.normalOriginOf(this.proposals.get(e.payload.proposal_id))
+      // G14：用户驳回合并请求 → 唤醒 supervisor，origin 取请求所在唤醒的 origin（与 task_proposal.rejected 一致，D2）。
+      case 'merge_request.rejected':
+        if (e.actor !== 'user') return null
+        return this.normalOriginOf(this.mergeRequests.get(e.payload.item_id))
       case 'task.reply_delegated':
         return 'reply'
       default:
@@ -262,6 +268,9 @@ export class WakeProjection {
         return null
       case 'task_proposal.created':
         this.proposals.set(e.payload.proposal_id, e.payload.wake_task_id)
+        break
+      case 'merge_request.created':
+        if (e.payload.item_id) this.mergeRequests.set(e.payload.item_id, e.payload.wake_task_id)
         break
       case 'supervisor.wake_started':
         return this.started(e)

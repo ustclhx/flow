@@ -62,6 +62,7 @@ origin 只有两类：
 | 派生任务状态变化 | 该任务的 origin |
 | `supervisor.answered`（用户回答提问） | 提问所在唤醒的 origin |
 | `task_proposal.accepted` / `rejected` | instruction（接受）/ 提案所在唤醒的 origin（驳回） |
+| `merge_request.rejected`（用户驳回合并请求） | 请求所在唤醒的 origin（`merge_request.created.wake_task_id`，与 `task_proposal.rejected` 一致） |
 | `task.reply_delegated` | `reply`：进 reply 队列，唤醒只能回复（D15）；reply 不会传给任何任务 |
 
 任务的 origin 在创建时由中枢写入任务投影，之后不可变：
@@ -203,14 +204,18 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
    - SDK 结构化输出（`outputFormat: json_schema`）给出 `verdict`、`blocking`、`notes`；`reviewed_sha` 由执行器填入预先记录的 head，**不取自模型**。结构化输出失败（包括 `error_max_structured_output_retries`）→ `failed(review_output_invalid)`。
    - `pr-reviewer` 模板：claude-sdk，`setting_sources: []`，`allowedTools` 只有 Read、Grep、Glob 和 Flow 只读 MCP，`disallowedTools` 列出 Bash、Edit、Write、MultiEdit、NotebookEdit、WebFetch、WebSearch，`read_scope: cwd`，不设 `writable_paths`，有效类别 read。
 3. `changes_requested` → supervisor 被唤醒，可以建修改任务（同一分支），受 D4 轮数上限。
-4. `approve` → supervisor 调用 `pr_merge_request{pr, review_task}`。中枢核对：
-   - 该 PR 是本 workspace 内某个 origin 为 instruction 的 write 任务的 `kind: pr` 产物；
-   - `review_task` 属于同一 workspace、角色在 `reviewer_roles` 中、`inputs.review.pr` 等于该 PR、`verdict = approve`，且是该 PR 最新一次可信审查（core `latestTrustedReview`）；
+4. `approve` → supervisor 调用 `pr_merge_request{pr, review_task}`。中枢核对（全部取自账本与配置，任一项拿不准即 `merge_not_eligible`，`details.reasons` 列出原因）：
+   - 该 PR 是本 workspace 内某个已 done、origin 为 instruction、有效类别恰为 write 的任务的 `kind: pr` 产物（唤醒、审查、合并任务的产物不算）；该任务上报过任务分支（`task.branch_reported`，投影 `branch`），多个候选任务的分支必须一致；
+   - PR 链接的 host/owner/repo 等于 merger 所用登记仓库 `remote.origin.url` 的仓库（纵深核对；pr-merge 合并前再核对一次）；
+   - `review_task` 属于同一 workspace、角色在 `reviewer_roles` 中、`inputs.review.pr` 等于该 PR、`verdict = approve`，且是该 PR 最新一次可信审查（core `latestTrustedReview`）；同一 PR 没有未结束的审查任务；
+   - 该审查任务的合并请求没有被驳回过（`rejected_before`：驳回后必须重新审查才能再请求）；
+   - merger 的工作目录与唯一的 merge 角色能确定；
    - 否则 `merge_not_eligible`。
 
-   通过后：`supervisor.auto_merge: true` → 中枢以 `hub` 身份建 merger 任务；否则生成 `source: merge_request` 的收件箱条目（Decide，动作"批准合并""驳回"），用户批准后中枢同样以 `hub` 身份建 merger 任务，批准者记录在 `merge_request.approved` 事件中；驳回则唤醒 supervisor。merger 任务的 `parent` 是审查任务，origin 由中枢直接取自开出该 PR 的 dev 任务（资格要求它是 instruction），不继承审查任务；它结束时进入 instruction 队列唤醒 supervisor。
+   通过后：`supervisor.auto_merge: true` **且请求来自 instruction 唤醒** → 中枢以 `hub` 身份建 merger 任务；否则（包括 autonomous 唤醒的请求）生成 `source: merge_request` 的收件箱条目（Decide，动作"批准合并""驳回"）。用户批准时中枢再核对一次资格、先解析 merge 角色并构造完整的 merger 合同（失败则不写任何事件），然后 `merge_request.approved`（actor user）、merger 的 `task.created`（actor hub）与条目关闭（actor user）在**同一事务**中写入；条目已被并发关闭时整个事务回滚。有批准事件就一定有 merger，之后不能再驳回。驳回写 `merge_request.rejected` 并唤醒 supervisor（origin 取请求所在唤醒，见 D2）。merger 任务的 `parent` 是审查任务，origin 由中枢直接取自开出该 PR 的 dev 任务（资格要求它是 instruction），不继承审查任务；`inputs.merge = {pr, review_task, branch}`，`branch` 取自 dev 任务投影；幂等键 `merge:<审查任务>`（hub 保留前缀）。它结束时按 origin 进入 instruction 队列唤醒 supervisor。supervisor 停用后，已生成的合并审批条目仍可由用户批准（资格的其余各项照常核对）。
+   - **fork PR**：codex-orca 只把本仓库（`isCrossRepository == false`）且 `headRefName` 等于任务分支的 PR 记为产物；审查准备拒绝 fork PR（`repo_not_in_workspace`）；pr-merge 要求 `isCrossRepository == false` 且 `headRefName == inputs.merge.branch`（否则 `repo_not_in_workspace` / `head_branch_mismatch`）。
 5. **pr-merge 执行器**（节点上，不调用模型；`gh` 可注入）在本 workspace 登记仓库中执行：
-   - 读 PR（一次 GraphQL 读取同一时刻的 head、可合并性、合并队列与 head 提交的检查）：open、base 为默认分支、仓库与登记仓库一致、`headRefOid == reviewed_sha`、可合并、未启用合并队列（否则 `merge_queue_unsupported`）；合并前再读一次 head；
+   - 读 PR（一次 GraphQL 读取同一时刻的 head、可合并性、合并队列与 head 提交的检查）：open、base 为默认分支、仓库与登记仓库一致、不是 fork PR、`headRefName == inputs.merge.branch`、`headRefOid == reviewed_sha`、可合并、未启用合并队列（否则 `merge_queue_unsupported`）；合并前再读一次 head；
    - 检查：至少有一项检查且全部成功、没有进行中的检查（workspace 配置 `supervisor.allow_no_checks: true` 时允许没有检查）；
      检查完全 fail-closed：head 提交上的每一条 check run 与 status 都单独计入（只对同一 check run id 去重），不按名称合并重跑结果——同一 workflow 中同名的不同 job 无法与重跑可靠区分。有意的后果：flaky 检查重跑成功后旧的失败记录仍会阻止合并，需要推新提交或由用户手动合并；
    - 再次核对审查任务（同第 4 步）；

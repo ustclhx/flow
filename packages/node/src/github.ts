@@ -1,6 +1,18 @@
-import { fail, ok, PR_URL_RE, type Result } from '@flow/core'
+import {
+  fail,
+  ok,
+  PR_URL_RE,
+  parseRemoteUrl,
+  type RepoRef,
+  type Result,
+  sameRepo,
+} from '@flow/core'
+
 import { z } from 'zod'
 import { type CommandOutput, type CommandRunner, execRunner } from './codex-orca/orca.ts'
+
+/** 仓库标识与 remote 解析移到 core（中枢的合并资格核对也要用），这里转出以保持原有导入路径。 */
+export { parseRemoteUrl, type RepoRef, sameRepo }
 
 /**
  * PR 审查准备与 pr-merge 执行器共用的 GitHub 与 git 辅助（add-m1-supervisor D10）。
@@ -19,13 +31,6 @@ export interface PrRef {
   number: number
 }
 
-/** 仓库标识（host/owner/repo）。 */
-export interface RepoRef {
-  host: string
-  owner: string
-  repo: string
-}
-
 export function parsePrUrl(url: string): PrRef | undefined {
   if (!PR_URL_RE.test(url)) return undefined
   const m = /^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url)
@@ -33,42 +38,6 @@ export function parsePrUrl(url: string): PrRef | undefined {
   const number = Number(m[4])
   if (!Number.isSafeInteger(number)) return undefined
   return { url, host: m[1], owner: m[2], repo: m[3], number }
-}
-
-const SEGMENT = /^[A-Za-z0-9_.-]+$/
-
-/**
- * 解析 remote 地址：`https://host/owner/repo(.git)`、`ssh://[user@]host[:port]/owner/repo(.git)`、
- * `[user@]host:owner/repo(.git)`。其他形式（本地路径、file://、多级路径、带凭证的 https）返回 undefined。
- */
-export function parseRemoteUrl(url: string): RepoRef | undefined {
-  const trimmed = url.trim()
-  if (trimmed !== url || url === '') return undefined
-  const forms = [
-    /^https:\/\/([A-Za-z0-9.-]+(?::\d+)?)\/(.+)$/,
-    /^ssh:\/\/(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+)(?::\d+)?\/(.+)$/,
-    /^(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):(?!\/)(.+)$/,
-  ]
-  const m = forms.map((re) => re.exec(url)).find((x) => x !== null)
-  const host = m?.[1]
-  const path = m?.[2]
-  if (!host || !path) return undefined
-  // https 地址的端口保留在 host 中，与 PR 链接的 host（同样可能带端口）原样比较；ssh 的端口不属于仓库标识。
-  const parts = path
-    .replace(/\/+$/, '')
-    .replace(/\.git$/, '')
-    .split('/')
-  if (parts.length !== 2) return undefined
-  const [owner, repo] = parts
-  if (!owner || !repo || !SEGMENT.test(owner) || !SEGMENT.test(repo)) return undefined
-  if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return undefined
-  return { host: host.toLowerCase(), owner, repo }
-}
-
-/** 两个仓库是否为同一个（host、owner、repo 不区分大小写）。 */
-export function sameRepo(a: RepoRef, b: RepoRef): boolean {
-  const eq = (x: string, y: string) => x.toLowerCase() === y.toLowerCase()
-  return eq(a.host, b.host) && eq(a.owner, b.owner) && eq(a.repo, b.repo)
 }
 
 /** gh `-R` 参数：`HOST/OWNER/REPO`。 */
@@ -235,6 +204,9 @@ export const ghPrView = z.looseObject({
   baseRefName: z.string().min(1),
   headRefOid: z.string().min(1),
   mergeable: z.string(),
+  /** 来自 fork 的 PR（head 仓库不是 base 仓库）：审查与合并一律拒绝。 */
+  isCrossRepository: z.boolean(),
+  headRefName: z.string().min(1),
 })
 export type GhPrView = z.infer<typeof ghPrView>
 
@@ -257,7 +229,7 @@ const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
     nameWithOwner
     defaultBranchRef { name }
     pullRequest(number: $number) {
-      number url state isDraft baseRefName headRefOid mergeable mergeStateStatus
+      number url state isDraft baseRefName headRefOid headRefName isCrossRepository mergeable mergeStateStatus
       isMergeQueueEnabled isInMergeQueue
       autoMergeRequest { enabledAt }
       commits(last: 1) {
@@ -331,6 +303,8 @@ const snapshotResponse = z.looseObject({
         isDraft: z.boolean(),
         baseRefName: z.string().min(1),
         headRefOid: z.string().min(1),
+        headRefName: z.string().min(1),
+        isCrossRepository: z.boolean(),
         mergeable: z.string(),
         mergeStateStatus: z.string(),
         isMergeQueueEnabled: z.boolean(),
@@ -370,6 +344,10 @@ export interface PrSnapshot {
   isDraft: boolean
   baseRefName: string
   headRefOid: string
+  /** PR 的 head 分支名；与 `isCrossRepository` 一起确认 PR 出自本仓库的任务分支。 */
+  headRefName: string
+  /** head 仓库不是 base 仓库（fork PR）。 */
+  isCrossRepository: boolean
   mergeable: string
   mergeStateStatus: string
   mergeQueue: boolean
@@ -507,7 +485,13 @@ export function createGitHubCli(options: GitHubCliOptions = {}): GitHubCli {
   return {
     prView: (pr) =>
       json(
-        ['pr', 'view', pr, '--json', 'number,url,state,isDraft,baseRefName,headRefOid,mergeable'],
+        [
+          'pr',
+          'view',
+          pr,
+          '--json',
+          'number,url,state,isDraft,baseRefName,headRefOid,mergeable,isCrossRepository,headRefName',
+        ],
         ghPrView,
         'pr view',
       ),
@@ -548,6 +532,8 @@ export function createGitHubCli(options: GitHubCliOptions = {}): GitHubCli {
         isDraft: p.isDraft,
         baseRefName: p.baseRefName,
         headRefOid: p.headRefOid,
+        headRefName: p.headRefName,
+        isCrossRepository: p.isCrossRepository,
         mergeable: p.mergeable,
         mergeStateStatus: p.mergeStateStatus,
         mergeQueue: p.isMergeQueueEnabled,

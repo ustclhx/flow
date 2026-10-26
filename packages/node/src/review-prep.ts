@@ -92,6 +92,13 @@ export async function prepareReview(input: PrepareReviewInput): Promise<Result<P
     return fail('failure', 'review_prep_failed', `gh 返回的 PR 编号 ${view.data.number} 与链接不符`)
   if (view.data.url.toLowerCase() !== pr.url.toLowerCase())
     return fail('failure', 'review_prep_failed', `gh 返回的 PR 链接 ${view.data.url} 与合同不符`)
+  // fork PR 的 head 不在登记仓库里：审查结论不能代表本仓库的任务分支（D10），一律拒绝。
+  if (view.data.isCrossRepository)
+    return fail(
+      'failure',
+      'repo_not_in_workspace',
+      `PR ${pr.url} 来自 fork（head 仓库不是登记仓库），不审查`,
+    )
   const head = view.data.headRefOid
   if (!gitSha.safeParse(head).success)
     return fail('failure', 'review_prep_failed', `gh 返回的 head 不是提交 sha：${head}`)

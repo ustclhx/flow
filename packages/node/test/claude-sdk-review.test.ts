@@ -373,6 +373,24 @@ describe('审查准备', () => {
     expect(existsSync(reviewDir(r))).toBe(false)
   })
 
+  test('fork PR（isCrossRepository）：启动前 failed(repo_not_in_workspace)，不检出、不启动会话', async () => {
+    const r = setup()
+    const { gh, state } = fakeGh({
+      pr: { ...fakeGh().state.pr, headRefOid: r.head, isCrossRepository: true },
+    })
+    const { outcome, calls } = await runOnce(
+      r,
+      async function* () {
+        yield resultMsg()
+      },
+      { gh },
+    )
+    expect(reasonOf(outcome)).toBe('repo_not_in_workspace')
+    expect(calls).toHaveLength(0)
+    expect(state.calls.some((c) => c.startsWith('pr diff'))).toBe(false)
+    expect(existsSync(reviewDir(r))).toBe(false)
+  })
+
   test('PR 编号不符或 head 不是 sha：failed(review_prep_failed)', async () => {
     const r = setup()
     for (const pr of [

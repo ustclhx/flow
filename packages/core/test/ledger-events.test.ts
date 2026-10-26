@@ -299,6 +299,33 @@ const samples: Record<
     valid: { payload: { path: 'decisions/2026-10-26-cache.md', review_date: '2026-11-30' } },
     invalid: { payload: { path: 'decisions/x.md', review_date: '11/30' } },
   },
+  'merge_request.created': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: {
+        request_id: 'mr-1a2b',
+        wake_task_id: 't_1',
+        pr: 'https://github.com/o/r/pull/12',
+        review_task: 't_3',
+        dev_task: 't_2',
+        reviewed_sha: 'a'.repeat(40),
+        auto_merge: false,
+        item_id: 'mr.1a2b',
+      },
+    },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: {
+        request_id: 'x-1',
+        wake_task_id: 't_1',
+        pr: 'https://github.com/o/r/pull/12',
+        review_task: 't_3',
+        dev_task: 't_2',
+        reviewed_sha: 'abc',
+        auto_merge: true,
+      },
+    },
+  },
   'merge_request.approved': {
     valid: {
       workspace: 'ws/product-res',
@@ -314,6 +341,19 @@ const samples: Record<
       workspace: 'ws/product-res',
       payload: { pr: 'https://github.com/o/r/issues/12', review_task: 't_3', approved_by: 'user' },
     },
+  },
+  'merge_request.rejected': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: {
+        item_id: 'mr.9',
+        pr: 'https://github.com/o/r/pull/12',
+        review_task: 't_3',
+        note: '先别合',
+        via: 'web',
+      },
+    },
+    invalid: { workspace: 'ws/product-res', payload: { pr: 'https://github.com/o/r/pull/12' } },
   },
 }
 

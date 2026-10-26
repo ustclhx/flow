@@ -17,6 +17,7 @@ import {
   type HubStatusData,
   type IssueTokenRequest,
   type listTasksQuery,
+  type MergeRequestRequest,
   okBody,
   type PolicyCheckRequest,
   type ReplyTaskRequest,
@@ -178,6 +179,9 @@ export class HubClient {
   }
   reviewDecision(input: DecisionReviewRequest) {
     return this.request('decisions-review', input)
+  }
+  requestMerge(input: MergeRequestRequest) {
+    return this.request('merge-requests-create', input)
   }
   listInbox(input: z.input<typeof inboxListQuery> = {}) {
     return this.request('inbox-list', input)

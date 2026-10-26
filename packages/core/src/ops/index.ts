@@ -10,7 +10,7 @@ import {
   kbProposeOp,
 } from './proposals.ts'
 import { kbGetOp, kbQueryOp, kbSearchOp } from './search.ts'
-import { askUserOp, decisionReviewOp, taskProposeOp } from './supervisor.ts'
+import { askUserOp, decisionReviewOp, prMergeRequestOp, taskProposeOp } from './supervisor.ts'
 import { taskCancelOp, taskCreateOp, taskListOp, taskReplyOp, taskShowOp } from './tasks.ts'
 import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './workspace.ts'
 
@@ -55,4 +55,5 @@ export const operations = [
   askUserOp,
   taskProposeOp,
   decisionReviewOp,
+  prMergeRequestOp,
 ] as Operation<never, unknown>[]

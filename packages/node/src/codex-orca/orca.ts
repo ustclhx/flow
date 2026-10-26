@@ -137,7 +137,14 @@ export type OrcaSendResult = z.infer<typeof orcaTerminalSendResult>
 const anyResult = z.unknown()
 
 export const ghPrList = z.array(
-  z.looseObject({ url: z.string().min(1), number: z.number().int(), state: z.string() }),
+  z.looseObject({
+    url: z.string().min(1),
+    number: z.number().int(),
+    state: z.string(),
+    /** fork PR（head 仓库不是本仓库）：`--head <branch>` 也会匹配到别人 fork 上的同名分支。 */
+    isCrossRepository: z.boolean(),
+    headRefName: z.string().min(1),
+  }),
 )
 export type GhPr = z.infer<typeof ghPrList>[number]
 
@@ -337,7 +344,7 @@ export interface GhCliOptions {
 }
 
 export interface GhCli {
-  /** `gh pr list --head <branch> --state all --json url,number,state`，在仓库目录中执行。 */
+  /** `gh pr list --head <branch> --state all --json url,number,state,isCrossRepository,headRefName`，在仓库目录中执行。 */
   prList(input: { cwd: string; branch: string }): Promise<Result<GhPr[]>>
 }
 
@@ -350,7 +357,16 @@ export function createGhCli(options: GhCliOptions = {}): GhCli {
       try {
         out = await run(
           bin,
-          ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url,number,state'],
+          [
+            'pr',
+            'list',
+            '--head',
+            branch,
+            '--state',
+            'all',
+            '--json',
+            'url,number,state,isCrossRepository,headRefName',
+          ],
           {
             cwd,
             timeoutMs: options.timeoutMs ?? 60_000,
