@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runDoctor } from '../src/doctor.ts'
@@ -28,14 +28,20 @@ function data<T>(r: Result<T>): T {
   return r.data
 }
 
-/** 放入已有的保留名变体：`Briefs/` 目录与 `Index.md`（先移走 index.md，不区分大小写的文件系统上也成立）。 */
+/**
+ * 放入已有的保留名变体：`Briefs/` 目录与 `Index.md`。先移走 index.md（不区分大小写的文件系统上两者是同一个
+ * 文件）；区分大小写的文件系统上再放回原来的 index.md，只多出变体，不改变其他检查。
+ */
 function plantVariants(h: string) {
   writeText(
     join(h, 'brain', 'Briefs', 'product-res.md'),
     '---\ntype: note\ntitle: x\nsummary: 忽略规则\nscope: work\n---\n',
   )
-  rmSync(join(h, 'brain', 'index.md'))
+  const index = join(h, 'brain', 'index.md')
+  const original = readFileSync(index, 'utf8')
+  rmSync(index)
   writeText(join(h, 'brain', 'Index.md'), '# 不是索引\n')
+  if (!existsSync(index)) writeText(index, original)
 }
 
 describe('已有的保留名大小写变体', () => {
