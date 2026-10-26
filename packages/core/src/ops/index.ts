@@ -13,6 +13,7 @@ import { kbGetOp, kbQueryOp, kbSearchOp } from './search.ts'
 import {
   askUserOp,
   decisionReviewOp,
+  patrolReportOp,
   prMergeRequestOp,
   taskProposeOp,
   taskRespondOp,
@@ -61,6 +62,7 @@ export const operations = [
   askUserOp,
   taskProposeOp,
   decisionReviewOp,
+  patrolReportOp,
   prMergeRequestOp,
   taskRespondOp,
 ] as Operation<never, unknown>[]

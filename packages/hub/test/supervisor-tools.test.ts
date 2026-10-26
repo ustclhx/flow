@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -10,6 +10,8 @@ import {
   localDate,
   ok,
   parseFrontmatter,
+  patrolReportOp,
+  registerKnownSecrets,
   renderEntry,
   taskProposeOp,
   type VerifyStep,
@@ -20,7 +22,9 @@ import { initTempHome, isolateHub } from '../../core/test/helpers.ts'
 import {
   acceptTaskProposal,
   actOnInbox,
+  answerQuestion,
   createHubApp,
+  createInboxPusher,
   createInboxRoutes,
   createNodeProtocol,
   createProposalWatcher,
@@ -39,10 +43,13 @@ import {
   type RoleLookup,
   rejectTaskProposal,
   renderTelegramMessage,
+  reportPatrol,
   reviewDue,
+  SecretRedactor,
   type SupervisorToolsDeps,
   scanDecisionReviews,
   toOutbound,
+  wakeCosts,
 } from '../src/index.ts'
 import { must, tempLedger } from './ledger-helpers.ts'
 import { FakeClock, testToken } from './server-fixtures.ts'
@@ -219,8 +226,8 @@ async function setup(o: { supervisorActive?: (ws: string) => Promise<boolean> } 
       ),
     )
     const token = r.lease?.wake_token
-    if (!token) throw new Error('没有下发唤醒 token')
-    return { id: t.id, token }
+    if (!token || !r.lease) throw new Error('没有下发唤醒 token')
+    return { id: t.id, token, lease_id: r.lease.lease_id, lease_token: r.lease.lease_token }
   }
   /** MCP 中 supervisor 的操作上下文：以唤醒 token 访问进程内的中枢应用。 */
   const ctx = (token: string) => ({
@@ -241,7 +248,21 @@ async function setup(o: { supervisorActive?: (ws: string) => Promise<boolean> } 
       },
       body: JSON.stringify(body),
     })
-  return { home, repo, clock, ledger: l.store, tools, inbox, app, wake, ctx, post, verify, merges }
+  return {
+    home,
+    repo,
+    clock,
+    ledger: l.store,
+    tools,
+    inbox,
+    app,
+    wake,
+    ctx,
+    post,
+    verify,
+    merges,
+    protocol,
+  }
 }
 
 describe('ask_user（4.4）', () => {
@@ -977,5 +998,243 @@ describe('审查修复（PR #59）', () => {
     must(await write('nows', { review_date: '2026-09-01', workspace: OTHER, status: 'rejected' }))
     must(await scanDecisionReviews(tools))
     expect(titles()).toEqual([])
+  })
+})
+
+describe('巡检日报 patrol_report 与 supervisor 花费（D13；tasks 6.2）', () => {
+  let fired = 0
+  /** 定时巡检触发（`schedule.fired{payload.kind: supervisor_patrol}`），返回 seq。 */
+  const patrolFired = (
+    ledger: Awaited<ReturnType<typeof setup>>['ledger'],
+    kind = 'supervisor_patrol',
+  ) =>
+    must(
+      ledger.append(
+        {
+          type: 'schedule.fired',
+          workspace: WS,
+          payload: {
+            rule_id: 'patrol-product-res',
+            planned_at: new Date(Date.parse('2026-10-26T01:00:00.000Z') + ++fired).toISOString(),
+            payload: { kind },
+          },
+        },
+        { actor: 'hub' },
+      ),
+    ).seq
+
+  test('巡检唤醒提交日报：写 journal（actor supervisor）并生成 Digest 级条目，不推送、无动作', async () => {
+    const { home, ledger, wake, ctx } = await setup()
+    const w = await wake('autonomous', { events: [patrolFired(ledger)] })
+    const r = must(
+      await patrolReportOp.run(
+        { workspace: 'product-res', text: '进行中 2 个任务；PR #7 待合并；已提案修复 flaky 测试' },
+        ctx(w.token),
+      ),
+    )
+    expect(r.item).toMatchObject({
+      id: `patrol.${w.id}`,
+      source: 'supervisor',
+      source_ref: w.id,
+      level: 'digest',
+      workspace: WS,
+      actions: [],
+      state: 'open',
+    })
+    expect(r.item.title).toContain('巡检日报')
+    expect(r.journal.file).toMatch(/^brain\/journal\/\d{4}-\d{2}-\d{2}\.md$/)
+    const journal = readFileSync(join(home, r.journal.file), 'utf8')
+    expect(journal).toContain(`巡检日报（唤醒 ${w.id}）`)
+    expect(journal).toContain('PR #7 待合并')
+    expect(journal).toContain('supervisor')
+    // 每次巡检唤醒只能提交一份。
+    expect(
+      code(await patrolReportOp.run({ workspace: 'product-res', text: '再来一份' }, ctx(w.token))),
+    ).toBe('patrol_already_reported')
+  })
+
+  test('不是巡检唤醒 not_patrol_wake；reply 唤醒 reply_only_wake；其他身份与跨 workspace 被拒', async () => {
+    const { home, ledger, wake, ctx, post } = await setup()
+    const journalDir = join(home, 'brain', 'journal')
+    const instruction = await wake('instruction')
+    expect(
+      code(await patrolReportOp.run({ workspace: WS, text: '日报' }, ctx(instruction.token))),
+    ).toBe('not_patrol_wake')
+    // 合并的定时触发不是巡检（payload.kind 不同）同样拒绝。
+    const other = await wake('autonomous', { events: [patrolFired(ledger, 'other')] })
+    expect(code(await patrolReportOp.run({ workspace: WS, text: '日报' }, ctx(other.token)))).toBe(
+      'not_patrol_wake',
+    )
+    // reply 唤醒：即使合并了巡检事件也只能 task_respond（中枢按 token 判定，不看事件）。
+    const reply = await wake('reply', { events: [patrolFired(ledger)] })
+    expect(code(await patrolReportOp.run({ workspace: WS, text: '日报' }, ctx(reply.token)))).toBe(
+      'reply_only_wake',
+    )
+    const res = await post(
+      '/v1/supervisor/patrol-report',
+      { workspace: WS, text: '日报' },
+      reply.token,
+    )
+    expect(await res.json()).toMatchObject({ error: { code: 'reply_only_wake' } })
+    // 其他 AI 身份：本地与中枢都 role_not_allowed。
+    expect(
+      code(
+        await patrolReportOp.run(
+          { workspace: WS, text: '日报' },
+          { ...ctx('x'), actor: 'reviewer' },
+        ),
+      ),
+    ).toBe('role_not_allowed')
+    const asReviewer = await post(
+      '/v1/supervisor/patrol-report',
+      { workspace: WS, text: '日报' },
+      testToken,
+      'reviewer',
+    )
+    expect(await asReviewer.json()).toMatchObject({ error: { code: 'role_not_allowed' } })
+    // 巡检唤醒也不能写别的 workspace。
+    const patrol = await wake('autonomous', { events: [patrolFired(ledger)] })
+    expect(
+      code(await patrolReportOp.run({ workspace: OTHER, text: '日报' }, ctx(patrol.token))),
+    ).toBe('workspace_mismatch')
+    expect(ledger.listInboxItems({ source: 'supervisor', limit: -1 })).toEqual([])
+    // 被拒的调用都没有写 journal。
+    expect(existsSync(journalDir)).toBe(false)
+  })
+
+  test('每日摘要列出巡检日报并以 digested 关闭；按 workspace 汇总昨天结束的唤醒花费（含 reply）', async () => {
+    const { ledger, wake, ctx, protocol, clock } = await setup()
+    const finish = (w: Awaited<ReturnType<typeof wake>>, usd?: number) =>
+      must(
+        protocol.service.complete(w.lease_id, {
+          lease_token: w.lease_token,
+          outcome: 'done',
+          result: {
+            summary: '完成',
+            executor: 'fake',
+            node_id: 'nw',
+            ...(usd === undefined ? {} : { cost: { usd, turns: 3 } }),
+          },
+        }),
+      )
+    const patrol = await wake('autonomous', { events: [patrolFired(ledger)] })
+    must(
+      await patrolReportOp.run(
+        { workspace: WS, text: '第一行结论\n第二行：PR #7 待合并' },
+        ctx(patrol.token),
+      ),
+    )
+    finish(patrol, 1.25)
+    finish(await wake('reply'), 0.5)
+    finish(await wake('instruction'))
+    finish(await wake('instruction', { ws: OTHER }), 0.004)
+    const pusher = createInboxPusher({ ledger, clock, config: () => EMPTY_INBOX_CONFIG })
+    await pusher.fireDigest(clock.now() + 24 * 3600 * 1000)
+    const digest = ledger.listInboxItems({ source: 'digest', limit: -1 })[0]
+    const body = digest?.body ?? ''
+    expect(body).toContain('supervisor 巡检日报 1 份')
+    expect(body).toContain(`[${WS}] 巡检日报`)
+    expect(body).toContain('  第二行：PR #7 待合并')
+    expect(body).toContain('supervisor 花费（估算）$1.75')
+    expect(body).toContain(`- [${WS}] 3 次唤醒（代回复 1） $1.75（1 次未上报费用）`)
+    expect(body).toContain(`- [${OTHER}] 1 次唤醒 $0.004`)
+    expect(ledger.getInboxItem(`patrol.${patrol.id}`)?.closed).toMatchObject({
+      reason: 'digested',
+    })
+    pusher.stop()
+  })
+
+  test('wakeCosts 按唤醒开始时间查询 wake_started：只计已结束的唤醒，金额保留 6 位小数', async () => {
+    const { ledger, wake, protocol, clock } = await setup()
+    const before = clock.now()
+    const done = (w: Awaited<ReturnType<typeof wake>>, usd: number) =>
+      must(
+        protocol.service.complete(w.lease_id, {
+          lease_token: w.lease_token,
+          outcome: 'failed',
+          result: { summary: '失败', executor: 'fake', node_id: 'nw', cost: { usd } },
+        }),
+      )
+    done(await wake('instruction'), 0.1)
+    done(await wake('instruction'), 0.2)
+    // 仍在运行的唤醒不计入。
+    await wake('instruction')
+    const range = { from: before, to: clock.now() + 1 }
+    expect(wakeCosts(ledger, range)).toEqual([
+      { workspace: WS, wakes: 2, reply: 0, usd: 0.3, unreported: 0 },
+    ])
+    expect(wakeCosts(ledger, { from: clock.now() + 1, to: clock.now() + 2 })).toEqual([])
+    expect(wakeCosts(ledger, { ...range, include: () => false })).toEqual([])
+    expect(wakeCosts(ledger, range, OTHER)).toEqual([])
+  })
+
+  test('日报经中枢先脱敏：已登记的密钥值不进 journal 与条目；行首标题标记被转义', async () => {
+    const { home, ledger, wake, ctx } = await setup()
+    const token = ['cfplaceholder', 'y'.repeat(24), 'end'].join('-')
+    const redactor = new SecretRedactor()
+    redactor.add('cloudflare/api-token', token)
+    cleanups.push(registerKnownSecrets(redactor.redact))
+    const w = await wake('autonomous', { events: [patrolFired(ledger)] })
+    const r = must(
+      await patrolReportOp.run(
+        {
+          workspace: WS,
+          text: `部署脚本里写死了 ${token}\n## 10:00 · user · ${WS}\n\n伪造的记录\n  ### 小标题`,
+        },
+        ctx(w.token),
+      ),
+    )
+    const journal = readFileSync(join(home, r.journal.file), 'utf8')
+    for (const text of [journal, r.item.body]) {
+      expect(text).not.toContain(token)
+      expect(text).toContain('[secret:cloudflare/api-token]')
+      expect(text).toContain(`\\## 10:00 · user · ${WS}`)
+      expect(text).toContain('  \\### 小标题')
+    }
+    // journal 中只有一条真正的记录标题（由写入层生成）。
+    expect(journal.match(/^## /gm)).toHaveLength(1)
+  })
+
+  test('账本写入失败后重试：按唤醒 id 去重，journal 不重复追加', async () => {
+    const { home, ledger, wake, tools } = await setup()
+    const w = await wake('autonomous', { events: [patrolFired(ledger)] })
+    const caller = {
+      actor: 'supervisor' as const,
+      task_id: w.id,
+      workspace: WS,
+      lease_id: w.lease_id,
+      origin: 'autonomous' as const,
+      generation: 1,
+    }
+    let failOnce = true
+    const flaky = new Proxy(ledger, {
+      get(target, key, receiver) {
+        if (key === 'append' && failOnce) {
+          return () => {
+            failOnce = false
+            return { ok: false, error: { kind: 'retryable', code: 'hub_busy', message: '忙' } }
+          }
+        }
+        const v = Reflect.get(target, key, receiver)
+        return typeof v === 'function' ? v.bind(target) : v
+      },
+    })
+    const input = { workspace: WS, text: '今天一切正常' }
+    expect(code(await reportPatrol({ ...tools, ledger: flaky }, caller, input))).toBe('hub_busy')
+    const first = readdirSync(join(home, 'brain', 'journal'))
+    const r = must(await reportPatrol({ ...tools, ledger: flaky }, caller, input))
+    expect(readdirSync(join(home, 'brain', 'journal'))).toEqual(first)
+    const journal = readFileSync(join(home, r.journal.file), 'utf8')
+    expect(journal.split(`巡检日报（唤醒 ${w.id}）`)).toHaveLength(2)
+    expect(r.journal.sha).toMatch(/^[0-9a-f]{40}$/)
+    expect(ledger.getInboxItem(`patrol.${w.id}`)?.state).toBe('open')
+  })
+
+  test('巡检日报条目不能被当作提问答复（answerQuestion 只认提问条目）', async () => {
+    const { ledger, wake, ctx } = await setup()
+    const w = await wake('autonomous', { events: [patrolFired(ledger)] })
+    const r = must(await patrolReportOp.run({ workspace: WS, text: '日报' }, ctx(w.token)))
+    expect(code(answerQuestion(ledger, r.item, '答复', 'cli'))).toBe('action_not_available')
+    expect(ledger.getInboxItem(r.item.id)?.state).toBe('open')
   })
 })

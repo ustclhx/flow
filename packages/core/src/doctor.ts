@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { z } from 'zod'
 import { checkDaemonPlists, launchAgentsDirectory } from './daemon/plist.ts'
+import { checkPatrolRules } from './doctor-patrol.ts'
 import { type DoctorSdk, inspectClaudeSdk } from './doctor-sdk.ts'
 import { reservedNameVariants } from './entries.ts'
 import type { execCommand } from './git.ts'
@@ -435,6 +436,7 @@ export async function runDoctor(
   }
 
   checks.push(...(await checkWorkspaces(home, roles.ok ? roles.data.roles : undefined)))
+  checks.push(...(await checkPatrolRules(home, roles.ok ? roles.data.roles : undefined)))
 
   checks.push(...(await checkExecutors(roles.ok ? roles.data.roles : [], env, opts, run, find)))
 

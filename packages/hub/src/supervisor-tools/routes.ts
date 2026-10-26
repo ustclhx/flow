@@ -7,6 +7,8 @@ import {
   fail,
   mergeRequestData,
   mergeRequestRequest,
+  patrolReportData,
+  patrolReportRequest,
   type Result,
   taskProposeData,
   taskProposeRequest,
@@ -20,12 +22,14 @@ import { fieldIssues } from '../ledger/tasks.ts'
 import { checkWakeCaller, type SupervisorToolsDeps, wakeCallerOf } from './common.ts'
 import { decisionReview } from './decisions.ts'
 import { requestMerge } from './merge-requests.ts'
+import { reportPatrol } from './patrol.ts'
 import { askUser } from './questions.ts'
 import { proposeTask } from './task-proposals.ts'
 
 /**
  * `POST /v1/supervisor/questions`（ask_user）、`POST /v1/task-proposals`（task_propose）、
- * `POST /v1/decisions/review`（decision_review）、`POST /v1/merge-requests`（pr_merge_request）：
+ * `POST /v1/decisions/review`（decision_review）、`POST /v1/merge-requests`（pr_merge_request）、
+ * `POST /v1/supervisor/patrol-report`（patrol_report，另限巡检唤醒）：
  * 只限非 reply 的 supervisor 唤醒 token（D6、D15）。
  * `POST /v1/supervisor/respond`（task_respond）：只限 reply 唤醒 token（D15）。
  */
@@ -54,6 +58,19 @@ export function createSupervisorToolRoutes(deps: SupervisorToolsDeps): Hono {
     const caller = checkWakeCaller('ask_user', actorOf(c), wakeCallerOf(c), input.data.workspace)
     if (!caller.ok) return respond(c, caller, askUserData)
     return respond(c, await askUser(deps, caller.data, input.data), askUserData, 201)
+  })
+
+  app.post(ENDPOINTS['supervisor-patrol-report'].path, async (c) => {
+    const input = await parse(c, patrolReportRequest)
+    if (!input.ok) return respond(c, input, patrolReportData)
+    const caller = checkWakeCaller(
+      'patrol_report',
+      actorOf(c),
+      wakeCallerOf(c),
+      input.data.workspace,
+    )
+    if (!caller.ok) return respond(c, caller, patrolReportData)
+    return respond(c, await reportPatrol(deps, caller.data, input.data), patrolReportData, 201)
   })
 
   app.post(ENDPOINTS['task-proposals-create'].path, async (c) => {

@@ -36,15 +36,19 @@ supervisor:
   reviewer_roles: [pr-reviewer]   # 审查结论被采信的角色，默认 [pr-reviewer]
   delegate_replies: true   # 卡住时先交给 supervisor 代回复，默认 true
   reply_timeout_s: 600     # 代回复等待秒数，超时转交你；默认 600，范围 30–86400
-  limits:                  # 见第 3 节
-    tasks_per_wake: 5
-    wakes_per_day: 24
-    autonomous_wakes_per_day: 4
-    reply_wakes_per_day: 48
-    chain_depth: 8
-    review_rounds: 2
-    open_questions: 3
+  limits:                  # 见第 3 节；均为非负整数，括号内为取值范围
+    tasks_per_wake: 5               # 0–100
+    wakes_per_day: 24               # 0–1000，普通唤醒（instruction + autonomous）
+    autonomous_wakes_per_day: 4     # 0–1000，且不能超过 wakes_per_day
+    reply_wakes_per_day: 48         # 0–1000，代回复唤醒单独计
+    chain_depth: 8                  # 0–64
+    review_rounds: 2                # 0–20
+    open_questions: 3               # 0–20
 ```
+
+`limits` 必须满足 `autonomous_wakes_per_day <= wakes_per_day`。违反这条约束、任一项超出取值范围或不是整数时，
+**整段 `supervisor` 配置都会被降级为未启用**（不只是 `limits` 回到默认值）：该 workspace 不唤醒、不代回复，
+`flow doctor` 给出指向文件与字段的 warning；改正后重跑 doctor 即恢复。
 
 要点：
 
@@ -202,11 +206,12 @@ PR 为 open、base 是默认分支、不是 fork、head 分支等于任务分支
 
 ## 7. 巡检
 
-巡检就是一条定时规则触发的 autonomous 唤醒。`flow init` **不会**生成 `config/schedules.yaml`，需要自己写：
+巡检就是一条定时规则触发的 autonomous 唤醒。`flow init` 会在 `config/schedules.yaml` **不存在时**生成一份只有注释的示例
+（已有文件不覆盖），默认不启用任何巡检。要巡检的 workspace 各写一条（取消注释、把 `<id>` 换成实际 id）：
 
 ```yaml
 # config/schedules.yaml —— 每天 09:00 巡检 product-res
-- id: product-res-patrol
+- id: patrol-product-res
   cron: "0 9 * * *"
   timezone: Asia/Shanghai        # 缺省为本机时区
   workspace: ws/product-res
@@ -215,10 +220,28 @@ PR 为 open、base 是默认分支、不是 fork、head 分支等于任务分支
 ```
 
 规则 id 不能以 `inbox:` 开头；写错的规则只会被跳过，`flow hub status` 报告。改完重启中枢生效。
+启用了 supervisor（有登记仓库、存在 supervisor 角色）却没有巡检规则的 workspace，`flow doctor` 会给一条 info。
+autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普通唤醒上限。
 
-巡检唤醒读简报、看进行中 / 卡住 / 失败的任务与未合并的 PR，把结论写进 journal 并更新简报；发现需要写代码的问题，
-只能 `task_propose` 提案等你接受（autonomous 不能直接建写类任务）。autonomous 每天最多 4 次（`autonomous_wakes_per_day`），
-计入每日普通唤醒上限。
+巡检唤醒做什么，分两类：
+
+**提示词引导的行为**（写在 `supervisor.md` 里，靠模型遵守，不是确定性保证）：读简报；看进行中 / 卡住 / 失败的任务、
+未合并的 PR、可能过时的知识条目、近期的 raw 与收件箱；写一份日报；发现需要写代码或改配置的问题就 `task_propose` 提案；
+最后更新简报。巡检唤醒的 `inputs.wake` 里有 `type: schedule.fired`、说明为"定时巡检（规则 …）"的事件，提示词据此判断这是巡检。
+
+**中枢实现的确定性功能**：
+
+- **不能直接建写类任务**：autonomous 唤醒建写类任务一律 `proposal_required`（第 3 节），只能提案等你接受。
+- **日报通道 `patrol_report`**：supervisor 调用它提交日报（最多 3500 字符）。中枢只接受**合并了巡检触发的非 reply 唤醒**
+  （否则 `not_patrol_wake` / `reply_only_wake`），每次唤醒一份（再交 `patrol_already_reported`）；接受后
+  1. 正文先脱敏（已登记的密钥值显示为 `[secret:<路径>]`，疑似密钥按规则替换），行首的 `#` 标题标记前加 `\`
+     （正文不能伪造 journal 记录的标题），再以 supervisor 身份追加一条 journal（`brain/journal/<日期>.md`，首行
+     "巡检日报（唤醒 <id>）"；中枢写条目失败后 supervisor 重试，按唤醒 id 去重，不会重复追加）；
+  2. 生成一条 Digest 级、没有任何动作的收件箱条目 `patrol.<唤醒任务 id>`，**不推送**；
+  3. 下一份每日摘要的"supervisor 巡检日报"一节列出它（每份最多展示 600 字符，全文在 journal 与条目里），随后条目以 `digested` 关闭。
+
+  supervisor 没调用 `patrol_report`（例如模型没照提示词做），这一天的摘要里就没有日报；这不会报错，可在 `flow task show <唤醒任务>` 看它做了什么。
+- **花费汇总**：见第 9 节。
 
 ## 8. 代回复：卡住时由 supervisor 替你回
 
@@ -283,10 +306,17 @@ PR 为 open、base 是默认分支、不是 fork、head 分支等于任务分支
 
 ## 9. 费用
 
-每次唤醒是一次 Opus 级别的 claude-sdk 会话；代回复唤醒、巡检、合并请求前的审查任务也各自是会话。Flow **目前不统计也不展示花费**，
-请通过 Anthropic 控制台查看用量。控制费用的手段：
+每次唤醒是一次 Opus 级别的 claude-sdk 会话；代回复唤醒、巡检、审查任务也各自是会话。claude-sdk 执行器在结果里记录
+`result.cost.usd`（SDK 给出的**估算值，不是账单**），Flow 据此汇总 supervisor 的花费：
 
-- 巡检默认关闭（不写 `schedules.yaml` 就没有 autonomous 唤醒）；
+- **每日摘要**的"supervisor 花费（估算）"一节：昨天**开始**、且已结束的唤醒任务（含 reply 唤醒）按 workspace 列出次数、代回复次数、金额，
+  以及没有上报费用的次数（例如被取消的唤醒）；
+- **`flow supervisor status`** 的"今日花费（估算）"：今天（中枢时区）开始、且已结束的唤醒任务的金额与次数（`--json` 中 `today.cost_usd` 保留 6 位小数）。
+
+只统计唤醒任务本身；supervisor 建的 dev、审查等任务不计入，未结束的唤醒也不计入。实际账单以 Anthropic 控制台为准。
+控制费用的手段：
+
+- 巡检默认关闭（`schedules.yaml` 里没有取消注释的巡检规则就没有巡检唤醒）；
 - 同一队列的多个事件合并成一次唤醒；
 - `limits.wakes_per_day`、`autonomous_wakes_per_day`、`reply_wakes_per_day` 是硬上限（默认 24 / 4 / 48）；
 - 不想让 supervisor 代回复就设 `delegate_replies: false`；整体停用设 `enabled: false`。
@@ -297,14 +327,14 @@ PR 为 open、base 是默认分支、不是 fork、head 分支等于任务分支
 flow ask product-res "给登录页加上忘记密码链接"       # 下指令；输出唤醒任务 id 或"已排队"
 flow supervisor wake product-res [<说明>]               # 手动唤醒（有说明则等同指令）
 flow supervisor wake product-res --release instruction  # 放行暂停 / 达到上限的队列（instruction | autonomous）
-flow supervisor status [product-res]                    # 当前唤醒、各队列长度、暂停状态、今日次数、最近一次结果
+flow supervisor status [product-res]                    # 当前唤醒、各队列长度、暂停状态、今日次数与花费、最近一次结果
 ```
 
 - workspace 写 `product-res` 或 `ws/product-res` 都可以。以上命令都**只有 user** 能用，AI 身份返回 `user_only`。
 - 不可唤醒（未启用、没有角色、没有登记仓库）时 `flow ask` 会告知"未启用"，指令不会被积压。
 - `--release` 只作用于放行当时队列里已有的事件；它立刻用这些事件唤醒一次，**不计入每日上限**，不能与说明同时给出。
 - Telegram：`/ask <workspace> <内容>`，回复唤醒编号、排队说明或"未启用"。转发来的消息和 inline bot 发出的消息会被拒绝。
-- supervisor 自己用的命令（`flow supervisor ask-user | propose | merge-request | respond | review-decision`、`flow brief update`）
+- supervisor 自己用的命令（`flow supervisor ask-user | propose | merge-request | respond | review-decision | patrol-report`、`flow brief update`）
   在你的终端里没有意义，需要唤醒绑定 token。
 
 ## 11. 故障排查
@@ -317,6 +347,8 @@ flow supervisor status [product-res]                    # 当前唤醒、各队�
 | doctor：`启用了 supervisor 但没有登记仓库` | 在 workspace 的 `repos` 登记仓库，或设 `enabled: false` |
 | doctor：supervisor 角色问题（多个、可写、名字不符） | 只保留一个只读的 `kind: supervisor` 角色；可写时参照 `flow init` 生成的 `supervisor.yaml` 收紧 |
 | doctor：`dev.yaml` 的 `creatable_by` 不包含 supervisor | supervisor 建不出 dev 任务，按提示片段补上 |
+| doctor（info）：`启用了 supervisor 但没有巡检规则` | 只是提示：不需要每日巡检可以忽略；需要时按第 7 节在 `schedules.yaml` 取消注释示例 |
+| 每日摘要里没有巡检日报 | 确认规则的 `payload.kind` 是 `supervisor_patrol` 且当天有巡检唤醒（`flow supervisor status`）；日报靠 supervisor 调用 `patrol_report`，没调用就没有 |
 | doctor：角色有效类别 | 显示每个角色是 read / write / merge / supervisor；声明只能收紧，推断更严格时以推断为准 |
 | `/ask` 回"未启用" | 同上三类原因之一 |
 | 事件没处理、队列为空 | 不可唤醒期间中枢会写 `supervisor.queue_dropped{queue, up_to_seq, reason}` 并清掉该队列的积压（原因 `disabled`、`global`、`no_repo`、`no_role`、`unknown_workspace` 立即丢；配置暂时有错的 `role_invalid`、`workspaces_invalid` 先保留并重试，持续 24 小时才丢）。重新启用后**不会**带出旧事件，需要重新下指令 |
@@ -337,7 +369,7 @@ flow supervisor status [product-res]                    # 当前唤醒、各队�
 
 1. **更新代码并补齐模板**：拉取最新 main 后运行 `flow init`。它只补齐缺失文件、**不覆盖已有文件**，
    会新增 `config/roles/supervisor.yaml`、`supervisor.md`、`pr-reviewer.yaml`、`pr-reviewer.md`、`merger.yaml`、`merger.md`，
-   并在**尚不存在**时生成带注释模板的 `policies.yaml`。已有的 `policies.yaml` 不会被改动，需要的模板请从
+   并在**尚不存在**时生成带注释模板的 `policies.yaml` 与只有注释巡检示例的 `schedules.yaml`。已有的 `policies.yaml` 不会被改动，需要的模板请从
    `packages/core/src/templates.ts` 的 `POLICIES_YAML` 或新建 flow-home 里的文件复制。
 2. **手动改 `config/roles/dev.yaml`**：加上 supervisor 才能创建 dev 任务（`flow init` 不会改已有文件，`flow doctor` 会提示缺失）：
 
@@ -359,10 +391,20 @@ flow supervisor status [product-res]                    # 当前唤醒、各队�
    - 可选：代回复白名单（第 8 节）。**先升级所有节点，再写带 `push_to` / `gh_scope` 的规则**，旧节点不认识这些条件。
 4. **按需调整 workspace**：在 `config/workspaces/<id>.yaml` 增加 `supervisor` 段（第 1 节）。想先观察就写 `enabled: false`。
    要自动合并再写 `auto_merge: true`，建议先在 `false` 下完整跑过几次。
-5. **按需写巡检**：`config/schedules.yaml`（第 7 节）。
-6. **重启，先中枢后节点**：`launchctl kickstart -k gui/$(id -u)/dev.flow.hub`，再 `launchctl kickstart -k gui/$(id -u)/dev.flow.node`
-   （或 `flow daemon install` 重装）。新旧节点协议兼容；`node.yaml` 的 `reserved` 要等所有节点升级后才能写（见 [daemon.md](daemon.md)）。
-7. **检查**：`flow doctor` 应没有 supervisor 相关的 fail；`flow supervisor status` 应列出各 workspace 的启用状态；
+5. **补上提示词里的巡检段**：`flow init` 不覆盖已有的 `config/roles/supervisor.md`，所以升级前就有这个文件的 home
+   拿不到新增的"巡检"一段（读简报 → 检查 → `patrol_report` 提交日报 → 只能提案 → 更新简报），supervisor 也就不会调用 `patrol_report`。
+   请把新模板中以"巡检（inputs.wake.events 中有 type 为 schedule.fired"开头的一段复制进你的 `supervisor.md`。新模板可在
+   `packages/core/src/role-templates.ts` 的 `DEFAULT_ROLE_FILES['supervisor.md']` 查看；也可以在临时目录里初始化一个新 home 后查看：
+   `export FLOW_HOME=$(mktemp -d)/home && flow init`，打开 `$FLOW_HOME/config/roles/supervisor.md`，看完 `unset FLOW_HOME`
+   （别在这个终端里继续操作真实的 home）。
+6. **按需启用巡检**：在 `config/schedules.yaml` 取消注释巡检示例（第 7 节）；已有 `schedules.yaml` 时 `flow init` 不改它，照第 7 节手动加规则。
+7. **重启，先中枢后节点**：
+   - 用 launchd 常驻（**前提是之前执行过 `flow daemon install`**）：`launchctl kickstart -k gui/$(id -u)/dev.flow.hub`，
+     再 `launchctl kickstart -k gui/$(id -u)/dev.flow.node`（或重新运行 `flow daemon install`）；
+   - 没有用 launchd 常驻、在前台运行的：先停掉并重新运行 `flow hub start`，再停掉并重新运行 `flow node start`。
+
+   新旧节点协议兼容；`node.yaml` 的 `reserved` 要等所有节点升级后才能写（见 [daemon.md](daemon.md)）。
+8. **检查**：`flow doctor` 应没有 supervisor 相关的 fail；`flow supervisor status` 应列出各 workspace 的启用状态；
    用 `flow ask <ws> "说明一下当前状态"` 做一次冒烟。
 
 **回滚**：把对应 workspace 的 `supervisor.enabled` 设为 `false`（或删除 supervisor 角色）即停止唤醒与代回复；已建的任务不受影响，

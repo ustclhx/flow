@@ -1430,3 +1430,64 @@ describe('第四轮审查', () => {
     expect(env.store.getInboxItem(itemId)?.state).toBe('open')
   })
 })
+
+describe('巡检唤醒与今日花费（D13；tasks 6.2）', () => {
+  test('巡检唤醒的 inputs.wake 带 schedule.fired 与"定时巡检"说明，提示词据此区分巡检', async () => {
+    const env = await setup()
+    const seq = patrol(env.store)
+    await env.settle()
+    const [w] = env.wakes()
+    expect(w).toMatchObject({ origin: 'autonomous', events: [seq] })
+    const inputs = env.store.getTask(w?.task_id ?? '')?.contract.inputs?.wake
+    expect(inputs?.events[0]).toMatchObject({ seq, type: 'schedule.fired' })
+    expect(inputs?.events[0]?.summary).toContain('定时巡检（规则 patrol')
+  })
+
+  test('flow supervisor status 显示今日结束的唤醒花费：只计唤醒任务，未上报的单独计数', async () => {
+    const env = await setup()
+    instruction(env.store)
+    await env.settle()
+    const first = env.wakes()[0]?.task_id ?? ''
+    start(env.store, first)
+    must(
+      env.store.append(
+        {
+          type: 'task.done',
+          task_id: first,
+          workspace: WS,
+          payload: { result: { ...result(), cost: { usd: 0.75, turns: 4 } } },
+        },
+        { actor: 'node:n1' },
+      ),
+    )
+    await env.settle()
+    // 唤醒自身结束不触发新唤醒；派生任务结束会触发第二次唤醒，它失败且没有上报费用。
+    expect(env.wakes()).toHaveLength(1)
+    // 非唤醒任务（链上的派生任务）的花费不计入。
+    derived(env.store, 't-dev', 'instruction')
+    start(env.store, 't-dev')
+    must(
+      env.store.append(
+        {
+          type: 'task.done',
+          task_id: 't-dev',
+          workspace: WS,
+          payload: { result: { ...result(), cost: { usd: 9 } } },
+        },
+        { actor: 'node:n1' },
+      ),
+    )
+    await env.settle()
+    const second = env.wakes()[1]?.task_id ?? ''
+    expect(second).not.toBe('')
+    failTask(env.store, second)
+    const today = must(await env.scheduler.status(WS)).workspaces[0]?.today
+    expect(today).toMatchObject({ cost_usd: 0.75, cost_wakes: 2, cost_unreported: 1 })
+    // 第二天归零。
+    await env.clock.advance(24 * HOUR)
+    expect(must(await env.scheduler.status(WS)).workspaces[0]?.today).toMatchObject({
+      cost_usd: 0,
+      cost_wakes: 0,
+    })
+  })
+})

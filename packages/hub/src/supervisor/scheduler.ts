@@ -27,6 +27,7 @@ import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import type { TaskService, WorkspaceInfo, WorkspaceLookup } from '../ledger/tasks.ts'
 import type { HubClock } from '../server/clock.ts'
 import { consoleLogger, type HubLogger } from '../server/maintenance.ts'
+import { wakeCosts } from './cost.ts'
 import {
   NORMAL_QUEUES,
   type Queue,
@@ -1063,6 +1064,13 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
             : null
         }
         const limits = ws.supervisor.limits
+        const todayKey = dayKey(now)
+        // 今天的唤醒：先按 36 小时窗口查询，再按 dayKey 精确筛选（dayKey 可注入，不假定时区）。
+        const cost = wakeCosts(
+          ledger,
+          { from: now - 36 * 3600_000, to: now + 1, include: (at) => dayKey(at) === todayKey },
+          ws.ref,
+        )[0]
         out.push({
           workspace: ws.ref,
           enabled: a.ok,
@@ -1081,6 +1089,9 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
             wakes_per_day: limits.wakes_per_day,
             autonomous_wakes_per_day: limits.autonomous_wakes_per_day,
             reply_wakes_per_day: limits.reply_wakes_per_day,
+            cost_usd: cost?.usd ?? 0,
+            cost_wakes: cost?.wakes ?? 0,
+            cost_unreported: cost?.unreported ?? 0,
           },
           last: last ? summaryOf(last) : null,
         })

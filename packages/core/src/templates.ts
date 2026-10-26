@@ -218,3 +218,21 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
 #   level: supervisor
 #   when: {push_to: task_branch}
 `
+
+/**
+ * `config/schedules.yaml` 的初始内容（add-m1-supervisor D13）：只有注释掉的巡检示例，默认不启用任何巡检。
+ * 以 `# ` 开头的行是可直接取消注释的规则，`## ` 开头的行是说明（测试据此验证取消注释后是合法规则）。
+ */
+export const SCHEDULES_YAML = `## 由 flow init 生成。定时规则数组：触发时中枢写 schedule.fired（字段见 packages/core/src/daemon/schedules.ts）。
+## 默认不启用任何规则。规则 id 不能以 inbox: 开头；写错的规则只会被跳过，flow hub status 会报告。
+##
+## —— supervisor 巡检（add-m1-supervisor D13）——
+## payload.kind: supervisor_patrol 的规则触发时唤醒该 workspace 的 supervisor（origin autonomous，
+## 计入 supervisor.limits.autonomous_wakes_per_day）。每个要巡检的 workspace 写一条：取消注释，
+## 把 ws/<id> 换成实际的 workspace id，规则 id 改成不重复的名字。timezone 缺省为本机时区。
+# - id: patrol-<id>
+#   cron: "0 9 * * *"
+#   workspace: ws/<id>
+#   payload:
+#     kind: supervisor_patrol
+`

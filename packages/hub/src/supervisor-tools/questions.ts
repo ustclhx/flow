@@ -113,7 +113,8 @@ export function answerQuestion(
   text: string | undefined,
   via: InboxVia,
 ): Result<null> {
-  if (item.source !== 'supervisor' || item.workspace === null) {
+  // 同一来源下还有调度器的提醒条目与巡检日报（patrol.），只有提问条目可以答复。
+  if (item.source !== 'supervisor' || item.workspace === null || !isQuestionItem(item)) {
     return fail('failure', 'action_not_available', '条目不是 supervisor 的提问')
   }
   const answer = text?.trim()

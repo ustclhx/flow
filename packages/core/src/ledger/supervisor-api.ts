@@ -128,6 +128,13 @@ export const supervisorWorkspaceStatus = z
       wakes_per_day: z.number().int().min(0),
       autonomous_wakes_per_day: z.number().int().min(0),
       reply_wakes_per_day: z.number().int().min(0),
+      cost_usd: z.number().min(0).optional().meta({
+        description: '今天结束的唤醒任务（含 reply）已上报的 result.cost.usd 之和（估算，D13）',
+      }),
+      cost_wakes: z.number().int().min(0).optional().meta({
+        description: '今天结束的唤醒任务数（含 reply），其中未上报费用的见 cost_unreported',
+      }),
+      cost_unreported: z.number().int().min(0).optional(),
     }),
     last: wakeSummary.nullable().meta({ description: '最近一次已结束的唤醒' }),
   })

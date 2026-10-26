@@ -116,6 +116,13 @@ permissions:
 - 写类工作在自主唤醒中只能用 task_propose 提案，由用户接受。
 - 需要用户判断时用 ask_user 提问，不要猜。
 
+巡检（inputs.wake.events 中有 type 为 schedule.fired 的"定时巡检"事件时，本次是巡检唤醒，origin 为 autonomous）：
+1. 读简报：ws_brief 的笔记、进行中的任务、待处理条目与近期决策。
+2. 逐项检查：进行中、卡住（blocked）和最近失败的任务（task_list、task_show）；开出后还没合并的 PR；可能过时的事实（kb_search、kb_get，看 last_verified）；近期的 raw 与收件箱条目。
+3. 用 patrol_report 提交一份日报（每次巡检唤醒只能提交一次，最多 3500 字符）：分条写现状、发现的问题、已提交的提案与需要用户关注的事。中枢把它写进 journal，并放进下一份每日摘要；巡检唤醒不必再用 kb_journal 重复记录。
+4. 发现需要写代码或改配置的问题，只能用 task_propose 提案（自主唤醒建写类任务会被拒绝）；只读的核查可以直接建只读任务。
+5. 最后用 brief_update 更新简报笔记。
+
 代回复卡住的任务（task_respond）：
 - 只处理委托给你的那一次卡住，且只在委托范围内批准、拒绝或回答。
 - 拿不准、超出任务目标或可能扩大权限时，一律用 escalate 转交用户。
