@@ -15,6 +15,8 @@ import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import type { Scheduler } from '../scheduler/index.ts'
 import type { HubClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
+import { costLine, formatUsd, wakeCosts } from '../supervisor/cost.ts'
+import { isPatrolItem } from '../supervisor-tools/patrol.ts'
 import {
   dailyCron,
   isQuiet,
@@ -32,8 +34,8 @@ import {
  * - **定时唤醒**：用调度器的内部规则（id 以 `inbox:` 开头，不写进 schedules.yaml）在 Decide 时间点、
  *   静默时段结束、每日摘要时间唤醒，交给渠道管理器按 `planPushes` 推送；
  * - **每日摘要**：在摘要时间生成 `dig.<本地日期>` 条目（昨天完成和失败的任务、auto-report 记录、
- *   待处理的 Decide 条目数、可能过时的知识条目数），同时关闭上一份摘要（superseded）和已写进摘要的
- *   策略记录（digested）。条目 id 按日期确定，重复触发、重启补发都不会生成第二份；
+ *   待处理的 Decide 条目数、可能过时的知识条目数、supervisor 巡检日报与花费），同时关闭上一份摘要
+ *   （superseded）和已写进摘要的策略记录与巡检日报（digested）。条目 id 按日期确定，重复触发、重启补发都不会生成第二份；
  *   中枢停机期间错过的摘要时间，由调度器在内部规则首次设置时补发最近一次（同 schedules.yaml）；
  * - 账本中有新的收件箱事件时，也做一次（微任务里，避免在账本通知循环中同步写入）。
  */
@@ -80,6 +82,9 @@ function taskLine(t: TaskView): string {
 const REPLY_LABEL = { approve: '批准', deny: '拒绝', text: '回答' } as const
 /** 摘要中每条代回复最多展示的字符数（回答原文与理由）。 */
 const REPLY_SNIPPET_MAX = 300
+
+/** 摘要中每份巡检日报最多展示的字符数（全文在 journal 与条目里）。 */
+const PATROL_SNIPPET_MAX = 600
 
 /** 回复的送达状态（`ReplyView.state`）：让用户知道代回复有没有真正生效。 */
 const REPLY_STATE_LABEL: Record<string, string> = {
@@ -243,8 +248,30 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
         ),
       )
     }
+    // supervisor 花费（D13）：昨天结束的唤醒任务（含 reply 唤醒）按 workspace 汇总 result.cost.usd。
+    const costs = wakeCosts(ledger, (at) => at >= from && at < to)
+    if (costs.length > 0) {
+      const total = costs.reduce((n, c) => n + c.usd, 0)
+      lines.push(`supervisor 花费（估算）${formatUsd(total)}：`)
+      lines.push(...listLines(costs, costLine))
+    }
     lines.push(`待处理的 Decide 条目 ${decide} 个。`)
     lines.push(`可能过时的知识条目 ${stale} 个。`)
+    // 巡检日报（add-m1-supervisor D13）：patrol_report 生成的 Digest 条目，写进摘要后以 digested 关闭。
+    // 放在最后：摘要正文超出上限被截断时，只截掉日报的展示（全文在 journal 与条目里）。
+    const patrols = open.filter(isPatrolItem)
+    if (patrols.length > 0) {
+      lines.push(`supervisor 巡检日报 ${patrols.length} 份：`)
+      for (const p of patrols.slice(0, SHOW_MAX)) {
+        lines.push(
+          `- ${p.title}`,
+          ...clipText(p.body, PATROL_SNIPPET_MAX)
+            .split('\n')
+            .map((l) => `  ${l}`),
+        )
+      }
+      if (patrols.length > SHOW_MAX) lines.push(`- ……另有 ${patrols.length - SHOW_MAX} 份`)
+    }
     const drafts: EventInput[] = []
     for (const prev of open.filter((i) => i.source === 'digest')) {
       drafts.push({
@@ -263,7 +290,7 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
         body: clipText(lines.join('\n'), INBOX_BODY_MAX),
       },
     })
-    for (const p of policy) {
+    for (const p of [...policy, ...patrols]) {
       drafts.push({
         type: 'inbox.item_closed',
         ...(p.task_id ? { task_id: p.task_id } : {}),

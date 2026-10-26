@@ -338,6 +338,22 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 9007199254740991
+                  },
+                  "cost_usd": {
+                    "description": "今天结束的唤醒任务（含 reply）已上报的 result.cost.usd 之和（估算，D13）",
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cost_wakes": {
+                    "description": "今天结束的唤醒任务数（含 reply），其中未上报费用的见 cost_unreported",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "cost_unreported": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
                   }
                 },
                 "required": [

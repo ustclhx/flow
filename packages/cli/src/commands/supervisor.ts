@@ -111,6 +111,12 @@ export const supervisorStatusCommand = defineCommand<SupervisorStatusData>({
         lines.push(
           `  今日（${t.date}）：普通唤醒 ${t.wakes}/${t.wakes_per_day}，其中 autonomous ${t.autonomous}/${t.autonomous_wakes_per_day}，代回复 ${t.reply}/${t.reply_wakes_per_day}`,
         )
+        if (t.cost_usd !== undefined) {
+          const missing = t.cost_unreported ? `，${t.cost_unreported} 次未上报` : ''
+          lines.push(
+            `  今日花费（估算）：$${t.cost_usd.toFixed(2)}（已结束的唤醒 ${t.cost_wakes ?? 0} 次，含代回复${missing}）`,
+          )
+        }
         lines.push(`  最近一次：${w.last ? wakeLine(w.last) : '无'}`)
         return lines.join('\n')
       })

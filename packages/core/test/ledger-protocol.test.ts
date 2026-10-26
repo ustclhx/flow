@@ -272,6 +272,7 @@ describe('端点清单与 JSON Schema 导出', () => {
       'POST /v1/briefs',
       'GET /v1/briefs/context',
       'POST /v1/supervisor/questions',
+      'POST /v1/supervisor/patrol-report',
       'POST /v1/task-proposals',
       'POST /v1/decisions/review',
       'POST /v1/merge-requests',

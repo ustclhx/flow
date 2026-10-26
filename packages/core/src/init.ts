@@ -21,6 +21,7 @@ import {
   GITLEAKS_TOML,
   POLICIES_YAML,
   PRE_COMMIT_HOOK,
+  SCHEDULES_YAML,
 } from './templates.ts'
 
 export interface InitReport {
@@ -43,6 +44,8 @@ const REPO_FILES: Record<RepoName, RepoFile[]> = {
   config: [
     { path: '.gitleaks.toml', content: () => CONFIG_GITLEAKS_TOML },
     { path: 'policies.yaml', content: () => POLICIES_YAML },
+    // 只有注释掉的巡检示例（D13）；已有 schedules.yaml 不覆盖。
+    { path: 'schedules.yaml', content: () => SCHEDULES_YAML },
     ...Object.entries(DEFAULT_ROLE_FILES).map(([name, content]) => ({
       path: `roles/${name}`,
       content: () => content,

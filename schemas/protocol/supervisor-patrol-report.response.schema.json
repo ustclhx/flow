@@ -1,0 +1,398 @@
+{
+  "$id": "https://flow.local/schemas/protocol/supervisor-patrol-report.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z]{2,12}\\.[A-Za-z0-9_.-]{1,120}$",
+              "description": "条目 id，例如 blk.42、prop.<提案 id>"
+            },
+            "short_id": {
+              "type": "string",
+              "description": "短 id：创建事件 seq 的 base36，供渠道按钮使用"
+            },
+            "level": {
+              "type": "string",
+              "enum": [
+                "interrupt",
+                "decide",
+                "digest"
+              ],
+              "description": "条目级别：interrupt 立即推送，decide 成批推送，digest 写进每日摘要"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "task",
+                "proposal",
+                "policy",
+                "supervisor",
+                "digest",
+                "task_proposal",
+                "merge_request",
+                "decision"
+              ],
+              "description": "条目来源"
+            },
+            "source_ref": {
+              "type": "string",
+              "description": "关联对象：任务 id、提案 id 或源事件 seq"
+            },
+            "reason": {
+              "description": "来源内的原因，例如卡住原因 question",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                  "description": "workspace 标识，形如 ws/<id>"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                  "description": "任务 id，由中枢在创建时分配"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "approve",
+                  "deny",
+                  "reply",
+                  "accept",
+                  "reject"
+                ],
+                "description": "条目上可用的操作"
+              }
+            },
+            "options": {
+              "minItems": 2,
+              "maxItems": 4,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "description": "提问的候选答复（2–4 个）；渠道上显示为按钮，点选即以该选项答复"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed"
+              ]
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+            },
+            "created_by": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+              "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+            },
+            "deferred_until": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "静默时段内生成的 Interrupt 条目顺延到此时推送（3.3）"
+            },
+            "pushed_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "首次推送到渠道的时间（4.1 维护）"
+            },
+            "channels": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "channel": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,31}$",
+                    "description": "推送渠道 id，例如 telegram"
+                  },
+                  "ref": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                        "description": "渠道内的消息引用，由渠道生成"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "item",
+                      "batch"
+                    ]
+                  },
+                  "sent_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  "synced_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "failed": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "reason": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                          }
+                        },
+                        "required": [
+                          "reason",
+                          "at"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "channel",
+                  "ref",
+                  "kind",
+                  "sent_at",
+                  "synced_at",
+                  "failed"
+                ],
+                "additionalProperties": false
+              },
+              "description": "条目在各渠道上的消息（推送与\"已处理\"同步记录）"
+            },
+            "closed": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "task_running",
+                        "task_queued",
+                        "task_done",
+                        "task_failed",
+                        "task_cancelled",
+                        "superseded",
+                        "proposal_accepted",
+                        "proposal_rejected",
+                        "proposal_removed",
+                        "answered",
+                        "expired",
+                        "dismissed",
+                        "acted",
+                        "digested"
+                      ],
+                      "description": "条目关闭原因"
+                    },
+                    "note": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                    },
+                    "by": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                    },
+                    "cause_actor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "导致关闭的操作者，例如答复任务的 user"
+                    },
+                    "via": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "telegram",
+                            "web",
+                            "cli"
+                          ],
+                          "description": "操作发起的渠道"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "note",
+                    "at",
+                    "by",
+                    "cause_actor",
+                    "via"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "short_id",
+            "level",
+            "source",
+            "source_ref",
+            "reason",
+            "workspace",
+            "task_id",
+            "title",
+            "body",
+            "actions",
+            "state",
+            "created_at",
+            "created_by",
+            "updated_at",
+            "deferred_until",
+            "pushed_at",
+            "channels",
+            "closed"
+          ],
+          "additionalProperties": false,
+          "title": "Inbox item",
+          "description": "收件箱条目（inbox_items 投影的一行）"
+        },
+        "journal": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "sha": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "sha"
+          ],
+          "additionalProperties": false,
+          "description": "写入的 journal 文件与 brain 提交 sha"
+        }
+      },
+      "required": [
+        "item",
+        "journal"
+      ],
+      "additionalProperties": false,
+      "title": "POST /v1/supervisor/patrol-report"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}

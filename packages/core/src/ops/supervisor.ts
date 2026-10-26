@@ -6,6 +6,8 @@ import { decisionPath } from '../ledger/events.ts'
 import {
   createTaskRequest,
   DECISION_REVIEW_MAX,
+  PATROL_REPORT_MAX,
+  type PatrolReportData,
   QUESTION_MAX,
   type TaskRespondData,
   taskRespondRequest,
@@ -132,6 +134,37 @@ export const decisionReviewOp = defineOperation({
     return new HubClient(ctx).reviewDecision(input)
   },
   human: (o) => `已回看决策 ${o.path}（${o.last_verified}，提交 ${o.sha.slice(0, 8)}）`,
+})
+
+/**
+ * 巡检日报（design D13；tasks 6.2）：经中枢写入 journal，同时生成一条 Digest 级的 supervisor 条目，
+ * 在下一份每日摘要中列出。中枢只接受合并了巡检触发（`schedule.fired{payload.kind: supervisor_patrol}`）
+ * 的非 reply 唤醒，每次唤醒一份；不经策略审批（只写日志与摘要，不产生外部效果）。
+ */
+export const patrolReportInput = z.strictObject({
+  workspace: z.string().min(1).describe('workspace（ws/<id> 或 <id>），必须是本次唤醒绑定的'),
+  text: z
+    .string()
+    .trim()
+    .min(1)
+    .max(PATROL_REPORT_MAX)
+    .describe('巡检日报：进行中/卡住/失败的任务、未合并 PR、过期事实、近期 raw/inbox 的结论与提案'),
+})
+export type PatrolReportInput = z.infer<typeof patrolReportInput>
+
+export const patrolReportOp = defineOperation({
+  name: 'patrol_report',
+  cli: 'supervisor patrol-report',
+  summary: '经中枢提交本次巡检的日报：写入 journal，并作为 Digest 条目进入每日摘要；只限巡检唤醒',
+  input: patrolReportInput,
+  positional: ['workspace', 'text'],
+  access: 'write',
+  run: async (input: PatrolReportInput, ctx) => {
+    const denied = supervisorOnly('patrol_report', ctx)
+    if (denied) return denied
+    return new HubClient(ctx).reportPatrol({ workspace: wsRef(input.workspace), text: input.text })
+  },
+  human: (o: PatrolReportData) => `已提交巡检日报（条目 #${o.item.short_id}，${o.journal.file}）`,
 })
 
 export const prMergeRequestInput = z.strictObject({

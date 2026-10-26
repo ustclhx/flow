@@ -19,6 +19,7 @@ import {
   type listTasksQuery,
   type MergeRequestRequest,
   okBody,
+  type PatrolReportRequest,
   type PolicyCheckRequest,
   type ReplyTaskRequest,
   type TaskProposeRequest,
@@ -174,6 +175,9 @@ export class HubClient {
   }
   askUser(input: AskUserRequest) {
     return this.request('supervisor-ask', input)
+  }
+  reportPatrol(input: PatrolReportRequest) {
+    return this.request('supervisor-patrol-report', input)
   }
   proposeTask(input: TaskProposeRequest) {
     return this.request('task-proposals-create', input)

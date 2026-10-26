@@ -138,6 +138,10 @@ export const PROTOCOL_ERRORS = {
   supervisor_disabled: { status: 409, kind: 'failure' },
   /** 合并请求的资格核对未通过（D10 第 4 步）：details.reasons 列出原因。 */
   merge_not_eligible: { status: 403, kind: 'failure' },
+  /** patrol_report 只限合并了巡检触发（`schedule.fired{payload.kind: supervisor_patrol}`）的唤醒（D13）。 */
+  not_patrol_wake: { status: 403, kind: 'failure' },
+  /** 本次唤醒已经提交过巡检日报（D13：每次巡检唤醒一份）。 */
+  patrol_already_reported: { status: 409, kind: 'failure' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
 export type ProtocolErrorCode = keyof typeof PROTOCOL_ERRORS
@@ -928,6 +932,31 @@ export const askUserData = z
   .object({ item: inboxItemView })
   .meta({ title: 'POST /v1/supervisor/questions' })
 
+/** 巡检日报正文的上限（字符，D13）。 */
+export const PATROL_REPORT_MAX = 3500
+
+export const patrolReportRequest = z
+  .strictObject({
+    workspace: workspaceRef,
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .max(PATROL_REPORT_MAX)
+      .meta({ description: '巡检日报正文：写入 journal，并作为 Digest 条目进入每日摘要' }),
+  })
+  .meta({ title: 'POST /v1/supervisor/patrol-report 请求体' })
+export type PatrolReportRequest = z.infer<typeof patrolReportRequest>
+export const patrolReportData = z
+  .object({
+    item: inboxItemView,
+    journal: z
+      .object({ file: z.string(), sha: z.string() })
+      .meta({ description: '写入的 journal 文件与 brain 提交 sha' }),
+  })
+  .meta({ title: 'POST /v1/supervisor/patrol-report' })
+export type PatrolReportData = z.infer<typeof patrolReportData>
+
 export const taskProposeRequest = z
   .strictObject({
     draft: createTaskRequest.meta({ description: '接受后要建的任务合同草稿' }),
@@ -1217,6 +1246,13 @@ export const ENDPOINTS = {
     auth: true,
     request: askUserRequest,
     response: askUserData,
+  },
+  'supervisor-patrol-report': {
+    method: 'POST',
+    path: '/v1/supervisor/patrol-report',
+    auth: true,
+    request: patrolReportRequest,
+    response: patrolReportData,
   },
   'task-proposals-create': {
     method: 'POST',

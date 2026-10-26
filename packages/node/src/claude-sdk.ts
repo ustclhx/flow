@@ -131,7 +131,8 @@ export const FLOW_MCP_AUTO_ALLOWED = [
 ] as const
 /**
  * 只在 supervisor 会话（`kind: supervisor`）中自动放行的 flow MCP 工具（design D7；tasks 4.1）：
- * `ask_user`、`task_propose`、`decision_review` 只产生等待用户处理的内容；`task_respond` 的权限由中枢按
+ * `ask_user`、`task_propose`、`decision_review` 只产生等待用户处理的内容；`patrol_report` 只写 journal 与
+ * Digest 条目（中枢只接受巡检唤醒，D13）；`task_respond` 的权限由中枢按
  * D15 核对（不再经策略审批，否则会自我阻塞）。其他角色不放行它们（readRoleMayUse 也不认），
  * `task_create`、`pr_merge_request` 对 supervisor 仍走策略。
  */
@@ -139,6 +140,7 @@ export const SUPERVISOR_MCP_AUTO_ALLOWED = [
   'ask_user',
   'task_propose',
   'decision_review',
+  'patrol_report',
   'task_respond',
 ] as const
 /**
