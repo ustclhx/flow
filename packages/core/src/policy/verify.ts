@@ -37,18 +37,33 @@ export interface VerifyVerdict {
 }
 
 /**
- * 验收命令中普通词（可执行文件、前缀词、位置参数）允许的形态：白名单，逐段的相对路径或普通词。
- * 不能含 `:`、`@`、`~`、`%` 等字符（`file:///tmp/x`、`@/tmp/x`、`~/x`），不能以 `/` 或 `-` 开头，
- * 不能含 `..`，`=` 之后也不能紧跟 `/`（`a=b=/tmp`）。
+ * 相对路径段的形态：每个 `/` 分隔段都以字母数字或 `_` 开头和结尾，中间只含字母数字与 `_ . + -`
+ * （段尾不能是 `-`、`+`、`.`，挡住 `a-/tmp`、`a+/tmp` 这类在某些工具里会被拆开的写法）。
+ * 因此不能以 `/` 开头、不能有空段（`a//b`）或 `.` 开头的段（`a/./b`、`.hidden`），不能含 `:`、`@`、`~`、`%`、
+ * 空白、`,`、`=` 等字符；另外不能含 `..`。
  */
-export const VERIFY_WORD_RE = /^[A-Za-z0-9_][A-Za-z0-9_.,=+-]*(\/[A-Za-z0-9_.,=+-]+)*$/
-/** 选项名：`-u`、`--fix`、`--watch`（不能把值直接拼在后面，例如 `-r/tmp/x.js`、`-c~/x`）。 */
-export const VERIFY_OPTION_RE = /^--?[A-Za-z0-9][A-Za-z0-9-]*$/
-/** `--name=值`：值必须是普通词。 */
-const VERIFY_OPTION_VALUE_RE = /^--[A-Za-z0-9][A-Za-z0-9-]*=(.*)$/s
+export const VERIFY_PATH_RE =
+  /^[A-Za-z0-9_](?:[A-Za-z0-9_.+-]*[A-Za-z0-9_])?(?:\/[A-Za-z0-9_](?:[A-Za-z0-9_.+-]*[A-Za-z0-9_])?)*$/
+/** 选项名：点分隔的段（`--coverage.enabled`），每段以字母数字开头、只含字母数字与 `-`。 */
+const OPTION_NAME = '[A-Za-z0-9][A-Za-z0-9-]*(?:\\.[A-Za-z0-9][A-Za-z0-9-]*)*'
+/** 不带值的选项：`-u`、`-rfoo`、`--fix`、`--coverage.enabled`（值不能直接拼在后面，例如 `-r/tmp/x.js`）。 */
+export const VERIFY_OPTION_RE = new RegExp(`^(?:-[A-Za-z0-9][A-Za-z0-9-]*|--${OPTION_NAME})$`)
+/** `--name=值`：值按普通词校验。 */
+const VERIFY_OPTION_VALUE_RE = new RegExp(`^--${OPTION_NAME}=(.*)$`, 's')
 
-const plainWord = (word: string) =>
-  VERIFY_WORD_RE.test(word) && !word.includes('..') && !word.includes('=/')
+/** 一个相对路径：允许开头的 `./`，去掉后按 VERIFY_PATH_RE 校验，且不含 `..`。 */
+const relativePath = (part: string) => {
+  const rest = part.startsWith('./') ? part.slice(2) : part
+  return VERIFY_PATH_RE.test(rest) && !rest.includes('..')
+}
+
+/**
+ * 普通词（可执行文件、前缀词、位置参数、`--name=` 的值）：先按 `,` 与 `=` 切段，每段都必须是相对路径。
+ * 很多工具会按逗号拆值（mocha `--require=a,/tmp/x.js`），也会把 `k=v` 的值当路径，所以每段单独校验。
+ */
+export function verifyPlainWord(word: string): boolean {
+  return word.split(/[,=]/).every(relativePath)
+}
 
 /** 单个词是否在白名单内。 */
 export function verifyWordAllowed(word: string): boolean {
@@ -56,8 +71,8 @@ export function verifyWordAllowed(word: string): boolean {
   if (word === '--') return true
   if (VERIFY_OPTION_RE.test(word)) return true
   const withValue = VERIFY_OPTION_VALUE_RE.exec(word)
-  if (withValue) return plainWord(withValue[1] ?? '')
-  return plainWord(word)
+  if (withValue) return verifyPlainWord(withValue[1] ?? '')
+  return verifyPlainWord(word)
 }
 
 /**

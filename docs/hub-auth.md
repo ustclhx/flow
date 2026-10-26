@@ -156,9 +156,10 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
      `inputs.pr`、`kind: pr` 产物），加上新合同的 `inputs.pr`。数量、轮数与链深度在写入前的同步段再检查一次，并发请求不能绕过。
 - **验收命令**（D5）：非 user 身份（包括 supervisor、user token 降级的 AI 身份）建任务时，合同 `verify` 的每条命令在创建时经策略判定：
   动作为 `tool:Verify` 加命令识别出的动作，scope 为新任务的 workspace 与角色，前缀严格匹配。只有 `auto` / `auto-report` 放行，
-  否则 403 `verify_not_allowed`，错误中列出未通过的命令。命令的每个词都必须在白名单内：普通词是字母数字或 `_` 开头、只含字母数字与
-  `_ . , = + -`、可用 `/` 分段的相对路径（不含 `..`，`=` 之后不紧跟 `/`）；选项只能是 `-x`、`--name` 或 `--name=<普通词>`，单独的 `--` 作分隔符。
-  因此 `-r/tmp/x.js`、`--preload=/tmp/x.js`、`file:`、`@`、`~`、`%` 与绝对路径都不放行；选项与值分开写时两个词分别校验。
+  否则 403 `verify_not_allowed`，错误中列出未通过的命令。命令的每个词都必须在白名单内：普通词（含 `--name=` 的值）先按 `,`、`=` 切段，
+  每段是可带 `./` 开头的相对路径（各段以字母数字或 `_` 开头和结尾，不含 `..`）；选项只能是 `-x`、`--name`、`--name.sub` 或
+  `--name=<普通词>`，单独的 `--` 作分隔符。因此 `-r/tmp/x.js`、`--require=a,/tmp/x.js`、`file:`、`@`、`~`、`%`、glob、空格与绝对路径
+  都不放行；选项与值分开写时两个词分别校验。白名单只校验形态、不校验选项含义（见 policies.yaml 模板注释）。
   仓库内指向仓库外的符号链接、以及用仓库内相对路径加载代码，无法在词法上拦截（已接受的风险，见 design D15）。`tool:Verify` 是受保护的工具，`* * auto` 这类通配规则不能放行。
   `policies.yaml` 模板中有注释掉的 `tool:Verify` 白名单；不启用时，supervisor 建的任务不能带 verify。
 - **链深度**：user、hub 之外的身份建任务时，新任务的 `parent` 链深度超过 `supervisor.limits.chain_depth`（默认 8）→ 429 `limit_exceeded`。
