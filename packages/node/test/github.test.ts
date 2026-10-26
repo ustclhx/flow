@@ -3,6 +3,7 @@ import {
   type CommandOutput,
   type CommandRunner,
   createGitHubCli,
+  evaluateChecks,
   parsePrUrl,
   parseRemoteUrl,
   sameRepo,
@@ -126,9 +127,16 @@ describe('prSnapshot（GraphQL）', () => {
     startedAt: '2026-10-26T08:00:00Z',
     checkSuite: {
       app: { slug: 'github-actions' },
-      workflowRun: { event: 'pull_request', workflow: { name: 'CI' } },
+      workflowRun: { event: 'pull_request', workflow: { databaseId: 101, name: 'CI' } },
     },
     ...over,
+  })
+  /** 某个 workflow（按 databaseId 区分；id 为 null 时取不到）下的检查。 */
+  const wf = (id: number | null, name = 'CI', event = 'pull_request') => ({
+    checkSuite: {
+      app: { slug: 'github-actions' },
+      workflowRun: { event, workflow: { databaseId: id, name } },
+    },
   })
   const response = (rollup: unknown, prOver: Record<string, unknown> = {}) =>
     JSON.stringify({
@@ -244,30 +252,95 @@ describe('prSnapshot（GraphQL）', () => {
     }
   })
 
-  test('同一检查的多次运行只保留最新的一条；排队中的重跑（没有 startedAt）视为最新', async () => {
-    const { r } = await snap(
-      response(
-        contexts([
-          run({ conclusion: 'FAILURE', startedAt: '2026-10-26T08:00:00Z' }),
-          run({ conclusion: 'SUCCESS', startedAt: '2026-10-26T09:00:00Z' }),
-          run({ name: 'lint', conclusion: 'SUCCESS', startedAt: '2026-10-26T08:00:00Z' }),
-          run({ name: 'lint', status: 'QUEUED', conclusion: null, startedAt: null }),
-          // 不同 workflow 的同名检查分别保留。
-          run({
-            conclusion: 'FAILURE',
-            checkSuite: {
-              app: { slug: 'github-actions' },
-              workflowRun: { event: 'push', workflow: { name: 'Deploy' } },
-            },
-          }),
-        ]),
-      ),
-    )
+  const checksOf = async (nodes: unknown[]) => {
+    const { r } = await snap(response(contexts(nodes)))
     if (!r.ok) throw new Error(r.error.message)
-    expect(r.data.checks.map((c) => `${c.name}:${c.bucket}`).sort()).toEqual([
-      'ci:fail',
-      'ci:pass',
-      'lint:pending',
+    return r.data.checks
+  }
+  const summary = (checks: { name: string; bucket: string }[]) =>
+    checks.map((c) => `${c.name}:${c.bucket}`).sort()
+
+  test('同一 workflow 同一检查的重跑：最新为 pass 时覆盖较早的失败；排队中的重跑（没有 startedAt）视为最新', async () => {
+    const checks = await checksOf([
+      run({ conclusion: 'FAILURE', startedAt: '2026-10-26T08:00:00Z' }),
+      run({ conclusion: 'SUCCESS', startedAt: '2026-10-26T09:00:00Z' }),
+      run({ name: 'lint', conclusion: 'SUCCESS', startedAt: '2026-10-26T08:00:00Z' }),
+      run({ name: 'lint', status: 'QUEUED', conclusion: null, startedAt: null }),
     ])
+    expect(summary(checks)).toEqual(['ci:pass', 'lint:pending'])
+    expect(evaluateChecks(checks, false).ok).toBe(false)
+  })
+
+  test('两个同名 workflow 一败一成：按 workflow id 分开计入，checks_not_green', async () => {
+    // 名称相同、id 不同。
+    const byId = await checksOf([
+      run({ conclusion: 'FAILURE', startedAt: '2026-10-26T08:00:00Z', ...wf(101) }),
+      run({ conclusion: 'SUCCESS', startedAt: '2026-10-26T09:00:00Z', ...wf(202) }),
+    ])
+    expect(summary(byId)).toEqual(['ci:fail', 'ci:pass'])
+    expect(evaluateChecks(byId, false).ok).toBe(false)
+    // 取不到 workflow id：不去重，每条单独计入。
+    const noId = await checksOf([
+      run({ conclusion: 'FAILURE', startedAt: '2026-10-26T08:00:00Z', ...wf(null) }),
+      run({ conclusion: 'SUCCESS', startedAt: '2026-10-26T09:00:00Z', ...wf(null) }),
+      run({ conclusion: 'SUCCESS', startedAt: '2026-10-26T09:00:00Z', checkSuite: null }),
+    ])
+    expect(summary(noId)).toEqual(['ci:fail', 'ci:pass', 'ci:pass'])
+    expect(evaluateChecks(noId, false).ok).toBe(false)
+  })
+
+  test('较新的 SKIPPED / NEUTRAL 遮不住较旧的 FAILURE / CANCELLED：按失败处理，checks_not_green', async () => {
+    for (const [older, newer] of [
+      ['FAILURE', 'SKIPPED'],
+      ['CANCELLED', 'NEUTRAL'],
+    ]) {
+      const checks = await checksOf([
+        run({ conclusion: older, startedAt: '2026-10-26T08:00:00Z' }),
+        run({ conclusion: newer, startedAt: '2026-10-26T09:00:00Z' }),
+      ])
+      expect(summary(checks)).toEqual(['ci:fail'])
+      expect(evaluateChecks(checks, false).ok).toBe(false)
+    }
+    // 较早的也是跳过：照常为 skipping。
+    const skipped = await checksOf([
+      run({ conclusion: 'SKIPPED', startedAt: '2026-10-26T08:00:00Z' }),
+      run({ conclusion: 'SKIPPED', startedAt: '2026-10-26T09:00:00Z' }),
+    ])
+    expect(summary(skipped)).toEqual(['ci:skipping'])
+  })
+
+  test('开始时间相同：保留结论更差的那条', async () => {
+    for (const order of [
+      ['SUCCESS', 'FAILURE'],
+      ['FAILURE', 'SUCCESS'],
+    ]) {
+      const checks = await checksOf(
+        order.map((conclusion) => run({ conclusion, startedAt: '2026-10-26T08:00:00Z' })),
+      )
+      expect(summary(checks)).toEqual(['ci:fail'])
+    }
+    const pending = await checksOf([
+      run({ status: 'QUEUED', conclusion: null, startedAt: null }),
+      run({ conclusion: 'SUCCESS', startedAt: null }),
+    ])
+    expect(summary(pending)).toEqual(['ci:pending'])
+  })
+
+  test('StatusContext 不去重', async () => {
+    const checks = await checksOf([
+      {
+        __typename: 'StatusContext',
+        context: 's',
+        state: 'FAILURE',
+        createdAt: '2026-10-26T08:00:00Z',
+      },
+      {
+        __typename: 'StatusContext',
+        context: 's',
+        state: 'SUCCESS',
+        createdAt: '2026-10-26T09:00:00Z',
+      },
+    ])
+    expect(summary(checks)).toEqual(['s:fail', 's:pass'])
   })
 })

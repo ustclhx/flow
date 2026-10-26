@@ -11,6 +11,7 @@ import {
   redactSecrets,
   reviewApproves,
   type SupervisorConfig,
+  samePrUrl,
   type TaskContract,
   type TaskResult,
   type TaskView,
@@ -137,6 +138,7 @@ export function evaluateRuns(runs: readonly GhRun[]): 'pending' | 'success' | 'f
 }
 
 const MERGE_ACTORS = new Set(['hub', 'user'])
+const samePrUrlOpt = (a: string | undefined, b: string) => a !== undefined && samePrUrl(a, b)
 
 /** 中枢不可达等无法核实的情况：以 failed(merge_unverifiable) 结束（未合并，可重试）。 */
 class Unverifiable extends Error {}
@@ -291,7 +293,7 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
           const other = pending.data.tasks.find(
             (t) =>
               t.id !== reviewTaskId &&
-              t.contract.inputs?.review?.pr === pr.url &&
+              samePrUrlOpt(t.contract.inputs?.review?.pr, pr.url) &&
               supervisor.reviewer_roles.includes(t.contract.role),
           )
           if (other)

@@ -373,10 +373,12 @@ pr-merge 执行器**不调用任何模型**，合同的 `inputs.merge = {pr, rev
 PR 状态与检查来自**同一次** GraphQL 读取（`gh api graphql`：`headRefOid`、`mergeable`、`isMergeQueueEnabled`、
 `autoMergeRequest` 与最新提交的 `statusCheckRollup`），不会出现"读检查之后 head 变了"的错位；合并前再读一次 head，
 合并命令本身也带 `--match-head-commit`。`mergeStateStatus`（BLOCKED、BEHIND、UNSTABLE 等）只读取并记在活动里，
-不作为判定依据。rollup 可能包含同一检查的多次运行（重新运行后旧的 check run 仍在；gh CLI 的 `gh pr checks` 同样去重，
-见 cli/cli `pkg/cmd/pr/checks/aggregate.go` 的 `eliminateDuplicates`），执行器按与 gh 相同的键去重——CheckRun 为名称 + app +
-workflow + event，StatusContext 为 context——只保留最新一条（按 startedAt / createdAt；没有开始时间的排队重跑视为最新，
-旧的成功结果不会掩盖进行中的重跑）。**分支保护应把关键检查设为 required**：pr-merge 只能看到读取时已存在的检查，
+不作为判定依据。rollup 可能包含同一检查的多次运行（重新运行后旧的 check run 仍在；gh CLI 的 `gh pr checks` 也去重，见 cli/cli
+`pkg/cmd/pr/checks/aggregate.go` 的 `eliminateDuplicates`）。执行器比 gh 更保守，宁可多判失败：只对 CheckRun 去重，键为
+workflow 的稳定 id（`checkSuite.workflowRun.workflow.databaseId`）+ 检查名 + event，取不到 id 时不去重、每条单独计入
+（两个同名 workflow 不会互相覆盖），StatusContext 不去重；同一键下按开始时间取最新一条（没有开始时间的排队重跑视为最新，
+时间相同时保留更差的那条）：最新是 pass 才能覆盖较早的非 pass，最新是 pending 则整体 pending，最新是 skipping / neutral 而
+较早有 fail 或 cancel 时按失败处理。**分支保护应把关键检查设为 required**：pr-merge 只能看到读取时已存在的检查，
 之后才创建的检查不在核对范围内。
 
 通过后执行 `gh pr merge <链接> --<merge_method> --match-head-commit <reviewed_sha>`（`supervisor.merge_method`，默认 squash）。
@@ -394,6 +396,9 @@ workflow + event，StatusContext 为 context——只保留最新一条（按 st
 
 **timeout_s**：merger 合同的 `timeout_s` 不得小于 2400 秒（40 分钟：核对与合并之外还要等最长 30 分钟的流水线），
 否则执行器在合并前以 `timeout_too_short` 失败；角色文件不支持 `timeout_s`，由创建 merger 任务的中枢保证（缺省 3600）。
+
+**pr-merge 只能在本机节点上运行**：远程节点、以及用绑定 token（`FLOW_HUB_TOKEN`，`node:<id>` 身份）运行的节点读不到审查任务与
+任务列表，核对必然失败（`merge_not_eligible` / `review_not_approved`），不能执行合并。
 
 审查任务与任务列表（`status=done` 的可信审查，以及各未结束状态的同 PR 审查）经中枢 `GET /v1/tasks/:id`、`GET /v1/tasks`
 读取。执行器自己按 flow-home 构造中枢客户端，不声明 `X-Flow-Actor`：本机节点以 user token 访问，身份为 user

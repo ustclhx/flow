@@ -404,6 +404,22 @@ describe('合并前的条件核对', () => {
       if (outcome.outcome === 'failed') expect(outcome.result.summary).toContain('t-review-next')
       expect(mergeCalls(s)).toEqual([])
     }
+    // 链接大小写不同也算同一 PR。
+    const cased = setup()
+    cased.others = [
+      {
+        ...cased.review,
+        id: 't-review-cased',
+        status: 'queued',
+        result: null,
+        finished_at: null,
+        contract: {
+          ...cased.review.contract,
+          inputs: { review: { pr: 'https://github.com/ACME/demo/pull/7' } },
+        },
+      },
+    ]
+    expect(reason((await execute(cased)).outcome)).toBe('review_not_approved')
     // 其他 PR 的进行中审查不影响。
     const s = setup()
     s.others = [

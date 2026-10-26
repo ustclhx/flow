@@ -272,7 +272,7 @@ const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
                   __typename
                   ... on CheckRun {
                     name status conclusion detailsUrl startedAt
-                    checkSuite { app { slug } workflowRun { event workflow { name } } }
+                    checkSuite { app { slug } workflowRun { event workflow { databaseId name } } }
                   }
                   ... on StatusContext { context state targetUrl createdAt }
                 }
@@ -300,7 +300,10 @@ const snapshotContext = z.union([
           .looseObject({
             event: z.string().nullable().optional(),
             workflow: z
-              .looseObject({ name: z.string().nullable().optional() })
+              .looseObject({
+                databaseId: z.number().int().nullable().optional(),
+                name: z.string().nullable().optional(),
+              })
               .nullable()
               .optional(),
           })
@@ -320,29 +323,63 @@ const snapshotContext = z.union([
 ])
 type SnapshotContext = z.infer<typeof snapshotContext>
 
+/** bucket 的严重程度：越小越差（开始时间相同时保留更差的那条）。 */
+const BUCKET_RANK: Record<string, number> = { fail: 0, cancel: 0, pending: 1, skipping: 2, pass: 3 }
+const rankOf = (bucket: string) => BUCKET_RANK[bucket] ?? 0
+
 /**
- * rollup 可能包含同一检查的多次运行（重新运行后旧的 check run 仍在，gh CLI 的 `pr checks` 同样去重，见
- * cli/cli `pkg/cmd/pr/checks/aggregate.go` 的 eliminateDuplicates）。按与 gh 相同的键去重——CheckRun 为
- * 名称 + app + workflow + event，StatusContext 为 context——只保留最新的一条（按 startedAt / createdAt）。
- * 与 gh 不同：没有开始时间的运行（排队中的重新运行）视为最新，避免旧的成功结果掩盖进行中的重跑。
+ * rollup 可能包含同一检查的多次运行（重新运行后旧的 check run 仍在；gh CLI 的 `pr checks` 也去重，见
+ * cli/cli `pkg/cmd/pr/checks/aggregate.go` 的 eliminateDuplicates）。这里比 gh 更保守，宁可多判失败：
+ * - 只对 CheckRun 去重，键为 workflow 的稳定 id（`workflow.databaseId`）+ 检查名 + event；取不到 workflow id 时
+ *   不去重，每一条都单独计入（同名的两个 workflow 不会互相覆盖）；StatusContext 不去重；
+ * - 同一键下按开始时间从新到旧排列（没有开始时间的排队重跑视为最新；时间相同时更差的在前），取最新一条：
+ *   - 最新是 pass：覆盖较早的非 pass 记录（重跑成功）；
+ *   - 最新是 pending：整体 pending；
+ *   - 最新是 skipping（SKIPPED / NEUTRAL）且较早记录有 fail 或 cancel：整体按 fail（跳过不能遮住失败）；
+ *   - 其他情况取最新一条本身。
  */
-export function latestChecks(contexts: readonly SnapshotContext[]): SnapshotContext[] {
+export function dedupeChecks(contexts: readonly SnapshotContext[]): GhCheck[] {
   const time = (c: SnapshotContext) => {
     const t = c.__typename === 'CheckRun' ? c.startedAt : c.createdAt
     const ms = t ? Date.parse(t) : Number.NaN
     return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms
   }
-  const key = (c: SnapshotContext) =>
-    c.__typename === 'CheckRun'
-      ? `run\0${c.name}\0${c.checkSuite?.app?.slug ?? ''}\0${c.checkSuite?.workflowRun?.workflow?.name ?? ''}\0${c.checkSuite?.workflowRun?.event ?? ''}`
-      : `status\0${c.context}`
-  const out = new Map<string, SnapshotContext>()
-  for (const c of contexts) {
-    const k = key(c)
-    const prev = out.get(k)
-    if (!prev || time(c) > time(prev)) out.set(k, c)
+  const groups = new Map<string, Array<{ c: SnapshotContext; check: GhCheck }>>()
+  contexts.forEach((c, i) => {
+    const id =
+      c.__typename === 'CheckRun' ? c.checkSuite?.workflowRun?.workflow?.databaseId : undefined
+    const key =
+      c.__typename === 'CheckRun' && typeof id === 'number'
+        ? `run\0${id}\0${c.name}\0${c.checkSuite?.workflowRun?.event ?? ''}`
+        : `single\0${i}`
+    const list = groups.get(key) ?? []
+    list.push({ c, check: bucketOf(c) })
+    groups.set(key, list)
+  })
+  const out: GhCheck[] = []
+  for (const list of groups.values()) {
+    list.sort((a, b) => {
+      const ta = time(a.c)
+      const tb = time(b.c)
+      if (ta !== tb) return ta > tb ? -1 : 1
+      return rankOf(a.check.bucket) - rankOf(b.check.bucket)
+    })
+    const [latest, ...older] = list
+    if (!latest) continue
+    if (latest.check.bucket === 'skipping') {
+      const bad = older.find((o) => o.check.bucket === 'fail' || o.check.bucket === 'cancel')
+      if (bad) {
+        out.push({
+          ...bad.check,
+          bucket: 'fail',
+          state: `${latest.check.state}（较早的运行 ${bad.check.state}）`,
+        })
+        continue
+      }
+    }
+    out.push(latest.check)
   }
-  return [...out.values()]
+  return out
 }
 
 const snapshotResponse = z.looseObject({
@@ -582,7 +619,7 @@ export function createGitHubCli(options: GitHubCliOptions = {}): GitHubCli {
         nameWithOwner: repo.nameWithOwner,
         defaultBranch: repo.defaultBranchRef.name,
         checksOid: commit?.oid,
-        checks: latestChecks(contexts?.nodes ?? []).map(bucketOf),
+        checks: dedupeChecks(contexts?.nodes ?? []),
         checksTruncated:
           contexts !== undefined &&
           (contexts.pageInfo.hasNextPage ||

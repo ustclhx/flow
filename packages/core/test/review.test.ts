@@ -6,6 +6,7 @@ import {
   reviewApproves,
   reviewerRoleIssues,
   reviewerRoleProblem,
+  samePrUrl,
   stripUntrustedReview,
   type TaskView,
   taskContract,
@@ -167,4 +168,18 @@ describe('审查角色必须是只读配置', () => {
     })
     expect(issues[0]?.message).toContain('reviewer')
   })
+})
+
+test('PR 链接比较不区分大小写（reviewApproves、latestTrustedReview）', () => {
+  const upper = 'https://github.com/ACME/Demo/pull/7'
+  expect(reviewApproves(reviewTask(), { workspace: 'ws/demo', pr: upper }, sup).ok).toBe(true)
+  const t = {
+    ...reviewTask({ inputs: { review: { pr: upper } } }),
+    id: 't-1',
+    created_at: '2026-10-26T08:00:00.000Z',
+    finished_at: '2026-10-26T08:10:00.000Z',
+  }
+  expect(latestTrustedReview([t], { workspace: 'ws/demo', pr: PR }, sup)?.id).toBe('t-1')
+  expect(samePrUrl(upper, PR)).toBe(true)
+  expect(samePrUrl('https://github.com/acme/demo/pull/8', PR)).toBe(false)
 })

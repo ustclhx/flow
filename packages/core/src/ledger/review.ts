@@ -12,6 +12,9 @@ import { type ReviewResult, reviewResult, type TaskResult, type TaskView } from 
 
 export const REVIEW_EXECUTOR = 'claude-sdk'
 
+/** 两个 PR 链接是否指向同一个 PR（GitHub 的 host、owner、repo 不区分大小写，按整串忽略大小写比较）。 */
+export const samePrUrl = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+
 /** 合同是否可能产出审查结论（不看角色；角色由 `trustedReview` 按 workspace 配置判断）。 */
 export function mayCarryReview(contract: TaskView['contract']): boolean {
   return contract.executor === REVIEW_EXECUTOR && contract.inputs?.review !== undefined
@@ -74,7 +77,7 @@ export function latestTrustedReview<
     .filter((t) => t.workspace === expected.workspace)
     .filter((t) => {
       const r = trustedReview(t, supervisor)
-      return r.ok && r.pr === expected.pr
+      return r.ok && samePrUrl(r.pr, expected.pr)
     })
     .sort((a, b) => (key(a) < key(b) ? 1 : key(a) > key(b) ? -1 : 0))[0]
 }
@@ -93,7 +96,7 @@ export function reviewApproves(
     return { ok: false, reason: `审查任务属于 ${task.workspace}，不是 ${expected.workspace}` }
   const trusted = trustedReview(task, supervisor)
   if (!trusted.ok) return trusted
-  if (trusted.pr !== expected.pr)
+  if (!samePrUrl(trusted.pr, expected.pr))
     return { ok: false, reason: `审查任务审查的是 ${trusted.pr}，不是 ${expected.pr}` }
   if (trusted.review.verdict !== 'approve')
     return { ok: false, reason: `审查结论为 ${trusted.review.verdict}` }
