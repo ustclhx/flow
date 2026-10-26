@@ -17,7 +17,7 @@ import { FakeClock, tick } from './server-fixtures.ts'
 interface Ctx {
   ledger: LedgerStore
   protocol: NodeProtocol
-  dev(over?: Partial<TaskContractInput>): Promise<string>
+  dev(over?: Partial<TaskContractInput>, actor?: string): Promise<string>
   wake(origin: WakeOrigin, workspace?: string, over?: Partial<TaskContractInput>): Promise<string>
   acquire(slots?: LeaseSlots, waitS?: number): Promise<string | null>
 }
@@ -51,8 +51,8 @@ async function setup(): Promise<Ctx> {
   return {
     ledger: t.store,
     protocol,
-    async dev(over = {}) {
-      const r = await tasks.createTask(contractInput(over), { actor: 'user' })
+    async dev(over = {}, actor = 'user') {
+      const r = await tasks.createTask(contractInput(over), { actor })
       if (!r.ok) throw new Error(r.error.message)
       return r.data.task.id
     },
@@ -125,7 +125,8 @@ describe('按执行槽类别分配', () => {
 
   test('普通空位可以接任何类别；角色名叫 supervisor 但没有 wake_started 的任务按普通任务处理', async () => {
     const c = await setup()
-    const fakeWake = await c.dev({ role: 'supervisor' })
+    // 名为 supervisor 的角色只能由 hub 建（G5）；不写 wake_started 就不是唤醒任务
+    const fakeWake = await c.dev({ role: 'supervisor' }, 'hub')
     expect(await c.acquire(slots({ supervisor: 1, reply: 1 }))).toBeNull()
     expect(await c.acquire(slots({ general: 1 }))).toBe(fakeWake)
     const w = await c.wake('instruction')
