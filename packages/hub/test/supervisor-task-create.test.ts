@@ -24,6 +24,7 @@ import {
   createTaskService,
   createWakeTokenAuthority,
   type EventInput,
+  type HubTokenStore,
   type LedgerStore,
   type RoleLookup,
   type WorkspaceInfo,
@@ -193,7 +194,10 @@ async function setup(
       ),
     ).task
     const r = must(
-      await protocol.service.acquire({ node_id: 'nw', capabilities: ['executor:fake', 'wake'] }),
+      await protocol.service.acquire(
+        { node_id: 'nw', capabilities: ['executor:fake', 'wake'] },
+        { actor: 'node:nw' },
+      ),
     )
     expect(r.lease?.task_id).toBe(t.id)
     const token = r.lease?.wake_token
@@ -1107,5 +1111,200 @@ describe('复核修复：并发、origin、写类路由与路径', () => {
     )
     expect(t?.contract.inputs?.repo).toBe(s.repo)
     expect((await go({ inputs: { repo: 'repo' } })).code).toBe('repo_not_in_workspace')
+  })
+})
+
+describe('第二轮复核：codex-orca 的 cwd', () => {
+  test('codex-orca 的 cwd / inputs.repo 必须恰好是登记仓库；其他执行器允许子目录', async () => {
+    const s = await setup()
+    const w = await s.wake('instruction')
+    const dev = { parent: w.id, role: 'dev', executor: 'codex-orca' }
+    expect((await s.supCreate(w.token, { ...dev, cwd: s.repo })).code).toBe('ok')
+    expect((await s.supCreate(w.token, { ...dev, cwd: `${s.repo}/packages/..` })).code).toBe('ok')
+    expect((await s.supCreate(w.token, { ...dev, cwd: join(s.repo, 'packages', 'a') })).code).toBe(
+      'repo_not_in_workspace',
+    )
+    const viaRepo = await s.supCreate(w.token, {
+      ...dev,
+      cwd: s.repo,
+      inputs: { repo: join(s.repo, 'packages') },
+    })
+    expect(viaRepo.code).toBe('repo_not_in_workspace')
+    expect(
+      (await s.supCreate(w.token, { parent: w.id, cwd: join(s.repo, 'packages', 'a') })).code,
+    ).toBe('ok')
+  })
+})
+
+describe('第二轮复核：只有节点与 user 能走节点协议并拿到唤醒 token（blocker）', () => {
+  /** 带一个绑定 AI token（actor dev）的应用，与 setup 共用账本与节点协议。 */
+  async function withBoundToken() {
+    const s = await setup()
+    const tokens = {
+      authenticate: (p: string) =>
+        p === 'fht_probe' ? { id: 'tok_aaaaaaaaaaaa', actor: 'dev', remote: false } : null,
+    } as unknown as HubTokenStore
+    const app = createHubApp({
+      token: testToken,
+      tokens,
+      wakeTokens: s.wakeTokens,
+      ledger: s.store,
+      mount: [{ path: '/', app: s.protocol.routes }],
+    })
+    const post = async (
+      path: string,
+      body: unknown,
+      o: { token?: string; actor?: string } = {},
+    ) => {
+      const res = await app.request(path, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${o.token ?? 'fht_probe'}`,
+          ...(o.actor ? { 'X-Flow-Actor': o.actor } : {}),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+      const json = (await res.json()) as {
+        ok: boolean
+        data?: { lease?: { wake_token?: string; task_id: string } | null }
+        error?: { code: string }
+      }
+      return { status: res.status, code: json.ok ? 'ok' : json.error?.code, json }
+    }
+    return { s, post }
+  }
+
+  test('绑定 AI token 与 user token 降级的 AI 注册、领取、续约、完成、ack 全部 403 scope_denied', async () => {
+    const { s, post } = await withBoundToken()
+    const w = await s.wake('instruction')
+    const lease = w.lease
+    const cases: [string, unknown][] = [
+      ['/v1/nodes', { node_id: 'evil', hostname: 'h', version: '0', capabilities: ['wake'] }],
+      ['/v1/leases', { node_id: 'nw', capabilities: ['executor:fake', 'wake'] }],
+      [`/v1/leases/${lease.lease_id}/renew`, { lease_token: lease.lease_token }],
+      [
+        `/v1/leases/${lease.lease_id}/complete`,
+        {
+          lease_token: lease.lease_token,
+          outcome: 'done',
+          result: { summary: 'x', executor: 'fake', node_id: 'nw' },
+        },
+      ],
+      [
+        `/v1/leases/${lease.lease_id}/ack-reply`,
+        { lease_token: lease.lease_token, reply_id: 'r-x' },
+      ],
+    ]
+    for (const [path, body] of cases) {
+      const bound = await post(path, body)
+      expect([path, bound.status, bound.code]).toEqual([path, 403, 'scope_denied'])
+      const downgraded = await post(path, body, { token: testToken, actor: 'dev' })
+      expect([path, downgraded.status, downgraded.code]).toEqual([path, 403, 'scope_denied'])
+    }
+    expect(s.store.getTask(w.id)?.status).toBe('running')
+  })
+
+  test('排队的唤醒不能被绑定 AI token 领走；user（本机节点）领取时才下发 token', async () => {
+    const { s, post } = await withBoundToken()
+    // 先建一个唤醒但不领取
+    const t = must(
+      await s.tasks.createTask(
+        {
+          goal: '处理唤醒',
+          workspace: WS,
+          role: 'supervisor',
+          executor: 'fake',
+          requires: ['wake'],
+          inputs: { wake: { origin: 'instruction', generation: 99, events: [] } },
+        },
+        {
+          actor: 'hub',
+          origin: 'instruction',
+          withCreated: (id): EventInput[] => [
+            {
+              task_id: id,
+              workspace: WS,
+              type: 'supervisor.wake_started',
+              payload: {
+                task_id: id,
+                workspace: WS,
+                origin: 'instruction',
+                events: [],
+                generation: 99,
+              },
+            },
+          ],
+        },
+      ),
+    ).task
+    const stolen = await post('/v1/leases', {
+      node_id: 'nw',
+      capabilities: ['executor:fake', 'wake'],
+    })
+    expect(stolen.code).toBe('scope_denied')
+    expect(s.store.getTask(t.id)?.status).toBe('queued')
+    const asUser = await post(
+      '/v1/leases',
+      { node_id: 'nw', capabilities: ['executor:fake', 'wake'] },
+      { token: testToken },
+    )
+    expect(asUser.code).toBe('ok')
+    expect(asUser.json.data?.lease?.task_id).toBe(t.id)
+    expect(asUser.json.data?.lease?.wake_token?.startsWith('fwk_')).toBe(true)
+  })
+
+  test('服务层：只有 user 或 node:<body.node_id> 能拿到唤醒 token', async () => {
+    for (const [actor, expected] of [
+      [undefined, false],
+      ['dev', false],
+      ['node:other', false],
+      ['supervisor', false],
+      ['user', true],
+      ['node:nw', true],
+    ] as const) {
+      const s = await setup()
+      must(
+        await s.tasks.createTask(
+          {
+            goal: 'w',
+            workspace: WS,
+            role: 'supervisor',
+            executor: 'fake',
+            requires: ['wake'],
+            inputs: { wake: { origin: 'instruction', generation: 1, events: [] } },
+          },
+          {
+            actor: 'hub',
+            origin: 'instruction',
+            withCreated: (id): EventInput[] => [
+              {
+                task_id: id,
+                workspace: WS,
+                type: 'supervisor.wake_started',
+                payload: {
+                  task_id: id,
+                  workspace: WS,
+                  origin: 'instruction',
+                  events: [],
+                  generation: 1,
+                },
+              },
+            ],
+          },
+        ),
+      )
+      const r = must(
+        await s.protocol.service.acquire(
+          { node_id: 'nw', capabilities: ['executor:fake', 'wake'] },
+          actor === undefined ? {} : { actor },
+        ),
+      )
+      expect([actor, r.lease !== null, r.lease?.wake_token !== undefined]).toEqual([
+        actor,
+        true,
+        expected,
+      ])
+    }
   })
 })

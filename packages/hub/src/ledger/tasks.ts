@@ -479,11 +479,16 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
             'failure',
             'verify_not_allowed',
             `验收命令未获策略自动放行（policies.yaml 中 tool:Verify 的 auto 规则）：${denied
-              .map((v) => `#${v.index} ${v.command}（${v.level}）`)
+              .map((v) => `#${v.index} ${v.command}（${v.reason ?? v.level}）`)
               .join('；')}`,
             {
               field: 'verify',
-              denied: denied.map((v) => ({ index: v.index, command: v.command, level: v.level })),
+              denied: denied.map((v) => ({
+                index: v.index,
+                command: v.command,
+                level: v.level,
+                ...(v.reason === undefined ? {} : { reason: v.reason }),
+              })),
             },
           )
         }

@@ -193,6 +193,7 @@ export interface CheckedRepoPaths {
  *   避免中枢与节点对 `..` 加符号链接的解释不同；不存在的路径拒绝；
  * - 通过后返回规范化的路径：登记仓库的写法（展开 `~`、词法规范化）加上 realpath 中仓库以下的部分。
  *   这个路径不含 `..` 与仓库内的符号链接，且与节点对登记仓库的比较方式一致；调用方写回合同；
+ * - executor 为 codex-orca 时必须恰好是登记仓库（与节点 `resolveContractCwd(…, true)` 一致），其他执行器允许子目录；
  * - 两者都没写时，只有 workspace 恰好登记一个仓库才允许（节点会回退到它）；
  * - 验收步骤的 `cwd` 相对任务目录解析，不能是绝对路径或含 `..`。
  * 节点在执行前仍须再核对一次 realpath（tasks 5.6），这里只能保证创建时刻的状态。
@@ -235,6 +236,13 @@ export async function checkRepoInWorkspace(
     if (resolved === null || !root) {
       return repoDenied(
         `${field} ${raw} 不在 ${workspace.ref} 登记的仓库内（config/workspaces/ 中该 workspace 的 repos）`,
+        { field, workspace: workspace.ref },
+      )
+    }
+    // codex-orca 以登记仓库为基础仓库创建 worktree，节点要求 cwd / inputs.repo 恰好是登记仓库（不允许子目录）。
+    if (contract.executor === 'codex-orca' && resolved !== root.real) {
+      return repoDenied(
+        `executor 为 codex-orca 时 ${field} 必须恰好是 ${workspace.ref} 登记的仓库，不能是其中的子目录：${raw}`,
         { field, workspace: workspace.ref },
       )
     }

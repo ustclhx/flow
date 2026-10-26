@@ -625,6 +625,14 @@ describe('policies.yaml 模板的代回复白名单', () => {
     [['pnpm', 'test', '&&', 'curl', 'x'], true],
     [['git', 'push', 'origin', 'main'], false],
     [['curl', 'https://example.com'], false],
+    // 参数中的路径一律不放行
+    [['pnpm', 'test', '/tmp/x.test.ts'], false],
+    [['pnpm', 'test', '~/x'], false],
+    [['pnpm', 'test', '../other'], false],
+    [['pnpm', 'test', 'a/../../b'], false],
+    [['pnpm', 'test', '--preload=/tmp/x.js'], false],
+    [['pnpm', 'test', '--reporter=../r.js'], false],
+    [['pnpm', 'test', 'src/a.test.ts'], true],
   ])('verify 白名单 %j → %s', (cmd, allowed) => {
     const [v] = decideVerifySteps(rules, { workspace: WS, role: 'dev' }, [{ cmd }])
     expect(v?.allowed).toBe(allowed as boolean)

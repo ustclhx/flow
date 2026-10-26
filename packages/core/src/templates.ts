@@ -130,6 +130,7 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
 ## 验收命令由节点在执行器沙箱之外直接运行。supervisor 等 AI 身份建任务时，中枢在创建时逐条判定：
 ## 动作为 tool:Verify 加上命令识别出的动作，只有 auto / auto-report 才允许，否则拒绝（verify_not_allowed）。
 ## 不启用下面的规则时，supervisor 建的任务不能带 verify。命令前缀同样严格按原始词匹配。
+## 参数中出现以 / 或 ~ 开头、或含 .. 的词（含 --x=<值> 的值）时一律不放行：它们可能读写或加载仓库外的文件。
 ## 风险：与代回复白名单相同，批准 pnpm test 等于在沙箱外执行仓库中的脚本。
 # - scope: ws/<id>
 #   action: tool:Verify

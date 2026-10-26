@@ -32,6 +32,20 @@ export interface VerifyVerdict {
   command: string
   level: PolicyDecisionLevel
   allowed: boolean
+  /** 不放行的额外原因（例如参数中有路径），档位本身可能是 auto。 */
+  reason?: string
+}
+
+/**
+ * 参数中的路径（以 `/`、`~` 开头或含 `..` 的词；`--x=<值>` 的值同样检查）：验收命令可借它们读写或加载
+ * 仓库外的文件（`pnpm test --preload=/tmp/x.js`、`pnpm test ../../other`），一律不放行。
+ */
+export function verifyPathArgument(cmd: readonly string[]): string | undefined {
+  return cmd.find((word) =>
+    [word, word.includes('=') ? word.slice(word.indexOf('=') + 1) : ''].some(
+      (w) => w.startsWith('/') || w.startsWith('~') || w.includes('..'),
+    ),
+  )
 }
 
 /** 逐条判定；`allowed` 只在 auto / auto-report 时为 true。 */
@@ -45,6 +59,10 @@ export function decideVerifySteps(
     const command = verifyCommandText(step.cmd)
     const actions = classifyAction({ tool: VERIFY_TOOL, command }, undefined, opts)
     const { level } = decide(rules, { scope, actions, command })
+    const pathArg = verifyPathArgument(step.cmd)
+    if (pathArg !== undefined) {
+      return { index, command, level, allowed: false, reason: `参数含路径 ${pathArg}` }
+    }
     return { index, command, level, allowed: level === 'auto' || level === 'auto-report' }
   })
 }

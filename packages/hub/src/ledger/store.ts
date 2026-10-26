@@ -889,6 +889,29 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     }
   }
 
+  /** 唤醒任务的账本记录（`supervisor.wake_started`）；`wakeOf` 与 `wakeOrigin` 共用。 */
+  function wakeRecordOf(taskId: string): WakeRecord | null {
+    const r = get<{ seq: number; workspace: string; payload_json: string }>(
+      `SELECT seq, workspace, payload_json FROM events
+         WHERE type = 'supervisor.wake_started' AND task_id = ? ORDER BY seq LIMIT 1`,
+      taskId,
+    )
+    if (!r) return null
+    const p = JSON.parse(r.payload_json) as {
+      origin: WakeOrigin
+      generation: number
+      events?: number[]
+    }
+    return {
+      task_id: taskId,
+      workspace: r.workspace,
+      origin: p.origin,
+      generation: p.generation,
+      seq: r.seq,
+      events: p.events ?? [],
+    }
+  }
+
   const insertEvent = db.prepare(
     `INSERT INTO events (ts, type, workspace, task_id, actor, payload_json)
      VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`,
@@ -1128,27 +1151,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       const r = get<TaskRow>(`${TASK_SELECT} WHERE t.idempotency_key = ?`, key)
       return r ? rowToTask(r) : null
     },
-    wakeOf(taskId) {
-      const r = get<{ seq: number; workspace: string; payload_json: string }>(
-        `SELECT seq, workspace, payload_json FROM events
-         WHERE type = 'supervisor.wake_started' AND task_id = ? ORDER BY seq LIMIT 1`,
-        taskId,
-      )
-      if (!r) return null
-      const p = JSON.parse(r.payload_json) as {
-        origin: WakeOrigin
-        generation: number
-        events?: number[]
-      }
-      return {
-        task_id: taskId,
-        workspace: r.workspace,
-        origin: p.origin,
-        generation: p.generation,
-        seq: r.seq,
-        events: p.events ?? [],
-      }
-    },
+    wakeOf: wakeRecordOf,
     eventTaskIds(seqs) {
       if (seqs.length === 0) return []
       const rows = all<{ task_id: string }>(
@@ -1189,14 +1192,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     activeDelegation(taskId) {
       return currentDelegation(taskId)
     },
-    wakeOrigin(taskId) {
-      const row = get<{ origin: WakeOrigin | null }>(
-        `SELECT json_extract(payload_json, '$.origin') AS origin FROM events
-         WHERE type = 'supervisor.wake_started' AND task_id = ? LIMIT 1`,
-        taskId,
-      )
-      return row?.origin ?? null
-    },
+    wakeOrigin: (taskId) => wakeRecordOf(taskId)?.origin ?? null,
     getNode(nodeId) {
       const r = get<NodeRow>(`${NODE_SELECT} WHERE n.node_id = ?`, nodeId)
       return r ? rowToNode(r) : null

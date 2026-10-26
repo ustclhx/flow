@@ -201,9 +201,11 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
       const denied = await checkNodeScope(c, actor, leaseHolders)
       if (denied) return denied
     }
-    // 唤醒身份（D6）不能走节点协议：不能注册节点、领取或操作租约（否则可借领取拿到其他任务）。
-    if (c.get('auth').kind === 'wake' && nodeMatchers.some((m) => m.match(c))) {
-      return errorResponse(c, 'scope_denied', 'supervisor 唤醒身份不能访问节点协议接口')
+    // 节点协议的写接口（注册、领取、续约、完成、ack-reply）只允许 user（本机节点用 user token）与 node:*。
+    // 其他身份（user token 降级的 AI、绑定 AI token、唤醒绑定 token）一律拒绝：领取租约会拿到任务合同、
+    // 唤醒绑定 token 与租约令牌（add-m1-supervisor D6）。
+    if (actor !== USER_ACTOR && !isNodeActor(actor) && nodeMatchers.some((m) => m.match(c))) {
+      return errorResponse(c, 'scope_denied', `身份 ${actor} 不能访问节点协议接口`)
     }
     await next()
   }

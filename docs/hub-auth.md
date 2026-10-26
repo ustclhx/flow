@@ -69,8 +69,8 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | 接口 | user | AI（user token 降级） | `node:<id>`（绑定 token） | remote token |
 |---|---|---|---|---|
 | `GET /v1/health` | ✓（不鉴权） | ✓ | ✓ | ✓ |
-| `POST /v1/nodes`（注册）、`POST /v1/leases`（领取） | ✓ | ✓ | 仅 `node_id` 为自己 | 403 |
-| `POST /v1/leases/:id/renew`、`complete`、`ack-reply` | ✓ | ✓ | ✓（凭 lease_token） | 403 |
+| `POST /v1/nodes`（注册）、`POST /v1/leases`（领取） | ✓（本机节点） | 403 `scope_denied` | 仅 `node_id` 为自己 | 403 |
+| `POST /v1/leases/:id/renew`、`complete`、`ack-reply` | ✓（本机节点） | 403 `scope_denied` | ✓（凭 lease_token） | 403 |
 | `GET /v1/tasks/:id` | ✓ | ✓ | 仅自己持有活动租约的任务 | 403 |
 | `POST /v1/policy/check` | ✓（人工调试） | 403 `scope_denied` | 仅自己持有未过期活动租约的任务 | 403 |
 | `POST /v1/tasks`（创建任务） | ✓（任意角色） | 仅 `creatable_by` 匹配的角色，否则 403 `role_not_allowed` | 403 `scope_denied` | 403 |
@@ -84,7 +84,12 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | `/v1/hub/tokens`（签发、列出、撤销） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/ui/login-code`（`flow ui` 申请 Web 登录码） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 
-remote token 一列的 403 都是 `remote_not_allowed`。`inbox_act` 先校验 action，再检查身份与条目的
+remote token 一列的 403 都是 `remote_not_allowed`。
+
+**节点接口的身份要求**：节点协议的写接口（注册、领取、续约、完成、ack-reply）只接受 `user`（本机节点用
+`state/hub.token`、不声明身份）与 `node:*`。user token 降级的 AI 身份、绑定给 AI 的 token、唤醒绑定 token 一律
+403 `scope_denied`：领取租约会拿到任务合同、租约令牌，领到唤醒任务时还会拿到唤醒绑定 token。唤醒绑定 token
+也只在调用方是 `user` 或 `node:<请求体中的 node_id>` 时随租约下发。`inbox_act` 先校验 action，再检查身份与条目的
 `created_by`；拒绝时不调用底层操作、不产生事件。via 只接受 cli、web、telegram，省略时为 cli；
 CLI 固定传 cli。读取密钥等只有用户能做的接口使用 `userOnly`，在读取请求体、调用服务之前拒绝；
 策略检查的节点 scope 需要读取请求体中的 `task_id`，加载策略后在入账前再次校验租约。
@@ -110,7 +115,7 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
   - 取消任务：只能取消本次唤醒自己建的任务（`parent` 为该唤醒且 `created_by = supervisor`），其他 workspace 的任务
     403 `workspace_mismatch`，其余 403 `scope_denied`；
   - 收件箱：只能忽略本 workspace 中自己发起的条目，其他 workspace 403 `workspace_mismatch`；
-  - 节点协议接口（注册节点、领取、续约、提交、ack-reply）与策略检查一律 403 `scope_denied`；
+  - 节点协议接口（注册节点、领取、续约、提交、ack-reply）与策略检查一律 403 `scope_denied`（见上文"节点接口的身份要求"）；
   - 回复任务、处理收件箱条目（接受或驳回提案、批准）、重建、签发 token 等 user-only 接口一律 403 `user_only`；
   - 读接口（任务、事件、收件箱列表等）与其他 AI 身份相同。
 - **节点身份被信任**：领到唤醒租约的节点拿到这次唤醒的 token，也就获得了 supervisor 身份。这与节点本来就能以
@@ -143,6 +148,7 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
   3. 目标类别为 merge 或 supervisor → 403 `role_not_allowed`；
   4. `cwd` 与 `inputs.repo` 必须是绝对路径（或 `~/`）；先像节点一样词法 `resolve`，再 realpath，落在本 workspace 登记仓库内
      （允许子目录）；通过后把规范化路径（登记仓库写法加 realpath 中仓库以下部分）写回合同。两者都没写时 workspace 必须恰好登记一个仓库；
+     executor 为 codex-orca 时必须恰好是登记仓库（不允许子目录，与节点一致），其他执行器允许子目录；
      验收步骤的 `cwd` 只能是不含 `..` 的相对路径；否则 403 `repo_not_in_workspace`。节点执行前还须再核对一次（tasks 5.6）；
   5. 上限（`supervisor.limits`）：本次唤醒已建任务数达到 `tasks_per_wake` → 429 `limit_exceeded`；新的写类任务关联的 PR 已有
      `review_rounds` 次 `changes_requested`（只统计 `reviewer_roles` 中 claude-sdk 审查任务的 `result.review.verdict`，链接不分大小写）
@@ -150,7 +156,8 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
      `inputs.pr`、`kind: pr` 产物），加上新合同的 `inputs.pr`。数量、轮数与链深度在写入前的同步段再检查一次，并发请求不能绕过。
 - **验收命令**（D5）：非 user 身份（包括 supervisor、user token 降级的 AI 身份）建任务时，合同 `verify` 的每条命令在创建时经策略判定：
   动作为 `tool:Verify` 加命令识别出的动作，scope 为新任务的 workspace 与角色，前缀严格匹配。只有 `auto` / `auto-report` 放行，
-  否则 403 `verify_not_allowed`，错误中列出未通过的命令。`tool:Verify` 是受保护的工具，`* * auto` 这类通配规则不能放行。
+  否则 403 `verify_not_allowed`，错误中列出未通过的命令。参数中出现以 `/`、`~` 开头或含 `..` 的词（`--x=<值>` 的值同样检查）时
+  一律不放行，因为它们可能读写或加载仓库外的文件。`tool:Verify` 是受保护的工具，`* * auto` 这类通配规则不能放行。
   `policies.yaml` 模板中有注释掉的 `tool:Verify` 白名单；不启用时，supervisor 建的任务不能带 verify。
 - **链深度**：user、hub 之外的身份建任务时，新任务的 `parent` 链深度超过 `supervisor.limits.chain_depth`（默认 8）→ 429 `limit_exceeded`。
 
@@ -158,8 +165,9 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 
 - 能读到 `state/hub.token` 的进程就是 user，它把任务挂到唤醒任务或 instruction 链上时，新任务会继承 instruction origin
   （与下文"信任边界"一致）。唤醒绑定 token 不由 `hub.token` 派生，读到 `hub.token` 也不能伪造 supervisor 身份。
-- 持有 user token 降级或绑定 token 的 AI 身份，可以把任务挂到**未结束**的 instruction 任务下并继承 instruction origin
-  （挂到唤醒任务下、或挂到已结束的任务下都不行）。
+- 持有 user token 降级或绑定 token 的 AI 身份，可以把任务挂到**任意未结束**的 instruction 任务下（不限于它自己所在的任务）
+  并继承 instruction origin；挂到唤醒任务下、或挂到已结束的任务下都不行。根治方案（要求调用方就是 parent 当前租约的执行者）
+  记在 design 的 Open Questions。
 
 ## 角色创建权限（`creatable_by`）
 

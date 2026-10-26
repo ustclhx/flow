@@ -81,6 +81,11 @@ export interface NodeServiceOptions extends NodeProtocolConfig {
 export interface AcquireOptions {
   /** 请求方断开或中枢停止时中止等待。 */
   signal?: AbortSignal
+  /**
+   * 调用方身份（鉴权中间件认定）。唤醒绑定 token 只在调用方是 `user`（本机节点用 user token）或
+   * `node:<body.node_id>` 时随租约下发；缺省或其他身份不下发（D6）。
+   */
+  actor?: string
 }
 
 export interface NodeService {
@@ -376,7 +381,6 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     // 被其他请求抢先（理论上不会发生，见文件头）。
     if (!written.ok) return null
     ledger.touchNode(nodeId)
-    const wakeToken = o.issueWakeToken?.({ lease_id: leaseId, task_id: task.id })
     return {
       lease_id: leaseId,
       lease_token: token,
@@ -387,7 +391,6 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       ttl_s: ttl,
       expires_at: expiresAt,
       ...(resume ? { resume } : {}),
-      ...(wakeToken === undefined ? {} : { wake_token: wakeToken }),
     }
   }
 
@@ -517,9 +520,18 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       if (!req.ok) return req
       const { node_id: nodeId, capabilities, slots } = req.data
       if (!ledger.touchNode(nodeId)) return notRegistered(nodeId)
+      // 唤醒绑定 token 按这次请求的调用方决定是否下发（等待者可能领到为别的请求挑出的任务）。
+      const mayIssue = opts.actor === 'user' || opts.actor === `node:${nodeId}`
+      const withWakeToken = (g: LeaseGrant | null): LeaseGrant | null => {
+        if (!g || !mayIssue) return g
+        const wakeToken = o.issueWakeToken?.({ lease_id: g.lease_id, task_id: g.task_id })
+        return wakeToken === undefined ? g : { ...g, wake_token: wakeToken }
+      }
       const grant = tryGrant(nodeId, capabilities, slots)
       const waitMs = Math.min(req.data.wait_s, o.leaseWaitMaxS) * 1000
-      if (grant || waitMs === 0 || closed || opts.signal?.aborted) return ok({ lease: grant })
+      if (grant || waitMs === 0 || closed || opts.signal?.aborted) {
+        return ok({ lease: withWakeToken(grant) })
+      }
 
       const lease = await new Promise<LeaseGrant | null>((resolve) => {
         let cancelTimer = () => {}
@@ -541,7 +553,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         opts.signal?.addEventListener('abort', onAbort, { once: true })
       })
       ledger.touchNode(nodeId)
-      return ok({ lease })
+      return ok({ lease: withWakeToken(lease) })
     },
 
     renew(leaseId, body) {

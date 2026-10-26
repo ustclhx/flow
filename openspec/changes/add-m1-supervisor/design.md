@@ -119,8 +119,8 @@ workspace 配置 `supervisor.limits`，默认值：
 1. `parent` 必须是本 workspace 未结束的普通唤醒任务（由 `supervisor.wake_started` 判定），否则 `parent_required`；
 2. 目标角色的有效类别（D9）为 `write` 且唤醒 origin 为 `autonomous` → 403 `proposal_required`；
 3. 目标角色类别为 `merge` 或 `supervisor` → 403 `role_not_allowed`；
-4. 合同 `cwd` / `inputs.repo` 必须位于本 workspace 登记的仓库内，否则 `repo_not_in_workspace`：必须是绝对路径或 `~/`；先按节点的方式词法 `resolve`，再 `realpath` 比较（避免 `链接/../..` 在中枢与节点解释不同）；通过后把规范化路径（登记仓库写法加 realpath 中仓库以下部分，不含 `..` 与符号链接）写回合同；节点执行前仍须再核对一次（tasks 5.6）；
-5. 验收命令（`verify`）：非 user 身份建任务时，每条命令在**创建时**经策略引擎判定——动作取 `tool:Verify` 加 `classifyAction` 的结果，scope 为新任务的 workspace 与角色，`command_prefix` 严格匹配；只有 `auto` / `auto-report` 放行，否则 403 `verify_not_allowed`，错误中列出未通过的命令。`tool:Verify` 列为受保护的工具（通配规则最多 draft-approve）。验收命令由节点在执行器沙箱之外直接运行，不经运行时审批，这一步堵住"建一个只读任务、借 verify 外传 `hub.token`"。`flow init` 的 `policies.yaml` 带一组注释掉的 `tool:Verify` auto 模板（`pnpm check`、`pnpm test`、`pnpm lint` 前缀）；不启用时 supervisor 建的任务不能带 verify。所有非 user 身份都受此限（不只 supervisor）；
+4. 合同 `cwd` / `inputs.repo` 必须位于本 workspace 登记的仓库内，否则 `repo_not_in_workspace`：必须是绝对路径或 `~/`；executor 为 codex-orca 时必须恰好是登记仓库（与节点一致），其他执行器允许子目录；先按节点的方式词法 `resolve`，再 `realpath` 比较（避免 `链接/../..` 在中枢与节点解释不同）；通过后把规范化路径（登记仓库写法加 realpath 中仓库以下部分，不含 `..` 与符号链接）写回合同；节点执行前仍须再核对一次（tasks 5.6）；
+5. 验收命令（`verify`）：非 user 身份建任务时，每条命令在**创建时**经策略引擎判定——动作取 `tool:Verify` 加 `classifyAction` 的结果，scope 为新任务的 workspace 与角色，`command_prefix` 严格匹配；只有 `auto` / `auto-report` 放行，否则 403 `verify_not_allowed`，错误中列出未通过的命令；参数中出现以 `/`、`~` 开头或含 `..` 的词（含 `--x=<值>` 的值）一律不放行。`tool:Verify` 列为受保护的工具（通配规则最多 draft-approve）。验收命令由节点在执行器沙箱之外直接运行，不经运行时审批，这一步堵住"建一个只读任务、借 verify 外传 `hub.token`"。`flow init` 的 `policies.yaml` 带一组注释掉的 `tool:Verify` auto 模板（`pnpm check`、`pnpm test`、`pnpm lint` 前缀）；不启用时 supervisor 建的任务不能带 verify。所有非 user 身份都受此限（不只 supervisor）；
 6. D4 的数量和深度上限。
 
 非 hub 身份不能在 `requires` 中声明保留能力（`wake`），否则 `invalid_arguments`。
@@ -132,6 +132,7 @@ workspace 配置 `supervisor.limits`，默认值：
 claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor --workspace <ws> --task <id>`，并设置 `FLOW_WORKSPACE`、`FLOW_TASK_ID`。**中枢以唤醒绑定 token 认定调用方**：节点领到唤醒任务的租约时，中枢签发只对这次唤醒有效的 token（actor `supervisor`、绑定 workspace 与唤醒 task_id、租约结束或任务结束即失效），节点把它注入 MCP 环境；中枢据此判定调用方是哪个唤醒、origin 是什么，**不信任** `--task`、`FLOW_TASK_ID` 或 `X-Flow-Actor`。`supervisor` 因此成为保留 actor：user token 加 `X-Flow-Actor: supervisor` 的降级请求、`flow hub token issue supervisor` 都被拒绝，只有中枢按租约内部签发（`docs/hub-auth.md` 补签发与失效规则）。
 
 - 写类操作只能作用于该 workspace（否则 `workspace_mismatch`）；`task_create` 自动以绑定的任务为 `parent`（MCP 填写，中枢不代填）。唤醒身份的写类路由：取消任务只能取消本次唤醒自己建的任务（`parent` 为该唤醒、`created_by = supervisor`；其他 workspace → `workspace_mismatch`，否则 `scope_denied`）；收件箱只能忽略本 workspace 中自己发起的条目；节点协议接口（注册、领取、续约、提交、ack）一律 `scope_denied`；回复任务、处理收件箱等 user-only 接口返回 `user_only`。
+- 节点协议的写接口（注册、领取、续约、完成、ack-reply）只接受 user（本机节点）与 `node:*`，其他身份（含绑定 AI token、唤醒 token）`scope_denied`；唤醒 token 只在调用方是 user 或 `node:<node_id>` 时下发。
 - 节点身份被信任：领到唤醒租约的节点获得该唤醒的 supervisor token（与节点本身就能以 `node:*` 身份执行任务的信任边界一致）。token 只存于中枢内存，中枢重启即失效。
 - 经中枢的写（建任务、提案、提问、合并请求、简报、决策回看）由中枢独立校验（D5、D8）。
 - `kb_journal` 仍在本地经写入层执行（只追加），**只有 MCP 绑定这一层检查**；风险是写错 workspace 的 journal，可接受。
@@ -328,3 +329,4 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - 巡检日报是否同时推送 Telegram（目前只进 Digest）。
 - `changes_requested` 后的修改任务复用原分支的方式，实现时以 codex-orca 现有能力为准。
 - 修改任务的推送是否限定到该 PR 的 head 分支（目前审查轮数只约束建任务，不约束修改任务推到哪里）：留作后续问题。
+- 其他 AI 身份借 parent 继承 instruction origin 的根治：要求建任务的调用方就是 parent 任务当前租约的执行者（例如执行器会话持有按租约签发的任务绑定 token），而不是任意持有绑定 token 的 AI；目前只限制 parent 未结束，残余风险写在 `docs/hub-auth.md`。
