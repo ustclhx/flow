@@ -61,7 +61,7 @@ import { createSupervisorRoutes } from '../supervisor/routes.ts'
 import {
   createWakeScheduler,
   type WakeScheduler,
-  workspaceStateFromHome,
+  workspaceConfigFromHome,
 } from '../supervisor/scheduler.ts'
 import {
   acceptTaskProposal,
@@ -411,7 +411,8 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       clock,
       logger,
       workspaces: workspaceLookupFromHome(options.home),
-      workspaceState: workspaceStateFromHome(options.home),
+      // 每次调度只读一次 config/workspaces/（状态与加载结果一并给出）。
+      workspaceConfig: workspaceConfigFromHome(options.home),
       listWorkspaces: async () => {
         const loaded = await loadWorkspaces(options.home)
         return loaded.ok ? loaded.data.workspaces : []

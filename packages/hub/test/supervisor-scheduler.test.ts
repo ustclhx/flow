@@ -21,12 +21,14 @@ import {
   createWakeTokenAuthority,
   type EventInput,
   type LedgerStore,
+  MISSING_RECHECK_MS,
   openTokenStore,
   pauseMs,
   type QueuedEvent,
   type RoleLookup,
   type WakeScheduler,
   type WorkspaceInfo,
+  workspaceConfigFromHome,
   workspaceLookupFromHome,
   workspaceStateFromHome,
 } from '../src/index.ts'
@@ -1204,10 +1206,28 @@ describe('第三轮审查', () => {
     expect(env.clock.pending).toBe(0)
   })
 
+  test('workspace 文件瞬时缺失（编辑器保存）：复查时已恢复，不丢弃，照常唤醒', async () => {
+    const env = await setup()
+    const saved = env.workspaces[WS]
+    delete env.workspaces[WS]
+    const a = instruction(env.store)
+    await env.settle()
+    expect(env.wakes()).toEqual([])
+    if (saved) env.workspaces[WS] = saved
+    await env.clock.advance(MISSING_RECHECK_MS)
+    await env.settle()
+    expect(drops(env.store)).toEqual([])
+    expect(env.wakes()[0]).toMatchObject({ origin: 'instruction', events: [a] })
+  })
+
   test('workspace 文件不存在静默丢弃；定义文件有错走宽限', async () => {
     const gone = await setup()
     delete gone.workspaces[WS]
     const a = instruction(gone.store)
+    await gone.settle()
+    // 隔 MISSING_RECHECK_MS 复查一次仍不存在才丢弃。
+    expect(drops(gone.store)).toEqual([])
+    await gone.clock.advance(MISSING_RECHECK_MS)
     await gone.settle()
     expect(drops(gone.store)).toEqual([
       expect.objectContaining({ up_to_seq: a, reason: 'unknown_workspace' }),
@@ -1355,7 +1375,8 @@ describe('第四轮审查', () => {
       tasks,
       clock,
       workspaces: lookup,
-      workspaceState: state,
+      // 与 run.ts 相同：状态与加载结果一次读取。
+      workspaceConfig: workspaceConfigFromHome(home),
       listWorkspaces: async () => [],
       supervisorRole: async () => ok(SUPERVISOR),
       dayKey,
@@ -1395,10 +1416,13 @@ describe('第四轮审查', () => {
         .map((e) => e.seq),
     ).toEqual([b])
 
-    // 3. 文件被删除：稳定原因，静默丢弃
+    // 3. 文件被删除：稳定原因，复查一次后静默丢弃
     rmSync(file)
     expect(await state(WS)).toBe('missing')
     await clock.advance(60_000)
+    await scheduler.idle()
+    expect(drops(l.store)).toEqual([])
+    await clock.advance(MISSING_RECHECK_MS)
     await scheduler.idle()
     expect(drops(l.store)).toEqual([
       expect.objectContaining({ queue: 'instruction', up_to_seq: b, reason: 'unknown_workspace' }),
