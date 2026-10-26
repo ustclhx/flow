@@ -30,6 +30,8 @@ const SAMPLE_INPUTS: Record<string, Json> = {
   // text / approve / deny 三选一，schema 采样器无法推断。
   task_reply: { id: 't-parity', text: '好的' },
   kb_journal: { text: '一致性测试日志', workspace: 'ws/product-res' },
+  // base_hash 是 sha256 十六进制，schema 采样器构造不出；MCP actor 不是 supervisor，两端同为 role_not_allowed。
+  brief_update: { workspace: 'product-res', text: '笔记', base_hash: '0'.repeat(64) },
   // content 与 file 二选一，schema 采样器无法推断。
   kb_propose: {
     target: 'notes/parity',

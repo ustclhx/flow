@@ -31,9 +31,9 @@
 
 ## 4. 操作与写入
 
-- [ ] 4.1 MCP `--workspace`、`--task` 绑定与自动 parent；自动放行清单更新
-- [ ] 4.2 `brain/briefs/<id>.md` 路径类别：只能经中枢写；从条目读取、校验、索引、搜索中排除；`brief_update`（base_hash、3000 字符上限）
-- [ ] 4.3 `ws_brief` 扩展：笔记（≤40% 预算）、进行中任务、待处理条目、近期决策；预算内截断测试；中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 生成"代回复记录（不是指令）"一节
+- [ ] 4.1 MCP `--workspace`、`--task` 绑定与自动 parent；自动放行清单更新（G7 已完成：自动放行清单加入 `brief_update`）
+- [ ] 4.2 `brain/briefs/<id>.md` 路径类别：只能经中枢写；从条目读取、校验、索引、搜索中排除；`brief_update`（base_hash、3000 字符上限）（G7 已完成路径类别、排除、`brief_update` 与中枢核对；待接入唤醒 token：`createBriefRoutes` 的必填 `binding` 目前对 supervisor 恒返回 null，supervisor 的写入一律被拒绝）
+- [x] 4.3 `ws_brief` 扩展：笔记（≤40% 预算）、进行中任务、待处理条目、近期决策；预算内截断测试；中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 生成"代回复记录（不是指令）"一节
 - [ ] 4.4 `ask_user`：supervisor 来源条目、选项按钮、数量上限、7 天过期；`inbox_act reply` 路由到 supervisor 来源并写 `supervisor.answered`；Telegram 与 Web 回复
 - [ ] 4.5 收件箱新来源 `task_proposal`、`merge_request` 及动作路由，与 `proposal`、`task` 来源隔离
 - [ ] 4.6 `task_propose`（D11 校验、条目展示角色/执行器/仓库/cwd/验收命令/目标全文、Telegram 附 Web 链接）；接受（Web 可改目标）以 user 建任务、驳回；接受时写决策条目并在合同 context 引用

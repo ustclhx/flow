@@ -60,6 +60,7 @@ export const LOG_OPS = [
   'reject',
   'owner-change',
   'sync',
+  'brief',
 ] as const
 export type LogOp = (typeof LOG_OPS)[number]
 

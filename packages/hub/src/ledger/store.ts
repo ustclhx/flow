@@ -31,6 +31,7 @@ import {
   type TaskResume,
   type TaskStatus,
   type TaskView,
+  TERMINAL_STATUSES,
   type WakeOrigin,
 } from '@flow/core'
 import type { z } from 'zod'
@@ -130,10 +131,14 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   latestEvent(beforeSeq?: number, type?: EventType): LedgerEvent | null
   /** 某时刻（含）之后策略自动放行（auto、auto-report）的次数（Telegram `/status`）。 */
   countAutoDecisions(sinceIso: string): number
+  /** 某 workspace 中给定类型的最近 limit 条事件，按 seq 倒序（简报的代回复记录等）。 */
+  recentEvents(workspace: string, types: readonly EventType[], limit: number): LedgerEvent[]
   hasScheduleFire(ruleId: string, plannedAt: string): boolean
 
   getTask(id: string): TaskView | null
   listTasks(filter?: Partial<ListTasksQuery>): TaskView[]
+  /** 某 workspace 未结束（非 done / failed / cancelled）的任务，按更新时间倒序，最多 limit 条。 */
+  openTasks(workspace: string, limit: number): TaskView[]
   /** 全部 queued 任务，按创建先后（created_seq 升序），供租约分配使用。 */
   queuedTasks(): TaskView[]
   findTaskByIdempotencyKey(key: string): TaskView | null
@@ -1019,6 +1024,16 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       )
       return row ? rowToEvent(row) : null
     },
+    recentEvents(workspace, types, limit) {
+      if (types.length === 0 || limit <= 0) return []
+      return all<EventRow>(
+        `SELECT * FROM events WHERE workspace = ? AND type IN (${types.map(() => '?').join(', ')})
+           ORDER BY seq DESC LIMIT ?`,
+        workspace,
+        ...types,
+        limit,
+      ).map(rowToEvent)
+    },
     countAutoDecisions(sinceIso) {
       return (
         get<{ n: number }>(
@@ -1067,6 +1082,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return all<TaskRow>(
         `${TASK_SELECT} ${clause} ORDER BY t.created_seq DESC LIMIT ?`,
         ...params,
+      ).map(rowToTask)
+    },
+    openTasks(workspace, limit) {
+      return all<TaskRow>(
+        `${TASK_SELECT} WHERE t.workspace = ? AND t.status NOT IN (${TERMINAL_STATUSES.map(() => '?').join(', ')})
+           ORDER BY t.updated_at DESC, t.id ASC LIMIT ?`,
+        workspace,
+        ...TERMINAL_STATUSES,
+        limit,
       ).map(rowToTask)
     },
     queuedTasks() {

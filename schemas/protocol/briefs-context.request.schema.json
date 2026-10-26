@@ -1,0 +1,17 @@
+{
+  "$id": "https://flow.local/schemas/protocol/briefs-context.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    }
+  },
+  "required": [
+    "workspace"
+  ],
+  "additionalProperties": false,
+  "title": "GET /v1/briefs/context 查询参数"
+}

@@ -96,6 +96,8 @@ export const FLOW_MCP_AUTO_ALLOWED = [
   'capture',
   'kb_propose',
   'ws_brief',
+  // 只写 supervisor 自己的简报笔记：身份、workspace 绑定与 base_hash 由中枢核对（design D7）。
+  'brief_update',
   'task_list',
   'task_show',
 ] as const

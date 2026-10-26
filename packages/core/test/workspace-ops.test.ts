@@ -8,18 +8,23 @@ import { renderJournalRecord, writeEntry } from '../src/write/api.ts'
 import {
   writeEntry as fixtureEntry,
   initTempHome,
+  isolateHub,
   snapshot,
   writeText,
   writeWorkspace,
 } from './helpers.ts'
 
 const homes: string[] = []
+const restores: (() => void)[] = []
 async function home() {
   const h = await initTempHome('flow-workspace-')
+  // 不连真实中枢：端口不可达、清除 FLOW_HUB_TOKEN；需要中枢数据的用例注入 fetch。
+  restores.push(isolateHub(h))
   homes.push(h)
   return h
 }
 afterEach(() => {
+  for (const restore of restores.splice(0).reverse()) restore()
   for (const h of homes.splice(0)) rmSync(join(h, '..'), { recursive: true, force: true })
 })
 const ctx = (home: string, actor = 'user') => ({ home, actor, via: 'cli' as const })
@@ -210,23 +215,34 @@ describe('workspace 操作', () => {
     expect(limited.text).not.toContain('早上的相关日志')
   })
 
-  test('预算截断：最低优先级先省略，footer 包含在预算中，最小预算仍列出省略部分', async () => {
+  test('预算截断：各节分享预算、在行边界截断，放不下时从最低优先级整节省略，footer 包含在预算中', async () => {
     const h = await briefHome()
     const full = data(await wsBriefOp.run({ workspace: 'xuanxue-saas', budget: 4000 }, ctx(h)))
-    const factsStart = full.text.indexOf('## 待核实事实')
+    expect(full.truncated).toEqual([])
     const reduced = data(
-      await wsBriefOp.run({ workspace: 'xuanxue-saas', budget: factsStart + 30 }, ctx(h)),
+      await wsBriefOp.run(
+        { workspace: 'xuanxue-saas', budget: Math.floor(full.text.length * 0.8) },
+        ctx(h),
+      ),
     )
-    expect(reduced.text.length).toBeLessThanOrEqual(factsStart + 30)
-    expect(reduced.omitted).toEqual(['待核实事实'])
+    expect(reduced.text.length).toBeLessThanOrEqual(Math.floor(full.text.length * 0.8))
+    // 较长的几节平分剩余预算、各自截断并保留标题，短的节完整保留，没有整节省略。
+    expect(reduced.omitted).toEqual([])
+    expect(reduced.truncated).toContain('最近 journal')
+    expect(reduced.truncated).not.toContain('workspace 描述')
+    expect(reduced.truncated).not.toContain('项目卡片')
+    expect(reduced.text).toContain('## 最近 journal')
     expect(reduced.text).toContain('最新相关日志')
-    expect(reduced.text.endsWith('> 已省略：待核实事实')).toBe(true)
-    for (const budget of [64, 100, 150]) {
+    expect(reduced.text).toContain('…（本节已截断）')
+    expect(reduced.text).toContain('## 待核实事实')
+    for (const budget of [64, 100, 150, 250]) {
       const out = data(await wsBriefOp.run({ workspace: 'xuanxue-saas', budget }, ctx(h)))
       expect(out.text.length).toBeLessThanOrEqual(budget)
       expect(out.omitted.length).toBeGreaterThan(0)
       expect(out.text).toContain('已省略：')
       for (const section of out.omitted) expect(out.text.split('已省略：')[1]).toContain(section)
+      // 整节省略从最低优先级开始：省略的总是末尾若干节。
+      expect(out.text.split('已省略：')[1]).toContain('待核实事实')
     }
   })
 

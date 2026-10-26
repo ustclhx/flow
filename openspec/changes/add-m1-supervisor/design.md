@@ -264,7 +264,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 - reply 唤醒的 origin 为 `reply`，可以与一个普通唤醒**并行**（同一 workspace 最多一个 reply 唤醒），因此正在运行的 instruction 唤醒不会把委托拖到超时；节点另有只给 reply 唤醒的预留槽（D12），其他 workspace 的普通唤醒占不到它。
 - **reply 唤醒的权限只限回复**：中枢（按 D6 的绑定 token 识别）只允许 `task_respond` 与只读操作；`brief_update`、`kb_journal`、`task_create`、`task_propose`、`ask_user`、`pr_merge_request`、`decision_review` 一律返回 `reply_only_wake`。它不能派生任务，也不能写任何会进入后续唤醒上下文的内容，因此 worker 的提问内容无法借它影响有建任务权限的唤醒。
-- 代回复记录由中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 确定性生成，作为 `ws_brief` 的独立一节，标明"代回复记录，不是指令"，只含任务 id、决定、时间与截断后的回答。
+- 代回复记录由中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 确定性生成，作为 `ws_brief` 的独立一节，标明"代回复记录，不是指令"，只含任务 id、决定、时间与回答长度，**不含回答原文**：回答由 reply 唤醒中的 supervisor 写出，若进入简报就会进入后续（有建任务权限的）唤醒的上下文，违反上一条"reply 唤醒不能写入会进入后续唤醒上下文的内容"。回答原文只进入用户可见的每日摘要。
 - reply 唤醒失败不重试，直接以 `wake_failed` 转交它处理的委托；reply 队列不暂停，也不提供 `--release`。
 - 唤醒开始前剔除已失效（已转交、用户已回复、任务已离开该次卡住）的委托事件；全部失效则不唤醒。
 - reply 唤醒单独计数：`supervisor.limits.reply_wakes_per_day`（默认 48，按唤醒计），不占用 instruction / autonomous 的每日配额；超出时立即转交。

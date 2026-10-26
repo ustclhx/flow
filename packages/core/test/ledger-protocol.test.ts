@@ -267,6 +267,8 @@ describe('端点清单与 JSON Schema 导出', () => {
       'POST /v1/leases',
       'POST /v1/leases/:id/renew',
       'POST /v1/leases/:id/complete',
+      'POST /v1/briefs',
+      'GET /v1/briefs/context',
       'POST /v1/leases/:id/ack-reply',
     ])
     expect(Object.values(ENDPOINTS).filter((d) => !d.auth)).toHaveLength(1)

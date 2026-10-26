@@ -10,6 +10,7 @@ import { fail, ok, type Result } from '../result.ts'
 import { checkEntryFrontmatter, localDate } from '../validate.ts'
 import type { ValidationIssue } from '../validation-issue.ts'
 import { loadWorkspaces, type Workspace } from '../workspaces.ts'
+import { BRIEF_WRITE } from './brief-capability.ts'
 import { acquireWriteLock, type WriteLock } from './lock.ts'
 import {
   checkPolicy,
@@ -60,6 +61,8 @@ export interface WriteContext {
   gitleaksBin?: string
   /** 传给 git 调用的选项（例如替换 git 可执行文件），测试用。 */
   git?: GitOptions
+  /** 简报笔记写入能力，只由 `writeBrief` 设置（见 brief-capability.ts）。 */
+  [BRIEF_WRITE]?: true
 }
 
 export interface WriteReceipt {
@@ -337,7 +340,9 @@ async function commitLocked(
     const pathBad = checkRepoPath(f.path)
     if (pathBad) return pathBad
     const before = await readText(abs)
-    const denied = checkPolicy(change.repo, f, before, ctx.actor)
+    const denied = checkPolicy(change.repo, f, before, ctx.actor, {
+      briefWrite: ctx[BRIEF_WRITE] === true,
+    })
     if (denied) return denied
     planned.push(plan(f, abs, before))
   }

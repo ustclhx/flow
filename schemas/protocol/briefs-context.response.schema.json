@@ -1,0 +1,195 @@
+{
+  "$id": "https://flow.local/schemas/protocol/briefs-context.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                "description": "任务 id，由中枢在创建时分配"
+              },
+              "role": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "queued",
+                  "running",
+                  "verifying",
+                  "done",
+                  "failed",
+                  "blocked",
+                  "cancelled"
+                ],
+                "description": "任务状态"
+              },
+              "goal": {
+                "type": "string",
+                "description": "截断后的任务目标"
+              },
+              "blocked_reason": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "awaiting_approval",
+                      "question",
+                      "no_progress",
+                      "crashed",
+                      "node_lost",
+                      "other"
+                    ],
+                    "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、node_lost 节点掉线（租约过期）、other 其他"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+              }
+            },
+            "required": [
+              "id",
+              "role",
+              "status",
+              "goal",
+              "blocked_reason",
+              "updated_at"
+            ],
+            "additionalProperties": false
+          },
+          "description": "未结束的任务，按更新时间倒序"
+        },
+        "inbox": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "short_id": {
+                "type": "string"
+              },
+              "level": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string",
+                "description": "截断后的标题"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+              }
+            },
+            "required": [
+              "short_id",
+              "level",
+              "source",
+              "title",
+              "created_at"
+            ],
+            "additionalProperties": false
+          },
+          "description": "本 workspace 未关闭的收件箱条目，按创建时间倒序"
+        },
+        "replies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                "description": "任务 id，由中枢在创建时分配"
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "approve",
+                  "deny",
+                  "answer",
+                  "escalate"
+                ]
+              },
+              "reason": {
+                "description": "转交原因（只有 escalate 有）",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+              },
+              "answer_chars": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "回答或拒绝理由的字符数；没有文字时为 null。原文不进入简报（reply 唤醒不能写入会进入后续上下文的内容）"
+              }
+            },
+            "required": [
+              "task_id",
+              "decision",
+              "reason",
+              "at",
+              "answer_chars"
+            ],
+            "additionalProperties": false
+          },
+          "description": "代回复记录：中枢根据 task.replied（actor supervisor）与 task.reply_escalated 生成，按时间倒序；只含任务 id、决定、时间与回答长度，不含回答原文"
+        }
+      },
+      "required": [
+        "workspace",
+        "tasks",
+        "inbox",
+        "replies"
+      ],
+      "additionalProperties": false,
+      "title": "GET /v1/briefs/context"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}
