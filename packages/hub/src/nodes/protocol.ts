@@ -1,7 +1,6 @@
 import type { Hono } from 'hono'
 import type { LedgerStore } from '../ledger/store.ts'
 import { type HubClock, systemClock } from '../server/clock.ts'
-import type { HubLogger } from '../server/maintenance.ts'
 import { createNodeRoutes } from './routes.ts'
 import {
   createNodeService,
