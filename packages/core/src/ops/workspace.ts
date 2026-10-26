@@ -42,6 +42,7 @@ function resourcesFor(entries: BrainEntry[], ref: string) {
 
 export const wsListOp = defineOperation({
   name: 'ws_list',
+  access: 'read',
   cli: 'ws list',
   summary: '列出全局与已定义的 workspace',
   input: z.object({}),
@@ -62,6 +63,7 @@ export const wsListOp = defineOperation({
 
 export const wsResourcesOp = defineOperation({
   name: 'ws_resources',
+  access: 'read',
   cli: 'ws resources',
   summary: '按归属和类型列出资源',
   input: z.object({ workspace: z.string(), type: z.enum(RESOURCE_TYPES).optional() }),
@@ -268,6 +270,7 @@ async function supervisorActive(home: string, ws: Workspace): Promise<boolean> {
 
 export const wsBriefOp = defineOperation({
   name: 'ws_brief',
+  access: 'read',
   cli: 'ws brief',
   summary: '在字符预算内生成 workspace 简报（supervisor 笔记在最前，最多占 40%）',
   input: z.object({

@@ -105,6 +105,10 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 - **签发**：节点领取租约时，如果任务是唤醒任务（以账本中的 `supervisor.wake_started` 为准，不看角色名或 `inputs`），
   中枢签发一个 `fwk_` 开头的 token，随租约响应的可选字段 `lease.wake_token` 下发一次；其他任务不下发，旧节点忽略该字段。
   节点把它作为 `FLOW_HUB_TOKEN` 注入该唤醒的 MCP 环境（tasks 5.3）。
+  claude-sdk 执行器只把它写进 Flow MCP 服务配置的 `env`（同时以 `flow mcp --actor supervisor --workspace <ws> --task <id>`
+  启动，reply 唤醒另加 `--reply-only`），Claude 会话进程自身的环境不含它；租约未下发 token 时任务 `failed(wake_token_missing)`。
+  已知残余风险：Agent SDK 把 MCP 配置（含 env）以 `--mcp-config` 参数传给 Claude Code 进程，同机的其他进程可以经
+  `ps` 看到；supervisor 模板的 `read_scope: cwd` 拒绝 Bash，会话本身读不到。与 `state/hub.token` 对同机进程可读属于同一已接受风险。
 - **绑定**：身份固定为 `supervisor`，绑定唤醒任务 id、workspace 与这次租约；中枢据此得知调用方是哪个唤醒、origin 是什么
   （instruction、autonomous 或只能回复的 reply）。
 - **失效**：每次请求都对照账本重新核对——租约仍是 active 且未过期、属于该唤醒任务，任务未结束（done、failed、cancelled）。

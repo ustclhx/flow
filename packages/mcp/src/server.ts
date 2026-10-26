@@ -5,8 +5,11 @@ import {
   invokeOperation,
   isDeclarableActor,
   isValidActor,
+  normalizeBindingWorkspace,
+  type OpBinding,
   type Operation,
   resolveFlowHome,
+  taskId,
   toJsonDocument,
   USER_ACTOR,
   VERSION,
@@ -32,6 +35,11 @@ export interface FlowMcpServerOptions {
   actor: string
   /** flow-home 路径；省略时每次调用按 `FLOW_HOME` / `~/flow-home` 解析。 */
   home?: string
+  /**
+   * 会话绑定（add-m1-supervisor D6；tasks 4.1）：`--workspace`、`--task`、`--reply-only`。
+   * 写类操作只能作用于该 workspace；`task_create` 自动以绑定的任务为 parent。
+   */
+  binding?: McpBindingOptions
   /** 暴露的操作列表，默认是 core 的全部 `operations`（测试可传入 fixture）。 */
   operations?: readonly Operation<never, unknown>[]
 }
@@ -77,6 +85,43 @@ export function checkMcpActor(actor: string | undefined): FlowError | null {
   return null
 }
 
+/** `flow mcp` 的绑定参数（未规范化）。 */
+export interface McpBindingOptions {
+  workspace?: string | undefined
+  task?: string | undefined
+  replyOnly?: boolean | undefined
+}
+
+/**
+ * 校验并规范化绑定参数：workspace 写成 `ws/<id>` 或 `<id>`；`--task`、`--reply-only` 必须与
+ * `--workspace` 同时给出。都没给时返回 undefined（不绑定）。
+ */
+export function resolveMcpBinding(
+  o: McpBindingOptions | undefined,
+): { ok: true; binding: OpBinding | undefined } | { ok: false; error: FlowError } {
+  const usage = (message: string) =>
+    ({ ok: false, error: { kind: 'usage', code: 'invalid_binding', message } }) as const
+  const given = (v: string | undefined) => v !== undefined && v !== ''
+  if (!o || (!given(o.workspace) && !given(o.task) && !o.replyOnly)) {
+    return { ok: true, binding: undefined }
+  }
+  if (!given(o.workspace)) return usage('--task 与 --reply-only 需要同时给出 --workspace <ws>')
+  const workspace = normalizeBindingWorkspace(o.workspace as string)
+  if (!workspace)
+    return usage(`不合法的 --workspace：${JSON.stringify(o.workspace)}（应为 ws/<id>）`)
+  if (given(o.task) && !taskId.safeParse(o.task).success) {
+    return usage(`不合法的 --task：${JSON.stringify(o.task)}`)
+  }
+  return {
+    ok: true,
+    binding: {
+      workspace,
+      ...(given(o.task) ? { task: o.task as string } : {}),
+      ...(o.replyOnly ? { replyOnly: true } : {}),
+    },
+  }
+}
+
 /** 由操作的 zod schema 生成 MCP 工具的 inputSchema；字段的 `.describe()` 成为参数说明。 */
 export function toolInputSchema(op: Pick<Operation<never, unknown>, 'input'>): Tool['inputSchema'] {
   const { $schema: _s, ...schema } = z.toJSONSchema(op.input, { io: 'input' }) as Record<
@@ -100,6 +145,9 @@ const textResult = (doc: unknown, isError: boolean): CallToolResult => ({
 export function createFlowMcpServer(opts: FlowMcpServerOptions): Server {
   const bad = checkMcpActor(opts.actor)
   if (bad) throw new FlowMcpConfigError(bad)
+  const bound = resolveMcpBinding(opts.binding)
+  if (!bound.ok) throw new FlowMcpConfigError(bound.error)
+  const binding = bound.binding
   const ops = opts.operations ?? allOperations
   const byName = new Map(ops.map((op) => [op.name, op]))
   if (byName.size !== ops.length) {
@@ -120,6 +168,7 @@ export function createFlowMcpServer(opts: FlowMcpServerOptions): Server {
           home: opts.home ?? resolveFlowHome(process.env),
           actor: opts.actor,
           via: 'mcp',
+          ...(binding ? { binding } : {}),
         })
       : fail('usage', 'unknown_tool', `未知工具：${req.params.name}`)
     return textResult(toJsonDocument(result), !result.ok)

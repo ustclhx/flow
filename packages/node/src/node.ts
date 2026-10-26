@@ -625,6 +625,8 @@ class LeaseRunner {
           env: executorEnv(),
           signal: this.abort.signal,
           ...(grant.resume ? { resume: grant.resume } : {}),
+          // 唤醒绑定 token 只交给执行器注入 MCP（tasks 5.3），不进 env、不写日志。
+          ...(grant.wake_token ? { wakeToken: grant.wake_token } : {}),
           precheck: createPolicyPrecheck({
             client: env.client,
             taskId: grant.task_id,

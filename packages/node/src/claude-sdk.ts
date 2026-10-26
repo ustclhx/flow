@@ -20,6 +20,7 @@ import {
   type DeliveredReply,
   effectiveRoleKind,
   fail,
+  HUB_TOKEN_ENV,
   loadRoles,
   loadWorkspaces,
   ok,
@@ -123,7 +124,24 @@ export const FLOW_MCP_AUTO_ALLOWED = [
   'brief_update',
   'task_list',
   'task_show',
+  // 以下为 supervisor 操作（design D7；tasks 4.1），先登记名字，由后续组实现（见 FLOW_MCP_AUTO_ALLOWED_PENDING）：
+  // ask_user、task_propose、decision_review 只产生等待用户处理的内容；task_respond 的权限由中枢按 D15
+  // 核对（不再经策略审批，否则会自我阻塞）。task_create、pr_merge_request 仍走策略。
+  'ask_user',
+  'task_propose',
+  'decision_review',
+  'task_respond',
 ] as const
+/**
+ * 已登记在放行清单、但 `packages/core/src/ops` 中尚未实现的操作名（4.4、4.6、4.7、4.9 实现后从这里删除）。
+ * 没有对应工具时清单项不起作用。
+ */
+export const FLOW_MCP_AUTO_ALLOWED_PENDING: readonly string[] = [
+  'ask_user',
+  'task_propose',
+  'decision_review',
+  'task_respond',
+]
 /** SDK 中 flow MCP 工具的全名前缀（服务名 flow），与 core 的动作识别共用。 */
 export const FLOW_MCP_TOOL_PREFIX = CORE_FLOW_MCP_TOOL_PREFIX
 /**
@@ -930,6 +948,28 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           )
           return
         }
+        // supervisor 会话绑定（tasks 5.3；D6）：中枢以唤醒绑定 token 认定调用方，没有 token 就无法以
+        // supervisor 身份访问中枢，直接失败（不启动 SDK）。
+        let supervisor: SupervisorSession | undefined
+        if (role.data.kind === 'supervisor') {
+          if (!ctx.wakeToken) {
+            finish(
+              ok({
+                outcome: 'failed',
+                result: result('租约没有下发唤醒绑定 token，无法以 supervisor 身份运行', {
+                  reason: 'wake_token_missing',
+                }),
+              }),
+            )
+            return
+          }
+          supervisor = {
+            workspace: contract.workspace,
+            taskId: ctx.taskId,
+            wakeToken: ctx.wakeToken,
+            replyOnly: contract.inputs?.wake?.origin === 'reply',
+          }
+        }
         const effort = role.data.effort
         if (effort !== undefined && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
           finish(
@@ -975,6 +1015,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           ctx: sessionCtx,
           home: options.home,
           flowCommand,
+          ...(supervisor ? { supervisor } : {}),
           ...(review
             ? {
                 outputFormat: { type: 'json_schema', schema: reviewOutputJsonSchema() },
@@ -1118,8 +1159,20 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
   }
 }
 
+/** supervisor 唤醒会话的绑定（tasks 5.3）。 */
+export interface SupervisorSession {
+  workspace: string
+  taskId: string
+  /** 唤醒绑定 token：只进 flow MCP 进程的环境（`FLOW_HUB_TOKEN`）。 */
+  wakeToken: string
+  /** reply 唤醒：MCP 本地只放行只读操作（`--reply-only`）。 */
+  replyOnly: boolean
+}
+
 interface BuildOptionsInput {
   env: NodeJS.ProcessEnv
+  /** `kind: supervisor` 角色的唤醒会话绑定；其他角色缺省。 */
+  supervisor?: SupervisorSession
   role: Role
   perms: ClaudeSdkPermissions
   /** 角色的有效类别；read 时用 SDK `tools` 只提供只读工具（tasks 5.7）。缺省按角色计算。 */
@@ -1143,11 +1196,37 @@ interface BuildOptionsInput {
 /** 由角色与任务上下文拼出 SDK 的 `query()` 选项。 */
 export function buildOptions(i: BuildOptionsInput): Options & { model: string } {
   const [command = 'flow', ...prefix] = i.flowCommand
+  const sup = i.supervisor
+  // supervisor 会话：MCP 绑定 workspace 与唤醒任务（写类只作用于该 workspace、task_create 自动填 parent），
+  // 唤醒绑定 token 作为 FLOW_HUB_TOKEN 只注入 MCP 进程；会话本身的 env（i.env）不含它（D6）。
   const flowMcp: McpStdioServerConfig = {
     type: 'stdio',
     command,
-    args: [...prefix, 'mcp', '--actor', i.role.name],
-    env: { FLOW_HOME: i.home },
+    args: [
+      ...prefix,
+      'mcp',
+      '--actor',
+      i.role.name,
+      ...(sup
+        ? [
+            '--workspace',
+            sup.workspace,
+            '--task',
+            sup.taskId,
+            ...(sup.replyOnly ? ['--reply-only'] : []),
+          ]
+        : []),
+    ],
+    env: {
+      FLOW_HOME: i.home,
+      ...(sup
+        ? {
+            FLOW_WORKSPACE: sup.workspace,
+            FLOW_TASK_ID: sup.taskId,
+            [HUB_TOKEN_ENV]: sup.wakeToken,
+          }
+        : {}),
+    },
   }
   const kind = i.kind ?? effectiveRoleKind(i.role)
   const readOnly = kind === 'read'
@@ -1176,16 +1255,23 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     cwd: i.ctx.cwd,
     // SDK 默认把 process.env 整个传给 Claude Code 子进程；改用去掉中枢凭证的 env（design D9）。
     // read_scope 下 Glob 不加 --hidden / --no-ignore（CLI 2.1.310 的 CLAUDE_CODE_GLOB_* 变量）。
-    env: {
-      ...i.env,
-      ...(i.perms.read_scope ? READ_SCOPE_ENV : {}),
-      // 只读角色与审查会话不加载 claude.ai connector（CLI 2.1.310 的 ENABLE_CLAUDEAI_MCP_SERVERS）。
-      ...(readOnly || review ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
-      // 审查会话中 Claude Code 自己运行的 git 同样不运行 hook、fsmonitor 与 filter driver。
-      ...(i.reviewGitConfig
-        ? { ...gitConfigEnv(i.reviewGitConfig, i.env), ...UNTRUSTED_CHECKOUT_ENV }
-        : {}),
-    },
+    env: (() => {
+      const env: NodeJS.ProcessEnv = {
+        ...i.env,
+        ...(i.perms.read_scope ? READ_SCOPE_ENV : {}),
+        // 只读角色与审查会话不加载 claude.ai connector（CLI 2.1.310 的 ENABLE_CLAUDEAI_MCP_SERVERS）。
+        ...(readOnly || review ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
+        // 审查会话中 Claude Code 自己运行的 git 同样不运行 hook、fsmonitor 与 filter driver。
+        ...(i.reviewGitConfig
+          ? { ...gitConfigEnv(i.reviewGitConfig, i.env), ...UNTRUSTED_CHECKOUT_ENV }
+          : {}),
+        // supervisor 会话的绑定信息（不是凭证）。
+        ...(sup ? { FLOW_WORKSPACE: sup.workspace, FLOW_TASK_ID: sup.taskId } : {}),
+      }
+      // 防御：会话进程的 env 绝不带中枢凭证（执行器 env 已去掉，这里再删一次；唤醒 token 只进 MCP）。
+      delete env[HUB_TOKEN_ENV]
+      return env
+    })(),
     model: i.role.model ?? DEFAULT_CLAUDE_MODEL,
     ...(i.role.effort ? { effort: i.role.effort as EffortLevel } : {}),
     systemPrompt: { type: 'preset', preset: 'claude_code', append },

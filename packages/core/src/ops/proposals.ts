@@ -41,6 +41,7 @@ const localMinute = (iso: string): string => {
 
 export const kbProposalsListOp = defineOperation({
   name: 'kb_proposals_list',
+  access: 'read',
   cli: 'kb proposals list',
   summary: '列出待确认提案',
   input: z.object({}),
@@ -62,6 +63,7 @@ export const kbProposalsListOp = defineOperation({
 
 export const kbProposalsDiffOp = defineOperation({
   name: 'kb_proposals_diff',
+  access: 'read',
   cli: 'kb proposals diff',
   summary: '查看提案与当前内容的统一差异',
   input: z.object({ id: z.string() }),

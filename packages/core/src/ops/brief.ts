@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { HubClient } from '../daemon/client.ts'
-import { fail } from '../result.ts'
+import { fail, ok } from '../result.ts'
 import { BRIEF_WRITERS } from '../write/policy.ts'
+import { checkBoundWorkspace } from './binding.ts'
 import { defineOperation } from './operation.ts'
 
 /**
@@ -28,6 +29,11 @@ export const briefUpdateOp = defineOperation({
   input: briefUpdateInput,
   positional: ['workspace', 'text'],
   fileInput: true,
+  // 会话绑定（tasks 4.1）：本地先拒绝写别的 workspace 的笔记；中枢仍按唤醒 token 校验。
+  bind: (input: BriefUpdateInput, binding) => {
+    const ws = checkBoundWorkspace(input.workspace, binding)
+    return ws.ok ? ok(input) : ws
+  },
   run: async (input: BriefUpdateInput, ctx) => {
     if (!(BRIEF_WRITERS as readonly string[]).includes(ctx.actor)) {
       return fail(
