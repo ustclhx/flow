@@ -52,8 +52,8 @@ import { resolveContractCwd } from './workdir.ts'
  * 4. 审查任务：同一 workspace、执行器 claude-sdk、角色在 `supervisor.reviewer_roles` 中、已 done、
  *    `inputs.review.pr` 等于该 PR、结论 approve，且是该 PR **最新一次**可信审查（`review_not_approved`）；
  *    中枢不可达时 `failed(merge_unverifiable)`，摘要写明未合并、可重试；
- * 5. 一次 GraphQL 读取 PR 的同一时刻状态（`PrSnapshot`）：链接与编号一致（`pr_unverifiable`）、仓库一致
- *    （`repo_not_in_workspace`）、open（`pr_not_open`）、base 为默认分支（`base_not_default`）、没有启用合并队列
+ * 5. 一次 GraphQL 读取 PR 的同一时刻状态（`PrSnapshot`）：链接与编号一致（`pr_unverifiable`）、仓库一致且不是 fork PR
+ *    （`repo_not_in_workspace`）、head 分支等于 `inputs.merge.branch`（`head_branch_mismatch`）、open（`pr_not_open`）、base 为默认分支（`base_not_default`）、没有启用合并队列
  *    （`merge_queue_unsupported`）、head 等于 `reviewed_sha` 且检查就是这个提交的（`head_moved`）、不是草稿且可合并
  *    （`not_mergeable`；`UNKNOWN` 时短暂重试）；
  * 6. 同一快照中的检查：至少一项且全部成功、没有进行中的（`checks_not_green`）；`supervisor.allow_no_checks` 时允许没有检查。
@@ -222,7 +222,7 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
         const inputs = mergeInputs.safeParse(contract.inputs?.merge)
         if (!inputs.success)
           return failed('invalid_inputs', `合同缺少合法的 inputs.merge：${inputs.error.message}`)
-        const { pr: prUrl, review_task: reviewTaskId } = inputs.data
+        const { pr: prUrl, review_task: reviewTaskId, branch } = inputs.data
         const pr = parsePrUrl(prUrl)
         if (!pr) return failed('invalid_inputs', `PR 链接不合法：${prUrl}`)
         artifacts.push({ kind: 'pr', ref: pr.url })
@@ -330,6 +330,13 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
             'repo_not_in_workspace',
             `gh 报告的仓库 ${v.nameWithOwner} 与登记仓库 ${repo.owner}/${repo.repo} 不一致`,
           )
+        if (v.isCrossRepository)
+          return failed('repo_not_in_workspace', 'PR 来自 fork（head 仓库不是登记仓库），不合并')
+        if (v.headRefName !== branch)
+          return failed(
+            'head_branch_mismatch',
+            `PR 的 head 分支 ${v.headRefName} 不是开出它的任务的分支 ${branch}`,
+          )
         if (v.state !== 'OPEN') return failed('pr_not_open', `PR 状态为 ${v.state}，不是 OPEN`)
         if (v.baseRefName !== v.defaultBranch)
           return failed(
@@ -367,6 +374,11 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
         const again = await gh.prView(pr.url)
         if (!again.ok)
           return failed('pr_unverifiable', `合并前重读 PR 失败：${again.error.message}`)
+        if (again.data.isCrossRepository || again.data.headRefName !== branch)
+          return failed(
+            'head_branch_mismatch',
+            `合并前重读：PR 的 head 为 ${again.data.headRefName}${again.data.isCrossRepository ? '（fork）' : ''}，不是任务分支 ${branch}`,
+          )
         if (again.data.headRefOid !== reviewedSha)
           return failed(
             'head_moved',
@@ -547,7 +559,11 @@ function checkSelf(task: TaskView, contract: TaskContract, reviewTask: string): 
   if (task.contract.parent !== reviewTask)
     return `merger 任务的 parent 为 ${task.contract.parent ?? '空'}，不是审查任务 ${reviewTask}`
   const own = task.contract.inputs?.merge
-  if (own?.pr !== contract.inputs?.merge?.pr || own?.review_task !== reviewTask)
+  if (
+    own?.pr !== contract.inputs?.merge?.pr ||
+    own?.review_task !== reviewTask ||
+    own?.branch !== contract.inputs?.merge?.branch
+  )
     return '中枢记录的 inputs.merge 与本次执行的合同不一致'
   return undefined
 }

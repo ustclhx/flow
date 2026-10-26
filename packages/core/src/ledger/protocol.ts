@@ -15,6 +15,7 @@ import {
   decisionPath,
   executorInfo,
   ledgerEvent,
+  mergeRequestId,
   REPLY_REASON_MAX,
   taskProposalDecision,
   taskProposalId,
@@ -32,6 +33,7 @@ import {
   deliveredReply,
   policyDecisionId,
   protocolBlockedDelegationShape,
+  prUrl,
   replyId,
   replyKind,
   replyView,
@@ -134,6 +136,8 @@ export const PROTOCOL_ERRORS = {
   not_review_target: { status: 403, kind: 'failure' },
   /** 该 workspace 不能唤醒 supervisor（未启用、global、没有或有多个 supervisor 角色等，D3）。 */
   supervisor_disabled: { status: 409, kind: 'failure' },
+  /** 合并请求的资格核对未通过（D10 第 4 步）：details.reasons 列出原因。 */
+  merge_not_eligible: { status: 403, kind: 'failure' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
 export type ProtocolErrorCode = keyof typeof PROTOCOL_ERRORS
@@ -960,6 +964,30 @@ export const decisionReviewData = z
   .meta({ title: 'POST /v1/decisions/review' })
 export type DecisionReviewData = z.infer<typeof decisionReviewData>
 
+/**
+ * 合并请求（`pr_merge_request`，design D10 第 4 步）：supervisor 只给出 PR 与审查任务，
+ * 其余（workspace、开出 PR 的任务、审查结论、reviewed_sha）全部由中枢从账本取得。
+ */
+export const mergeRequestRequest = z
+  .strictObject({
+    pr: prUrl,
+    review_task: taskId.meta({
+      description: '给出 approve 结论的审查任务（该 PR 最新一次可信审查）',
+    }),
+  })
+  .meta({ title: 'POST /v1/merge-requests 请求体' })
+export type MergeRequestRequest = z.infer<typeof mergeRequestRequest>
+export const mergeRequestData = z
+  .object({
+    request_id: mergeRequestId,
+    mode: z.enum(['auto', 'approval']).meta({
+      description: 'auto：已直接建 merger 任务；approval：已生成合并审批条目，等待用户批准',
+    }),
+    task: taskView.optional().meta({ description: 'auto 时创建的 merger 任务' }),
+    item: inboxItemView.optional().meta({ description: 'approval 时生成的收件箱条目' }),
+  })
+  .meta({ title: 'POST /v1/merge-requests' })
+export type MergeRequestData = z.infer<typeof mergeRequestData>
 // ---------------------------------------------------------------------------
 // task_respond（design D15；tasks 4.9）
 // ---------------------------------------------------------------------------
@@ -1203,6 +1231,13 @@ export const ENDPOINTS = {
     auth: true,
     request: decisionReviewRequest,
     response: decisionReviewData,
+  },
+  'merge-requests-create': {
+    method: 'POST',
+    path: '/v1/merge-requests',
+    auth: true,
+    request: mergeRequestRequest,
+    response: mergeRequestData,
   },
   'supervisor-respond': {
     method: 'POST',

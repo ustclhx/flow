@@ -72,6 +72,12 @@ export interface AppendOptions {
   /** 操作者，写入事件信封的 `actor`。 */
   actor: string
   /**
+   * 逐条覆盖操作者（与 drafts 按下标对应，缺省项用 `actor`）。只供中枢内部在同一事务里写入不同身份的
+   * 事件（例如用户批准合并与 hub 建 merger，D10）；草稿自身的 `actor` 字段始终被忽略。每条事件仍按
+   * 写入身份白名单（`EVENT_ACTORS`）校验。
+   */
+  actors?: readonly (string | undefined)[]
+  /**
    * 写入前在**同一事务**里执行的额外核对（只读投影，不写任何东西）：失败时整体不写。
    * 用于必须与写入原子完成的核对，例如 `task_respond` 对调用方唤醒、委托与卡住序号的核对（D15）。
    */
@@ -179,6 +185,13 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
    * 只统计角色在 `roles` 中、执行器为 claude-sdk 的任务的 `result.review.verdict`。
    */
   countChangesRequested(workspace: string, pr: string, roles: readonly string[]): number
+  /**
+   * 合并请求的资格核对（D10 第 4 步）用：workspace 中合同带 `inputs.review`，或结果中有 `kind: pr`
+   * 产物、且链接以 `/pull/<prNumber>` 结尾的任务（按创建先后，最多 limit 条）。只是预筛：PR 号是各种写法
+   * （大小写、`www.`、`:443`）共有的部分，PR 是否相同由调用方用 `samePrUrl` 判断；返回条数达到 limit 时
+   * 调用方应判为无法确认（fail-closed）。
+   */
+  prRelatedTasks(workspace: string, prNumber: number, limit: number): TaskView[]
   /** 某任务的全部事件（按 seq）。 */
   taskEvents(taskId: string): LedgerEvent[]
   /**
@@ -457,8 +470,8 @@ function rowToNode(r: NodeRow): NodeView {
 
 /**
  * 新事件的写入身份白名单（store 层兜底；路由层另有 user-only 等检查）：
- * - 用户的决定：指令、放行、接受 / 驳回提案、批准合并只接受 user；
- * - 中枢内部：唤醒、丢弃队列积压、定时触发、提案登记、决策回看、代回复委托只接受 hub；
+ * - 用户的决定：指令、放行、接受 / 驳回提案、批准 / 驳回合并只接受 user；
+ * - 中枢内部：唤醒、丢弃队列积压、定时触发、提案登记、合并请求登记、决策回看、代回复委托只接受 hub；
  * - `task.reply_escalated` 按 reason 区分（见 `ESCALATION_BY_USER`）：user_replied、user_dismissed
  *   在用户回复或忽略的同一次 append 中写入，只接受 user；其他原因只接受 hub；
  * - `supervisor.answered`（D11）由收件箱回复路由写入：路由以 user 身份直接写，
@@ -473,6 +486,8 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'task_proposal.accepted': ['user'],
   'task_proposal.rejected': ['user'],
   'merge_request.approved': ['user'],
+  'merge_request.rejected': ['user'],
+  'merge_request.created': ['hub'],
   'supervisor.wake_started': ['hub'],
   'supervisor.answered': ['hub', 'user'],
   'task_proposal.created': ['hub'],
@@ -1094,7 +1109,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         const checked = o.check()
         if (!checked.ok) throw new Abort(checked)
       }
-      return drafts.map((d) => writeOne({ ...d, actor: o.actor }, ts))
+      return drafts.map((d, i) => writeOne({ ...d, actor: o.actors?.[i] ?? o.actor }, ts))
     })
     if (result.ok) notify(result.data)
     return result
@@ -1324,6 +1339,21 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           ...roles,
         )?.n ?? 0
       )
+    },
+    prRelatedTasks(workspace, prNumber, limit) {
+      const suffix = `%/pull/${Math.trunc(prNumber)}`
+      return all<TaskRow>(
+        `${TASK_SELECT} WHERE t.workspace = ?
+           AND (json_extract(t.contract_json, '$.inputs.review.pr') LIKE ?
+             OR EXISTS (SELECT 1 FROM json_each(t.result_json, '$.artifacts') AS a
+                        WHERE json_extract(a.value, '$.kind') = 'pr'
+                          AND json_extract(a.value, '$.ref') LIKE ?))
+         ORDER BY t.created_seq ASC LIMIT ?`,
+        workspace,
+        suffix,
+        suffix,
+        limit,
+      ).map(rowToTask)
     },
     taskEvents(taskId) {
       return taskEventsOf(taskId)

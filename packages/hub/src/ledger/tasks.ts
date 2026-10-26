@@ -183,6 +183,12 @@ export interface CreateTaskOptions {
    */
   withCreated?: (taskId: string) => EventInput[]
   /**
+   * 只限 hub：以**另一个身份**在同一事务里写入的事件——`before` 在 `task.created` 之前、`after(taskId)`
+   * 在 `withCreated` 之后。用于用户批准合并（D10）：`merge_request.approved`（actor user）、hub 建 merger、
+   * 条目关闭（actor user）三者要么一起写入，要么都不写。只在真正新建任务时写入，幂等命中时不写。
+   */
+  coWrite?: { actor: string; before?: EventInput[]; after?: (taskId: string) => EventInput[] }
+  /**
    * 调用方所在的唤醒（D6）：**只由路由按唤醒绑定 token 填入**，不取自请求体、`--task` 或请求头。
    * actor 为 supervisor 时必须提供，其他身份不得提供。
    */
@@ -271,8 +277,11 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           { field: 'idempotency_key', code: 'invalid_field', message: '幂等键不一致' },
         ])
       }
-      if (opts.withCreated !== undefined && opts.actor !== HUB_ACTOR) {
-        return fail('failure', 'actor_mismatch', 'withCreated 只限中枢（hub）使用')
+      if (
+        (opts.withCreated !== undefined || opts.coWrite !== undefined) &&
+        opts.actor !== HUB_ACTOR
+      ) {
+        return fail('failure', 'actor_mismatch', 'withCreated、coWrite 只限中枢（hub）使用')
       }
       // inputs.wake 只由中枢的唤醒调度写入（D1）；其他身份携带即拒绝，避免伪造唤醒上下文。
       if (contract.inputs?.wake !== undefined && opts.actor !== HUB_ACTOR) {
@@ -286,7 +295,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       const isUser = opts.actor === USER_ACTOR
       const isSupervisor = opts.actor.toLowerCase() === SUPERVISOR_ACTOR
 
-      // D3：`supervisor:` 幂等键前缀只保留给 hub（唤醒任务的幂等键），防止抢注或借幂等键拿到唤醒任务。
+      // D3、D10：`supervisor:`、`merge:` 幂等键前缀只保留给 hub（唤醒任务、merger 任务的幂等键），防止抢注或借幂等键拿到它们。
       // 例外：中枢接受任务提案时（`proposalKey`）以 user 身份使用 `task-proposal:<id>`，且必须恰好是该键。
       const proposalKeyOk =
         key !== undefined &&
@@ -298,7 +307,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           return fail(
             'failure',
             'reserved_idempotency_key',
-            '幂等键前缀 supervisor:、task-proposal: 保留给中枢内部（唤醒任务、接受任务提案）',
+            '幂等键前缀 supervisor:、task-proposal:、merge: 保留给中枢内部（唤醒任务、接受任务提案、merger 任务）',
             { field: 'idempotency_key' },
           )
         }
@@ -605,8 +614,21 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         workspace: contract.workspace,
         payload: { contract, ...(origin === undefined ? {} : { origin }) },
       }
-      const written = ledger.appendMany([created, ...(opts.withCreated?.(id) ?? [])], {
+      const before = opts.coWrite?.before ?? []
+      const own = [created, ...(opts.withCreated?.(id) ?? [])]
+      const after = opts.coWrite?.after?.(id) ?? []
+      const co = opts.coWrite?.actor
+      const written = ledger.appendMany([...before, ...own, ...after], {
         actor: opts.actor,
+        ...(co === undefined
+          ? {}
+          : {
+              actors: [
+                ...before.map(() => co),
+                ...own.map(() => undefined),
+                ...after.map(() => co),
+              ],
+            }),
       })
       if (!written.ok) return written
       const task = ledger.getTask(id)

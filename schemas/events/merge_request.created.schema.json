@@ -1,0 +1,108 @@
+{
+  "$id": "https://flow.local/schemas/events/merge_request.created.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "账本序号，单调递增"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+    },
+    "type": {
+      "type": "string",
+      "const": "merge_request.created"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "任务 id，由中枢在创建时分配"
+    },
+    "actor": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^mr-[A-Za-z0-9_.-]{1,64}$",
+          "description": "合并请求 id，由中枢在请求时分配"
+        },
+        "wake_task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "发起请求的唤醒任务"
+        },
+        "pr": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+          "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+        },
+        "review_task": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "给出 approve 结论的审查任务（最新一次可信审查）"
+        },
+        "dev_task": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "开出该 PR 的任务（origin instruction、有效类别 write）"
+        },
+        "reviewed_sha": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "description": "审查时的 PR head（执行器记录）"
+        },
+        "auto_merge": {
+          "type": "boolean",
+          "description": "是否按 supervisor.auto_merge 直接建 merger 任务"
+        },
+        "item_id": {
+          "description": "等待批准的收件箱条目（auto_merge 为 false）",
+          "type": "string",
+          "pattern": "^[a-z]{2,12}\\.[A-Za-z0-9_.-]{1,120}$"
+        },
+        "merger_task": {
+          "description": "直接创建的 merger 任务（auto_merge 为 true）",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        }
+      },
+      "required": [
+        "request_id",
+        "wake_task_id",
+        "pr",
+        "review_task",
+        "dev_task",
+        "reviewed_sha",
+        "auto_merge"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "seq",
+    "ts",
+    "type",
+    "workspace",
+    "actor",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "title": "merge_request.created"
+}

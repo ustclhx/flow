@@ -26,22 +26,46 @@
 - **THEN** 任务在启动前 `failed(repo_not_in_workspace)`
 
 ### Requirement: 合并请求的资格
-supervisor SHALL 用 `pr_merge_request{pr, review_task}` 请求合并。中枢 MUST 核对：该 PR 是本 workspace 内某个 origin 为 instruction 的 write 任务的 `kind: pr` 产物；`review_task` 同一 workspace、角色属于 `reviewer_roles`、`inputs.review.pr` 等于该 PR、结论为 `approve`。不满足返回 `merge_not_eligible`。
+supervisor SHALL 用 `pr_merge_request{pr, review_task}` 请求合并。中枢 MUST 只依据账本与配置核对：该 PR 是本 workspace 内某个已 done、origin 为 instruction、有效类别为 write 且上报过任务分支的任务的 `kind: pr` 产物；PR 的 owner/repo 等于登记仓库 origin 的仓库；`review_task` 同一 workspace、角色属于 `reviewer_roles`、`inputs.review.pr` 等于该 PR、结论为 `approve`，且是该 PR 最新一次可信审查、同一 PR 没有未结束的审查任务；该审查任务的合并请求没有被驳回过。不满足返回 `merge_not_eligible`。codex-orca、审查准备与 pr-merge MUST 拒绝 fork PR（`isCrossRepository`），pr-merge 还 MUST 要求 PR 的 head 分支等于开出它的任务的分支。
 
 #### Scenario: 巡检链上的 PR
 - **WHEN** autonomous 唤醒中 supervisor 对一个外部贡献者的 PR 请求合并
 - **THEN** 返回 `merge_not_eligible`
 
+#### Scenario: 驳回后不能再请求
+- **WHEN** 用户驳回了某审查任务的合并请求后，supervisor 用同一审查任务再次请求合并
+- **THEN** 返回 `merge_not_eligible`（`rejected_before`），需要重新审查
+
+#### Scenario: fork 上的同名分支
+- **WHEN** 别人在 fork 上用与任务分支同名的分支开了 PR
+- **THEN** codex-orca 不把它记为本任务的产物；审查准备 `failed(repo_not_in_workspace)`；pr-merge 不合并
+
+#### Scenario: PR 的 head 分支不是任务分支
+- **WHEN** merger 读到 PR 的 headRefName 与 `inputs.merge.branch` 不同
+- **THEN** merger `failed(head_branch_mismatch)`，PR 未合并
+
 ### Requirement: 合并请求按开关分流
-资格通过后，workspace `supervisor.auto_merge` 为 true 时中枢 SHALL 以 hub 身份直接创建 merger 任务；否则（默认）生成 `source: merge_request` 的 Decide 条目，用户批准后中枢以 hub 身份创建 merger 任务并记录批准者，驳回则唤醒 supervisor。merger 任务的 `parent` MUST 是审查任务，origin MUST 取自开出该 PR 的任务。`kind: merge` 的任务 MUST 只能由 hub 与 user 创建。
+资格通过后，workspace `supervisor.auto_merge` 为 true **且请求来自 instruction 唤醒**时中枢 SHALL 以 hub 身份直接创建 merger 任务；否则（默认，以及 autonomous 唤醒的请求）生成 `source: merge_request` 的 Decide 条目，用户批准后中枢以 hub 身份创建 merger 任务并记录批准者（批准事件与 merger 的创建 MUST 在同一事务中写入），驳回则唤醒 supervisor（origin 取请求所在唤醒的 origin）。merger 任务的 `parent` MUST 是审查任务，origin MUST 取自开出该 PR 的任务。`kind: merge` 的任务 MUST 只能由 hub 与 user 创建。
 
 #### Scenario: 默认需要批准
 - **WHEN** `auto_merge` 未配置，supervisor 请求合并
 - **THEN** 收件箱出现"批准合并"条目，未批准前不创建 merger 任务
 
 #### Scenario: 开启自动合并
-- **WHEN** `ws/product-res` 配置 `supervisor.auto_merge: true`
+- **WHEN** `ws/product-res` 配置 `supervisor.auto_merge: true`，instruction 唤醒中 supervisor 请求合并
 - **THEN** 资格通过后直接创建 merger 任务
+
+#### Scenario: 自主唤醒不自动合并
+- **WHEN** `supervisor.auto_merge: true`，autonomous 唤醒中 supervisor 请求合并
+- **THEN** 只生成"批准合并"条目，不创建 merger 任务
+
+#### Scenario: 驳回唤醒 supervisor
+- **WHEN** 用户驳回 autonomous 唤醒发起的合并请求
+- **THEN** 写 `merge_request.rejected`，supervisor 在 autonomous 队列被唤醒
+
+#### Scenario: 批准失败不留下批准记录
+- **WHEN** 用户批准时找不到唯一的 merge 角色
+- **THEN** 返回 `merge_not_eligible`，不写 `merge_request.approved`，条目保持打开
 
 #### Scenario: 合并任务挂在审查任务下
 - **WHEN** 用户批准合并

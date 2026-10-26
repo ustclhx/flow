@@ -96,6 +96,31 @@ describe('gh 封装', () => {
     }
   })
 
+  test('pr view 读取 isCrossRepository 与 headRefName；缺少它们时 gh_bad_output（fork 判定 fail-closed）', async () => {
+    const view = {
+      number: 7,
+      url: PR_URL,
+      state: 'OPEN',
+      isDraft: false,
+      baseRefName: 'main',
+      headRefOid: 'a'.repeat(40),
+      mergeable: 'MERGEABLE',
+    }
+    const f = fakeRunner(() =>
+      out(JSON.stringify({ ...view, isCrossRepository: true, headRefName: 'x/y' })),
+    )
+    expect(await createGitHubCli({ run: f.run }).prView(PR_URL)).toMatchObject({
+      ok: true,
+      data: { isCrossRepository: true, headRefName: 'x/y' },
+    })
+    expect(f.calls[0]?.args.join(' ')).toContain('isCrossRepository,headRefName')
+    const missing = createGitHubCli({ run: fakeRunner(() => out(JSON.stringify(view))).run })
+    expect(await missing.prView(PR_URL)).toMatchObject({
+      ok: false,
+      error: { code: 'gh_bad_output' },
+    })
+  })
+
   test('输出不合 schema、非零退出码与找不到 gh 都返回失败', async () => {
     const bad = createGitHubCli({ run: fakeRunner(() => out('{"number":"7"}')).run })
     expect(await bad.prView(PR_URL)).toMatchObject({ ok: false, error: { code: 'gh_bad_output' } })
@@ -141,6 +166,8 @@ describe('prSnapshot（GraphQL）', () => {
             isDraft: false,
             baseRefName: 'main',
             headRefOid: HEAD,
+            headRefName: 'flow/t-dev',
+            isCrossRepository: false,
             mergeable: 'MERGEABLE',
             mergeStateStatus: 'CLEAN',
             isMergeQueueEnabled: false,
@@ -172,6 +199,10 @@ describe('prSnapshot（GraphQL）', () => {
     const query = args.find((a) => a.startsWith('query=')) ?? ''
     expect(query).toContain('statusCheckRollup')
     expect(query).toContain('isMergeQueueEnabled')
+    expect(query).toContain('isCrossRepository')
+    expect(query).toContain('headRefName')
+    if (!r.ok) throw new Error(r.error.message)
+    expect(r.data).toMatchObject({ isCrossRepository: false, headRefName: 'flow/t-dev' })
   })
 
   test('bucket 映射：CheckRun 与 StatusContext', async () => {

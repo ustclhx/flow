@@ -3,6 +3,7 @@ import {
   defaultSupervisorConfig,
   latestTrustedReview,
   mayCarryReview,
+  normalizePrUrl,
   reviewApproves,
   reviewerRoleIssues,
   reviewerRoleProblem,
@@ -184,7 +185,7 @@ test('PR 链接比较不区分大小写（reviewApproves、latestTrustedReview�
   expect(samePrUrl('https://github.com/acme/demo/pull/8', PR)).toBe(false)
 })
 
-test('samePrUrl：两边都须是合法 PR 链接；host 去掉 www. 与 :443 后比较', () => {
+test('samePrUrl：两边都须是合法 PR 链接；host 去掉 :443、www.github.com 归为 github.com 后比较', () => {
   expect(samePrUrl('https://www.github.com/acme/demo/pull/7', PR)).toBe(true)
   expect(samePrUrl('https://github.com:443/acme/demo/pull/7', PR)).toBe(true)
   expect(samePrUrl('https://WWW.GitHub.com:443/Acme/Demo/pull/7', PR)).toBe(true)
@@ -192,4 +193,12 @@ test('samePrUrl：两边都须是合法 PR 链接；host 去掉 www. 与 :443 �
   expect(samePrUrl('https://github.com/acme/demo/pull/7/', PR)).toBe(false)
   expect(samePrUrl('not a url', 'not a url')).toBe(false)
   expect(samePrUrl(PR, 'https://github.com/acme/demo/pull/70')).toBe(false)
+  // 只有 github.com 去掉 www.：其他主机（GitHub Enterprise 等）上 www.<host> 不一定是同一个服务。
+  expect(
+    samePrUrl('https://www.ghe.example.com/a/b/pull/1', 'https://ghe.example.com/a/b/pull/1'),
+  ).toBe(false)
+  expect(normalizePrUrl('https://www.ghe.example.com/A/B/pull/1')).toBe(
+    'https://www.ghe.example.com/a/b/pull/1',
+  )
+  expect(normalizePrUrl('https://WWW.GitHub.com/A/B/pull/1')).toBe('https://github.com/a/b/pull/1')
 })

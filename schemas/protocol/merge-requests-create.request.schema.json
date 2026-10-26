@@ -1,0 +1,24 @@
+{
+  "$id": "https://flow.local/schemas/protocol/merge-requests-create.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "pr": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+      "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+    },
+    "review_task": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "给出 approve 结论的审查任务（该 PR 最新一次可信审查）"
+    }
+  },
+  "required": [
+    "pr",
+    "review_task"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/merge-requests 请求体"
+}

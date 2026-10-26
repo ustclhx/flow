@@ -269,7 +269,7 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
    只认 `https://host/owner/repo`、`ssh://[user@]host/owner/repo`、`[user@]host:owner/repo` 三种形式，host 必须与 PR 链接的
    host 相同：**`~/.ssh/config` 中的主机别名（例如 `git@github-work:owner/repo`）会被判为 `repo_not_in_workspace`**，
    需要把 origin 改成真实主机名；
-2. `gh pr view <链接>` 读取 PR，核对编号与链接（大小写不敏感），记录当前 `headRefOid`；`gh pr diff` 写入任务私有目录的 `pr.diff`；
+2. `gh pr view <链接>` 读取 PR，核对编号与链接（大小写不敏感），fork PR（`isCrossRepository`）一律 `failed(repo_not_in_workspace)`，记录当前 `headRefOid`；`gh pr diff` 写入任务私有目录的 `pr.diff`；
 3. `git fetch origin +pull/<n>/head:refs/flow/review/<task-id>`（任务专用 ref，不依赖 FETCH_HEAD），该 ref 必须等于记录的
    head（准备期间有新提交时 `failed(head_moved)`），再 `git worktree add --detach` 检出到任务私有目录下的 `worktree/` 作为会话 cwd；
 4. 检出时不运行任何由配置驱动的程序：`-c core.hooksPath=/dev/null`、`-c core.fsmonitor=false`，并对
@@ -363,12 +363,14 @@ pr-merge 执行器**不调用任何模型**，合同的 `inputs.merge = {pr, rev
 | 中枢不可达（可重试错误） | `merge_unverifiable`（摘要写明"未合并，中枢不可达，可重试"） |
 | 合同 `timeout_s` 不小于 2400（40 分钟） | `timeout_too_short` |
 | PR 快照读取成功、编号与链接（大小写不敏感）一致 | `pr_unverifiable` |
+| 不是 fork PR（`isCrossRepository == false`） | `repo_not_in_workspace` |
+| PR 的 head 分支等于 `inputs.merge.branch`（合并前重读时再核对一次） | `head_branch_mismatch` |
 | PR 为 OPEN | `pr_not_open` |
 | base 为仓库默认分支 | `base_not_default` |
 | 目标分支没有启用合并队列 | `merge_queue_unsupported` |
 | 当前 head 等于 `reviewed_sha`，快照中的检查就是这个提交的；读完检查、合并前再读一次 head 仍相等 | `head_moved` |
 | 不是草稿且 `mergeable = MERGEABLE`（`UNKNOWN` 时每 5 秒重读，最多 3 次） | `not_mergeable` |
-| 至少一项检查且全部 `pass`（`skipping` / NEUTRAL 不算失败，但不计入"至少一项"），没有进行中的；检查超过 100 项无法确认时判失败；`supervisor.allow_no_checks: true` 时允许没有检查 | `checks_not_green` |
+| 至少一项检查且全部 `pass`（`skipping` 不算失败，但不计入"至少一项"；结论为 SKIPPED 与 NEUTRAL 的检查都归为 `skipping`），没有进行中的；检查超过 100 项无法确认时判失败；`supervisor.allow_no_checks: true` 时允许没有检查 | `checks_not_green` |
 
 PR 状态与检查来自**同一次** GraphQL 读取（`gh api graphql`：`headRefOid`、`mergeable`、`isMergeQueueEnabled`、
 `autoMergeRequest` 与最新提交的 `statusCheckRollup`），不会出现"读检查之后 head 变了"的错位；合并前再读一次 head，
@@ -393,6 +395,19 @@ pass / skipping 就不合并（进行中为 pending，其余为失败，都是 `
 结果附 run 链接；有其他结论 → `failed(pipeline_failed)`，其中 cancelled 的 run 附说明（可能是被同一并发组中更新的提交取代，
 请确认默认分支最新提交的流水线）；30 分钟仍未结束 → `failed(pipeline_timeout)`，附 run 链接；合并后 2 分钟内一直没有任何 run →
 `done`，注明未发现发布流水线（查询失败不算"没有 run"）。合并后被取消时，cancelled 的结果带合并提交与 artifacts。
+
+**谁建 merger**（D10 第 4 步，tasks 4.8）：supervisor 不能直接建（`task_create` 返回 `role_not_allowed`），只能调用
+`pr_merge_request{pr, review_task}`。中枢按账本核对资格，任一项拿不准即 403 `merge_not_eligible`（`details.reasons` 列出原因）：
+PR 是本 workspace 内某个已 done、origin 为 instruction、有效类别恰为 write、上报过任务分支的任务的 `kind: pr` 产物（唤醒、审查、合并任务的产物不算）；
+PR 的 owner/repo 等于登记仓库 `remote.origin.url` 的仓库；
+`review_task` 同 workspace、角色在 `reviewer_roles`、执行器 claude-sdk、done、审查同一 PR、结论 approve，且是该 PR 最新一次可信审查；
+同一 PR 没有未结束的审查任务；该审查的合并请求没有被驳回过（`rejected_before`）；merger 的工作目录能唯一确定为登记仓库；有且只有一个有效类别为 merge、执行器为 pr-merge 的角色。
+通过后 `supervisor.auto_merge: true` 且请求来自 instruction 唤醒时中枢以 hub 直接建 merger；否则（含 autonomous 唤醒）生成
+`merge_request` 收件箱条目，只有用户能批准（再核对一次资格，`merge_request.approved`、merger 的创建与条目关闭在同一事务中写入）
+或驳回（写 `merge_request.rejected`，按请求所在唤醒的 origin 唤醒 supervisor）。supervisor 停用后旧条目仍可批准。
+merger 合同：`parent` 为审查任务、origin 取自开出 PR 的任务（instruction）、`inputs.merge = {pr, review_task, branch}`（`branch`
+取自该任务投影的任务分支）、`timeout_s` 3600、
+幂等键 `merge:<审查任务>`（同一次审查最多一个 merger；要重试合并需要重新审查）。合并审批条目不轮询 PR 状态。
 
 **timeout_s**：merger 合同的 `timeout_s` 不得小于 2400 秒（40 分钟：核对与合并之外还要等最长 30 分钟的流水线），
 否则执行器在合并前以 `timeout_too_short` 失败；角色文件不支持 `timeout_s`，由创建 merger 任务的中枢保证（缺省 3600）。

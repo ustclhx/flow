@@ -65,7 +65,9 @@ import {
 } from '../supervisor/scheduler.ts'
 import {
   acceptTaskProposal,
+  approveMergeRequest,
   createSupervisorToolRoutes,
+  rejectMergeRequest,
   rejectTaskProposal,
   type SupervisorToolsDeps,
   startSupervisorTools,
@@ -248,7 +250,10 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
           accept: (item, o) => acceptTaskProposal(tools, item, o),
           reject: (item, o) => rejectTaskProposal(tools, item, o),
         },
-        // TODO(4.8)：mergeRequests 由 pr_merge_request 一组接入（建 merger 任务、merge_request.approved）。
+        mergeRequests: {
+          approve: (item, o) => approveMergeRequest(tools, item, o),
+          reject: (item, o) => rejectMergeRequest(tools, item, o),
+        },
       }
       inboxActions = inboxDeps
       const status = new Hono()

@@ -25,6 +25,7 @@ import {
   blockedDelegationShape,
   blockedReason,
   canTransition,
+  gitSha,
   policyDecisionId,
   prUrl,
   replyId,
@@ -138,6 +139,12 @@ export const taskProposalId = z
   .string()
   .regex(/^tp-[A-Za-z0-9_.-]{1,64}$/, '任务提案 id 形如 tp-<随机串>')
   .meta({ description: '任务提案 id，由中枢在提交时分配' })
+
+/** 合并请求 id（`pr_merge_request`，D10）：中枢在请求时分配。 */
+export const mergeRequestId = z
+  .string()
+  .regex(/^mr-[A-Za-z0-9_.-]{1,64}$/, '合并请求 id 形如 mr-<随机串>')
+  .meta({ description: '合并请求 id，由中枢在请求时分配' })
 
 /** brain 中决策条目的路径（相对 brain/），例如 `decisions/2026-10-26-cache.md`。 */
 export const decisionPath = z
@@ -547,12 +554,44 @@ export const eventPayloads = {
     review_date: dateString,
     missed: z.boolean().default(false).meta({ description: '停机期间错过、恢复后补发' }),
   }),
+  /**
+   * supervisor 的合并请求通过了中枢的资格核对（D10 第 4 步）：全部字段由中枢从账本取得。
+   * `auto_merge` 时与 merger 任务在同一事务中写入（带 `merger_task`）；否则与 `merge_request`
+   * 收件箱条目一起写入（带 `item_id`），等待用户批准。
+   */
+  'merge_request.created': z.strictObject({
+    request_id: mergeRequestId,
+    wake_task_id: taskId.meta({ description: '发起请求的唤醒任务' }),
+    pr: prUrl,
+    review_task: taskId.meta({ description: '给出 approve 结论的审查任务（最新一次可信审查）' }),
+    dev_task: taskId.meta({
+      description: '开出该 PR 的任务（origin instruction、有效类别 write）',
+    }),
+    reviewed_sha: gitSha.meta({ description: '审查时的 PR head（执行器记录）' }),
+    auto_merge: z
+      .boolean()
+      .meta({ description: '是否按 supervisor.auto_merge 直接建 merger 任务' }),
+    item_id: inboxItemId
+      .optional()
+      .meta({ description: '等待批准的收件箱条目（auto_merge 为 false）' }),
+    merger_task: taskId
+      .optional()
+      .meta({ description: '直接创建的 merger 任务（auto_merge 为 true）' }),
+  }),
   /** 用户批准了 supervisor 的合并请求（D10）：中枢随后以 hub 身份建 merger 任务。 */
   'merge_request.approved': z.strictObject({
     item_id: inboxItemId.optional().meta({ description: '合并请求的收件箱条目' }),
     pr: prUrl,
     review_task: taskId.meta({ description: '给出 approve 结论的审查任务' }),
     approved_by: actor.meta({ description: '批准者' }),
+    via: inboxVia.optional(),
+  }),
+  /** 用户驳回 supervisor 的合并请求（D10）：唤醒 supervisor（instruction 队列）。 */
+  'merge_request.rejected': z.strictObject({
+    item_id: inboxItemId.meta({ description: '合并请求的收件箱条目' }),
+    pr: prUrl,
+    review_task: taskId,
+    note: z.string().max(2000).optional().meta({ description: '驳回理由' }),
     via: inboxVia.optional(),
   }),
 } as const
@@ -607,7 +646,9 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task_proposal.rejected': 'workspace',
   // 决策可能没有 workspace（此时只生成 Digest 条目）。
   'decision.review_due': 'none',
+  'merge_request.created': 'workspace',
   'merge_request.approved': 'workspace',
+  'merge_request.rejected': 'workspace',
 }
 
 const scopeShape = (scope: Scope) =>

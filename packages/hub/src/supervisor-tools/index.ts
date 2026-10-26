@@ -6,6 +6,7 @@ import { expireQuestions } from './questions.ts'
 
 export * from './common.ts'
 export * from './decisions.ts'
+export * from './merge-requests.ts'
 export * from './questions.ts'
 export * from './routes.ts'
 export * from './task-proposals.ts'

@@ -281,7 +281,15 @@ describe('监控循环', () => {
 
   test('开完 PR 停下：以 done 结束，产物中有 PR 链接；终端保持打开', async () => {
     const s = await start({}, (o) => o.show('working', 'pr-opened'))
-    s.gh.prs = [{ url: 'https://github.com/example-user/flow/pull/20', number: 20, state: 'OPEN' }]
+    s.gh.prs = [
+      {
+        url: 'https://github.com/example-user/flow/pull/20',
+        number: 20,
+        state: 'OPEN',
+        isCrossRepository: false,
+        headRefName: 'example-user/t-orca-1',
+      },
+    ]
     await ready(s)
     await s.poll(3)
     await until(() => s.outcome() !== undefined, '结束')
@@ -297,9 +305,42 @@ describe('监控循环', () => {
     expect(s.orca.ops('terminalClose')).toEqual([])
   })
 
+  test('同名分支上的 fork PR 或 head 分支不符的 PR 不算本任务的产物', async () => {
+    const s = await start({}, (o) => o.show('pr-opened'))
+    s.gh.prs = [
+      {
+        url: 'https://github.com/example-user/flow/pull/21',
+        number: 21,
+        state: 'OPEN',
+        isCrossRepository: true,
+        headRefName: 'example-user/t-orca-1',
+      },
+      {
+        url: 'https://github.com/example-user/flow/pull/22',
+        number: 22,
+        state: 'OPEN',
+        isCrossRepository: false,
+        headRefName: 'other-branch',
+      },
+    ]
+    await ready(s)
+    await s.poll(3)
+    expect(s.outcome()).toBeUndefined()
+    expect(s.gh.calls.length).toBeGreaterThan(0)
+    await s.run.cancel()
+  })
+
   test('done 带上 workdir：验收在 worktree 中运行', async () => {
     const s = await start({}, (o) => o.show('pr-opened'))
-    s.gh.prs = [{ url: 'https://github.com/example-user/flow/pull/20', number: 20, state: 'OPEN' }]
+    s.gh.prs = [
+      {
+        url: 'https://github.com/example-user/flow/pull/20',
+        number: 20,
+        state: 'OPEN',
+        isCrossRepository: false,
+        headRefName: 'example-user/t-orca-1',
+      },
+    ]
     await ready(s)
     await s.poll(2)
     await until(() => s.outcome() !== undefined, '结束')
@@ -769,7 +810,15 @@ describe('经节点与中枢的完整流程', () => {
 
       orca.reads = []
       orca.show('working', 'pr-opened')
-      gh.prs = [{ url: 'https://github.com/example-user/flow/pull/20', number: 20, state: 'OPEN' }]
+      gh.prs = [
+        {
+          url: 'https://github.com/example-user/flow/pull/20',
+          number: 20,
+          state: 'OPEN',
+          isCrossRepository: false,
+          headRefName: 'example-user/t-orca-1',
+        },
+      ]
       await b.api('POST', `/v1/tasks/${id}/reply`, { kind: 'text', text: '用方案 A' })
       const done = await b.until(id, (t) => t.status === 'done', 600_000)
       expect(done.result?.artifacts[0]).toEqual({

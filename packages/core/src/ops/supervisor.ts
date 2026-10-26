@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { HubClient } from '../daemon/client.ts'
 import { inboxOptions } from '../inbox/schema.ts'
+import { taskId } from '../ledger/common.ts'
 import { decisionPath } from '../ledger/events.ts'
 import {
   createTaskRequest,
@@ -9,6 +10,7 @@ import {
   type TaskRespondData,
   taskRespondRequest,
 } from '../ledger/protocol.ts'
+import { prUrl } from '../ledger/task.ts'
 import { fail, type Result } from '../result.ts'
 import { SUPERVISOR_ACTOR } from '../roles.ts'
 import { dateString } from '../schema/common.ts'
@@ -130,6 +132,30 @@ export const decisionReviewOp = defineOperation({
     return new HubClient(ctx).reviewDecision(input)
   },
   human: (o) => `已回看决策 ${o.path}（${o.last_verified}，提交 ${o.sha.slice(0, 8)}）`,
+})
+
+export const prMergeRequestInput = z.strictObject({
+  pr: prUrl.describe('要合并的 PR 链接：必须是本 workspace 指令链上任务开出的 PR'),
+  review_task: taskId.describe('给出 approve 结论的审查任务 id（必须是该 PR 最新一次可信审查）'),
+})
+export type PrMergeRequestInput = z.infer<typeof prMergeRequestInput>
+
+export const prMergeRequestOp = defineOperation({
+  name: 'pr_merge_request',
+  cli: 'supervisor merge-request',
+  summary:
+    '经中枢请求合并已审查通过的 PR：资格由中枢按账本核对；auto_merge 时直接建 merger 任务，否则生成合并审批条目',
+  input: prMergeRequestInput,
+  positional: ['pr', 'review_task'],
+  run: async (input: PrMergeRequestInput, ctx) => {
+    const denied = supervisorOnly('pr_merge_request', ctx)
+    if (denied) return denied
+    return new HubClient(ctx).requestMerge(input)
+  },
+  human: (o) =>
+    o.mode === 'auto'
+      ? `已建 merger 任务 ${o.task?.id ?? ''}（合并请求 ${o.request_id}）`
+      : `已提交合并请求 ${o.request_id}，等待用户批准（条目 #${o.item?.short_id ?? ''}）`,
 })
 
 /**
