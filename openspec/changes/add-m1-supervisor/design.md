@@ -62,13 +62,14 @@ origin 只有两类：
 | 派生任务状态变化 | 该任务的 origin |
 | `supervisor.answered`（用户回答提问） | 提问所在唤醒的 origin |
 | `task_proposal.accepted` / `rejected` | instruction（接受）/ 提案所在唤醒的 origin（驳回） |
+| `task.reply_delegated` | 无 origin：进 reply 队列，唤醒只能回复（D15） |
 
 任务的 origin 在创建时由中枢写入任务投影，之后不可变：
 
 - 接受任务提案所建的任务 → instruction（接受就是用户的决定）；
 - `parent` 是唤醒任务 → 该唤醒的 origin；
 - `parent` 是有 origin 的任务 → 继承它的 origin；
-- 其他（包括用户手动建、没有挂到 supervisor 链上的任务）→ **无 origin**：不属于 supervisor 链，它的状态变化不唤醒 supervisor，它的 PR 也不能被 supervisor 请求合并。
+- 其他（包括用户手动建、没有挂到 supervisor 链上的任务）→ **无 origin**：不属于 supervisor 链，它的状态变化不唤醒 supervisor（D15 的委托卡住除外，那是只能回复的 reply 唤醒），它的 PR 也不能被 supervisor 请求合并。
 
 **所有身份**建任务时，中枢都校验 `parent`：必须存在、与新任务同一 workspace，否则 `parent_not_found` / `workspace_mismatch`。这堵住"把任意任务挂到唤醒任务或用户任务下面伪造来源"。
 
@@ -78,9 +79,9 @@ origin 只有两类：
 
 ### D3. 唤醒调度：按 workspace × origin 分队列，串行、合并、限流
 
-调度器订阅账本，识别上表中的唤醒事件。"派生任务状态变化"指 origin 不为空的任务进入 `done`、`failed`、`cancelled`，或进入 `blocked` 且原因是 `crashed`、`node_lost`、`no_progress`、`other`（同一任务同一原因只唤醒一次）。`awaiting_approval`、`question` 不走这条规则：委托给 supervisor 的卡住按 D15 唤醒（范围是本 workspace 全部任务，不限于有 origin 的任务），未委托的直接进用户收件箱，不唤醒。唤醒任务自身的状态变化不触发唤醒。
+调度器订阅账本，识别上表中的唤醒事件。"派生任务状态变化"指 origin 不为空的任务进入 `done`、`failed`、`cancelled`，或进入 `blocked` 且原因是 `crashed`、`node_lost`、`no_progress`、`other`（同一任务同一原因只唤醒一次）。`awaiting_approval`、`question` 不走这条规则：委托给 supervisor 的卡住按 D15 进入独立的 reply 队列（范围是本 workspace 全部任务，不限于有 origin 的任务），未委托的直接进用户收件箱，不唤醒。唤醒任务自身的状态变化不触发唤醒。
 
-- 每个 workspace 有两条队列：instruction、autonomous。同一 workspace 同时最多一个未结束（含 `blocked`）的唤醒任务；空闲时**先处理 instruction 队列**。一次唤醒只合并同一条队列里的事件，所以每次唤醒恰好有一个 origin。
+- 每个 workspace 有两条队列：instruction、autonomous（另有只用于代回复的 reply 队列，见 D15）。同一 workspace 同时最多一个未结束（含 `blocked`）的唤醒任务；空闲时**先处理 instruction 队列**。一次唤醒只合并同一条队列里的事件，所以每次唤醒恰好有一个 origin。
 - 队列与代数（generation，每创建一次唤醒加一）由账本投影，中枢重启后恢复。唤醒任务的幂等键为 `supervisor:<ws>:<generation>`；`supervisor:` 前缀保留给 `hub`，其他身份使用返回 `reserved_idempotency_key`。
 - 唤醒任务 `blocked` 时新事件继续排队；用户取消它即放行队列。
 - 唤醒任务失败：按重试设置重试一次；仍失败则进收件箱（Interrupt），该队列暂停：新事件继续排队但不触发唤醒，直到用户 `--release`，或暂停满 1 小时后自动恢复一次（再失败则回到暂停，退避时间翻倍，最长 24 小时）。
@@ -223,35 +224,52 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 目标：执行器卡住时的简单批准和方案选择不再打扰用户。
 
-**范围**：workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 `true`）。开启后，本 workspace **所有任务**的 `blocked(question)` 与 `blocked(awaiting_approval)` 都先考虑委托给 supervisor，包括用户手动建、没有 origin 的任务。例外：唤醒任务自身、有效类别为 `merge` 的任务，一律直接交给用户。
+**范围**：workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 `true`）。开启后，本 workspace 任务（包括用户手动建、没有 origin 的任务）的以下卡住委托给 supervisor：
 
-**委托判定**（中枢，确定性）：
+- `blocked(question)`；
+- `blocked(awaiting_approval)`，且节点持有活动租约（`lease_held`）、策略判定为 `supervisor` 档位、该判定与这次卡住绑定（见下）。
 
-- `question`：满足范围即委托。
-- `awaiting_approval`：策略引擎新增档位 `supervisor`，合并次序为 `notify > user > draft-approve > supervisor > auto-report > auto`。判定结果为 `supervisor` 才委托，其余照旧（auto 直接放行，user / draft-approve / notify 交给用户）。
-  - 受保护的动作（`shell.opaque`、`pr.merge`、`deploy`、`secrets`、`policy.edit`、`config.edit`、`flow.admin`，以及 flow 中会扩大权限的操作）MUST NOT 判为 `supervisor`，命中 `supervisor` 规则时提升为 `draft-approve`。
-  - 受保护的工具（`tool:CodexCommand`、`tool:mcp__*`、外发工具、派生子 agent）只有具体 scope 加精确 action 的规则才能判为 `supervisor`，通配规则最多 `draft-approve`。
-  - `git.push` 新增条件 `when.push_to: task_branch`：节点确定性地解析推送命令，目标 ref 是该任务自己的分支（codex-orca 为 worktree 分支，其余为合同中登记的分支）、不是仓库默认分支、没有强推（`-f`、`--force`、`--force-with-lease`、`+refspec`）、没有删除（`--delete`、`:ref`），才算满足；解析不确定按不满足处理。
-  - `flow init` 在 `policies.yaml` 中生成一组**注释掉的**白名单模板（按 workspace 启用）：`tool:CodexCommand` 与 `tool:Bash` 下的 `pnpm check`、`pnpm test`、`pnpm lint` 前缀；只读的 `gh pr view`、`gh pr diff`；`pr.create`；带 `push_to: task_branch` 的 `git.push`。
-- 委托时中枢写 `task.reply_delegated{task_id, block_seq, kind, deadline}`，生成的收件箱条目处于"supervisor 处理中"状态，**不推送**；事件进入该任务 origin 对应的队列，没有 origin 的任务进 instruction 队列（用户自己建的任务等同用户决定）。
+例外，一律直接交给用户：唤醒任务自身、有效类别为 `merge` 的任务、角色在 `supervisor.reviewer_roles` 中的审查任务（审查必须独立于请求合并的一方）、`node_lost` 后保留 `prior_reason` 的卡住。不在范围内的卡住不写委托事件，按普通条目处理。
 
-**上下文**：唤醒 `inputs.wake` 带上卡住说明、终端末尾、请求的命令与理由、任务目标与角色。执行器卡住时 SHALL 附上工作区的 `git diff --stat`（`blocked.diff_stat`，最多 2000 字符）：dev 的 worktree 不在 supervisor 的 `read_scope` 内，它靠这份摘要判断改动范围。
+**策略档位**：策略引擎新增档位 `supervisor`，合并次序为 `notify > user > draft-approve > supervisor > auto-report > auto`。
 
-**回复**：新操作 `task_respond{task_id, block_seq, decision, text?, reason}`，只允许 supervisor，由中枢执行。中枢核对：任务与绑定 workspace 一致；任务当前处于 `blocked` 且序号等于 `block_seq`；该次卡住已委托给 supervisor 且未转交、未过期；`approve` / `deny` 只用于 `awaiting_approval`，`answer` 只用于 `question`（`text` 必填，≤2000 字符）；`escalate` 两者都可。否则返回 `not_delegated`、`stale_block` 或 `invalid_arguments`。
+- 受保护的动作（`shell.opaque`、`pr.merge`、`deploy`、`secrets`、`policy.edit`、`config.edit`、`flow.admin`，以及 flow 中会扩大权限的操作，含新增的 `task.respond`）MUST NOT 判为 `supervisor`：命中 `supervisor` 规则时提升为 `draft-approve` 并标 `guarded`。
+- 受保护的工具（`tool:CodexCommand`、`tool:mcp__*`、外发工具、派生子 agent）只有具体 scope 加精确 action 的规则才能判为 `supervisor`，通配规则最多 `draft-approve`。`supervisor` 在 guarded 逻辑中与 `auto`、`auto-report` 同属"自动档位"。
+- 新条件 `when.push_to: task_branch`（只用于 `git.push`），由 core 纯函数 `parsePushTarget` 加中枢投影中的任务分支判定，**以下全部满足才算满足，任何不确定都不满足**：整条命令只有一段且就是 `git push`（不允许串联）；没有任何 git 全局选项（`-c`、`-C`、`--exec-path`、`--git-dir`、`--config-env` 等都会执行或改变配置）；远端是登记仓库的 remote 名（如 `origin`），不是 URL 或路径；恰好一个显式 refspec，目标 ref 等于任务分支；不带 `--all`、`--mirror`、`--tags`、`--prune`、`--delete`、`--receive-pack`、`--exec`、`-o`、`--push-option`、`-f`、`--force*`，refspec 不以 `+` 或 `:` 开头，`HEAD` 视为不确定。另外节点核对仓库没有启用的 git hook（`core.hooksPath` 未设置、hooks 目录只有 `.sample`），否则不满足：pre-push hook 会在沙箱外运行。
+- **任务分支**：只有自己创建任务分支的执行器（codex-orca 的 worktree 分支）在开始时写 `task.branch_reported{branch}`，中枢写入投影；没有上报分支的任务 `push_to` 永不满足。
+- 新条件 `when.gh_scope: workspace_repo`（用于 `pr.create` 与只读的 `gh pr view` / `gh pr diff`）：不带 `-R` / `--repo`、cwd 的 origin 是本 workspace 登记仓库；`--body-file` / `-F` 只能指向 cwd 或系统临时目录内的文件（realpath 比较）。防止把凭证文件当 PR 正文外传、或读写其他仓库。
+- `flow init` 在 `policies.yaml` 中生成一组**注释掉的**白名单模板（按 workspace 启用）：`tool:CodexCommand` 与 `tool:Bash` 下的 `pnpm check`、`pnpm test`、`pnpm lint` 前缀（串联请求每段都须满足，沿用现有规则；前缀按现有词边界匹配，模板中每个前缀在 1.6 的测试中覆盖 `pnpm test --x`、`pnpm test:e2e` 等写法）；带 `gh_scope` 的 `pr.create`、`gh pr view`、`gh pr diff`；带 `push_to` 的 `git.push`。
 
-- 通过后写 `task.replied`（actor supervisor，带 `reason`），回复按现有路径送达节点；条目关闭，关闭原因记为 `answered`。当天的每日摘要列出 supervisor 代回复的内容。
-- `escalate` 写 `task.reply_escalated{reason: supervisor}`，条目变为普通条目并按级别推送给用户。
-- 提示词边界：只在任务目标的范围内选方案；需要扩大范围、改变完成条件、涉及不可逆动作、或拿不准时一律 `escalate`。这一条只能靠提示词，中枢无法确定性强制；回答本身不扩大任何权限，worker 仍受沙箱与策略约束。
+**判定与卡住绑定**：`POST /v1/policy/check` 的响应增加 `decision_id`（对应 `policy.decided` 的 seq）。节点按"不放行、上报 blocked"处理 `supervisor` 档位，上报时带 `decision_id` 与请求文本。中枢只在以下全部成立时委托：该判定属于本任务、写于该任务上一次离开 `blocked` 之后、判定的请求与上报的请求一致。缺 `decision_id`（precheck 超时、5xx 等）一律交给用户。节点执行 supervisor 的 `approve` 前 MUST 重新读取待批请求（Codex 弹窗或待批工具调用），与 `decision_id` 的请求一致才放行，否则以 `stale_block` 拒收并上报。`block_seq` 定义为该次 `task.blocked` 事件的账本 seq。
 
-**兜底**（中枢写 `task.reply_escalated{reason}` 并按原级别推送给用户）：
+**委托与唤醒**：中枢写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`，条目标为"supervisor 处理中"、**不推送**。委托事件进入独立的 **reply 队列**，不与 instruction、autonomous 合并：
+
+- reply 队列优先于另外两条；仍受"同一 workspace 一次一个唤醒"约束。
+- **reply 唤醒的权限只限回复**：中枢对来自 reply 唤醒的请求只允许 `task_respond`、`brief_update`、`kb_journal` 与只读操作，`task_create`、`task_propose`、`ask_user`、`pr_merge_request`、`decision_review` 一律返回 `reply_only_wake`。reply 唤醒没有 origin，它不能派生任何任务，因此 worker 的提问内容无法借它获得 instruction 权限。
+- 唤醒开始前剔除已失效（已转交、用户已回复、任务已离开该次卡住）的委托事件；全部失效则不唤醒。
+- reply 唤醒单独计数：`supervisor.limits.reply_wakes_per_day`（默认 48，按唤醒计），不占用 instruction / autonomous 的每日配额；超出时立即转交。
+
+**上下文**：`inputs.wake` 带上卡住说明、终端末尾、请求的命令与理由、任务目标与角色。执行器卡住时附上工作区的 `git diff --stat`（`blocked.diff_stat`，最多 2000 字符）：dev 的 worktree 不在 supervisor 的 `read_scope` 内，它靠这份摘要判断改动范围。
+
+**回复**：新操作 `task_respond{task_id, block_seq, decision, text?, reason}`，由中枢执行。`supervisor` 列为保留 actor：只能由 `kind: supervisor` 角色的 MCP 会话使用，角色加载与 doctor 对名为 `supervisor` 但类别不是 supervisor 的角色报错，HTTP 请求头不能声明。中枢在 store 的同一事务里核对：
+
+- 调用方绑定的 `--task` 是持活动租约、正在运行的唤醒任务，并且就是被分配处理这次委托的那个唤醒（`task.reply_delegated` 被该唤醒的 `supervisor.wake_started.events` 引用）；
+- 任务与绑定 workspace 一致；任务当前 `blocked` 且序号等于 `block_seq`；委托仍有效；该任务没有待送达的回复；
+- `approve` / `deny` 只用于 `awaiting_approval`，`answer` 只用于 `question`（`text` 必填，≤2000 字符），`escalate` 两者都可。
+
+不满足返回 `not_delegated`、`stale_block` 或 `invalid_arguments`。通过后写 `task.replied`（actor supervisor，`via: supervisor`，带 `reason`），回复按现有路径送达节点；条目仍按收件箱现有规则在任务离开 `blocked` 时关闭，并记录回复者为 supervisor。当天的每日摘要列出 supervisor 代回复的内容。`escalate` 写 `task.reply_escalated{reason: supervisor}`，条目按原级别推送给用户。
+
+提示词边界：只在任务目标的范围内选方案；需要扩大范围、改变完成条件、涉及不可逆动作、或拿不准时一律 `escalate`。这一条只能靠提示词，中枢无法确定性强制；回答本身不扩大任何权限，worker 仍受沙箱与策略约束。
+
+**转交与竞态**（中枢写 `task.reply_escalated{reason}`，委托随之结束，条目按原级别推送）：
 
 - 超过 `supervisor.reply_timeout_s`（默认 600）仍未回复（`timeout`）；
-- 唤醒无法开始：未启用、没有 `kind: supervisor` 角色、队列暂停、已达每日上限（`wake_unavailable`）；
-- 携带该事件的唤醒任务失败或结束时仍未回复（`wake_failed`、`wake_ended`）。
+- 唤醒无法开始或无法及时开始：未启用、没有 supervisor 角色、队列暂停、reply 配额用尽、当前唤醒任务处于 `blocked`（`wake_unavailable`，立即转交，不等超时）；
+- 处理该委托的唤醒失败或结束时仍未回复（`wake_failed`、`wake_ended`）；
+- 任务从这次卡住直接进入新的卡住（`superseded`），旧委托失效，新卡住重新判定；
+- 用户忽略该条目（`user_dismissed`）。
 
-用户在任何时候都可以直接回复该条目，用户的回复优先；之后 supervisor 的 `task_respond` 得到 `stale_block`。
-
-**计数**：代回复事件计入每日唤醒上限；一次唤醒可以处理多个委托。
+用户回复：在用户 `task_reply` 的同一次追加里写 `task.reply_escalated{reason: user_replied}` 结束委托，之后 supervisor 的 `task_respond` 返回 `stale_block`。**在 supervisor 的回复写入之前，用户的回复优先**；supervisor 的回复已写入但尚未送达时，用户再回复按现有语义得到 `reply_pending`。转交与 `task_respond` 并发时，以 store 事务的先后为准，后到者得到 `stale_block`。
 
 备选：用确定性规则直接 `auto` 放行这些命令。保留为用户自己的选项（策略本来就支持），但它无法处理 `question`，也无法结合任务目标判断"这个请求是否合理"。
 
@@ -262,7 +280,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - **唤醒风暴** → 串行合并、D4 上限、唤醒任务不自激、`blocked` 只唤醒一次。
 - **费用** → 合并事件、巡检默认关闭、每日唤醒上限；结果记录花费，日报汇总。
 - **hub.token 可读** → 见 D2 的已接受风险。
-- **代回复被诱导**（worker 的提问或请求理由里夹带指令）→ 授权请求先由确定性白名单限定，受保护动作永远不委托，推送只能到任务自己的分支；回答只能靠提示词约束，是残余风险。**已接受的风险**：批准在沙箱外运行 `pnpm check` 等于在沙箱外执行 worker 写的代码，与用户直接点批准的风险相同，写入文档。
+- **代回复被诱导**（worker 的提问或请求理由里夹带指令）→ 授权请求先由确定性白名单限定，受保护动作永远不委托，推送只能是单段、无全局选项、推到登记 remote 的任务分支，gh 只能作用于登记仓库；判定与具体卡住绑定，节点放行前重读请求；reply 唤醒不能建任务、提案或请求合并；审查任务不委托。回答只能靠提示词约束，是残余风险。**已接受的风险**：批准在沙箱外运行 `pnpm check` 等于在沙箱外执行 worker 写的代码，与用户直接点批准的风险相同，写入文档。
 - **决策回看例外** → 只追加、只改 status 与 last_verified、只限关联决策、由中枢代写。
 - **单机假设**：中枢和节点读同一份 roles；⑤ 远程节点前需要重新评估。
 

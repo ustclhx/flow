@@ -29,7 +29,7 @@ supervisor SHALL 能用 `ask_user` 创建 `source: supervisor` 的条目（默�
 - **THEN** 中枢创建 merger 任务，条目关闭
 
 ### Requirement: 委托给 supervisor 的条目
-任务卡住被委托给 supervisor 时，收件箱条目 SHALL 照常生成并标明"supervisor 处理中"，MUST NOT 推送到通知渠道；用户仍可在 Web、CLI 或 Telegram 上直接处理。supervisor 回复后条目关闭为 `answered` 并记录回复者；转交用户时条目 MUST 按原级别推送。
+任务卡住被委托给 supervisor 时，收件箱条目 SHALL 照常生成并标明"supervisor 处理中"，MUST NOT 推送到通知渠道；用户仍可在 Web、CLI 或 Telegram 上直接处理。supervisor 回复后条目仍按现有自动关闭规则在任务离开 `blocked` 时关闭，并记录回复者为 supervisor（`task.replied.via: supervisor`）；回复未送达、任务仍卡着时条目 MUST 保持打开。转交用户时条目 MUST 按原级别推送；用户忽略委托中的条目视为转交并结束委托。
 
 #### Scenario: 委托期间不打扰
 - **WHEN** 一个 `awaiting_approval` 条目被委托给 supervisor
