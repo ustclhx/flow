@@ -114,8 +114,11 @@ scripts、测试配置与 `--reporter`、`--preload` 等参数），这是已接
 前缀。现在它不命中，请求落到其他规则或交给用户（只会更保守）。动作识别（`classifyAction`）仍然
 消去包装，保守识别敏感动作；执行文件（含包装命令）或用于匹配映射前缀的词含会展开的元字符时
 （`{gh,pr} merge`、`gh $X pr merge`、`gh pr mer[g]e`、`git $IFS push`；含展开的词可代表任意多个词），
-整段按 `shell.opaque` 处理。识别前先去掉每段中任意位置的重定向词（`>out gh pr merge`、`gh 2>&1 pr merge`、
-`<in git push`；只有操作符的词连同其后的目标一起去掉，`gh>x` 这类无法拆分的写法按不透明处理），并把
+整段按 `shell.opaque` 处理。重定向默认拒绝：只有位于段末尾的重定向（`git status 2>&1`、`ls > out.txt`）才剥离后照常识别；
+出现在最后一个普通词之前（开头或中间，如 `>out gh pr merge`、`gh 2>&- pr merge`、`gh &>x pr merge`）、
+不在词首（`gh>x`）或缺少目标的重定向使整段按不透明处理，分词误差只会让判定更严。只有操作符的词
+（`>`、`>>`、`>|`、`<`、`<<`、`<<<`、`<>`、`&>`、`&>>`、`>&`、`<&`，可带编号）连同其后的目标一起剥离；
+以 `&-` 或 `&<数字>` 结尾的词本身完整。识别时还把
 shell 保留字 `!`、`if`、`then`、`elif`、`else`、`do`、`while`、`until`、`coproc` 当作前缀剥离；
 `function`、`select`、`case`、`{`、`}` 开头的段按不透明处理。分词只在空格与制表符处断词（与 bash 一致），命令中出现其他空白时
 `classifyAction` 按 `shell.opaque` 处理。

@@ -160,12 +160,19 @@ export function splitCommands(command: string): ParsedCommands {
     } else if (char === '#' && !started) {
       while (i < command.length && command[i] !== '\n') i++
       flushCommand()
-    } else if (char === '&' && wasAfterRedirect) {
+    } else if ((char === '&' || char === '|') && wasAfterRedirect) {
+      // `2>&1`、`>&-`、`>|`：属于重定向词。
       word += char
       started = true
+    } else if (char === '&' && next === '>') {
+      // `&>x`、`&>>x`：重定向词的开头，不切段。
+      flushWord()
+      word = char
+      started = true
+      redirect = true
     } else if (char === '&') {
       if (next === '&') i++
-      else if (next !== '>') background = true
+      else background = true
       flushCommand()
     } else if (';|()\n'.includes(char)) flushCommand()
     // 与 bash 一致只在空格与制表符处断词；NBSP、U+3000 等 Unicode 空白属于词的一部分。
@@ -190,26 +197,36 @@ export function splitCommands(command: string): ParsedCommands {
   }
 }
 
-/** 只有重定向操作符、目标在下一个词（`>`、`2>`、`<<`、`>&`……）。 */
-const REDIRECT_OPERATOR_RE = /^\d*[<>&|-]+$/
-/** 以重定向开头（可带文件描述符编号）：`>out`、`2>&1`、`<in`。 */
-const REDIRECT_START_RE = /^\d*[<>]/
+/**
+ * 只有重定向操作符、目标在下一个词（显式白名单）：`>`、`>>`、`>|`、`<`、`<<`、`<<<`、`<>`、`&>`、`&>>`、
+ * `>&`、`<&`，可带文件描述符编号。以 `&-` 或 `&<数字>` 结尾的词（`2>&1`、`>&-`）本身完整。
+ */
+const REDIRECT_OPERATOR_RE = /^\d*(?:>>?|>\||<<?<?|<>|&>>?|[<>]&)$/
+/** 以重定向开头（可带文件描述符编号）：`>out`、`2>&1`、`<in`、`&>x`。 */
+const REDIRECT_START_RE = /^(?:\d*[<>]|&>)/
 
 /**
- * 去掉一段中的重定向词（任意位置，包括行首与词间）：只有操作符的词连同其后的目标词一起去掉。
- * 重定向不在词首（如 `gh>x`）时无法可靠拆分，返回 opaque。
+ * 去掉一段末尾的重定向（`git status 2>&1`、`ls > out.txt`），返回其余的词。默认拒绝：
+ * 重定向出现在最后一个普通词之前（开头或中间，如 `>out gh pr merge`、`gh 2>&- pr merge`）、
+ * 不在词首（`gh>x`）或缺少目标时，返回 opaque——分词上的任何误差只会让判定更严。
  */
 export function stripRedirects(segment: readonly WordInfo[]): { words: string[]; opaque: boolean } {
   const words: string[] = []
   let opaque = false
+  let redirected = false
   for (let index = 0; index < segment.length; index++) {
     const word = segment[index] as WordInfo
     if (!word.redirect) {
+      if (redirected) opaque = true
       words.push(word.text)
       continue
     }
+    redirected = true
     if (!REDIRECT_START_RE.test(word.text)) opaque = true
-    else if (REDIRECT_OPERATOR_RE.test(word.text)) index++
+    else if (REDIRECT_OPERATOR_RE.test(word.text)) {
+      if (index + 1 >= segment.length) opaque = true
+      index++
+    }
   }
   return { words, opaque }
 }

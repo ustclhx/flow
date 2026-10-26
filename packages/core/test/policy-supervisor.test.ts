@@ -743,15 +743,6 @@ describe('第二轮审查：重定向、展开与 tag', () => {
 
 describe('第三轮审查：重定向位置、保留字、后台与推送来源', () => {
   test.each([
-    ['>out gh pr merge 1', 'pr.merge'],
-    ['> /dev/null gh pr merge 1', 'pr.merge'],
-    ['2>&1 gh pr merge 1', 'pr.merge'],
-    ['gh >x pr merge 1', 'pr.merge'],
-    ['gh > x pr merge 1', 'pr.merge'],
-    ['gh 2>&1 pr merge 1', 'pr.merge'],
-    ['<in git push origin main', 'git.push'],
-    ['git 2>/dev/null push', 'git.push'],
-    ['git 2> /dev/null push', 'git.push'],
     ['gh pr merge 1 2>&1', 'pr.merge'],
     ['! gh pr merge 1', 'pr.merge'],
     ['if gh pr merge 1; then :; fi', 'pr.merge'],
@@ -836,5 +827,75 @@ describe('第三轮审查：重定向位置、保留字、后台与推送来源'
     ['git push origin v1:refs/heads/ustclhx/t-1'],
   ])('push_to：满足：%s', (command) => {
     expect(pushToTaskBranch({ ...pushInput, command })).toEqual({ ok: true })
+  })
+})
+
+describe('第四轮审查：开头或中间的重定向一律按不透明', () => {
+  test.each([
+    ['>out gh pr merge 1'],
+    ['> /dev/null gh pr merge 1'],
+    ['2>&1 gh pr merge 1'],
+    ['gh >x pr merge 1'],
+    ['gh > x pr merge 1'],
+    ['gh 2>&1 pr merge 1'],
+    ['<in git push origin main'],
+    ['git 2>/dev/null push'],
+    ['git 2> /dev/null push'],
+    ['gh >&- pr merge 1'],
+    ['gh 2>&- pr merge 1'],
+    ['gh <&- pr merge 1'],
+    ['>&- gh pr merge 1'],
+    ['gh &>x pr merge 1'],
+    ['gh &>>x pr merge 1'],
+    ['&>x gh pr merge 1'],
+    ['gh >| x pr merge 1'],
+    ['gh <<<x pr merge 1'],
+    ['gh 2> x pr merge 1'],
+    ['gh pr merge 1 >'],
+    ['gh>x pr merge 1'],
+    ['gh "pr" >x merge 1'],
+    ['gh -- >x pr merge'],
+    ['then 2>&1 gh pr merge 1'],
+    ['! >x gh pr merge 1'],
+    ['if >x gh pr merge 1; then :; fi'],
+    ['git push origin a>b'],
+  ])('%s → shell.opaque', (command) => {
+    expect(classifyAction({ tool: 'Bash', command })).toContain('shell.opaque')
+  })
+
+  test.each([
+    ['gh pr merge 1 2>&1', 'pr.merge'],
+    ['gh pr merge 1>x', 'pr.merge'],
+    ['gh pr merge 1 >x', 'pr.merge'],
+    ['gh pr merge 1 > x 2>&1', 'pr.merge'],
+    ['gh pr merge 1 &>x', 'pr.merge'],
+    ['gh pr merge 1 >| x', 'pr.merge'],
+    ['git push origin main 2>&1', 'git.push'],
+    ['git push origin main >&-', 'git.push'],
+    ['exec >x; gh pr merge 1', 'pr.merge'],
+  ])('末尾重定向剥离后照常识别：%s → %s', (command, action) => {
+    const actions = classifyAction({ tool: 'Bash', command })
+    expect(actions).toContain(action)
+    expect(actions).not.toContain('shell.opaque')
+  })
+
+  test.each([
+    ['git status >/dev/null'],
+    ['ls > out.txt'],
+    ['echo hi 2>/dev/null'],
+    ['git status 2>&1'],
+  ])('普通命令末尾重定向不额外标记：%s', (command) => {
+    expect(classifyAction({ tool: 'Bash', command })).not.toContain('shell.opaque')
+  })
+
+  test.each([
+    ['pnpm test &>x', false],
+    ['pnpm test |& cat', false],
+    ['pnpm test >| x', false],
+    ['pnpm test >&-', false],
+    ['pnpm test "&"', true],
+    ['pnpm test&&pnpm test x', true],
+  ] as [string, boolean][])('command_prefix：%s → %p', (command, expected) => {
+    expect(commandPrefixMatches(command, 'pnpm test')).toBe(expected)
   })
 })

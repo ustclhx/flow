@@ -94,7 +94,7 @@
 - **THEN** `push_to` 条件不满足，请求交给用户
 
 ### Requirement: 命令前缀严格匹配
-`when.command_prefix` SHALL 按原始命令词匹配：首词 MUST 与前缀首词完全相同（不带路径），前面 MUST NOT 有环境变量赋值或包装命令（`sudo`、`env`、`command`、`exec`、`nohup`、`timeout`、`nice`、`xargs` 等），命令只能含空格与可见 ASCII；任一段含引号外的文件重定向（独立的 `2>&1` 除外）、后台执行的单个 `&`，或会展开的元字符（`$`、`{`、`[`、`*`、`?`、`~`）MUST 不满足；串联命令的每一段都须满足。动作识别中执行文件或用于匹配映射前缀的词含这些元字符时 MUST 按 `shell.opaque` 处理；识别前 MUST 去掉任意位置的重定向并剥离 shell 保留字前缀（`!`、`if`、`then`、`elif`、`else`、`do`、`while`、`until`、`coproc`），`function`、`select`、`case`、`{`、`}` 开头的段 MUST 按 `shell.opaque` 处理。动作识别仍消去包装命令，保守识别敏感动作。
+`when.command_prefix` SHALL 按原始命令词匹配：首词 MUST 与前缀首词完全相同（不带路径），前面 MUST NOT 有环境变量赋值或包装命令（`sudo`、`env`、`command`、`exec`、`nohup`、`timeout`、`nice`、`xargs` 等），命令只能含空格与可见 ASCII；任一段含引号外的文件重定向（独立的 `2>&1` 除外）、后台执行的单个 `&`，或会展开的元字符（`$`、`{`、`[`、`*`、`?`、`~`）MUST 不满足；串联命令的每一段都须满足。动作识别中执行文件或用于匹配映射前缀的词含这些元字符时 MUST 按 `shell.opaque` 处理；重定向位于最后一个普通词之前（开头或中间）时 MUST 按 `shell.opaque` 处理，只有段末尾的重定向可剥离后识别；识别前 MUST 剥离 shell 保留字前缀（`!`、`if`、`then`、`elif`、`else`、`do`、`while`、`until`、`coproc`），`function`、`select`、`case`、`{`、`}` 开头的段 MUST 按 `shell.opaque` 处理。动作识别仍消去包装命令，保守识别敏感动作。
 
 #### Scenario: 包装命令不命中前缀
 - **WHEN** 有规则 `scope: ws/a action: tool:Bash level: auto when: {command_prefix: pnpm test}`，请求 `sudo pnpm test`、`./pnpm test` 或 `NODE_OPTIONS=--require=./x.js pnpm test`
