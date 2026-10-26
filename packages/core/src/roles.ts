@@ -53,7 +53,7 @@ export const writablePaths = z.array(z.string().min(1)).meta({
 
 export const readScope = z.enum(['cwd']).meta({
   description:
-    '仅 claude-sdk 可配置，其他执行器报配置错误；cwd：所有工具的路径类参数只能落在合同 cwd 与任务私有目录内，拒绝 ..、隐藏路径段、绝对 glob 与符号链接越界，拒绝 Bash 等无法按路径约束的工具及带未知路径字段的工具；Flow MCP 不受影响',
+    '仅 claude-sdk 可配置，其他执行器报配置错误；cwd：所有工具的路径类参数只能落在合同 cwd 与任务私有目录内，拒绝 ~、..、隐藏路径段、绝对 glob 与符号链接越界，只允许白名单内置工具与字段（Bash、WebFetch、非 Flow 的 MCP 等一律拒绝）；Flow MCP 不受影响',
 })
 
 export const roleSchema = z

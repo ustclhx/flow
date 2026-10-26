@@ -155,7 +155,7 @@ permissions:
   路径相对合同 cwd，支持 `*`（不跨目录）、`**`（跨目录）、`?`（单字符），不支持花括号扩展，其余字符按字面匹配；默认模板已按扩展名展开。
   默认 reviewer 可直接写 `docs/` 下的 md、mdx、txt、png、svg、jpg、jpeg、gif、webp，
   以及任意目录（含根目录）的 `*.md`、`*.mdx`。
-  原始路径与解析符号链接后的真实路径都必须匹配；允许 cwd 内绝对路径，拒绝任何 `..` 路径段、
+  原始路径与解析符号链接后的真实路径都必须匹配；允许 cwd 内绝对路径，拒绝任何 `..` 路径段、以 `~` 开头或首尾有空白的路径、
   cwd 外路径及无法确认真实位置的路径。新文件校验最近的已存在祖先。
   不论白名单如何配置，任何隐藏路径段（以 `.` 开头）和任意层级的 `CLAUDE.md`、`CLAUDE.local.md`、
   `AGENT.md`、`AGENTS.md`、`AGENTS.override.md`、`CONVENTIONS.md`、`GEMINI.md`、`copilot-instructions.md` 都硬性禁写。
@@ -174,20 +174,34 @@ permissions:
   只在成功的 `PostToolUse` 后，将文件绝对路径去重列入 result 的 `artifacts`（`kind: file`）；
   仅获授权、被拒绝或执行失败的调用不算产物，不统计 Bash 或其他工具的写入。
 - `read_scope: cwd`（add-m1-supervisor D6）仅适用于 `claude-sdk`；其他执行器配置它会报配置错误，取值目前只有 `cwd`。
-  设置后同一个省略 matcher 的 `PreToolUse` hook 覆盖全部工具（`canUseTool` 中也做同样的兜底），
+  设置后同一个省略 matcher 的 `PreToolUse` hook 覆盖全部工具（`canUseTool` 中也做同样的兜底，检查出错一律拒绝），
   与 `writable_paths` 共用路径判定（`packages/node/src/claude-path-scope.ts`），用于防止读取
   `state/hub.token`、密钥存储、`~/.config/gh`、`~/.ssh` 后经任务目标外传：
-  - `file_path`、`path`、`notebook_path` 只能落在合同 cwd（相对路径相对它解析，cwd 自身可读）或节点注入的任务私有目录
-    （只接受绝对路径）内；拒绝 `..` 段、NUL、以 `.` 开头的路径段（按 NFKC 折叠比较）、越界以及逐段解析后越界或落到隐藏段的符号链接；
-  - Glob 的 `pattern`、Grep 的 `glob` 不得为绝对路径或以 `~` 开头，不得含 `..`、反斜杠，任何段及花括号、括号分支不得以 `.` 或 `/` 开头；
-  - Bash、PowerShell、Monitor、Agent、Task、Workflow、RemoteTrigger、EnterWorktree、ExitWorktree 无法按路径约束，一律拒绝；
-  - 其他工具（含非 Flow 的 MCP 工具）的输入中，若在上述字段之外出现任何路径类键（键名含 path、file、dir、folder、glob、cwd、root、uri、location，含嵌套），直接拒绝，例如 LSP 的 `filePath`、ReadMcpResourceTool 的 `uri`；
-  - hook 收到的会话 cwd 与合同 cwd 真实路径不一致时，拒绝全部非 Flow 工具；
-  - Flow MCP 工具（`mcp__flow__*`，且来源名为 `flow`）不受影响。
-  读边界只拒绝、从不放行：通过检查的调用仍走 SDK 权限、Flow 策略与审批；同时设置 `writable_paths` 时先判读边界，再按写白名单放行或拒绝。
+  - 只认白名单工具并按字段白名单校验：Read、NotebookRead、Glob、Grep、Edit、MultiEdit、Write、NotebookEdit、TodoWrite、ToolSearch
+    （以及只产生输出的 StructuredOutput）；带白名单外字段（包括 `FILE_PATH`、`filePath` 之类的变体）即拒绝。
+    其他工具一律拒绝，包括 Bash、PowerShell、Monitor、Agent、WebFetch、WebSearch、LSP、Skill、MCP 资源工具和非 Flow 的 MCP 工具；
+  - 路径字段只能落在合同 cwd（相对路径相对它解析，cwd 自身可读）或节点注入的任务私有目录（只按绝对路径匹配）内；
+    拒绝以 `~` 开头（CLI 会展开为 home）、首尾有空白、含 `..` 段或 NUL、以 `.` 开头的路径段（按 NFKC 折叠比较）、越界，
+    以及逐段解析后越界或落到隐藏段的符号链接；Read、NotebookRead 和 Glob/Grep 的 `path` 必须已存在。
+    通过后用不带 `permissionDecision` 的 `updatedInput` 把路径改写为校验过的真实绝对路径（CLI 2.1.310 在没有决定时
+    只替换输入、权限流程照常继续），确保 CLI 使用的就是检查过的路径；
+  - Glob/Grep 未给 `path` 时显式补上合同 cwd 的真实路径；
+  - Glob 的 `pattern`、Grep 的 `glob` 不得为绝对路径或以 `~` 开头，不得含 `..`、反斜杠或字符类 `[...]`；
+    按空白拆开的每个片段中，任何段及花括号、括号分支都不得以 `.`、`/`、`?` 开头；
+  - 隐藏条目：CLI 的 Grep 固定带 `--hidden`。Flow 在 `glob` 末尾追加 `!.*`；CLI 按空白（以及不含成对花括号时按逗号）
+    把 `glob` 拆成多个 `--glob`，之后只再追加排除规则，而 rg 的 override 以最后命中的一条为准，因此用户片段不能覆盖这条排除。
+    开启 `.github` 选项并在 cwd 根下搜索时，再追加 `/.github` 放回根下的 `.github`（没有正向片段时先补 `*`）。
+    Glob 默认带 `--hidden --no-ignore`，Flow 为会话设置 `CLAUDE_CODE_GLOB_HIDDEN=false`、`CLAUDE_CODE_GLOB_NO_IGNORE=false`；
+  - hook 收到的会话 cwd 与合同 cwd 的真实路径不一致时，拒绝全部非 Flow 工具；
+  - Flow MCP 工具不受影响，条件是工具名为 `mcp__flow__*`，且 SDK 提供的 MCP 来源名为 `flow`、`source` 为 `dynamic`
+    （执行器经 `--mcp-config` 注入的进程服务器）或 `sdk`；缺少来源信息时不豁免，`canUseTool` 也按同样的规则核对。
+  读边界只拒绝或改写，从不放行：通过检查的调用仍走 SDK 权限、Flow 策略与审批；同时设置 `writable_paths` 时先判读边界，再按写白名单放行或拒绝。
   审查任务可由节点通过 `ExecutorContext.readScope` 注入私有目录，并打开 `allowDotGithub` 允许读 cwd 根下的 `.github/`（其中的隐藏段仍拒绝），默认关闭。
-  残余风险：Glob、Grep 在允许的目录内递归时，是否进入隐藏文件或跟随符号链接取决于 Claude Code 自身的实现，
-  这一层只约束调用参数，不能阻止在 cwd 内递归搜索到 `.env` 之类的隐藏文件内容；这同样不是操作系统级隔离。
+  残余风险（以 CLI 2.1.310 的实现为依据，未运行真实 Claude）：
+  - Glob 的 `pattern` 本身作为 rg 的正向 `--glob` 传入，正向 override 优先于隐藏过滤，所以 `**/*` 这类模式仍可能列出 cwd 内隐藏文件的**名称**
+    （读取其内容会被拒绝）；
+  - `/.github` 按 rg 的锚定语义相对搜索根匹配，若 CLI 的 rg 工作目录不是搜索根，`.github` 可能搜不到（只会更严）；
+  - 检查之后同一用户的其他进程仍可能并发替换文件或符号链接；这同样不是操作系统级隔离。
 - reviewer 可以评论和提交 PR review，但其他 Bash 调用仍沿用策略预检与审批；不要用 Bash 或其他工具绕过文件白名单。
   这不是操作系统级文件隔离，任意命令、MCP 工具和外部进程的间接写入仍应结合沙箱与授权范围约束。
 - 可选 `maxTurns` 限制轮次；`approval_timeout_minutes` 默认 1440（24 小时），超过后任务以 `approval_timeout` 失败。

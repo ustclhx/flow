@@ -32,7 +32,12 @@ import {
   writablePaths,
 } from '@flow/core'
 import { z } from 'zod'
-import { checkReadScope, type ReadScopeContext } from './claude-read-scope.ts'
+import {
+  checkReadScope,
+  READ_SCOPE_ENV,
+  type ReadScopeCall,
+  type ReadScopeContext,
+} from './claude-read-scope.ts'
 import { CLAUDE_FILE_WRITE_MATCHER, checkWritableTool } from './claude-writable-paths.ts'
 import { type NodeClock, systemClock } from './clock.ts'
 import { executorRoleEnv } from './env.ts'
@@ -534,17 +539,15 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         (perms: ClaudeSdkPermissions): CanUseTool =>
         async (toolName, toolInput, opts) => {
           if (finished) return { behavior: 'deny', message: '任务已结束', interrupt: true }
-          // 读边界只拒绝不放行；PreToolUse 已先判定一次，这里兜底（例如钩子之外进入审批的调用）。
-          const read = perms.read_scope
-            ? await checkReadScope(toolName, toolInput, readScopeContext(ctx))
-            : undefined
-          if (read) return read
-          const write = await checkWritableTool(toolName, toolInput, ctx.cwd, perms.writable_paths)
+          // PreToolUse 已先判定一次；这里兜底（例如钩子之外进入审批的调用），并沿用改写后的输入。
+          const guard = await guardTool(perms, ctx, toolName, toolInput, {
+            ...(opts.mcpServer ? { mcpServer: opts.mcpServer } : {}),
+          })
           if (finished || opts.signal.aborted)
             return { behavior: 'deny', message: '任务或工具调用已中止', interrupt: true }
-          if (write?.behavior === 'deny') return write
-          if (write?.behavior === 'allow')
-            return { behavior: 'allow', updatedInput: { ...toolInput, file_path: write.path } }
+          if (guard.kind === 'deny') return { behavior: 'deny', message: guard.message }
+          if (guard.kind === 'allow') return { behavior: 'allow', updatedInput: guard.input }
+          if (guard.input) toolInput = guard.input
           const summary = summarizeToolInput(toolName, toolInput)
           // ---- 策略预检（add-m1-inbox 2.3）：交给用户之前先问策略引擎。 ----
           // 只有中枢明确判定 auto / auto-report 才放行；其余结果与调用失败一律交给用户。
@@ -929,7 +932,8 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
   return {
     cwd: i.ctx.cwd,
     // SDK 默认把 process.env 整个传给 Claude Code 子进程；改用去掉中枢凭证的 env（design D9）。
-    env: i.env,
+    // read_scope 下 Glob 不加 --hidden / --no-ignore（CLI 2.1.310 的 CLAUDE_CODE_GLOB_* 变量）。
+    env: i.perms.read_scope ? { ...i.env, ...READ_SCOPE_ENV } : i.env,
     model: i.role.model ?? DEFAULT_CLAUDE_MODEL,
     ...(i.role.effort ? { effort: i.role.effort as EffortLevel } : {}),
     systemPrompt: { type: 'preset', preset: 'claude_code', append },
@@ -955,45 +959,33 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
                 hooks: [
                   async (input) => {
                     if (input.hook_event_name !== 'PreToolUse') return {}
-                    // 读边界先判定（只拒绝），再按写边界决定放行或拒绝。
-                    const read = i.perms.read_scope
-                      ? await checkReadScope(
-                          input.tool_name,
-                          input.tool_input,
-                          readScopeContext(i.ctx),
-                          {
-                            sessionCwd: input.cwd,
-                            ...(input.mcp_server ? { mcpServer: input.mcp_server } : {}),
-                          },
-                        )
-                      : undefined
-                    if (read)
-                      return {
-                        hookSpecificOutput: {
-                          hookEventName: 'PreToolUse',
-                          permissionDecision: 'deny',
-                          permissionDecisionReason: read.message,
-                        },
-                      }
-                    const write = await checkWritableTool(
+                    const guard = await guardTool(
+                      i.perms,
+                      i.ctx,
                       input.tool_name,
                       input.tool_input,
-                      i.ctx.cwd,
-                      i.perms.writable_paths,
+                      {
+                        sessionCwd: input.cwd,
+                        ...(input.mcp_server ? { mcpServer: input.mcp_server } : {}),
+                      },
                     )
-                    if (!write) return {}
+                    if (guard.kind === 'pass')
+                      // 没有 permissionDecision 的 updatedInput 只改写输入，权限流程照常继续（CLI 2.1.310）。
+                      return guard.input
+                        ? {
+                            hookSpecificOutput: {
+                              hookEventName: 'PreToolUse',
+                              updatedInput: guard.input,
+                            },
+                          }
+                        : {}
                     return {
                       hookSpecificOutput: {
                         hookEventName: 'PreToolUse',
-                        permissionDecision: write.behavior,
-                        ...(write.behavior === 'deny'
-                          ? { permissionDecisionReason: write.message }
-                          : {
-                              updatedInput: {
-                                ...(input.tool_input as Record<string, unknown>),
-                                file_path: write.path,
-                              },
-                            }),
+                        permissionDecision: guard.kind,
+                        ...(guard.kind === 'deny'
+                          ? { permissionDecisionReason: guard.message }
+                          : { updatedInput: guard.input }),
                       },
                     }
                   },
@@ -1024,6 +1016,47 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     abortController: i.abortController,
     ...(i.ctx.resume?.session ? { resume: i.ctx.resume.session } : {}),
     stderr: i.stderr,
+  }
+}
+
+type ToolGuard =
+  | { kind: 'deny'; message: string }
+  | { kind: 'allow'; input: Record<string, unknown> }
+  /** 交还 SDK 权限流程；`input` 为改写后的输入（未改写时缺省）。 */
+  | { kind: 'pass'; input?: Record<string, unknown> }
+
+/**
+ * 钩子与 canUseTool 共用的本地边界：先判读边界（只拒绝或改写），再按写白名单放行或拒绝。
+ * 任何异常都按拒绝处理。
+ */
+async function guardTool(
+  perms: ClaudeSdkPermissions,
+  ctx: ExecutorContext,
+  toolName: string,
+  toolInput: unknown,
+  call: ReadScopeCall,
+): Promise<ToolGuard> {
+  try {
+    let input = toolInput
+    let rewritten: Record<string, unknown> | undefined
+    if (perms.read_scope) {
+      const read = await checkReadScope(toolName, toolInput, readScopeContext(ctx), call)
+      if (read?.behavior === 'deny') return { kind: 'deny', message: read.message }
+      if (read) input = rewritten = read.updatedInput
+    }
+    const write = await checkWritableTool(toolName, input, ctx.cwd, perms.writable_paths)
+    if (write?.behavior === 'deny') return { kind: 'deny', message: write.message }
+    if (write?.behavior === 'allow')
+      return {
+        kind: 'allow',
+        input: { ...(input as Record<string, unknown>), file_path: write.path },
+      }
+    return rewritten ? { kind: 'pass', input: rewritten } : { kind: 'pass' }
+  } catch (err) {
+    return {
+      kind: 'deny',
+      message: `本地文件边界检查出错，拒绝本次调用：${safe(String((err as Error)?.message ?? err), 300)}`,
+    }
   }
 }
 

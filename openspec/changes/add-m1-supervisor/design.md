@@ -127,6 +127,8 @@ claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor -
 
 读边界：claude-sdk 新增权限字段 `read_scope: cwd`。设置后 PreToolUse 钩子（匹配全部工具，与 `writable_paths` 共用路径判定）只允许读合同工作目录与任务私有目录（见 D10 的 diff 文件）内的路径，拒绝 `.` 开头的路径段、`..`、符号链接越界。检查的字段包括 `file_path`、`path`、`notebook_path`，以及 Glob 的 `pattern`、Grep 的 `glob`（这两个不得是绝对路径、不得含 `..`）；输入中含其他路径类字段的非 MCP 工具一律拒绝。Flow MCP 不受影响。supervisor 与 pr-reviewer 模板都设 `read_scope: cwd`，防止读取 `state/hub.token`、密钥存储、`~/.config/gh`、`~/.ssh` 后经任务目标外传。
 
+实现细节（按 Claude Code 2.1.310 核实）：只认白名单工具与字段，其余工具（含 Bash、WebFetch、非 Flow 的 MCP）一律拒绝；路径拒绝 `~` 开头与首尾空白，读取目标必须已存在，通过后以 `updatedInput` 改写为校验过的真实绝对路径；Glob/Grep 缺省目录显式补为 cwd；Grep 的 `glob` 末尾追加 `!.*`（CLI 固定带 `--hidden`，rg 以最后命中的 glob 为准），Glob 以 `CLAUDE_CODE_GLOB_HIDDEN=false`、`CLAUDE_CODE_GLOB_NO_IGNORE=false` 运行；Flow MCP 只在 SDK 报告的来源为 `flow`/`dynamic`（或 `sdk`）时豁免。**残余风险**：Glob 的模式本身是 rg 的正向 glob，可能列出 cwd 内隐藏文件的名称（内容不可读）；检查与使用之间的并发替换无法排除。
+
 ### D7. 新增操作（`packages/core/src/ops/`）
 
 | 操作 | 谁能调用 | 执行位置 | 作用 |

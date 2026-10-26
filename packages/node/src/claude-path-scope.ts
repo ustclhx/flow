@@ -31,6 +31,8 @@ export interface PathScopeOptions {
   accept?: (rel: string) => boolean
   /** `file`：末段必须是已存在的普通文件或尚不存在；`any`：文件或目录皆可。 */
   leaf: 'file' | 'any'
+  /** 目标必须已存在（读边界）；缺省允许尚不存在的新路径（写入）。 */
+  mustExist?: boolean
 }
 
 function folded(segment: string): string {
@@ -60,9 +62,17 @@ export function insidePath(
   return parts.join('/')
 }
 
-/** 路径中是否含 NUL 或 `..` 段（`/` 与 `\` 都视为分隔符）。 */
-export function hasTraversal(path: string): boolean {
-  return path.includes('\0') || path.split(/[\\/]/).includes('..')
+/**
+ * 入口拒绝：NUL、`..` 段（`/` 与 `\` 都视为分隔符）、以 `~` 开头（CLI 会展开为 home，
+ * 而 Node 的 resolve 不会）以及首尾空白（CLI 可能修剪后再使用）。
+ */
+export function rejectedPathForm(path: string): boolean {
+  return (
+    path.includes('\0') ||
+    path.startsWith('~') ||
+    path.trim() !== path ||
+    path.split(/[\\/]/).includes('..')
+  )
 }
 
 /**
@@ -78,7 +88,7 @@ export async function scopedPath(
   path: string,
   opts: PathScopeOptions,
 ): Promise<string | undefined> {
-  if (hasTraversal(path)) return undefined
+  if (rejectedPathForm(path)) return undefined
   const accept = opts.accept ?? (() => true)
   try {
     const real = await realpath(root)
@@ -103,6 +113,7 @@ export async function scopedPath(
         exists = false
       }
       if (!exists) {
+        if (opts.mustExist) return undefined
         current = join(current, ...parts.slice(i + 1))
         break
       }
