@@ -1221,3 +1221,109 @@ test('SDK 会话覆盖继承的 FLOW_ACTOR，重新过滤 token；user 角色不
     }
   }
 })
+
+describe('读边界 read_scope: cwd', () => {
+  test('PreToolUse 覆盖全部工具：越界与 Bash 拒绝，与 writable_paths 同时生效，Flow MCP 不受影响', async () => {
+    const temp = realpathSync(mkdtempSync(join(tmpdir(), 'flow-read-scope-sdk-')))
+    const repo = join(temp, 'repo')
+    const priv = join(temp, 'private')
+    const home = join(temp, 'flow-home')
+    mkdirSync(join(repo, 'docs'), { recursive: true })
+    mkdirSync(priv)
+    mkdirSync(join(home, 'state'), { recursive: true })
+    writeFileSync(join(repo, 'README.md'), '说明')
+    writeFileSync(join(priv, 'pr.diff'), 'diff')
+    writeFileSync(join(home, 'state', 'hub.token'), 'placeholder')
+    try {
+      const { query, state } = mockSdk(async function* (io) {
+        await io.nextUser()
+        const pre = io.options.hooks?.PreToolUse?.[0]?.hooks[0]
+        if (!pre) throw new Error('缺少 PreToolUse hook')
+        expect(io.options.hooks?.PreToolUse?.[0]).not.toHaveProperty('matcher')
+        const opts = { signal: new AbortController().signal }
+        const call = (tool_name: string, tool_input: Record<string, unknown>, cwd = repo) =>
+          pre(
+            {
+              session_id: SID,
+              transcript_path: '',
+              cwd,
+              hook_event_name: 'PreToolUse',
+              tool_name,
+              tool_input,
+              tool_use_id: 'tu',
+            },
+            'tu',
+            opts,
+          )
+        const decision = (r: unknown) =>
+          (r as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
+            ?.permissionDecision
+        // Spec 场景：读取中枢 token、用 Glob 越界。
+        expect(decision(await call('Read', { file_path: join(home, 'state/hub.token') }))).toBe(
+          'deny',
+        )
+        expect(decision(await call('Glob', { pattern: '/Users/x/.ssh/*' }))).toBe('deny')
+        expect(decision(await call('Bash', { command: 'cat ~/.ssh/id_rsa' }))).toBe('deny')
+        expect(decision(await call('FutureRead', { source_path: 'README.md' }))).toBe('deny')
+        expect(decision(await call('Read', { file_path: 'README.md' }, temp))).toBe('deny')
+        // 写边界在读边界之后：越界写入被读边界拒绝，白名单内写入照常放行。
+        expect(decision(await call('Write', { file_path: join(temp, 'x.md'), content: '' }))).toBe(
+          'deny',
+        )
+        expect(decision(await call('Write', { file_path: 'docs/r.md', content: '' }))).toBe('allow')
+        expect(decision(await call('Write', { file_path: 'src/a.ts', content: '' }))).toBe('deny')
+        // 读边界只拒绝不放行：通过时不作决定，交还 SDK 权限流程。
+        expect(await call('Read', { file_path: 'README.md' })).toEqual({})
+        expect(await call('Read', { file_path: join(priv, 'pr.diff') })).toEqual({})
+        expect(await call('mcp__flow__kb_get', { path: join(home, 'state/hub.token') })).toEqual({})
+        // canUseTool 同样兜底拒绝。
+        expect(await io.ask('Read', { file_path: join(home, 'state/hub.token') })).toMatchObject({
+          behavior: 'deny',
+        })
+        yield result()
+      })
+      const ex = createClaudeSdkExecutor({
+        home,
+        query,
+        resolveRole: roleResolver(
+          reviewer({
+            allowedTools: ['Read', 'Glob', 'Grep'],
+            disallowedTools: ['NotebookEdit'],
+            read_scope: 'cwd',
+            writable_paths: ['docs/**'],
+          }),
+        ),
+      })
+      const r = await ex.run(contract(), ctx({ cwd: repo, readScope: { privateDir: priv } })).done
+      expect(r.ok && r.data.outcome).toBe('done')
+      expect(state.calls[0]?.hooks?.PreToolUse).toHaveLength(1)
+    } finally {
+      rmSync(temp, { recursive: true, force: true })
+    }
+  })
+
+  test('只设 read_scope 时也安装 PreToolUse；不设任何边界时不安装 hooks；非法取值使任务 failed', async () => {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    for (const perms of [{ read_scope: 'cwd' }, {}]) {
+      const ex = createClaudeSdkExecutor({
+        home: '/nonexistent',
+        query,
+        resolveRole: roleResolver(reviewer(perms)),
+      })
+      const r = await ex.run(contract(), ctx()).done
+      expect(r.ok && r.data.outcome).toBe('done')
+    }
+    expect(state.calls[0]?.hooks?.PreToolUse).toHaveLength(1)
+    expect(state.calls[1]?.hooks).toBeUndefined()
+    const bad = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(reviewer({ read_scope: 'home' })),
+    })
+    const r = await bad.run(contract(), ctx()).done
+    expect(r.ok && r.data.outcome === 'failed' && r.data.result.reason).toBe('invalid_role')
+  })
+})

@@ -199,6 +199,32 @@ describe('角色配置', () => {
       ),
     )
   })
+
+  test('read_scope 只接受 cwd 且只属于 claude-sdk', async () => {
+    const sdk = { ...role, executor: 'claude-sdk' }
+    expect(roleSchema.safeParse({ ...sdk, permissions: { read_scope: 'cwd' } }).success).toBe(true)
+    for (const read_scope of ['home', '', true, ['cwd']])
+      expect(roleSchema.safeParse({ ...sdk, permissions: { read_scope } }).success).toBe(false)
+    const home = tempHome('flow-role-read-scope-')
+    for (const executor of ['codex-orca', 'codex-exec']) {
+      writeText(
+        join(home, 'config/roles', `${executor}.yaml`),
+        stringify({ ...role, name: executor, executor, permissions: { read_scope: 'cwd' } }),
+      )
+    }
+    const loaded = data(await loadRoles(home))
+    expect(loaded.roles).toEqual([])
+    expect(loaded.errors).toEqual(
+      ['codex-exec', 'codex-orca'].map((executor) =>
+        expect.objectContaining({
+          file: `config/roles/${executor}.yaml`,
+          field: 'permissions.read_scope',
+          code: 'invalid_field',
+          message: '字段 permissions.read_scope：read_scope 仅适用于 claude-sdk 执行器',
+        }),
+      ),
+    )
+  })
 })
 
 describe('creatable_by（角色创建权限）', () => {

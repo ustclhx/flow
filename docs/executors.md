@@ -173,6 +173,21 @@ permissions:
   保留既有允许规则、Flow 策略和用户审批；这不意味着自动放行 MCP 调用。
   只在成功的 `PostToolUse` 后，将文件绝对路径去重列入 result 的 `artifacts`（`kind: file`）；
   仅获授权、被拒绝或执行失败的调用不算产物，不统计 Bash 或其他工具的写入。
+- `read_scope: cwd`（add-m1-supervisor D6）仅适用于 `claude-sdk`；其他执行器配置它会报配置错误，取值目前只有 `cwd`。
+  设置后同一个省略 matcher 的 `PreToolUse` hook 覆盖全部工具（`canUseTool` 中也做同样的兜底），
+  与 `writable_paths` 共用路径判定（`packages/node/src/claude-path-scope.ts`），用于防止读取
+  `state/hub.token`、密钥存储、`~/.config/gh`、`~/.ssh` 后经任务目标外传：
+  - `file_path`、`path`、`notebook_path` 只能落在合同 cwd（相对路径相对它解析，cwd 自身可读）或节点注入的任务私有目录
+    （只接受绝对路径）内；拒绝 `..` 段、NUL、以 `.` 开头的路径段（按 NFKC 折叠比较）、越界以及逐段解析后越界或落到隐藏段的符号链接；
+  - Glob 的 `pattern`、Grep 的 `glob` 不得为绝对路径或以 `~` 开头，不得含 `..`、反斜杠，任何段及花括号、括号分支不得以 `.` 或 `/` 开头；
+  - Bash、PowerShell、Monitor、Agent、Task、Workflow、RemoteTrigger、EnterWorktree、ExitWorktree 无法按路径约束，一律拒绝；
+  - 其他工具（含非 Flow 的 MCP 工具）的输入中，若在上述字段之外出现任何路径类键（键名含 path、file、dir、folder、glob、cwd、root、uri、location，含嵌套），直接拒绝，例如 LSP 的 `filePath`、ReadMcpResourceTool 的 `uri`；
+  - hook 收到的会话 cwd 与合同 cwd 真实路径不一致时，拒绝全部非 Flow 工具；
+  - Flow MCP 工具（`mcp__flow__*`，且来源名为 `flow`）不受影响。
+  读边界只拒绝、从不放行：通过检查的调用仍走 SDK 权限、Flow 策略与审批；同时设置 `writable_paths` 时先判读边界，再按写白名单放行或拒绝。
+  审查任务可由节点通过 `ExecutorContext.readScope` 注入私有目录，并打开 `allowDotGithub` 允许读 cwd 根下的 `.github/`（其中的隐藏段仍拒绝），默认关闭。
+  残余风险：Glob、Grep 在允许的目录内递归时，是否进入隐藏文件或跟随符号链接取决于 Claude Code 自身的实现，
+  这一层只约束调用参数，不能阻止在 cwd 内递归搜索到 `.env` 之类的隐藏文件内容；这同样不是操作系统级隔离。
 - reviewer 可以评论和提交 PR review，但其他 Bash 调用仍沿用策略预检与审批；不要用 Bash 或其他工具绕过文件白名单。
   这不是操作系统级文件隔离，任意命令、MCP 工具和外部进程的间接写入仍应结合沙箱与授权范围约束。
 - 可选 `maxTurns` 限制轮次；`approval_timeout_minutes` 默认 1440（24 小时），超过后任务以 `approval_timeout` 失败。

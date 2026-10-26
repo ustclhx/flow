@@ -23,6 +23,7 @@ import {
   ok,
   type Result,
   type Role,
+  readScope,
   redactLines,
   redactSecrets,
   type TaskContract,
@@ -31,6 +32,7 @@ import {
   writablePaths,
 } from '@flow/core'
 import { z } from 'zod'
+import { checkReadScope, type ReadScopeContext } from './claude-read-scope.ts'
 import { CLAUDE_FILE_WRITE_MATCHER, checkWritableTool } from './claude-writable-paths.ts'
 import { type NodeClock, systemClock } from './clock.ts'
 import { executorRoleEnv } from './env.ts'
@@ -133,6 +135,7 @@ export const claudeSdkPermissions = z.strictObject({
   allowedTools: z.array(z.string().min(1)).default([]),
   disallowedTools: z.array(z.string().min(1)).default([]),
   writable_paths: writablePaths.optional(),
+  read_scope: readScope.optional(),
   maxTurns: z.number().int().positive().optional(),
   approval_timeout_minutes: z
     .number()
@@ -531,6 +534,11 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         (perms: ClaudeSdkPermissions): CanUseTool =>
         async (toolName, toolInput, opts) => {
           if (finished) return { behavior: 'deny', message: '任务已结束', interrupt: true }
+          // 读边界只拒绝不放行；PreToolUse 已先判定一次，这里兜底（例如钩子之外进入审批的调用）。
+          const read = perms.read_scope
+            ? await checkReadScope(toolName, toolInput, readScopeContext(ctx))
+            : undefined
+          if (read) return read
           const write = await checkWritableTool(toolName, toolInput, ctx.cwd, perms.writable_paths)
           if (finished || opts.signal.aborted)
             return { behavior: 'deny', message: '任务或工具调用已中止', interrupt: true }
@@ -937,7 +945,7 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     ...(i.perms.maxTurns ? { maxTurns: i.perms.maxTurns } : {}),
     canUseTool: i.canUseTool,
     // canUseTool 可能被 SDK 权限模式、允许规则或会话批准跳过；每次文件调用仍要经过本地边界。
-    ...(i.perms.writable_paths !== undefined
+    ...(i.perms.writable_paths !== undefined || i.perms.read_scope !== undefined
       ? {
           hooks: {
             PreToolUse: [
@@ -947,6 +955,26 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
                 hooks: [
                   async (input) => {
                     if (input.hook_event_name !== 'PreToolUse') return {}
+                    // 读边界先判定（只拒绝），再按写边界决定放行或拒绝。
+                    const read = i.perms.read_scope
+                      ? await checkReadScope(
+                          input.tool_name,
+                          input.tool_input,
+                          readScopeContext(i.ctx),
+                          {
+                            sessionCwd: input.cwd,
+                            ...(input.mcp_server ? { mcpServer: input.mcp_server } : {}),
+                          },
+                        )
+                      : undefined
+                    if (read)
+                      return {
+                        hookSpecificOutput: {
+                          hookEventName: 'PreToolUse',
+                          permissionDecision: 'deny',
+                          permissionDecisionReason: read.message,
+                        },
+                      }
                     const write = await checkWritableTool(
                       input.tool_name,
                       input.tool_input,
@@ -996,6 +1024,15 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     abortController: i.abortController,
     ...(i.ctx.resume?.session ? { resume: i.ctx.resume.session } : {}),
     stderr: i.stderr,
+  }
+}
+
+/** 合同 cwd 加节点注入的私有目录与 `.github/` 选项。 */
+function readScopeContext(ctx: ExecutorContext): ReadScopeContext {
+  return {
+    cwd: ctx.cwd,
+    ...(ctx.readScope?.privateDir !== undefined ? { privateDir: ctx.readScope.privateDir } : {}),
+    ...(ctx.readScope?.allowDotGithub ? { allowDotGithub: true } : {}),
   }
 }
 
