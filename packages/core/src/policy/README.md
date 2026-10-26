@@ -74,6 +74,10 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 `npm|pnpm|yarn exec|run|dlx flow` 同样识别；选项（以及 `--actor` 的值）不影响匹配，
 与 CLI 的命令匹配方式一致。`bun -e` / `--eval` / `-p` / `--print` 按不透明处理。
 
+### 升级顺序：新条件与旧节点
+
+旧版本节点会 strict 解析 `policy/check` 响应中的 `matched_rules[].rule`，不认识的条件字段（例如 ④ 新增的 `when.push_to`、`when.gh_scope`）会让预检失败，节点按"需要用户"处理。因此**先升级所有节点，再在 `policies.yaml` 中写带新条件的规则**；回滚节点前先删掉这些规则。`decision_id` 只随 `supervisor` 档位返回，不影响旧节点。
+
 ### 信任边界与局限
 
 - **策略执行点在节点**：判定在中枢，放行（allow / 回车）由节点上的执行器完成，节点属于

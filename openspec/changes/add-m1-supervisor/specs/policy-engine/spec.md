@@ -19,7 +19,7 @@
 各档位 SHALL 按以下方式处理命中的请求：
 - `auto`：系统以 `policy` 身份直接批准，不生成条目；
 - `auto-report`：直接批准，并生成一条 Digest 条目；
-- `supervisor`：任务与这次卡住在代回复范围内（见 supervisor 能力的"卡住时代用户回复"）时委托给 supervisor 判断（条目不推送，超时或无法唤醒时转交用户）；否则按 `draft-approve` 处理；节点对 `supervisor` 结果不放行、上报 `blocked` 并带上判定的 `decision_id`；
+- `supervisor`：任务与这次卡住在代回复范围内（见 supervisor 能力的"卡住时代用户回复"）时委托给 supervisor 判断（条目不推送，超时或无法唤醒时转交用户）；否则按 `draft-approve` 处理；节点对 `supervisor` 结果不放行、上报 `blocked` 并带上判定的 `decision_id`（`POST /v1/policy/check` 只在 `supervisor` 档位时返回 `decision_id`，即 `policy.decided` 的 seq；其他档位不返回，保持旧节点兼容）；
 - `draft-approve`：生成 Decide 级别以上的条目，等用户批准或驳回；
 - `notify`：同 `draft-approve`，但条目级别为 Interrupt。
 

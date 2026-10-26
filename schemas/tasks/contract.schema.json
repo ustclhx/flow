@@ -122,7 +122,7 @@
       "maxLength": 200
     },
     "inputs": {
-      "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用",
+      "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review 见 supervisor",
       "type": "object",
       "properties": {
         "fake": {
@@ -621,6 +621,114 @@
           },
           "additionalProperties": false,
           "title": "Fake executor inputs"
+        },
+        "wake": {
+          "description": "supervisor 唤醒任务的唤醒原因与事件（只供提示词，不作为权限依据）",
+          "type": "object",
+          "properties": {
+            "origin": {
+              "type": "string",
+              "enum": [
+                "instruction",
+                "autonomous",
+                "reply"
+              ],
+              "description": "唤醒来源：instruction、autonomous，或只能代回复卡住的 reply"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "唤醒代数，从 1 开始"
+            },
+            "events": {
+              "default": [],
+              "maxItems": 200,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991,
+                    "description": "账本事件的 seq"
+                  },
+                  "type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "事件类型，例如 user.instruction"
+                  },
+                  "ts": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  "task_id": {
+                    "description": "相关任务",
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+                  },
+                  "summary": {
+                    "description": "中枢生成的事件说明，例如指令原文、任务结果摘要、卡住说明",
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "data": {
+                    "description": "中枢附上的结构化上下文，例如代回复时的 block_seq、请求的命令、终端末尾、diff_stat、目标与角色",
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "seq",
+                  "type"
+                ],
+                "additionalProperties": false,
+                "title": "Wake event",
+                "description": "唤醒合并的一条账本事件"
+              }
+            },
+            "note": {
+              "description": "附加说明，例如手动放行队列时的提示",
+              "type": "string",
+              "maxLength": 4000
+            }
+          },
+          "required": [
+            "origin",
+            "generation"
+          ],
+          "additionalProperties": false,
+          "title": "Wake inputs"
+        },
+        "review": {
+          "description": "审查任务要审查的 PR 与补充关注点",
+          "type": "object",
+          "properties": {
+            "pr": {
+              "type": "string",
+              "maxLength": 512,
+              "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+              "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+            },
+            "focus": {
+              "description": "补充关注点（不超过 500 字），不改变判定标准",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
+          "required": [
+            "pr"
+          ],
+          "additionalProperties": false,
+          "title": "Review inputs"
         }
       },
       "additionalProperties": {}

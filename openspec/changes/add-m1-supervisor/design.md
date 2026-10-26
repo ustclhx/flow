@@ -88,6 +88,8 @@ origin 只有两类：
 - 手动控制（user-only）：`flow supervisor wake <ws> <说明>` 写一条 `user.instruction`；`flow supervisor wake <ws> --release <instruction|autonomous>` 写 `supervisor.release{queue}`，立刻用该队列现有事件创建一次唤醒，origin 保持该队列的类别。手动放行不计入每日上限。
 - 一个 workspace 只能有一个 `kind: supervisor` 角色可用（全局最多一个，doctor 对多个报错）；唤醒任务使用它。
 - workspace 配置 `supervisor.enabled: false` 或没有 `kind: supervisor` 角色时不唤醒，`/ask` 回复未启用。
+- `ws/global` 固定不启用 supervisor（`supervisor.enabled` 恒为 false）：不唤醒，也不代回复其中任务的卡住；doctor 显示"global 不启用 supervisor"。workspace 文件的 `supervisor` 段校验失败时，该 workspace 照常加载，supervisor 视为未启用，问题由 doctor 报告。
+- 是否代回复统一由 `delegationEnabled(workspace)`（`enabled && delegate_replies`）判断。
 
 ### D4. 硬性上限（中枢强制）
 
@@ -256,7 +258,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - **命令前缀严格匹配**（所有档位）：`command_prefix` 按原始词比较，不消去环境变量赋值、包装命令（sudo、env、exec、nohup、timeout、nice、xargs 等）或执行文件路径，首词必须与前缀首词完全相同，只接受空格与可见 ASCII；动作识别仍消去包装、保守识别。
 - `flow init` 在 `policies.yaml` 中生成一组**注释掉的**白名单模板（按 workspace 启用）：`tool:CodexCommand` 与 `tool:Bash` 下的 `pnpm check`、`pnpm test`、`pnpm lint` 前缀（串联请求每段都须满足；前缀按上述严格规则匹配，模板中每个前缀在 1.6 的测试中覆盖 `pnpm test --x`、`pnpm test:e2e` 等写法）；带 `gh_scope` 的 `pr.create`、`gh pr view`、`gh pr diff`；带 `push_to` 的 `git.push`。
 
-**判定与卡住绑定**：`POST /v1/policy/check` 的响应增加 `decision_id`（对应 `policy.decided` 的 seq）。节点按"不放行、上报 blocked"处理 `supervisor` 档位，上报时带 `decision_id` 与请求文本。中枢只在以下全部成立时委托：该判定属于本任务、写于该任务上一次离开 `blocked` 之后、判定的请求与上报的请求一致。缺 `decision_id`（precheck 超时、5xx 等）一律交给用户。节点执行 supervisor 的 `approve` 前 MUST 重新读取待批请求（Codex 弹窗或待批工具调用），与 `decision_id` 的请求一致、推送或 gh 环境复查通过才放行；否则在 ack 中标记该回复 `dropped{reason: request_changed}`，并以新的卡住重新上报（带 `no_delegate: true`），中枢把它直接交给用户。`block_seq` 定义为该次 `task.blocked` 事件的账本 seq。
+**判定与卡住绑定**：`POST /v1/policy/check` 的响应在判定为 `supervisor` 档位时返回 `decision_id`（对应 `policy.decided` 的 seq）；其他档位与 dry_run 不返回该字段（旧节点以 strict schema 解析响应，而旧节点不会遇到 `supervisor` 档位；新版响应 schema 改为非 strict，便于以后扩展）。节点按"不放行、上报 blocked"处理 `supervisor` 档位，上报时带 `decision_id` 与请求文本。中枢只在以下全部成立时委托：该判定属于本任务、写于该任务上一次离开 `blocked` 之后、判定的请求与上报的请求一致。缺 `decision_id`（precheck 超时、5xx 等）一律交给用户。节点执行 supervisor 的 `approve` 前 MUST 重新读取待批请求（Codex 弹窗或待批工具调用），与 `decision_id` 的请求一致、推送或 gh 环境复查通过才放行；否则在 ack 中标记该回复 `dropped{reason: request_changed}`，并以新的卡住重新上报（带 `no_delegate: true`），中枢把它直接交给用户。`block_seq` 定义为该次 `task.blocked` 事件的账本 seq。
 
 **委托与唤醒**：中枢写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`，条目标为"supervisor 处理中"、**不推送**。委托事件进入独立的 **reply 队列**，不与 instruction、autonomous 合并：
 
@@ -284,10 +286,11 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - 超过 `supervisor.reply_timeout_s`（默认 600）仍未回复（`timeout`）；
 - 唤醒无法开始：未启用、没有 supervisor 角色、reply 配额用尽、当前 reply 唤醒处于 `blocked`（`wake_unavailable`，立即转交，不等超时）；
 - 处理该委托的唤醒失败或结束时仍未回复（`wake_failed`、`wake_ended`）；
-- 任务从这次卡住直接进入新的卡住（`superseded`），旧委托失效，新卡住重新判定；
 - 用户忽略该条目（`user_dismissed`）。
 
-用户回复：在用户 `task_reply` 的同一次追加里写 `task.reply_escalated{reason: user_replied}` 结束委托，之后 supervisor 的 `task_respond` 返回 `stale_block`。**在 supervisor 的回复写入之前，用户的回复优先**；supervisor 的回复已写入但尚未送达时，用户再回复按现有语义得到 `reply_pending`。转交与 `task_respond` 并发时，以 store 事务的先后为准，后到者得到 `stale_block`。
+**隐式失效**（不写事件）：委托只在任务处于 `blocked`、且当前这次卡住（最近一次 `task.blocked`）的 seq 等于委托的 `block_seq` 时有效。任务离开该次卡住（`task.unblocked`、`task.requeued`、`task.requeued_with_reply`、`task.lease_expired`，包括进入新的卡住）时委托隐式失效，新卡住重新判定是否委托。调度与 `task_respond` 统一用 core 的 `activeDelegation`（store 的 `activeDelegation(taskId)`）判断；失效后的 `task.reply_escalated` 被拒绝（`not_delegated`）。
+
+用户回复：在用户 `task_reply` 的同一次追加里写 `task.reply_escalated{reason: user_replied}` 结束委托（用户忽略条目同理写 `user_dismissed`）。这两种原因的事件 actor 为 user，store 只接受 user 写入；其他原因（`supervisor`、`timeout`、`wake_*`）由中枢写入，只接受 hub。委托结束后，之后 supervisor 的 `task_respond` 返回 `stale_block`。**在 supervisor 的回复写入之前，用户的回复优先**；supervisor 的回复已写入但尚未送达时，用户再回复按现有语义得到 `reply_pending`。转交与 `task_respond` 并发时，以 store 事务的先后为准，后到者得到 `stale_block`。
 
 备选：用确定性规则直接 `auto` 放行这些命令。保留为用户自己的选项（策略本来就支持），但它无法处理 `question`，也无法结合任务目标判断"这个请求是否合理"。
 

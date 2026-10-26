@@ -4,12 +4,12 @@
 
 ## 1. 协议与配置
 
-- [ ] 1.1 账本事件与 schema：`supervisor.wake_started`、`supervisor.answered`、`task_proposal.created|accepted|rejected`、`decision.review_due`；任务投影增加 origin；`schemas:check` 覆盖新事件；`supervisor.wake_started.origin` 枚举加 `reply`
-- [ ] 1.2 workspace 配置 `supervisor: {enabled, auto_merge, merge_method, allow_no_checks, reviewer_roles, limits}`（schema、默认值、doctor 显示）；`node.yaml` 的 `reserved.supervisor`；`limits.reply_wakes_per_day`；`reserved.supervisor` 默认 1 与 `reserved.reply` 默认 1
+- [x] 1.1 账本事件与 schema：`supervisor.wake_started`、`supervisor.answered`、`task_proposal.created|accepted|rejected`、`decision.review_due`；任务投影增加 origin；`schemas:check` 覆盖新事件；`supervisor.wake_started.origin` 枚举加 `reply`
+- [x] 1.2 workspace 配置 `supervisor: {enabled, auto_merge, merge_method, allow_no_checks, reviewer_roles, limits}`（schema、默认值、doctor 显示）；`node.yaml` 的 `reserved.supervisor`；`limits.reply_wakes_per_day`；`reserved.supervisor` 默认 1 与 `reserved.reply` 默认 1
 - [x] 1.3 角色 `kind` 与有效类别（D9：声明只能收紧、Bash 规则计为 write），doctor 显示与警告
 - [x] 1.4 角色模板：`supervisor`、`pr-reviewer`、`merger` 及提示词；`dev` 模板 `creatable_by: [supervisor]`；doctor 对缺少该值的已有 `dev.yaml` 给出片段
-- [ ] 1.5 合同 `inputs.wake`、`inputs.review` 与结果 `result.review` 的 schema
-- [ ] 1.6 策略档位 `supervisor`（合并次序；受保护动作含 `task.respond` 提升为 `draft-approve` 并标 `guarded`；通配规则不能给出）；`when.push_to: task_branch`（core 纯函数 `parsePushTarget`：单段、无 git 全局选项、登记 remote 名、单一显式 refspec、禁用选项清单、无启用的 hook，不确定即不满足）与 `when.gh_scope: workspace_repo`；`policy/check` 响应加 `decision_id`；`policies.yaml` 模板加入注释掉的代回复白名单，每个前缀写法有测试；`FLOW_TOOL_ACTIONS` 与 CLI 映射加 `task_respond` → `task.respond`；账本事件 `task.reply_delegated`、`task.reply_escalated`、`task.branch_reported`，`task.blocked` 加 `decision_id`、`diff_stat`、`no_delegate`，`policy/check` 请求加 `push_env_ok`、`gh_env_ok`，`task.replied.via` 加 `supervisor`；workspace 配置 `supervisor.delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；`supervisor` 列为保留 actor（角色加载与 doctor 报错）（G3 已完成：`supervisor` 列为保留 actor，名为 supervisor 但类别不是 supervisor 的角色在角色加载与 doctor 报错；其余条目未做）；（G2 已完成策略引擎部分：`supervisor` 档位与合并次序、受保护动作/工具的提升、`parsePushTarget` 与 `push_to` / `gh_scope` 条件及 decide 上下文、`FLOW_TOOL_ACTIONS` 与 CLI 的 `task.respond`、`policies.yaml` 注释模板与逐条测试、policy README；协议字段、账本事件、workspace 配置、保留 actor 不在此组）
+- [x] 1.5 合同 `inputs.wake`、`inputs.review` 与结果 `result.review` 的 schema
+- [ ] 1.6 策略档位 `supervisor`（合并次序；受保护动作含 `task.respond` 提升为 `draft-approve` 并标 `guarded`；通配规则不能给出）；`when.push_to: task_branch`（core 纯函数 `parsePushTarget`：单段、无 git 全局选项、登记 remote 名、单一显式 refspec、禁用选项清单、无启用的 hook，不确定即不满足）与 `when.gh_scope: workspace_repo`；`policy/check` 响应加 `decision_id`；`policies.yaml` 模板加入注释掉的代回复白名单，每个前缀写法有测试；`FLOW_TOOL_ACTIONS` 与 CLI 映射加 `task_respond` → `task.respond`；账本事件 `task.reply_delegated`、`task.reply_escalated`、`task.branch_reported`，`task.blocked` 加 `decision_id`、`diff_stat`、`no_delegate`，`policy/check` 请求加 `push_env_ok`、`gh_env_ok`，`task.replied.via` 加 `supervisor`；workspace 配置 `supervisor.delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；`supervisor` 列为保留 actor（角色加载与 doctor 报错）（G3 已完成：`supervisor` 列为保留 actor，名为 supervisor 但类别不是 supervisor 的角色在角色加载与 doctor 报错）。（G1 已完成账本/协议部分：`task.reply_delegated`、`task.reply_escalated`、`task.branch_reported` 事件与写入校验，`task.blocked` 的 `decision_id`/`diff_stat`/`no_delegate`，`policy/check` 请求的 `push_env_ok`/`gh_env_ok` 与响应的 `decision_id`，`task.replied.via` 的 `supervisor`，workspace `delegate_replies`、`reply_timeout_s`、`limits.reply_wakes_per_day`；策略档位、`push_to`/`gh_scope`、模板与 `FLOW_TOOL_ACTIONS` 映射由 G2 完成）（G2 已完成策略引擎部分：`supervisor` 档位与合并次序、受保护动作/工具的提升、`parsePushTarget` 与 `push_to` / `gh_scope` 条件及 decide 上下文、`FLOW_TOOL_ACTIONS` 与 CLI 的 `task.respond`、`policies.yaml` 注释模板与逐条测试、policy README；协议字段、账本事件、workspace 配置、保留 actor 不在此组）
 
 ## 2. 中枢：任务创建的校验
 
@@ -27,7 +27,7 @@
 - [ ] 3.2 workspace × origin 三条队列（instruction、autonomous、reply）、instruction 优先、每次唤醒递增的代数与幂等键；队列由账本投影；重启恢复测试；只允许一个 `kind: supervisor` 角色；第三条 reply 队列：可与一个普通唤醒并行、失败不重试直接转交、不暂停、无 `--release`
 - [ ] 3.3 每日唤醒上限（总数与 autonomous 分别计）与"已达上限"条目；失败重试、Interrupt 条目、队列暂停与指数退避
 - [ ] 3.4 `flow ask`、`flow supervisor wake [--release <queue>]|status`（user-only 路由）；Telegram `/ask` 返回唤醒编号、排队说明或未启用
-- [ ] 3.5 代回复调度（D15）：委托判定（question；`lease_held` 且 `decision_id` 绑定本任务、晚于上次离开 blocked、请求一致的 `supervisor` 档位审批；排除唤醒、merge、审查任务与 `node_lost` 遗留卡住）；reply 队列（不合并、开始前剔除失效事件、单独配额）；`reply_only_wake` 限制；条目不推送；转交（超时、唤醒不可用或 blocked 时立即、唤醒失败或结束、`superseded`、用户忽略、用户回复同次追加结束委托）；竞态测试（用户先回复、supervisor 先回复、超时与回复并发）与重启恢复
+- [ ] 3.5 代回复调度（D15）：委托判定（question；`lease_held` 且 `decision_id` 绑定本任务、晚于上次离开 blocked、请求一致的 `supervisor` 档位审批；排除唤醒、merge、审查任务与 `node_lost` 遗留卡住）；reply 队列（不合并、开始前剔除失效事件、单独配额）；`reply_only_wake` 限制；条目不推送；转交（超时、唤醒不可用或 blocked 时立即、唤醒失败或结束、离开该次卡住时隐式失效（`activeDelegation`，不写事件）、用户忽略、用户回复同次追加结束委托）；竞态测试（用户先回复、supervisor 先回复、超时与回复并发）与重启恢复
 
 ## 4. 操作与写入
 

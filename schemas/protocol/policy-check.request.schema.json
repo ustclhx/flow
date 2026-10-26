@@ -29,6 +29,14 @@
     "dry_run": {
       "description": "默认 false；user 可设为 true 只判定不入账，节点传 true 返回 400",
       "type": "boolean"
+    },
+    "push_env_ok": {
+      "description": "git push 的推送环境检查（D15）：push 地址与登记仓库一致、没有会执行命令或改写目标的 git 配置、没有启用的 hook；缺失视为不满足",
+      "type": "boolean"
+    },
+    "gh_env_ok": {
+      "description": "gh 命令的仓库检查（D15）：gh 实际解析出的仓库与登记仓库一致；缺失视为不满足",
+      "type": "boolean"
     }
   },
   "required": [

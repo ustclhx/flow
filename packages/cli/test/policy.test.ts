@@ -77,6 +77,7 @@ test('policy check 默认只判定 auto-report，--record 才入账；支持重�
   expect(dry.data).toEqual(before.data)
   const recorded = await runCli([...args, '--record'], commands)
   expect(recorded.exitCode).toBe(0)
+  // auto-report 档位不返回 decision_id（只随 supervisor 档位返回），与只判定的输出一致。
   expect(JSON.parse(recorded.stdout)).toEqual(JSON.parse(checked.stdout))
   const shown = await client.showTask(taskId)
   if (!shown.ok) throw new Error(shown.error.message)

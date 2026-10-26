@@ -316,6 +316,14 @@
                     "type": "string",
                     "maxLength": 2000
                   }
+                },
+                "push_env_ok": {
+                  "description": "节点上报的推送环境检查结果（D15）；缺失视为不满足",
+                  "type": "boolean"
+                },
+                "gh_env_ok": {
+                  "description": "节点上报的 gh 仓库解析检查结果（D15）；缺失视为不满足",
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -506,7 +514,7 @@
                   "maxLength": 200
                 },
                 "inputs": {
-                  "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用",
+                  "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review 见 supervisor",
                   "type": "object",
                   "properties": {
                     "fake": {
@@ -1017,6 +1025,115 @@
                       ],
                       "additionalProperties": false,
                       "title": "Fake executor inputs"
+                    },
+                    "wake": {
+                      "description": "supervisor 唤醒任务的唤醒原因与事件（只供提示词，不作为权限依据）",
+                      "type": "object",
+                      "properties": {
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "instruction",
+                            "autonomous",
+                            "reply"
+                          ],
+                          "description": "唤醒来源：instruction、autonomous，或只能代回复卡住的 reply"
+                        },
+                        "generation": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991,
+                          "description": "唤醒代数，从 1 开始"
+                        },
+                        "events": {
+                          "default": [],
+                          "maxItems": 200,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "seq": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991,
+                                "description": "账本事件的 seq"
+                              },
+                              "type": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "description": "事件类型，例如 user.instruction"
+                              },
+                              "ts": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                              },
+                              "task_id": {
+                                "description": "相关任务",
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+                              },
+                              "summary": {
+                                "description": "中枢生成的事件说明，例如指令原文、任务结果摘要、卡住说明",
+                                "type": "string",
+                                "maxLength": 4000
+                              },
+                              "data": {
+                                "description": "中枢附上的结构化上下文，例如代回复时的 block_seq、请求的命令、终端末尾、diff_stat、目标与角色",
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {}
+                              }
+                            },
+                            "required": [
+                              "seq",
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "title": "Wake event",
+                            "description": "唤醒合并的一条账本事件"
+                          }
+                        },
+                        "note": {
+                          "description": "附加说明，例如手动放行队列时的提示",
+                          "type": "string",
+                          "maxLength": 4000
+                        }
+                      },
+                      "required": [
+                        "origin",
+                        "generation",
+                        "events"
+                      ],
+                      "additionalProperties": false,
+                      "title": "Wake inputs"
+                    },
+                    "review": {
+                      "description": "审查任务要审查的 PR 与补充关注点",
+                      "type": "object",
+                      "properties": {
+                        "pr": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+                          "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+                        },
+                        "focus": {
+                          "description": "补充关注点（不超过 500 字），不改变判定标准",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        }
+                      },
+                      "required": [
+                        "pr"
+                      ],
+                      "additionalProperties": false,
+                      "title": "Review inputs"
                     }
                   },
                   "additionalProperties": {}
@@ -1033,6 +1150,14 @@
               "additionalProperties": false,
               "title": "Flow task contract",
               "description": "创建任务时提交的合同"
+            },
+            "origin": {
+              "description": "中枢计算的来源（D2），创建时写入、之后不变；不在 supervisor 链上的任务省略",
+              "type": "string",
+              "enum": [
+                "instruction",
+                "autonomous"
+              ]
             }
           },
           "required": [
@@ -1383,6 +1508,48 @@
                   "additionalProperties": false,
                   "title": "Task cost",
                   "description": "执行器上报的费用与用量（估算）"
+                },
+                "review": {
+                  "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
+                  "type": "object",
+                  "properties": {
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "approve",
+                        "changes_requested"
+                      ],
+                      "description": "approve 没有阻塞问题；changes_requested 需要修改"
+                    },
+                    "blocking": {
+                      "default": [],
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000
+                      }
+                    },
+                    "notes": {
+                      "default": "",
+                      "type": "string",
+                      "maxLength": 16384
+                    },
+                    "reviewed_sha": {
+                      "type": "string",
+                      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                      "description": "审查时 PR 的 head（执行器记录）"
+                    }
+                  },
+                  "required": [
+                    "verdict",
+                    "blocking",
+                    "notes",
+                    "reviewed_sha"
+                  ],
+                  "additionalProperties": false,
+                  "title": "Review result"
                 }
               },
               "required": [
@@ -1611,6 +1778,48 @@
                   "additionalProperties": false,
                   "title": "Task cost",
                   "description": "执行器上报的费用与用量（估算）"
+                },
+                "review": {
+                  "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
+                  "type": "object",
+                  "properties": {
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "approve",
+                        "changes_requested"
+                      ],
+                      "description": "approve 没有阻塞问题；changes_requested 需要修改"
+                    },
+                    "blocking": {
+                      "default": [],
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000
+                      }
+                    },
+                    "notes": {
+                      "default": "",
+                      "type": "string",
+                      "maxLength": 16384
+                    },
+                    "reviewed_sha": {
+                      "type": "string",
+                      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                      "description": "审查时 PR 的 head（执行器记录）"
+                    }
+                  },
+                  "required": [
+                    "verdict",
+                    "blocking",
+                    "notes",
+                    "reviewed_sha"
+                  ],
+                  "additionalProperties": false,
+                  "title": "Review result"
                 }
               },
               "required": [
@@ -1732,6 +1941,22 @@
                 "node_lost",
                 "other"
               ]
+            },
+            "decision_id": {
+              "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "no_delegate": {
+              "description": "true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）",
+              "type": "boolean"
+            },
+            "diff_stat": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000,
+              "description": "相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并以 … 结尾）"
             }
           },
           "required": [
@@ -1881,9 +2106,10 @@
               "enum": [
                 "telegram",
                 "web",
-                "cli"
+                "cli",
+                "supervisor"
               ],
-              "description": "操作发起的渠道"
+              "description": "回复发起的渠道；supervisor 表示 supervisor 代用户回复"
             },
             "text": {
               "description": "回复文字或拒绝理由",
@@ -2300,6 +2526,48 @@
                   "additionalProperties": false,
                   "title": "Task cost",
                   "description": "执行器上报的费用与用量（估算）"
+                },
+                "review": {
+                  "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
+                  "type": "object",
+                  "properties": {
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "approve",
+                        "changes_requested"
+                      ],
+                      "description": "approve 没有阻塞问题；changes_requested 需要修改"
+                    },
+                    "blocking": {
+                      "default": [],
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000
+                      }
+                    },
+                    "notes": {
+                      "default": "",
+                      "type": "string",
+                      "maxLength": 16384
+                    },
+                    "reviewed_sha": {
+                      "type": "string",
+                      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                      "description": "审查时 PR 的 head（执行器记录）"
+                    }
+                  },
+                  "required": [
+                    "verdict",
+                    "blocking",
+                    "notes",
+                    "reviewed_sha"
+                  ],
+                  "additionalProperties": false,
+                  "title": "Review result"
                 }
               },
               "required": [
@@ -2412,6 +2680,240 @@
       ],
       "additionalProperties": false,
       "title": "task.lease_expired"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "task.reply_delegated"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "任务 id，由中枢在创建时分配"
+            },
+            "block_seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "被委托的那次 task.blocked 的 seq"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "question",
+                "awaiting_approval"
+              ],
+              "description": "卡住原因：question 或 awaiting_approval"
+            },
+            "decision_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "策略判定 id，即对应 policy.decided 事件的 seq"
+            },
+            "deadline": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "description": "超过此时间仍未回复即转交用户（reply_timeout_s）"
+            }
+          },
+          "required": [
+            "task_id",
+            "block_seq",
+            "kind",
+            "deadline"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "task_id",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "task.reply_delegated"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "task.reply_escalated"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "enum": [
+                "supervisor",
+                "timeout",
+                "wake_unavailable",
+                "wake_failed",
+                "wake_ended",
+                "user_dismissed",
+                "user_replied"
+              ],
+              "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复"
+            },
+            "block_seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "被结束的委托对应的 task.blocked seq（必须是当前这次卡住）"
+            },
+            "note": {
+              "description": "说明，例如 supervisor 转交的理由",
+              "type": "string",
+              "maxLength": 2000
+            }
+          },
+          "required": [
+            "reason",
+            "block_seq"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "task_id",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "task.reply_escalated"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "task.branch_reported"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "branch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$",
+              "description": "执行器创建的任务分支，例如 ustclhx/t-1"
+            }
+          },
+          "required": [
+            "branch"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "task_id",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "task.branch_reported"
     },
     {
       "type": "object",
@@ -3652,6 +4154,1421 @@
       ],
       "additionalProperties": false,
       "title": "user.instruction"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "supervisor.wake_started"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "唤醒任务 id"
+            },
+            "workspace": {
+              "type": "string",
+              "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+              "description": "workspace 标识，形如 ws/<id>"
+            },
+            "origin": {
+              "type": "string",
+              "enum": [
+                "instruction",
+                "autonomous",
+                "reply"
+              ],
+              "description": "唤醒来源：instruction、autonomous，或只能代回复卡住的 reply"
+            },
+            "events": {
+              "maxItems": 200,
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "description": "这次唤醒合并的账本事件 seq（按顺序）"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "唤醒代数，从 1 开始"
+            }
+          },
+          "required": [
+            "task_id",
+            "workspace",
+            "origin",
+            "events",
+            "generation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "task_id",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "supervisor.wake_started"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "supervisor.answered"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "type": "string",
+              "pattern": "^[a-z]{2,12}\\.[A-Za-z0-9_.-]{1,120}$",
+              "description": "条目 id，例如 blk.42、prop.<提案 id>"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000,
+              "description": "答复原文或所选选项"
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "web",
+                "cli"
+              ],
+              "description": "操作发起的渠道"
+            }
+          },
+          "required": [
+            "item_id",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "supervisor.answered"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "supervisor.release"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "queue": {
+              "type": "string",
+              "enum": [
+                "instruction",
+                "autonomous"
+              ]
+            }
+          },
+          "required": [
+            "queue"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "supervisor.release"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "task_proposal.created"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "proposal_id": {
+              "type": "string",
+              "pattern": "^tp-[A-Za-z0-9_.-]{1,64}$",
+              "description": "任务提案 id，由中枢在提交时分配"
+            },
+            "wake_task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "提交提案的唤醒任务"
+            },
+            "draft": {
+              "type": "object",
+              "properties": {
+                "goal": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "任务目标"
+                },
+                "workspace": {
+                  "type": "string",
+                  "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                  "description": "workspace 标识，形如 ws/<id>"
+                },
+                "role": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "角色，例如 developer、reviewer、triage"
+                },
+                "executor": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                  "description": "执行器类型，例如 fake、codex-orca、claude-sdk、codex-exec"
+                },
+                "requires": {
+                  "default": [],
+                  "description": "所需节点能力；匹配时 executor:<executor> 视为隐含必需，不必重复写出",
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "pattern": "^[a-z][a-z0-9_-]*(:.+)?$",
+                    "description": "节点能力，例如 browser、executor:fake、repo:/path/to/repo"
+                  }
+                },
+                "cwd": {
+                  "description": "工作目录（兼容历史合同的路径）",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "context": {
+                  "description": "上下文引用：brain 条目 id 或文件路径",
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "verify": {
+                  "description": "验收命令，按顺序执行",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "cmd": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "命令 argv 数组（不经 shell），例如 [\"bun\", \"test\"]"
+                      },
+                      "cwd": {
+                        "description": "工作目录；缺省为任务的 cwd",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "timeout_s": {
+                        "description": "单条命令超时秒数，缺省为 600（10 分钟）",
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "cmd"
+                    ],
+                    "additionalProperties": false,
+                    "title": "Verify step",
+                    "description": "一条验收命令"
+                  }
+                },
+                "timeout_s": {
+                  "default": 3600,
+                  "description": "单次尝试的超时秒数，默认 3600",
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "no_progress_minutes": {
+                  "description": "无进展阈值（分钟）：执行器这么久没有任何新活动即上报 blocked(no_progress)；缺省取角色设置，再缺省为 15",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10080
+                },
+                "retry": {
+                  "description": "重试策略；缺省为不重试（执行器可能已有副作用）",
+                  "type": "object",
+                  "properties": {
+                    "max_attempts": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100,
+                      "description": "最多尝试次数（含第一次）；1 等同于不重试"
+                    }
+                  },
+                  "required": [
+                    "max_attempts"
+                  ],
+                  "additionalProperties": false
+                },
+                "parent": {
+                  "description": "父任务 id",
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+                },
+                "idempotency_key": {
+                  "description": "幂等键：同一个键再次提交时返回已有任务",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "inputs": {
+                  "description": "执行器专用输入，按执行器类型取用；inputs.fake 仅 executor=fake 可用；inputs.wake、inputs.review 见 supervisor",
+                  "type": "object",
+                  "properties": {
+                    "fake": {
+                      "type": "object",
+                      "properties": {
+                        "outcome": {
+                          "default": "done",
+                          "description": "模拟的结束方式",
+                          "type": "string",
+                          "enum": [
+                            "done",
+                            "failed",
+                            "blocked"
+                          ]
+                        },
+                        "delay_ms": {
+                          "default": 0,
+                          "description": "结束前等待的毫秒数，用于模拟长时间运行",
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 86400000
+                        },
+                        "blocked_reason": {
+                          "description": "outcome=blocked 时必填的卡住原因",
+                          "type": "string",
+                          "enum": [
+                            "awaiting_approval",
+                            "question",
+                            "no_progress",
+                            "crashed",
+                            "node_lost",
+                            "other"
+                          ]
+                        },
+                        "message": {
+                          "description": "卡住或失败时的说明；done 时作为结果摘要",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "activity": {
+                          "default": [],
+                          "description": "执行期间依次上报的输出片段（kind=output）",
+                          "maxItems": 1000,
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "script": {
+                          "description": "在 activity / delay_ms 之前依次执行的脚本步骤",
+                          "maxItems": 1000,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "output"
+                                  },
+                                  "text": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "text"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "wait"
+                                  },
+                                  "ms": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 86400000
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "ms"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "idle"
+                                  },
+                                  "hint": {
+                                    "description": "随 idle 信号附带的结构化信息，交给 classify",
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": [
+                                  "do"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "await_reply"
+                                  }
+                                },
+                                "required": [
+                                  "do"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "resumed"
+                                  }
+                                },
+                                "required": [
+                                  "do"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "exit"
+                                  },
+                                  "code": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "退出码；被信号终止时为 null"
+                                  },
+                                  "signal": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "code"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "hang"
+                                  },
+                                  "ignore_cancel": {
+                                    "default": false,
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "ignore_cancel"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "do": {
+                                    "type": "string",
+                                    "const": "approval"
+                                  },
+                                  "tool": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 128,
+                                    "description": "请求审批的工具名，例如 Bash"
+                                  },
+                                  "command": {
+                                    "description": "命令文本",
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "paths": {
+                                    "description": "涉及的路径",
+                                    "maxItems": 200,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "do",
+                                  "tool"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ],
+                            "title": "Fake executor step"
+                          }
+                        },
+                        "session": {
+                          "description": "以 blocked 结束时上报的会话 id（模拟无头执行器的 resume）",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deliver_failures": {
+                          "description": "deliver 前 N 次抛出异常（模拟临时送达失败）",
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
+                        "deliver_hangs": {
+                          "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000000
+                        },
+                        "deliver_delay_ms": {
+                          "description": "deliver 耗时（毫秒），模拟缓慢的送达",
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 86400000
+                        },
+                        "resume": {
+                          "description": "任务带着回复重新排队后，下一次执行改按这里的指令",
+                          "type": "object",
+                          "properties": {
+                            "outcome": {
+                              "default": "done",
+                              "description": "模拟的结束方式",
+                              "type": "string",
+                              "enum": [
+                                "done",
+                                "failed",
+                                "blocked"
+                              ]
+                            },
+                            "delay_ms": {
+                              "default": 0,
+                              "description": "结束前等待的毫秒数，用于模拟长时间运行",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 86400000
+                            },
+                            "blocked_reason": {
+                              "description": "outcome=blocked 时必填的卡住原因",
+                              "type": "string",
+                              "enum": [
+                                "awaiting_approval",
+                                "question",
+                                "no_progress",
+                                "crashed",
+                                "node_lost",
+                                "other"
+                              ]
+                            },
+                            "message": {
+                              "description": "卡住或失败时的说明；done 时作为结果摘要",
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "activity": {
+                              "default": [],
+                              "description": "执行期间依次上报的输出片段（kind=output）",
+                              "maxItems": 1000,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "script": {
+                              "description": "在 activity / delay_ms 之前依次执行的脚本步骤",
+                              "maxItems": 1000,
+                              "type": "array",
+                              "items": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "output"
+                                      },
+                                      "text": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "text"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "wait"
+                                      },
+                                      "ms": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 86400000
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "ms"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "idle"
+                                      },
+                                      "hint": {
+                                        "description": "随 idle 信号附带的结构化信息，交给 classify",
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {}
+                                      }
+                                    },
+                                    "required": [
+                                      "do"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "await_reply"
+                                      }
+                                    },
+                                    "required": [
+                                      "do"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "resumed"
+                                      }
+                                    },
+                                    "required": [
+                                      "do"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "exit"
+                                      },
+                                      "code": {
+                                        "anyOf": [
+                                          {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ],
+                                        "description": "退出码；被信号终止时为 null"
+                                      },
+                                      "signal": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "code"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "hang"
+                                      },
+                                      "ignore_cancel": {
+                                        "default": false,
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "ignore_cancel"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "do": {
+                                        "type": "string",
+                                        "const": "approval"
+                                      },
+                                      "tool": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 128,
+                                        "description": "请求审批的工具名，例如 Bash"
+                                      },
+                                      "command": {
+                                        "description": "命令文本",
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "paths": {
+                                        "description": "涉及的路径",
+                                        "maxItems": 200,
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "do",
+                                      "tool"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ],
+                                "title": "Fake executor step"
+                              }
+                            },
+                            "session": {
+                              "description": "以 blocked 结束时上报的会话 id（模拟无头执行器的 resume）",
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "deliver_failures": {
+                              "description": "deliver 前 N 次抛出异常（模拟临时送达失败）",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "deliver_hangs": {
+                              "description": "deliver 前 N 次永不返回（模拟卡死的送达）",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "deliver_delay_ms": {
+                              "description": "deliver 耗时（毫秒），模拟缓慢的送达",
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 86400000
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "delay_ms",
+                            "activity"
+                          ],
+                          "additionalProperties": false,
+                          "title": "Fake executor resume inputs"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "delay_ms",
+                        "activity"
+                      ],
+                      "additionalProperties": false,
+                      "title": "Fake executor inputs"
+                    },
+                    "wake": {
+                      "description": "supervisor 唤醒任务的唤醒原因与事件（只供提示词，不作为权限依据）",
+                      "type": "object",
+                      "properties": {
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "instruction",
+                            "autonomous",
+                            "reply"
+                          ],
+                          "description": "唤醒来源：instruction、autonomous，或只能代回复卡住的 reply"
+                        },
+                        "generation": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991,
+                          "description": "唤醒代数，从 1 开始"
+                        },
+                        "events": {
+                          "default": [],
+                          "maxItems": 200,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "seq": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991,
+                                "description": "账本事件的 seq"
+                              },
+                              "type": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "description": "事件类型，例如 user.instruction"
+                              },
+                              "ts": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                              },
+                              "task_id": {
+                                "description": "相关任务",
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+                              },
+                              "summary": {
+                                "description": "中枢生成的事件说明，例如指令原文、任务结果摘要、卡住说明",
+                                "type": "string",
+                                "maxLength": 4000
+                              },
+                              "data": {
+                                "description": "中枢附上的结构化上下文，例如代回复时的 block_seq、请求的命令、终端末尾、diff_stat、目标与角色",
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {}
+                              }
+                            },
+                            "required": [
+                              "seq",
+                              "type"
+                            ],
+                            "additionalProperties": false,
+                            "title": "Wake event",
+                            "description": "唤醒合并的一条账本事件"
+                          }
+                        },
+                        "note": {
+                          "description": "附加说明，例如手动放行队列时的提示",
+                          "type": "string",
+                          "maxLength": 4000
+                        }
+                      },
+                      "required": [
+                        "origin",
+                        "generation",
+                        "events"
+                      ],
+                      "additionalProperties": false,
+                      "title": "Wake inputs"
+                    },
+                    "review": {
+                      "description": "审查任务要审查的 PR 与补充关注点",
+                      "type": "object",
+                      "properties": {
+                        "pr": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+                          "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+                        },
+                        "focus": {
+                          "description": "补充关注点（不超过 500 字），不改变判定标准",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        }
+                      },
+                      "required": [
+                        "pr"
+                      ],
+                      "additionalProperties": false,
+                      "title": "Review inputs"
+                    }
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "goal",
+                "workspace",
+                "role",
+                "executor",
+                "requires",
+                "timeout_s"
+              ],
+              "additionalProperties": false,
+              "title": "Flow task contract",
+              "description": "创建任务时提交的合同"
+            },
+            "decision": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "expected_outcome": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "metric": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "review_date": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                  "description": "回看日期（YYYY-MM-DD），晚于当天且不超过 180 天"
+                }
+              },
+              "required": [
+                "title",
+                "expected_outcome",
+                "metric",
+                "review_date"
+              ],
+              "additionalProperties": false,
+              "title": "Task proposal decision"
+            },
+            "reason": {
+              "description": "提案理由",
+              "type": "string",
+              "maxLength": 2000
+            }
+          },
+          "required": [
+            "proposal_id",
+            "wake_task_id",
+            "draft"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "task_proposal.created"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "task_proposal.accepted"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "proposal_id": {
+              "type": "string",
+              "pattern": "^tp-[A-Za-z0-9_.-]{1,64}$",
+              "description": "任务提案 id，由中枢在提交时分配"
+            },
+            "task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "据此创建的任务"
+            },
+            "goal": {
+              "description": "用户在 Web 上修改后的目标；没有修改时省略",
+              "type": "string",
+              "minLength": 1
+            },
+            "decision_path": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^decisions\\/[A-Za-z0-9][A-Za-z0-9._-]*\\.md$",
+              "description": "决策条目路径（相对 brain/）"
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "web",
+                "cli"
+              ],
+              "description": "操作发起的渠道"
+            }
+          },
+          "required": [
+            "proposal_id",
+            "task_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "task_proposal.accepted"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "task_proposal.rejected"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "proposal_id": {
+              "type": "string",
+              "pattern": "^tp-[A-Za-z0-9_.-]{1,64}$",
+              "description": "任务提案 id，由中枢在提交时分配"
+            },
+            "note": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "web",
+                "cli"
+              ],
+              "description": "操作发起的渠道"
+            }
+          },
+          "required": [
+            "proposal_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "task_proposal.rejected"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "decision.review_due"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^decisions\\/[A-Za-z0-9][A-Za-z0-9._-]*\\.md$",
+              "description": "决策条目路径（相对 brain/）"
+            },
+            "review_date": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "日期，格式 YYYY-MM-DD"
+            },
+            "missed": {
+              "default": false,
+              "description": "停机期间错过、恢复后补发",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path",
+            "review_date",
+            "missed"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "decision.review_due"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "merge_request.approved"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "item_id": {
+              "description": "合并请求的收件箱条目",
+              "type": "string",
+              "pattern": "^[a-z]{2,12}\\.[A-Za-z0-9_.-]{1,120}$"
+            },
+            "pr": {
+              "type": "string",
+              "maxLength": 512,
+              "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+              "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+            },
+            "review_task": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "给出 approve 结论的审查任务"
+            },
+            "approved_by": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+              "description": "批准者"
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "web",
+                "cli"
+              ],
+              "description": "操作发起的渠道"
+            }
+          },
+          "required": [
+            "pr",
+            "review_task",
+            "approved_by"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "merge_request.approved"
     }
   ],
   "title": "Flow ledger event",

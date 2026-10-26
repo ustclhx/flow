@@ -566,20 +566,28 @@ describe('旧账本迁移', () => {
     try {
       const path = join(dir, 'flow.db')
       const db = await openDatabase(path)
-      // 旧版 DDL：去掉 resume_json 与 replies 表。
+      // 旧版 DDL：去掉 resume_json（以及 ④ 的 origin、branch）列与 replies 表。
       db.exec(
-        LEDGER_DDL.replace(',\n  resume_json      TEXT\n', '\n').replace(
-          /CREATE TABLE IF NOT EXISTS replies[\s\S]*$/,
-          '',
-        ),
+        LEDGER_DDL.replace(
+          ',\n  resume_json      TEXT,\n  origin           TEXT,\n  branch           TEXT\n',
+          '\n',
+        ).replace(/CREATE TABLE IF NOT EXISTS replies[\s\S]*$/, ''),
       )
       const before = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
-      expect(before.some((c) => c.name === 'resume_json')).toBe(false)
+      for (const col of ['resume_json', 'origin', 'branch']) {
+        expect(before.some((c) => c.name === col)).toBe(false)
+      }
       db.close()
       const store = await openLedger(path)
       expect(store.taskResume('t-none')).toBeNull()
       expect(store.taskReplies('t-none')).toEqual([])
       store.close()
+      const reopened = await openDatabase(path)
+      const after = reopened.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
+      reopened.close()
+      for (const col of ['resume_json', 'origin', 'branch']) {
+        expect(after.some((c) => c.name === col)).toBe(true)
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

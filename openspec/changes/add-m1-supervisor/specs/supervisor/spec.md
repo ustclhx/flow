@@ -82,11 +82,15 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 收件箱先出现 Interrupt 条目；放行后创建一个 origin 为 autonomous 的唤醒，包含该队列中的事件
 
 ### Requirement: 启用开关
-workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 `kind: supervisor` 角色时生效）。未启用时 MUST NOT 唤醒，`/ask`、`flow ask` 回复该 workspace 未启用 supervisor。
+workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 `kind: supervisor` 角色时生效）。未启用时 MUST NOT 唤醒，`/ask`、`flow ask` 回复该 workspace 未启用 supervisor。 `ws/global` 的 supervisor MUST 固定不启用：不唤醒，也不代回复其中任务的卡住。
 
 #### Scenario: 关闭后不唤醒
 - **WHEN** `ws/xuanxue-saas` 配置 `supervisor.enabled: false`，用户发送 `/ask xuanxue-saas 看看支付`
 - **THEN** 不创建唤醒任务，用户收到"该 workspace 未启用 supervisor"
+
+#### Scenario: global 不启用
+- **WHEN** 用户发送 `/ask global 看看`，或 `ws/global` 中的任务进入 `blocked(question)`
+- **THEN** 不创建唤醒任务、不写 `task.reply_delegated`，卡住按普通条目推送给用户；doctor 显示"global 不启用 supervisor"
 
 ### Requirement: supervisor 建任务的约束
 中枢对 supervisor 身份的建任务请求 SHALL 依次检查：`parent` 是本 workspace 未结束的唤醒任务（否则 `parent_required`）；目标角色有效类别为 write 且唤醒 origin 为 autonomous 时拒绝（403 `proposal_required`）；目标类别为 merge 或 supervisor 时拒绝（403 `role_not_allowed`）；`cwd` 与 `inputs.repo` 位于本 workspace 登记仓库内（否则 `repo_not_in_workspace`）。
@@ -141,13 +145,13 @@ supervisor SHALL 能用 `ws_brief` 读取简报（supervisor 笔记、进行中�
 - **THEN** 返回 `not_delegated`，任务保持 `blocked`
 
 ### Requirement: 卡住时代用户回复
-workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 true）开启时，中枢 SHALL 把本 workspace 任务（包括没有 origin 的任务）的以下卡住委托给 supervisor：所有 `blocked(question)`；节点持有活动租约、策略判定为 `supervisor` 档位、且该判定（`decision_id`）属于本任务、写于上一次离开 `blocked` 之后、请求与上报一致的 `blocked(awaiting_approval)`。唤醒任务自身、有效类别为 merge 的任务、`reviewer_roles` 中的审查任务、`node_lost` 后保留 `prior_reason` 的卡住 MUST NOT 委托。委托时 MUST 写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`（`block_seq` 为该次 `task.blocked` 的账本 seq），对应收件箱条目 MUST NOT 推送。
+workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 true）开启时（统一按 `delegationEnabled(workspace)` = `enabled && delegate_replies` 判断，`ws/global` 恒为否），中枢 SHALL 把本 workspace 任务（包括没有 origin 的任务）的以下卡住委托给 supervisor：所有 `blocked(question)`；节点持有活动租约、策略判定为 `supervisor` 档位、且该判定（`decision_id`）属于本任务、写于上一次离开 `blocked` 之后、请求与上报一致的 `blocked(awaiting_approval)`。唤醒任务自身、有效类别为 merge 的任务、`reviewer_roles` 中的审查任务、`node_lost` 后保留 `prior_reason` 的卡住 MUST NOT 委托。委托时 MUST 写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`（`block_seq` 为该次 `task.blocked` 的账本 seq），对应收件箱条目 MUST NOT 推送。
 
 委托事件 SHALL 进入独立的 reply 队列，不与其他队列合并；reply 唤醒可以与一个普通唤醒并行。reply 唤醒 MUST 只能调用 `task_respond` 与只读操作，其余（包括 `brief_update`、`kb_journal`）返回 `reply_only_wake`；中枢 MUST 按唤醒绑定 token 识别调用方，不信任调用方声明的任务 id 或 actor。代回复记录 SHALL 由中枢根据账本生成，作为 `ws_brief` 中标明"不是指令"的独立一节。reply 唤醒按 `supervisor.limits.reply_wakes_per_day`（默认 48）单独计数。
 
 supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回复，`decision` 为 `approve`、`deny`（仅授权请求）、`answer`（仅提问，`text` 必填且不超过 2000 字符）或 `escalate`。中枢 MUST 在同一事务里核对：调用方的绑定 token 对应持活动租约、正被分配处理这次委托的 reply 唤醒；workspace 一致；任务当前卡住序号等于 `block_seq`；委托有效且没有待送达的回复。通过后写 `task.replied`（actor supervisor）；条目仍在任务离开 `blocked` 时关闭并记录回复者。节点放行前 MUST 重新读取待批请求，与 `decision_id` 对应的请求一致、推送或 gh 环境复查通过才执行，否则丢弃该回复并以不可委托的新卡住交给用户。`escalate` 写 `task.reply_escalated{reason: supervisor}` 并把条目推送给用户。
 
-以下情况中枢 MUST 结束委托（`task.reply_escalated{reason}`；除用户自己回复或忽略外，按条目原级别推送给用户）：超过 `supervisor.reply_timeout_s`（默认 600）未回复；唤醒无法开始或当前 reply 唤醒处于 `blocked`（立即转交）；处理它的唤醒失败或结束时仍未回复；任务进入新的卡住；用户忽略条目；用户回复（同一次追加中结束委托）。supervisor 的回复写入之前，用户的回复 MUST 优先，之后 supervisor 的回复返回 `stale_block`。supervisor 代回复的内容 SHALL 出现在当天的每日摘要中。
+以下情况中枢 MUST 结束委托（`task.reply_escalated{reason}`；除用户自己回复或忽略外，按条目原级别推送给用户）：超过 `supervisor.reply_timeout_s`（默认 600）未回复；唤醒无法开始或当前 reply 唤醒处于 `blocked`（立即转交）；处理它的唤醒失败或结束时仍未回复；用户忽略条目；用户回复（同一次追加中结束委托）。委托只在任务处于 `blocked` 且当前卡住的 seq 等于 `block_seq` 时有效：任务离开该次卡住（`unblocked`、`requeued`、`lease_expired`，以及进入新的卡住）时委托 MUST 隐式失效、不写事件，新卡住重新判定。supervisor 的回复写入之前，用户的回复 MUST 优先，之后 supervisor 的回复返回 `stale_block`。supervisor 代回复的内容 SHALL 出现在当天的每日摘要中。
 
 #### Scenario: 代为选择方案
 - **WHEN** 用户手动建的 dev 任务进入 `blocked(question)`，问"A 记录既有失败后开 PR，还是 B 扩大范围修复"，且任务目标只限 README
@@ -172,6 +176,10 @@ supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回�
 #### Scenario: 超时转交
 - **WHEN** 委托后 600 秒内 supervisor 没有回复
 - **THEN** 条目推送给用户，之后 supervisor 的 `task_respond` 返回 `stale_block`
+
+#### Scenario: 进入新的卡住
+- **WHEN** 委托期间任务从这次卡住直接进入新的卡住（blocked → blocked），或被重新排队
+- **THEN** 旧委托隐式失效、不写转交事件，旧 `block_seq` 上的 `task_respond` 与转交都被拒绝；新卡住重新判定，可以重新委托
 
 #### Scenario: 用户抢先回复
 - **WHEN** 委托期间、supervisor 回复之前，用户在 Web 上直接批准
