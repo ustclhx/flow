@@ -156,8 +156,9 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
      `inputs.pr`、`kind: pr` 产物），加上新合同的 `inputs.pr`。数量、轮数与链深度在写入前的同步段再检查一次，并发请求不能绕过。
 - **验收命令**（D5）：非 user 身份（包括 supervisor、user token 降级的 AI 身份）建任务时，合同 `verify` 的每条命令在创建时经策略判定：
   动作为 `tool:Verify` 加命令识别出的动作，scope 为新任务的 workspace 与角色，前缀严格匹配。只有 `auto` / `auto-report` 放行，
-  否则 403 `verify_not_allowed`，错误中列出未通过的命令。参数中出现以 `/`、`~` 开头或含 `..` 的词（`--x=<值>` 的值同样检查）时
-  一律不放行，因为它们可能读写或加载仓库外的文件。`tool:Verify` 是受保护的工具，`* * auto` 这类通配规则不能放行。
+  否则 403 `verify_not_allowed`，错误中列出未通过的命令。命令的每个词都必须符合白名单（字母数字或 `_` 开头，只含字母数字与
+  `_ . , = + -`，可用 `/` 分段，不含 `..`，`=` 之后不紧跟 `/`），所以不能带 `-` 开头的选项，也不能出现 `:`、`@`、`~`、`%` 或绝对路径；
+  仓库内指向仓库外的符号链接无法在词法上拦截（已接受的风险，见 design D15）。`tool:Verify` 是受保护的工具，`* * auto` 这类通配规则不能放行。
   `policies.yaml` 模板中有注释掉的 `tool:Verify` 白名单；不启用时，supervisor 建的任务不能带 verify。
 - **链深度**：user、hub 之外的身份建任务时，新任务的 `parent` 链深度超过 `supervisor.limits.chain_depth`（默认 8）→ 429 `limit_exceeded`。
 

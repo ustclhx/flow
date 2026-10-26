@@ -37,14 +37,21 @@ export interface VerifyVerdict {
 }
 
 /**
- * 参数中的路径（以 `/`、`~` 开头或含 `..` 的词；`--x=<值>` 的值同样检查）：验收命令可借它们读写或加载
- * 仓库外的文件（`pnpm test --preload=/tmp/x.js`、`pnpm test ../../other`），一律不放行。
+ * 验收命令中每个词（含可执行文件与前缀词）允许的形态：白名单，逐段的相对路径或普通词。
+ * 不能以 `-` 开头（选项可以用 `=`、拼接等方式夹带路径，例如 `-r/tmp/x.js`、`--preload=/tmp/x.js`），
+ * 不能含 `:`、`@`、`~`、`%` 等字符（`file:///tmp/x`、`@/tmp/x`、`~/x`），不能以 `/` 开头，不能含 `..`，
+ * `=` 之后也不能紧跟 `/`。
  */
-export function verifyPathArgument(cmd: readonly string[]): string | undefined {
-  return cmd.find((word) =>
-    [word, word.includes('=') ? word.slice(word.indexOf('=') + 1) : ''].some(
-      (w) => w.startsWith('/') || w.startsWith('~') || w.includes('..'),
-    ),
+export const VERIFY_WORD_RE = /^[A-Za-z0-9_][A-Za-z0-9_.,=+-]*(\/[A-Za-z0-9_.,=+-]+)*$/
+
+/**
+ * 第一个不符合白名单的词；全部符合时为 undefined。
+ * 词法检查拦不住仓库内指向仓库外的符号链接（例如 `src/link-to-outside`），这是已接受的风险。
+ */
+export function verifyRejectedWord(cmd: readonly string[]): string | undefined {
+  // `=` 之后紧跟 `/`（`a=b=/tmp`、`x=/etc/y`）：值是绝对路径，同样拒绝。
+  return cmd.find(
+    (word) => !VERIFY_WORD_RE.test(word) || word.includes('..') || word.includes('=/'),
   )
 }
 
@@ -59,9 +66,9 @@ export function decideVerifySteps(
     const command = verifyCommandText(step.cmd)
     const actions = classifyAction({ tool: VERIFY_TOOL, command }, undefined, opts)
     const { level } = decide(rules, { scope, actions, command })
-    const pathArg = verifyPathArgument(step.cmd)
-    if (pathArg !== undefined) {
-      return { index, command, level, allowed: false, reason: `参数含路径 ${pathArg}` }
+    const rejected = verifyRejectedWord(step.cmd)
+    if (rejected !== undefined) {
+      return { index, command, level, allowed: false, reason: `参数不在白名单内：${rejected}` }
     }
     return { index, command, level, allowed: level === 'auto' || level === 'auto-report' }
   })
