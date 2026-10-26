@@ -788,14 +788,18 @@ class LeaseRunner {
    * 每个租约一次。中枢还没有快照时，对执行器解析出的登记仓库（`report.repo`）采集快照一并上报；
    * 已有快照（随租约下发）时只用它，不重新采集。
    */
-  private reportBranch(report: { branch: string; worktree: string; repo?: string }) {
-    if (this.branchReported) return
+  /**
+   * 返回的 Promise 在 realpath 与仓库快照采集完成、待上报内容就绪后结束（不等中枢确认）：执行器应等它
+   * 结束再启动 worker，快照因此反映 worker 改动之前的仓库状态（remote_url 等）。不会 reject。
+   */
+  private reportBranch(report: { branch: string; worktree: string; repo?: string }): Promise<void> {
+    if (this.branchReported) return Promise.resolve()
     if (!taskBranch.safeParse(report.branch).success) {
       this.env.logger.warn(`执行器上报的任务分支不合法，忽略：${report.branch}`)
-      return
+      return Promise.resolve()
     }
     this.branchReported = true
-    void (async () => {
+    return (async () => {
       let worktree: string
       try {
         worktree = await realpath(report.worktree)
@@ -825,7 +829,9 @@ class LeaseRunner {
         ...(collected ? { repo_snapshot: collected } : {}),
       }
       void this.renewNow()
-    })()
+    })().catch((err) => {
+      this.env.logger.warn('准备任务分支上报失败', String(err))
+    })
   }
 
   private enterRunning() {

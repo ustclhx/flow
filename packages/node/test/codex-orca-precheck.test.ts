@@ -46,10 +46,12 @@ async function start(
   reads: OrcaTerminalRead[],
   precheck?: Precheck,
   extra: Partial<Pick<ExecutorContext, 'reportBranch' | 'confirmApproval'>> = {},
+  onOrca?: (orca: FakeOrca) => void,
 ) {
   h = orcaHome()
   const clock = new ManualClock()
   const orca = new FakeOrca(h.worktree)
+  onOrca?.(orca)
   orca.reads.push(...reads.map((r) => ok(r)))
   const plugin = createCodexOrcaExecutor({
     home: h.home,
@@ -331,10 +333,35 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
 
   test('开始时上报任务分支与 worktree', async () => {
     const reports: Array<{ branch: string; worktree: string }> = []
-    const s = await start([APPROVAL], undefined, { reportBranch: (r) => reports.push(r) })
+    const s = await start([APPROVAL], undefined, { reportBranch: (r) => void reports.push(r) })
     expect(reports).toHaveLength(1)
     expect(reports[0]?.worktree).toBe(h?.worktree as string)
     expect(reports[0]?.branch).toBeTruthy()
+    await s.run.cancel()
+  })
+
+  test('等 reportBranch 的快照采集完成后才启动 Codex 终端', async () => {
+    let orca: FakeOrca | undefined
+    let createdAtDone: number | undefined
+    const s = await start(
+      [APPROVAL],
+      undefined,
+      {
+        reportBranch: () =>
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              // 快照完成的这一刻还没有建终端。
+              createdAtDone = orca?.ops('terminalCreate').length
+              resolve()
+            }, 30),
+          ),
+      },
+      (o) => {
+        orca = o
+      },
+    )
+    await until(() => s.orca.ops('terminalCreate').length === 1, '启动终端')
+    expect(createdAtDone).toBe(0)
     await s.run.cancel()
   })
 

@@ -846,8 +846,10 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           status(`已创建 worktree ${state.worktree_path}（分支 ${state.branch}，基于 ${base}）`)
         }
         const st = state
-        // D15：codex-orca 开始时上报任务分支与 worktree（中枢每个任务只记录一次）。
-        ctx.reportBranch?.({ branch: st.branch, worktree: st.worktree_path, repo })
+        // D15：codex-orca 开始时上报任务分支与 worktree（中枢每个任务只记录一次）。等节点采集完仓库快照
+        // 再启动 Codex，快照（remote_url 等）反映 worker 改动之前的状态。
+        await ctx.reportBranch?.({ branch: st.branch, worktree: st.worktree_path, repo })
+        if (finished || stopping) return
         if (fresh) {
           const ready = await waitForSetup(st.worktree_path, ctx.signal)
           if (finished || stopping) return

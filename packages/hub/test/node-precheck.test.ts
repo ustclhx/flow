@@ -22,6 +22,8 @@ interface Ctx {
   ledger: LedgerStore
   clock: FakeClock
   protocol: NodeProtocol
+  /** 节点服务记下的 warn。 */
+  warns: string[]
   create(over?: Record<string, unknown>): Promise<string>
 }
 
@@ -34,7 +36,14 @@ afterEach(() => {
 async function setup(caps = ['executor:fake', 'executor:codex-orca']): Promise<Ctx> {
   const clock = new FakeClock(T0)
   const t = await tempLedger({ now: clock.now })
-  const protocol = createNodeProtocol({ ledger: t.store, clock, leaseTtlS: TTL, leaseWaitMaxS: 30 })
+  const warns: string[] = []
+  const protocol = createNodeProtocol({
+    ledger: t.store,
+    clock,
+    leaseTtlS: TTL,
+    leaseWaitMaxS: 30,
+    logger: { warn: (m: string) => void warns.push(m) },
+  })
   cleanups.push(() => {
     protocol.stop()
     t.cleanup()
@@ -55,6 +64,7 @@ async function setup(caps = ['executor:fake', 'executor:codex-orca']): Promise<C
     ledger: t.store,
     clock,
     protocol,
+    warns,
     async create(over = {}) {
       const c = await tasks.createTask(contractInput(over), { actor: 'user' })
       if (!c.ok) throw new Error(c.error.message)
@@ -95,6 +105,21 @@ describe('续约上报任务分支（task.branch_reported）', () => {
     expect(ctx.ledger.taskEvents(id).filter((e) => e.type === 'task.branch_reported')).toHaveLength(
       1,
     )
+  })
+
+  test('写入被拒（不是 codex-orca 任务）：ignored 并记 warn，续约照常成功', async () => {
+    const ctx = await setup()
+    const id = await ctx.create({ executor: 'fake' })
+    const lease = await grant(ctx)
+    const r = must(
+      ctx.protocol.service.renew(lease.lease_id, {
+        lease_token: lease.lease_token,
+        branch: { branch: 'ustclhx/t-1', worktree: '/w/t-1' },
+      }),
+    )
+    expect(r.branch_report).toBe('ignored')
+    expect(ctx.ledger.getTask(id)?.branch ?? null).toBeNull()
+    expect(ctx.warns.some((m) => m.includes('任务分支上报写入失败'))).toBe(true)
   })
 
   test('首次上报固定快照；之后的租约随 grant 下发快照', async () => {

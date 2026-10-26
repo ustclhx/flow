@@ -35,6 +35,7 @@ import type { z } from 'zod'
 import type { EventInput, LeaseRecord, LedgerStore } from '../ledger/store.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { type HubClock, systemClock } from '../server/clock.ts'
+import type { HubLogger } from '../server/maintenance.ts'
 
 /**
  * 节点协议的中枢侧（tasks.md 4.1；node-protocol spec；design D4）。
@@ -80,6 +81,8 @@ export interface NodeServiceOptions extends NodeProtocolConfig {
    * （`wake_token`）；不是唤醒任务时返回 undefined。缺省不签发。
    */
   issueWakeToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
+  /** 不影响请求结果的失败（例如任务分支上报写入失败）只记日志。 */
+  logger?: Pick<HubLogger, 'warn'>
 }
 
 export interface AcquireOptions {
@@ -766,9 +769,13 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         },
         { actor: `node:${lease.node_id}` },
       )
-      return written.ok ? 'recorded' : 'ignored'
+      if (written.ok) return 'recorded'
+      o.logger?.warn('任务分支上报写入失败，忽略', { task_id: task.id, error: written.error })
+      return 'ignored'
     } catch (err) {
-      return isSqliteBusy(err) ? 'retry' : 'ignored'
+      if (isSqliteBusy(err)) return 'retry'
+      o.logger?.warn('任务分支上报写入失败，忽略', { task_id: task.id, error: String(err) })
+      return 'ignored'
     }
   }
 

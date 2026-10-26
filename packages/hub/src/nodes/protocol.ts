@@ -22,10 +22,9 @@ export const SLEEP_CHECK_MS = 1_000
 
 export interface NodeProtocolOptions
   extends NodeProtocolConfig,
-    Pick<NodeServiceOptions, 'issueWakeToken'> {
+    Pick<NodeServiceOptions, 'issueWakeToken' | 'logger'> {
   ledger: LedgerStore
   clock?: HubClock
-  logger?: Pick<HubLogger, 'warn'>
   onResume?: () => void
 }
 

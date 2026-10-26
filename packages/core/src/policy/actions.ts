@@ -472,12 +472,26 @@ export const INDIRECT_EXECUTORS: ReadonlySet<string> = new Set([
 ])
 /** `find` 中执行命令的谓词。 */
 const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir)$/
+/**
+ * 词是否是长选项 `full`（不含 `--`）或它的缩写：git 的 parse-options 接受唯一前缀缩写
+ * （`--upload=`、`--recei`、`--exe`），这里不判断唯一性，任何非空前缀都算（宁可多判不透明）。
+ */
+function isLongOption(word: string, ...full: readonly string[]): boolean {
+  if (!word.startsWith('--')) return false
+  const name = word.slice(2).split('=', 1)[0] ?? ''
+  return name.length > 0 && full.some((f) => f.startsWith(name))
+}
+
+/** 短选项簇（`-qu`、`-u/bin/x`）中是否含某个短选项字母。参数可能直接接在后面，保守地按含有处理。 */
+const hasShortOption = (word: string, letter: string): boolean =>
+  /^-[^-]/.test(word) && word.slice(1).includes(letter)
+
 /** git 子命令中执行任意命令的写法（`git rebase -x/--exec`、`bisect run`、`submodule foreach`……）。 */
 function gitRunsCommands(words: readonly string[]): boolean {
   const sub = words[1]
   const rest = words.slice(2)
   if (sub === 'rebase') {
-    return rest.some((w) => w === '-x' || /^--exec(?:=|$)/.test(w) || /^-[^-]*x/.test(w))
+    return rest.some((w) => hasShortOption(w, 'x') || isLongOption(w, 'exec'))
   }
   if (sub === 'bisect') return rest[0] === 'run'
   if (sub === 'submodule') return rest.includes('foreach')
@@ -485,17 +499,21 @@ function gitRunsCommands(words: readonly string[]): boolean {
   if (sub === 'difftool' || sub === 'mergetool') return true
   // grep -O / --open-files-in-pager：用分页程序打开命中的文件。
   if (sub === 'grep') {
-    return rest.some((w) => /^--open-files-in-pager(?:=|$)/.test(w) || /^-[^-]*O/.test(w))
+    return rest.some((w) => isLongOption(w, 'open-files-in-pager') || hasShortOption(w, 'O'))
   }
   // 远端执行的程序：--upload-pack / -u、--receive-pack / --exec。
   if (sub === 'fetch' || sub === 'clone' || sub === 'ls-remote' || sub === 'pull') {
-    return rest.some(
-      (w) => /^--upload-pack(?:=|$)/.test(w) || w === '-u' || /^--exec(?:=|$)/.test(w),
-    )
+    if (rest.some((w) => isLongOption(w, 'upload-pack', 'exec') || hasShortOption(w, 'u'))) {
+      return true
+    }
+    // clone 的 -c / --config 写入新仓库的配置并立即生效（core.sshCommand、core.fsmonitor……）。
+    return sub === 'clone' && rest.some((w) => isLongOption(w, 'config') || hasShortOption(w, 'c'))
   }
-  if (sub === 'archive') return rest.some((w) => /^--exec(?:=|$)/.test(w))
-  if (sub === 'push') return rest.some((w) => /^--(?:receive-pack|exec)(?:=|$)/.test(w))
-  if (sub === 'help') return rest.some((w) => w === '--web' || w === '-w' || /^--browser/.test(w))
+  if (sub === 'archive') return rest.some((w) => isLongOption(w, 'exec'))
+  if (sub === 'push') return rest.some((w) => isLongOption(w, 'receive-pack', 'exec'))
+  if (sub === 'help') {
+    return rest.some((w) => isLongOption(w, 'web', 'browser') || hasShortOption(w, 'w'))
+  }
   return (
     sub === 'filter-branch' || sub === 'filter-repo' || sub === 'send-email' || sub === 'instaweb'
   )
