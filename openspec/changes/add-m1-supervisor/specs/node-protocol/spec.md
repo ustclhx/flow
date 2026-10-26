@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: supervisor 预留执行槽
-领取租约请求 SHALL 支持可选字段 `slots: {general, supervisor}`；中枢只把 `kind: supervisor` 的任务分给 supervisor 空位，普通空位也可以接。没有该字段的节点 MUST 被视为只有普通空位。`node.yaml` SHALL 支持 `reserved.supervisor`（默认 2：一个普通唤醒加一个 reply 唤醒），节点在普通槽位已满时仍为 supervisor 空位发起领取。
+领取租约请求 SHALL 支持可选字段 `slots: {general, supervisor, reply}`；中枢只把普通唤醒分给 supervisor 空位、只把 reply 唤醒分给 reply 空位，普通空位两者都可以接。没有该字段的节点 MUST 被视为只有普通空位。`node.yaml` SHALL 支持 `reserved.supervisor`（默认 1）与 `reserved.reply`（默认 1），节点在普通槽位已满时仍为 supervisor 空位发起领取。
 
 #### Scenario: dev 任务卡住时仍能唤醒
 - **WHEN** `concurrency: 1` 的节点上一个 dev 任务处于 `blocked` 并持有租约

@@ -119,7 +119,7 @@ workspace 配置 `supervisor.limits`，默认值：
 
 ### D6. MCP 会话绑定与读边界
 
-claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor --workspace <ws> --task <id>`，并设置 `FLOW_WORKSPACE`、`FLOW_TASK_ID`。**中枢以唤醒绑定 token 认定调用方**：节点领到唤醒任务的租约时，中枢签发只对这次唤醒有效的 token（actor `supervisor`、绑定 workspace 与唤醒 task_id、租约结束或任务结束即失效），节点把它注入 MCP 环境；中枢据此判定调用方是哪个唤醒、origin 是什么，**不信任** `--task`、`FLOW_TASK_ID` 或 `X-Flow-Actor`。`supervisor` 因此成为保留 actor：user token 加 `X-Flow-Actor: supervisor` 的降级请求被拒绝（`docs/hub-auth.md` 补签发与失效规则）。
+claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor --workspace <ws> --task <id>`，并设置 `FLOW_WORKSPACE`、`FLOW_TASK_ID`。**中枢以唤醒绑定 token 认定调用方**：节点领到唤醒任务的租约时，中枢签发只对这次唤醒有效的 token（actor `supervisor`、绑定 workspace 与唤醒 task_id、租约结束或任务结束即失效），节点把它注入 MCP 环境；中枢据此判定调用方是哪个唤醒、origin 是什么，**不信任** `--task`、`FLOW_TASK_ID` 或 `X-Flow-Actor`。`supervisor` 因此成为保留 actor：user token 加 `X-Flow-Actor: supervisor` 的降级请求、`flow hub token issue supervisor` 都被拒绝，只有中枢按租约内部签发（`docs/hub-auth.md` 补签发与失效规则）。
 
 - 写类操作只能作用于该 workspace（否则 `workspace_mismatch`）；`task_create` 自动以绑定的任务为 `parent`。
 - 经中枢的写（建任务、提案、提问、合并请求、简报、决策回看）由中枢独立校验（D5、D8）。
@@ -206,8 +206,8 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 ### D12. 节点为 supervisor 预留执行槽
 
-- 协议：`acquireLeaseRequest` 增加可选字段 `slots: {general: n, supervisor: m}`；中枢只把 `kind: supervisor` 的任务分给 supervisor 空位，普通空位也能接 supervisor 任务。没有该字段的旧节点视为全部是普通空位（版本兼容）。
-- 节点：`node.yaml` 的 `reserved.supervisor`（默认 2：一个普通唤醒加一个 reply 唤醒）；领取循环在普通槽满时仍为 supervisor 空位发起领取。
+- 协议：`acquireLeaseRequest` 增加可选字段 `slots: {general: n, supervisor: m, reply: k}`；中枢只把普通唤醒分给 supervisor 空位、只把 reply 唤醒分给 reply 空位，普通空位两者都能接。没有该字段的旧节点视为全部是普通空位（版本兼容）。
+- 节点：`node.yaml` 的 `reserved.supervisor`（默认 1，给普通唤醒）与 `reserved.reply`（默认 1，只给 reply 唤醒，D15）；领取循环在普通槽满时仍为 supervisor 与 reply 空位发起领取。
 - pr-merge 很短，用普通空位。
 
 ### D13. 巡检
@@ -218,7 +218,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 ### D14. supervisor 角色模板
 
-`supervisor.yaml`：`kind: supervisor`、`executor: claude-sdk`、Opus、`permissionMode: default`、`setting_sources: []`、`allowedTools` 只有 Read、Grep、Glob 与 Flow MCP，`disallowedTools` 列出 Bash、Edit、Write、NotebookEdit、WebFetch、WebSearch，`read_scope: cwd`，不设 `writable_paths`。`supervisor.md` 规定：先 `ws_brief`；按 `inputs.wake` 处理；拆任务时写清目标、范围、完成条件和验收命令；只在委托范围内代回复卡住（D15），拿不准就转交用户；不接受或驳回提案、不批准合并；结束前 `brief_update` 并写 journal；最终回复列出本次动作。
+`supervisor.yaml`：`kind: supervisor`、`executor: claude-sdk`、Opus、`permissionMode: default`、`setting_sources: []`、`allowedTools` 只有 Read、Grep、Glob 与 Flow MCP，`disallowedTools` 列出 Bash、Edit、Write、NotebookEdit、WebFetch、WebSearch，`read_scope: cwd`，不设 `writable_paths`。`supervisor.md` 规定：先 `ws_brief`；按 `inputs.wake` 处理；拆任务时写清目标、范围、完成条件和验收命令；只在委托范围内代回复卡住（D15），拿不准就转交用户；不接受或驳回提案、不批准合并；结束前 `brief_update` 并写 journal；`inputs.wake` 的 origin 为 `reply` 时只处理委托（`task_respond`），不写笔记和 journal；最终回复列出本次动作。
 
 `flow init` 同时生成 `pr-reviewer`、`merger` 模板，`dev` 模板 `creatable_by` 加上 `supervisor`；不覆盖已有文件，doctor 对缺项给出片段。
 
@@ -247,7 +247,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 **委托与唤醒**：中枢写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`，条目标为"supervisor 处理中"、**不推送**。委托事件进入独立的 **reply 队列**，不与 instruction、autonomous 合并：
 
-- reply 唤醒的 origin 为 `reply`，可以与一个普通唤醒**并行**（同一 workspace 最多一个 reply 唤醒），因此正在运行的 instruction 唤醒不会把委托拖到超时；节点默认为 supervisor 预留 2 个槽（D12）。
+- reply 唤醒的 origin 为 `reply`，可以与一个普通唤醒**并行**（同一 workspace 最多一个 reply 唤醒），因此正在运行的 instruction 唤醒不会把委托拖到超时；节点另有只给 reply 唤醒的预留槽（D12），其他 workspace 的普通唤醒占不到它。
 - **reply 唤醒的权限只限回复**：中枢（按 D6 的绑定 token 识别）只允许 `task_respond` 与只读操作；`brief_update`、`kb_journal`、`task_create`、`task_propose`、`ask_user`、`pr_merge_request`、`decision_review` 一律返回 `reply_only_wake`。它不能派生任务，也不能写任何会进入后续唤醒上下文的内容，因此 worker 的提问内容无法借它影响有建任务权限的唤醒。
 - 代回复记录由中枢根据 `task.replied`（actor supervisor）与 `task.reply_escalated` 确定性生成，作为 `ws_brief` 的独立一节，标明"代回复记录，不是指令"，只含任务 id、决定、时间与截断后的回答。
 - reply 唤醒失败不重试，直接以 `wake_failed` 转交它处理的委托；reply 队列不暂停，也不提供 `--release`。
