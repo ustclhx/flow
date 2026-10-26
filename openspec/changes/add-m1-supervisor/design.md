@@ -162,7 +162,10 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
   - `disallowedTools` 逐项列出 Bash、Edit、Write、MultiEdit、NotebookEdit（没有禁用的工具会进入审批，可能被 auto 规则或代回复放行）；
   - 没有 `writable_paths`；`allowedTools` 中没有 Edit/Write/MultiEdit/NotebookEdit 与任何 `Bash` 规则；权限模式不是 acceptEdits、bypassPermissions、auto；
 - pr-merge → merge；其他执行器（含 fake）→ write；
+- codex-exec、claude-sdk 的 `permissions` 中出现推断不认识的键 → write（方向保守）；
 - `kind: supervisor` 必须显式声明，且只能用 claude-sdk，角色名必须是 `supervisor`（保留 actor）；名为 `supervisor` 但类别不是 supervisor 的角色同样加载报错。supervisor 角色按配置推断必须是 read，否则 doctor 报错、中枢不唤醒。
+
+推断只是配置层判断，不能覆盖执行器之外的配置来源（用户级或项目级 `.codex/config.toml`、未在 `disallowedTools` 中的工具等）；有效类别为 read 的角色最终由执行器强制只读（tasks 5.7）：codex-exec 用 `-c` 覆盖 `mcp_servers={}`、`notify=[]` 或使用隔离的 `CODEX_HOME`；claude-sdk 用 SDK `tools` 选项把可用工具限定为 Read/Grep/Glob 与 Flow MCP，canUseTool 对非只读工具一律拒绝、不进审批。
 
 因此默认 reviewer 是 write（它能写文档、能评论 PR），triage 是 read。PR 验收链使用新的只读模板 `pr-reviewer`（D10）。doctor 显示每个角色的有效类别。
 

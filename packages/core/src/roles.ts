@@ -234,6 +234,27 @@ const CLAUDE_WRITE_MODES = new Set(['acceptEdits', 'bypassPermissions', 'auto'])
  */
 export const CODEX_EXEC_READ_SAFE_CONFIG_KEYS = ['model', 'model_reasoning_effort'] as const
 
+/**
+ * 推断时认识的权限键（与 node 执行器的权限 schema 对应；`read_scope` 只收紧读取范围）。
+ * 出现其他键一律推断为 write：无法判断它的效果，方向保守。
+ */
+export const CLAUDE_SDK_KNOWN_PERMISSION_KEYS = [
+  'permissionMode',
+  'allowedTools',
+  'disallowedTools',
+  'writable_paths',
+  'maxTurns',
+  'approval_timeout_minutes',
+  'setting_sources',
+  'read_scope',
+] as const
+export const CODEX_EXEC_KNOWN_PERMISSION_KEYS = ['sandbox', 'config'] as const
+
+const hasUnknownKey = (
+  permissions: Record<string, unknown> | undefined,
+  known: readonly string[],
+) => Object.keys(permissions ?? {}).some((k) => !known.includes(k))
+
 /** `Edit`、`Edit(src/**)`、`Bash(gh pr review:*)` 等允许规则取括号前的工具名。 */
 const ruleTool = (rule: string) => rule.split('(', 1)[0]?.trim() ?? ''
 
@@ -242,6 +263,7 @@ const stringList = (v: unknown): string[] | null =>
 
 function claudeSdkWrites(permissions: Record<string, unknown> | undefined): boolean {
   const p = permissions ?? {}
+  if (hasUnknownKey(p, CLAUDE_SDK_KNOWN_PERMISSION_KEYS)) return true
   if (p.writable_paths !== undefined) return true
   // setting_sources 缺省时执行器用 ['project']；含任何来源时仓库 .claude/settings.json 的
   // permissions.allow 与 hooks 都会生效，只有显式 [] 才可能是 read。
@@ -259,6 +281,7 @@ function claudeSdkWrites(permissions: Record<string, unknown> | undefined): bool
 }
 
 function codexExecWrites(permissions: Record<string, unknown> | undefined): boolean {
+  if (hasUnknownKey(permissions, CODEX_EXEC_KNOWN_PERMISSION_KEYS)) return true
   const sandbox = permissions?.sandbox
   if (sandbox !== undefined && sandbox !== 'read-only') return true
   const config = permissions?.config
@@ -276,7 +299,9 @@ function codexExecWrites(permissions: Record<string, unknown> | undefined): bool
  *   权限模式不是 acceptEdits / bypassPermissions / auto；`disallowedTools` 列出
  *   CLAUDE_READ_REQUIRED_DISALLOWED 全部工具；`allowedTools` 中没有 Edit/Write/MultiEdit/NotebookEdit 与任何 Bash 规则；
  * - pr-merge → merge；
- * - 其他执行器（含 fake 与未知类型）按 write 处理。
+ * - 其他执行器（含 fake 与未知类型）按 write 处理；
+ * - codex-exec、claude-sdk 的 permissions 中出现推断不认识的键 → write。
+ * 这只是配置层判断；read 角色的只读最终由执行器强制（tasks 5.7）。
  * 推断结果永远不是 supervisor：它必须显式声明。
  */
 export function inferRoleKind(role: Pick<Role, 'executor' | 'permissions'>): RoleKind {

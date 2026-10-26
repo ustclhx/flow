@@ -189,6 +189,21 @@ describe('flow doctor', () => {
     )
   })
 
+  test('codex-exec 角色声明 read 但推断为 write：提示 sandbox 与 config 白名单', async () => {
+    const home = tempHome('flow-doctor-kind-')
+    await initFlowHome(home)
+    writeText(
+      join(home, 'config/roles/scan.yaml'),
+      'name: scan\nkind: read\nexecutor: codex-exec\nprompt: 测试\npermissions:\n  sandbox: workspace-write\n  config:\n    notify: say\n',
+    )
+    const check = reportOf(await runDoctor(home, 'FLOW_HOME')).checks.find(
+      (c) => c.id === 'role.scan.kind',
+    )
+    expect(check).toMatchObject({ ok: false, severity: 'warning' })
+    expect(check?.hint).toContain('sandbox: read-only')
+    expect(check?.hint).toContain('config 只允许 model、model_reasoning_effort')
+  })
+
   test('已有用户升级：dev.yaml 没有 creatable_by 且存在 supervisor 角色时给出可复制片段', async () => {
     const home = tempHome('flow-doctor-kind-')
     await initFlowHome(home)

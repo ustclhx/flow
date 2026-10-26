@@ -357,6 +357,19 @@ describe('角色有效类别（D9）', () => {
     }
   })
 
+  test('permissions 中有推断不认识的键：保守判为 write', () => {
+    expect(inferRoleKind(of('claude-sdk', { ...readOnly, read_scope: 'cwd' }))).toBe('read')
+    expect(inferRoleKind(of('claude-sdk', { ...readOnly, maxTurns: 5 }))).toBe('read')
+    expect(inferRoleKind(of('claude-sdk', { ...readOnly, hooks: {} }))).toBe('write')
+    expect(inferRoleKind(of('claude-sdk', { ...readOnly, additionalDirectories: ['/'] }))).toBe(
+      'write',
+    )
+    expect(inferRoleKind(of('codex-exec', { sandbox: 'read-only', approval: 'never' }))).toBe(
+      'write',
+    )
+    expect(inferRoleKind(of('codex-exec', { profile: 'x' }))).toBe('write')
+  })
+
   test('claude-sdk：setting_sources 显式 []、禁用全部写工具、没有写规则才是 read', () => {
     expect(inferRoleKind(of('claude-sdk', readOnly))).toBe('read')
     expect(

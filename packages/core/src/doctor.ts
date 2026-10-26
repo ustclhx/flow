@@ -11,6 +11,9 @@ import { type Env, flowPaths, GIT_REPOS } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import {
   CLAUDE_READ_REQUIRED_DISALLOWED,
+  CLAUDE_SDK_KNOWN_PERMISSION_KEYS,
+  CODEX_EXEC_KNOWN_PERMISSION_KEYS,
+  CODEX_EXEC_READ_SAFE_CONFIG_KEYS,
   canCreateRole,
   effectiveRoleKind,
   findSupervisorRole,
@@ -456,7 +459,9 @@ export const CLAUDE_READ_ONLY_SNIPPET = [
   ...CLAUDE_READ_REQUIRED_DISALLOWED.map((t) => `    - ${t}`),
 ].join('\n')
 
-const claudeReadHint = `不设 writable_paths、不允许写工具与 Bash 规则，并确保 permissions 包含（已有列表时合并）：\n${CLAUDE_READ_ONLY_SNIPPET}`
+const codexExecReadHint = `permissions 中写 sandbox: read-only（或不写，缺省即只读）；config 只允许 ${CODEX_EXEC_READ_SAFE_CONFIG_KEYS.join('、')}，其他键（如 notify、mcp_servers.*）一律删除；permissions 不要有 ${CODEX_EXEC_KNOWN_PERMISSION_KEYS.join('、')} 以外的键`
+
+const claudeReadHint = `不设 writable_paths、permissions 只含 ${CLAUDE_SDK_KNOWN_PERMISSION_KEYS.join('、')}、不允许写工具与 Bash 规则，并确保 permissions 包含（已有列表时合并）：\n${CLAUDE_READ_ONLY_SNIPPET}`
 
 /** 角色有效类别（design D9）、supervisor 唯一且只读、dev 的 creatable_by 升级提示。 */
 function checkRoleKinds(roles: Role[]): DoctorCheck[] {
@@ -478,7 +483,9 @@ function checkRoleKinds(roles: Role[]): DoctorCheck[] {
             hint:
               role.executor === 'claude-sdk' && role.kind === 'read'
                 ? claudeReadHint
-                : `删除 kind 或改为 ${effective}；要降低类别，请收紧执行器权限配置`,
+                : role.executor === 'codex-exec' && role.kind === 'read'
+                  ? codexExecReadHint
+                  : `删除 kind 或改为 ${effective}；要降低类别，请收紧执行器权限配置`,
           }
         : {}),
     })
