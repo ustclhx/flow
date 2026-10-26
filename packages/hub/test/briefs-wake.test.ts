@@ -106,6 +106,18 @@ async function setup() {
     ),
   )
   let generation = 0
+  let lastLease: { lease_id: string; lease_token: string } | undefined
+  /** 结束最近一次唤醒的租约（任务完成）。 */
+  const finishWake = () => {
+    if (!lastLease) throw new Error('没有进行中的唤醒')
+    must(
+      protocol.service.complete(lastLease.lease_id, {
+        lease_token: lastLease.lease_token,
+        outcome: 'done',
+        result: { summary: '完成', executor: 'fake', node_id: 'nw' },
+      }),
+    )
+  }
   /** 中枢以 hub 建唤醒任务并由节点领取，返回租约下发的唤醒 token。 */
   const wake = async (origin: WakeOrigin, ws = WS) => {
     const g = ++generation
@@ -142,7 +154,8 @@ async function setup() {
     )
     expect(r.lease?.task_id).toBe(t.id)
     const token = r.lease?.wake_token
-    if (!token) throw new Error('没有下发唤醒 token')
+    if (!token || !r.lease) throw new Error('没有下发唤醒 token')
+    lastLease = r.lease
     return token
   }
   /** MCP 中 supervisor 的操作上下文：以唤醒 token 访问进程内的中枢应用。 */
@@ -153,7 +166,7 @@ async function setup() {
     token,
     fetch: (req: Request) => app.fetch(req),
   })
-  return { home, app, wake, ctx }
+  return { home, app, wake, finishWake, ctx }
 }
 
 const notePath = (home: string, id = 'product-res') => join(home, 'brain', 'briefs', `${id}.md`)
@@ -210,6 +223,24 @@ describe('唤醒 token → 鉴权中间件 → 简报路由', () => {
       ctx(token),
     )
     expect(code(r)).toBe('reply_only_wake')
+    expect(existsSync(notePath(home))).toBe(false)
+  })
+
+  test('唤醒结束后同一 token 调 brief_update 返回 401，文件不变', async () => {
+    const { home, app, wake, finishWake, ctx } = await setup()
+    const token = await wake('instruction')
+    finishWake()
+    const r = await briefUpdateOp.run(
+      { workspace: 'product-res', text: '唤醒结束后写笔记', base_hash: briefHash(null) },
+      ctx(token),
+    )
+    expect(code(r)).not.toBe('ok')
+    const raw = await app.request('/v1/briefs', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ workspace: WS, text: '唤醒结束后写笔记', base_hash: briefHash(null) }),
+    })
+    expect(raw.status).toBe(401)
     expect(existsSync(notePath(home))).toBe(false)
   })
 })

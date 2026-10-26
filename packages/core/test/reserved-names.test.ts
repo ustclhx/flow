@@ -59,17 +59,25 @@ describe('已有的保留名大小写变体', () => {
     const clean = await runDoctor(h, 'FLOW_HOME', doctorOptions(h))
     const cleanReport = clean.ok
       ? clean.data
-      : (clean.error.details as { checks: { id: string }[] })
+      : (clean.error.details as { checks: { id: string; ok?: boolean; severity?: string }[] })
     expect(cleanReport.checks.some((c) => c.id === 'brain.reserved-names')).toBe(false)
     plantVariants(h)
     const r = await runDoctor(h, 'FLOW_HOME', doctorOptions(h))
     const report = r.ok
       ? r.data
-      : (r.error.details as { checks: { id: string; severity?: string; message: string }[] })
+      : (r.error.details as {
+          checks: { id: string; ok?: boolean; severity?: string; message: string }[]
+        })
     const check = report.checks.find((c) => c.id === 'brain.reserved-names')
     expect(check?.severity).toBe('warning')
     expect(check?.message).toContain('brain/Briefs/')
     expect(check?.message).toContain('brain/Index.md')
+    // 退出码只取决于 report.ok（error 级检查）：保留名变体是 warning，不改变它，也不新增 error 级失败。
+    expect(check?.ok).toBe(false)
+    expect(r.ok).toBe(clean.ok)
+    const errorIds = (rep: { checks: { id: string; ok?: boolean; severity?: string }[] }) =>
+      rep.checks.filter((c) => !c.ok && c.severity === 'error').map((c) => c.id)
+    expect(errorIds(report)).toEqual(errorIds(cleanReport))
   })
 })
 
@@ -87,5 +95,16 @@ describe('readBrief', () => {
       hash: briefHash(null),
       exists: false,
     })
+  })
+
+  test('HEAD 损坏等其他 git 失败返回 read_failed，不当作笔记不存在', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'flow-badhead-'))
+    dirs.push(root)
+    const h = join(root, 'home')
+    mkdirSync(join(h, 'brain'), { recursive: true })
+    data(await gitInit(join(h, 'brain')))
+    writeText(join(h, 'brain', '.git', 'HEAD'), '不是 HEAD\n')
+    const r = await readBrief(h, 'ws/product-res')
+    expect(r.ok ? 'ok' : r.error.code).toBe('read_failed')
   })
 })

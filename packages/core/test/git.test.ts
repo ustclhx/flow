@@ -8,6 +8,7 @@ import {
   gitCommit,
   gitInit,
   hasCommits,
+  headState,
   hookPath,
   isRepoRoot,
 } from '../src/git.ts'
@@ -48,4 +49,18 @@ test('execCommand：命令不存在时返回 127', async () => {
   expect(r.code).toBe(127)
   const echo = await execCommand('cat', [], { input: '你好' })
   expect(echo).toEqual({ code: 0, stdout: '你好', stderr: '' })
+})
+
+test('headState 区分 unborn HEAD 与其他 git 失败', async () => {
+  const dir = tempHome('flow-git-')
+  mkdirSync(dir, { recursive: true })
+  expect(await headState(dir)).toBe('error')
+  expect((await gitInit(dir)).ok).toBe(true)
+  expect(await headState(dir)).toBe('unborn')
+  writeText(join(dir, 'a.md'), 'a\n')
+  await gitCommit(dir, { message: 'x', author: flowAuthor('codex'), paths: ['a.md'] })
+  expect(await headState(dir)).toBe('present')
+  // 分支引用存在但指向不存在的对象：仓库损坏，不是 unborn。
+  writeText(join(dir, '.git', 'refs', 'heads', 'main'), `${'0'.repeat(39)}1\n`)
+  expect(await headState(dir)).toBe('error')
 })
