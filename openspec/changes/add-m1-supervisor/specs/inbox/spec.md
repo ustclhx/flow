@@ -1,5 +1,22 @@
 # Spec Delta
 
+## MODIFIED Requirements
+
+### Requirement: 推送节奏
+- **Interrupt**：条目生成后 SHALL 立即推送；处于静默时段（默认 23:00–08:00，可配置）时，顺延到时段结束。
+- **Decide**：按配置的时间点合并成一条消息推送（默认 09:00 和 18:00）；待处理的条目超过 N 个（默认 5）时提前推送。
+- **Digest**：每天合并成一条摘要，默认 08:30 推送。
+
+委托给 supervisor 处理中的条目不计入以上推送，也不计入 Decide 的提前推送阈值；委托因超时、唤醒不可用、supervisor 转交等原因结束时，条目从那一刻起按自身级别适用以上规则。用户自己回复或忽略而结束的委托不推送。
+
+#### Scenario: 夜间卡住
+- **WHEN** 凌晨 2 点一个任务进入 `blocked(question)`
+- **THEN** 条目立即生成，但推送顺延到 08:00
+
+#### Scenario: 委托期间不推送
+- **WHEN** 一个 Interrupt 级的 `awaiting_approval` 条目被委托给 supervisor
+- **THEN** 不立即推送；600 秒后超时转交时才推送
+
 ## ADDED Requirements
 
 ### Requirement: supervisor 提问条目
@@ -27,3 +44,14 @@ supervisor SHALL 能用 `ask_user` 创建 `source: supervisor` 的条目（默�
 #### Scenario: 批准合并
 - **WHEN** 用户对 `merge_request` 条目点"批准合并"
 - **THEN** 中枢创建 merger 任务，条目关闭
+
+### Requirement: 委托给 supervisor 的条目
+任务卡住被委托给 supervisor 时，收件箱条目 SHALL 照常生成并标明"supervisor 处理中"，MUST NOT 推送到通知渠道；用户仍可在 Web、CLI 或 Telegram 上直接处理。supervisor 回复后条目仍按现有自动关闭规则在任务离开 `blocked` 时关闭，并记录回复者为 supervisor（`task.replied.via: supervisor`）；回复未送达、任务仍卡着时条目 MUST 保持打开。转交用户时条目 MUST 按"推送节奏"推送；用户忽略委托中的条目即结束委托，不再推送。
+
+#### Scenario: 委托期间不打扰
+- **WHEN** 一个 `awaiting_approval` 条目被委托给 supervisor
+- **THEN** Telegram 不发消息，Web 收件箱显示该条目与"supervisor 处理中"
+
+#### Scenario: 转交后推送
+- **WHEN** supervisor 对该条目 `escalate`
+- **THEN** Telegram 按条目级别推送，条目注明 supervisor 给出的理由

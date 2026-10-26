@@ -18,22 +18,22 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 该任务不被视为唤醒任务，不能作为 supervisor 建任务的 `parent`
 
 ### Requirement: 唤醒来源
-中枢 SHALL 在以下事件发生时为对应 workspace 安排唤醒：actor 为 user 的 `user.instruction`；`payload.kind = supervisor_patrol` 的定时触发；`decision.review_due`；属于 supervisor 链的任务进入 `done`、`failed`、`cancelled`，或进入原因为 `crashed`、`node_lost`、`no_progress`、`other` 的 `blocked`（同一任务同一原因只一次）；用户回答提问；任务提案被接受或驳回。唤醒任务自身的状态变化 MUST NOT 触发唤醒。
+中枢 SHALL 在以下事件发生时为对应 workspace 安排唤醒：actor 为 user 的 `user.instruction`；`payload.kind = supervisor_patrol` 的定时触发；`decision.review_due`；属于 supervisor 链的任务进入 `done`、`failed`、`cancelled`，或进入原因为 `crashed`、`node_lost`、`no_progress`、`other` 的 `blocked`（同一任务同一原因只一次）；用户回答提问；任务提案被接受或驳回；卡住被委托给 supervisor（见"卡住时代用户回复"）。唤醒任务自身的状态变化 MUST NOT 触发唤醒。
 
 #### Scenario: 用户指令唤醒
 - **WHEN** 用户在 Telegram 发送 `/ask product-res 把 README 的项目定位补上`
 - **THEN** 中枢为 `ws/product-res` 创建唤醒任务，origin 为 `instruction`
 
-#### Scenario: 等审批不唤醒
-- **WHEN** supervisor 链上的 dev 任务进入 `blocked(awaiting_approval)`
-- **THEN** 不唤醒 supervisor（条目已直接进入用户收件箱）
+#### Scenario: 未委托的审批不唤醒
+- **WHEN** 一个 dev 任务进入 `blocked(awaiting_approval)`，策略判定为 `user`
+- **THEN** 不唤醒 supervisor，条目直接进入用户收件箱并推送
 
 #### Scenario: 唤醒任务自身结束不自激
-- **WHEN** 唤醒任务变为 `done`，且两条队列都为空
+- **WHEN** 唤醒任务变为 `done`，且所有队列都为空
 - **THEN** 不创建新的唤醒任务
 
 ### Requirement: 来源由中枢计算且不可变
-每个唤醒和 supervisor 链上的任务 SHALL 有中枢计算的 origin（`instruction` 或 `autonomous`），创建时写入，之后不变：user 指令触发的唤醒、接受提案所建任务为 instruction；巡检与决策回看为 autonomous；唤醒任务的子任务取该唤醒的 origin，`parent` 有 origin 的任务继承它；回答提问继承提问所在唤醒的 origin。其他任务（包括用户手动建、不在链上的任务）MUST 没有 origin。origin MUST NOT 取自合同 `inputs` 或任何调用方可填写的字段。
+每个唤醒和 supervisor 链上的任务 SHALL 有中枢计算的 origin（`instruction` 或 `autonomous`；代回复的唤醒为 `reply`，它不能派生任务，`reply` 不会出现在任何任务上），创建时写入，之后不变：user 指令触发的唤醒、接受提案所建任务为 instruction；巡检与决策回看为 autonomous；唤醒任务的子任务取该唤醒的 origin，`parent` 有 origin 的任务继承它；回答提问继承提问所在唤醒的 origin。其他任务（包括用户手动建、不在链上的任务）MUST 没有 origin；它们的状态变化不唤醒 supervisor，委托给 supervisor 的卡住除外（只能回复的 reply 唤醒）。origin MUST NOT 取自合同 `inputs` 或任何调用方可填写的字段。
 
 #### Scenario: 指令派生的后续唤醒
 - **WHEN** instruction 唤醒所建的 dev 任务 `done`
@@ -48,7 +48,7 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 随后的唤醒 origin 为 instruction
 
 ### Requirement: 按 workspace 与来源分队列串行唤醒
-同一 workspace 同时 SHALL 最多一个未结束（含 `blocked`）的唤醒任务。期间到达的事件按 origin 进入 instruction 或 autonomous 队列；当前唤醒结束后优先处理 instruction 队列，一次唤醒只合并同一条队列的事件。队列与代数 MUST 由账本投影，中枢重启后不丢失、不重复；代数在每次创建唤醒时加一，唤醒任务的幂等键为 `supervisor:<ws>:<generation>`，`supervisor:` 前缀 MUST 只允许 `hub` 使用。
+同一 workspace 同时 SHALL 最多一个未结束（含 `blocked`）的普通唤醒（instruction 或 autonomous），另可并行最多一个 reply 唤醒。期间到达的事件按 origin 进入 instruction、autonomous 或 reply 队列；普通唤醒结束后优先处理 instruction 队列，一次唤醒只合并同一条队列的事件。队列与代数 MUST 由账本投影，中枢重启后不丢失、不重复；代数在每次创建唤醒时加一，唤醒任务的幂等键为 `supervisor:<ws>:<generation>`，`supervisor:` 前缀 MUST 只允许 `hub` 使用。
 
 #### Scenario: 运行中到达的事件被合并
 - **WHEN** 唤醒 A 运行期间，两个 instruction 链上的任务先后结束
@@ -75,7 +75,7 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 重启后为该事件创建且只创建一次唤醒任务
 
 ### Requirement: 唤醒失败与手动控制
-唤醒任务失败 SHALL 按重试设置重试一次；仍失败 MUST 在收件箱生成 Interrupt 条目并暂停该队列：新事件继续排队但不触发唤醒，直到用户放行或退避时间到（首次 1 小时，每次失败翻倍，最长 24 小时）。用户 SHALL 能用 `flow supervisor wake <ws> <说明>` 下指令（写入 `user.instruction`），用 `flow supervisor wake <ws> --release <instruction|autonomous>` 放行指定队列（写入 `supervisor.release`，唤醒保持该队列的 origin，不计入每日上限），用 `flow supervisor status [<ws>]` 查看当前唤醒、两条队列长度、今日唤醒次数和最近一次结果。一个 workspace 可用的 `kind: supervisor` 角色 MUST 恰好一个，多于一个时 doctor 报错且不唤醒。
+普通唤醒任务失败 SHALL 按重试设置重试一次（reply 唤醒失败不重试，直接转交它处理的委托，reply 队列不暂停）；仍失败 MUST 在收件箱生成 Interrupt 条目并暂停该队列：新事件继续排队但不触发唤醒，直到用户放行或退避时间到（首次 1 小时，每次失败翻倍，最长 24 小时）。用户 SHALL 能用 `flow supervisor wake <ws> <说明>` 下指令（写入 `user.instruction`），用 `flow supervisor wake <ws> --release <instruction|autonomous>` 放行指定队列（写入 `supervisor.release`，唤醒保持该队列的 origin，不计入每日上限），用 `flow supervisor status [<ws>]` 查看当前唤醒、各队列长度、今日唤醒次数和最近一次结果。一个 workspace 可用的 `kind: supervisor` 角色 MUST 恰好一个，多于一个时 doctor 报错且不唤醒。
 
 #### Scenario: 重试用尽后恢复
 - **WHEN** autonomous 唤醒两次都 `failed`，之后用户运行 `flow supervisor wake product-res --release autonomous`
@@ -108,7 +108,7 @@ workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 
 - **THEN** 返回 `repo_not_in_workspace`
 
 ### Requirement: 硬性上限
-中枢 SHALL 按 workspace 配置 `supervisor.limits` 强制上限，默认：每次唤醒建任务 5 个、每 workspace 每天唤醒 24 次（其中 autonomous 最多 4 次）、`parent` 链深度 8、同一 PR `changes_requested` 2 轮、未回答提问 3 条。建任务超限返回 `limit_exceeded` 或 `review_rounds_exceeded`；每日唤醒超限时事件留在队列，并生成一条 Decide 条目，用户可用 `--release` 放行。
+中枢 SHALL 按 workspace 配置 `supervisor.limits` 强制上限，默认：每次唤醒建任务 5 个、每 workspace 每天普通唤醒 24 次（其中 autonomous 最多 4 次，不含 reply 唤醒）、每天 reply 唤醒 48 次（超出时委托立即转交用户）、`parent` 链深度 8、同一 PR `changes_requested` 2 轮、未回答提问 3 条。建任务超限返回 `limit_exceeded` 或 `review_rounds_exceeded`；每日唤醒超限时事件留在队列，并生成一条 Decide 条目，用户可用 `--release` 放行。
 
 #### Scenario: 第三轮修改
 - **WHEN** 同一 PR 已两次得到 `changes_requested`，supervisor 再为它建 dev 任务
@@ -129,12 +129,61 @@ supervisor SHALL 能用 `ws_brief` 读取简报（supervisor 笔记、进行中�
 - **WHEN** `base_hash` 与当前文件不一致
 - **THEN** 返回 `conflict`，文件不变
 
-### Requirement: supervisor 不能替用户决定
-supervisor 身份 MUST NOT 能回复任务、批准或驳回审批、接受或驳回任何提案、批准合并；这些请求 MUST 由中枢按身份拒绝（`user_only`）。
+### Requirement: supervisor 只能回复委托给它的卡住
+除 `task_respond` 外，supervisor 身份 MUST NOT 能回复任务、批准或驳回审批、接受或驳回任何提案、批准合并；这些请求 MUST 由中枢按身份拒绝（`user_only`）。`task_respond` MUST 只作用于当前委托给 supervisor、尚未转交或过期的那一次卡住。
 
-#### Scenario: 尝试批准
+#### Scenario: 用通用接口批准
 - **WHEN** supervisor 调用 `task_reply --approve`
 - **THEN** 返回 403 `user_only`
+
+#### Scenario: 回复未委托的卡住
+- **WHEN** supervisor 对一个策略判定为 `user` 的授权请求调用 `task_respond approve`
+- **THEN** 返回 `not_delegated`，任务保持 `blocked`
+
+### Requirement: 卡住时代用户回复
+workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 true）开启时，中枢 SHALL 把本 workspace 任务（包括没有 origin 的任务）的以下卡住委托给 supervisor：所有 `blocked(question)`；节点持有活动租约、策略判定为 `supervisor` 档位、且该判定（`decision_id`）属于本任务、写于上一次离开 `blocked` 之后、请求与上报一致的 `blocked(awaiting_approval)`。唤醒任务自身、有效类别为 merge 的任务、`reviewer_roles` 中的审查任务、`node_lost` 后保留 `prior_reason` 的卡住 MUST NOT 委托。委托时 MUST 写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`（`block_seq` 为该次 `task.blocked` 的账本 seq），对应收件箱条目 MUST NOT 推送。
+
+委托事件 SHALL 进入独立的 reply 队列，不与其他队列合并；reply 唤醒可以与一个普通唤醒并行。reply 唤醒 MUST 只能调用 `task_respond` 与只读操作，其余（包括 `brief_update`、`kb_journal`）返回 `reply_only_wake`；中枢 MUST 按唤醒绑定 token 识别调用方，不信任调用方声明的任务 id 或 actor。代回复记录 SHALL 由中枢根据账本生成，作为 `ws_brief` 中标明"不是指令"的独立一节。reply 唤醒按 `supervisor.limits.reply_wakes_per_day`（默认 48）单独计数。
+
+supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回复，`decision` 为 `approve`、`deny`（仅授权请求）、`answer`（仅提问，`text` 必填且不超过 2000 字符）或 `escalate`。中枢 MUST 在同一事务里核对：调用方的绑定 token 对应持活动租约、正被分配处理这次委托的 reply 唤醒；workspace 一致；任务当前卡住序号等于 `block_seq`；委托有效且没有待送达的回复。通过后写 `task.replied`（actor supervisor）；条目仍在任务离开 `blocked` 时关闭并记录回复者。节点放行前 MUST 重新读取待批请求，与 `decision_id` 对应的请求一致、推送或 gh 环境复查通过才执行，否则丢弃该回复并以不可委托的新卡住交给用户。`escalate` 写 `task.reply_escalated{reason: supervisor}` 并把条目推送给用户。
+
+以下情况中枢 MUST 结束委托（`task.reply_escalated{reason}`；除用户自己回复或忽略外，按条目原级别推送给用户）：超过 `supervisor.reply_timeout_s`（默认 600）未回复；唤醒无法开始或当前 reply 唤醒处于 `blocked`（立即转交）；处理它的唤醒失败或结束时仍未回复；任务进入新的卡住；用户忽略条目；用户回复（同一次追加中结束委托）。supervisor 的回复写入之前，用户的回复 MUST 优先，之后 supervisor 的回复返回 `stale_block`。supervisor 代回复的内容 SHALL 出现在当天的每日摘要中。
+
+#### Scenario: 代为选择方案
+- **WHEN** 用户手动建的 dev 任务进入 `blocked(question)`，问"A 记录既有失败后开 PR，还是 B 扩大范围修复"，且任务目标只限 README
+- **THEN** supervisor 被唤醒，以 `answer` 选择 A，任务继续运行，用户没有收到推送
+
+#### Scenario: 白名单内的授权
+- **WHEN** Codex 请求在沙箱外运行 `pnpm check`，策略判定为 `supervisor`
+- **THEN** supervisor 被唤醒，`approve` 后节点核对请求未变并放行；当天摘要中出现这次代批准
+
+#### Scenario: reply 唤醒不能建任务或写笔记
+- **WHEN** 一次 reply 唤醒中 supervisor 调用 `task_create` 或 `brief_update`
+- **THEN** 返回 `reply_only_wake`
+
+#### Scenario: 普通唤醒运行中也能代回复
+- **WHEN** 一个 instruction 唤醒正在运行，另一个任务的提问被委托
+- **THEN** 一个 reply 唤醒并行开始并回复，不等普通唤醒结束
+
+#### Scenario: 判定不能错套
+- **WHEN** 任务的上一个请求判为 `supervisor` 并已获批，下一个请求的策略检查超时、没有 `decision_id`，任务上报 `blocked(awaiting_approval)`
+- **THEN** 不委托，条目直接推送给用户
+
+#### Scenario: 超时转交
+- **WHEN** 委托后 600 秒内 supervisor 没有回复
+- **THEN** 条目推送给用户，之后 supervisor 的 `task_respond` 返回 `stale_block`
+
+#### Scenario: 用户抢先回复
+- **WHEN** 委托期间、supervisor 回复之前，用户在 Web 上直接批准
+- **THEN** 委托结束，任务按用户的回复继续，supervisor 随后的 `task_respond` 返回 `stale_block`
+
+#### Scenario: 合并与审查任务不委托
+- **WHEN** merger 任务或 pr-reviewer 任务进入 `blocked(question)`
+- **THEN** 不委托给 supervisor，条目直接推送给用户
+
+#### Scenario: 冒用 supervisor 身份
+- **WHEN** 一个名为 `supervisor` 但没有 `kind: supervisor` 的角色存在，或某请求用 user token 加 `X-Flow-Actor: supervisor` 调用 `task_respond`
+- **THEN** 角色加载报错、doctor 报 error；请求被拒绝
 
 ### Requirement: 用户指令入口
 用户 SHALL 能通过 Telegram `/ask <ws> <内容>` 和 CLI `flow ask <ws> <内容>` 下达指令；两者都只接受 user 身份，写入 `user.instruction`，并返回唤醒任务编号或排队说明。
