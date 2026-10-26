@@ -892,6 +892,31 @@
                   "description": "唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略",
                   "type": "string",
                   "minLength": 16
+                },
+                "repo_snapshot": {
+                  "description": "中枢投影中固定的登记仓库快照（D15，任务首次上报分支时采集）；有它时节点不再重新采集；旧节点忽略",
+                  "type": "object",
+                  "properties": {
+                    "remote_url": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "pattern": "^[\\x21-\\x7e]+$",
+                      "description": "登记仓库 origin 的地址（只接受 github.com）"
+                    },
+                    "default_branch": {
+                      "description": "登记仓库的默认分支；取不到时省略（push_to 随之不满足）",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255,
+                      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
+                    }
+                  },
+                  "required": [
+                    "remote_url"
+                  ],
+                  "additionalProperties": false,
+                  "title": "Repo snapshot"
                 }
               },
               "required": [

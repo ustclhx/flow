@@ -8,7 +8,7 @@ import type {
   TaskResume,
 } from '@flow/core'
 import { executorCapability } from '@flow/core'
-import type { Precheck } from './precheck.ts'
+import type { Precheck, PrecheckRequest } from './precheck.ts'
 
 /**
  * 执行器插件接口（add-m1-ledger-daemon D6；add-m1-executors D1）与注册表。
@@ -59,6 +59,20 @@ export interface ExecutorContext {
    * 路径作为 `FLOW_HUB_TOKEN_FILE` 交给 Flow MCP 进程，不得读出 token 放进 argv、env、活动、结果或日志。
    */
   wakeTokenFile?: string
+  /**
+   * 上报执行器创建的任务分支与 worktree（D15，codex-orca 开始时调用）：节点随下一次续约上报，
+   * 中枢写 `task.branch_reported`（每个任务一次、不可更改）。worktree 由节点 realpath 后上报；
+   * `repo` 是执行器解析出的登记仓库（codex-orca 的 `resolveTaskRepo`），节点在任务首次上报时对它采集快照。
+   */
+  reportBranch?: (report: { branch: string; worktree: string; repo?: string }) => void
+  /**
+   * 送达批准之前的复核（D15）：执行器先重新读取实时的待批请求（Codex 弹窗、待批的工具调用），
+   * 再以它调用本函数（读不到待批请求时传 undefined）。返回 false 时**不得放行**，deliver 返回
+   * `dropped`：节点在 ack 中标记 `dropped{reason: request_changed}`，并以 `no_delegate` 重新上报卡住。
+   * 节点只对 supervisor 的批准做实质核对（与判定时的请求一致、推送或 gh 环境复查通过），
+   * 其他回复直接返回 true。缺省时视为通过（旧调用方、单元测试）。
+   */
+  confirmApproval?: (reply: DeliveredReply, live: PrecheckRequest | undefined) => Promise<boolean>
 }
 
 /** 节点交给 `classify` 的快照。 */
@@ -82,8 +96,11 @@ export interface StuckVerdict {
   session?: string
 }
 
-/** 回复送达结果：worker 已不在运行时返回 not_running，中枢会让任务带着回复重新排队。 */
-export type DeliverResult = 'delivered' | 'not_running'
+/**
+ * 回复送达结果：worker 已不在运行时返回 not_running，中枢会让任务带着回复重新排队；
+ * dropped 表示执行器按 `confirmApproval` 拒收了这条批准（待批请求已变或环境复查未通过），没有放行。
+ */
+export type DeliverResult = 'delivered' | 'not_running' | 'dropped'
 
 /** 执行器的最终结果：done / failed 附带结果，blocked 附带原因与说明。 */
 export type ExecutorOutcome =

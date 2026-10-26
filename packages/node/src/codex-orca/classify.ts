@@ -230,6 +230,8 @@ export interface ApprovalPrompt {
   command: string
   /** 从 `Would you like to run the following command?` 到页脚的各行。 */
   prompt: string[]
+  /** 弹窗中 `Reason:` 一行（Codex 给出的理由）；没有时省略。只用于上报请求文本，不参与判定。 */
+  reason?: string
 }
 
 const RUN_COMMAND_RE = /^\s*Would you like to run the following command\?\s*$/
@@ -294,7 +296,8 @@ export function approvalForPrecheck(tail: readonly string[]): ApprovalPrompt | u
   if (rest.slice(2, noAt).some((l) => ANY_OPTION_RE.test(l))) return undefined
   const command = COMMAND_LINE_RE.exec(block[at] ?? '')?.[1]?.trim()
   if (!command || command.includes('…') || UNPRINTABLE_RE.test(command)) return undefined
-  return { command, prompt: block }
+  const reason = approvalCommand(block.slice(0, at)).reason
+  return { command, prompt: block, ...(reason ? { reason } : {}) }
 }
 
 /** 从 idle 信号的 hint 中取终端末尾；没有时用节点累积的末尾输出。 */

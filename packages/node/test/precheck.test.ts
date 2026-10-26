@@ -17,6 +17,7 @@ import {
   type PrecheckVerdict,
   realPolicyPath,
 } from '../src/index.ts'
+import { blockedRequestOf } from '../src/node.ts'
 import { type Bench, bench, type Intercept, ManualClock } from './harness.ts'
 
 /**
@@ -641,5 +642,126 @@ describe('复核对抗用例（真实 policy/check）：Bash 调 flow CLI、直�
     const id = await approvalTask(b, { tool: 'Bash', command: 'flow task create --goal 子任务' })
     await settle(b, id, (t) => t.status === 'done', 'done')
     expect(b.types(id)).not.toContain('task.blocked')
+  })
+})
+
+describe('预检函数：supervisor 档位与节点上报（D15，tasks 5.6）', () => {
+  const supervisorData = (extra: Record<string, unknown> = {}) => ({
+    ...decision('supervisor'),
+    ...extra,
+  })
+
+  test('supervisor：不放行，带回 decision_id 并回调记录判定；其他档位即使带了也忽略', async () => {
+    const seen: Array<[number, unknown, unknown]> = []
+    const client = createNodeHubClient({
+      url: 'http://hub.test',
+      token: TOKEN,
+      fetch: async () => json(200, { ok: true, data: supervisorData({ decision_id: 42 }) }),
+    })
+    const precheck = createPolicyPrecheck({
+      client,
+      taskId: 't-pre-1',
+      envReport: async () => ({ command_cwd: '/w/t-1', push_env_ok: true }),
+      onSupervisorDecision: (id, req, report) => seen.push([id, req, report]),
+    })
+    const req = {
+      tool: 'CodexCommand',
+      command: 'git push origin x',
+      cwd: '/w/t-1',
+      workdirTrusted: true,
+    }
+    expect(await precheck(req)).toEqual({ allow: false, level: 'supervisor', decision_id: 42 })
+    expect(seen).toEqual([[42, req, { command_cwd: '/w/t-1', push_env_ok: true }]])
+
+    const strange = createPolicyPrecheck({
+      client: createNodeHubClient({
+        url: 'http://hub.test',
+        token: TOKEN,
+        fetch: async () =>
+          json(200, { ok: true, data: { ...decision('draft-approve'), decision_id: 7 } }),
+      }),
+      taskId: 't-pre-1',
+      onSupervisorDecision: () => seen.push([0, null, null]),
+    })
+    expect(await strange(req)).toEqual({ allow: false, level: 'draft-approve' })
+    expect(seen).toHaveLength(1)
+  })
+
+  test('只有执行目录可信的请求才计算环境字段；租约令牌总是带上；理由与执行目录不送去判定', async () => {
+    const bodies: unknown[] = []
+    const dirs: string[] = []
+    const precheck = createPolicyPrecheck({
+      client: createNodeHubClient({
+        url: 'http://hub.test',
+        token: TOKEN,
+        fetch: async (_input, init) => {
+          bodies.push(JSON.parse(String(init?.body ?? 'null')))
+          return json(200, { ok: true, data: decision('user') })
+        },
+      }),
+      taskId: 't-pre-1',
+      cwd: '/contract/cwd',
+      leaseToken: 'lease-token-0123456789',
+      envReport: async (_command, dir) => {
+        dirs.push(dir)
+        return { command_cwd: dir, push_env_ok: true }
+      },
+    })
+    await precheck({
+      tool: 'CodexCommand',
+      command: 'git push origin x',
+      cwd: '/w/t-1',
+      reason: '推送',
+      workdirTrusted: true,
+    })
+    // codex-orca / claude-sdk 的请求不声明执行目录可信：不计算、不上报环境字段。
+    await precheck({ tool: 'CodexCommand', command: 'git push origin x', cwd: '/w/t-1' })
+    await precheck({ tool: 'Bash', command: 'ls' })
+    expect(dirs).toEqual(['/w/t-1'])
+    expect(bodies[0]).toEqual({
+      task_id: 't-pre-1',
+      tool: 'CodexCommand',
+      command: 'git push origin x',
+      command_cwd: '/w/t-1',
+      push_env_ok: true,
+      lease_token: 'lease-token-0123456789',
+    })
+    expect(bodies[1]).toEqual({
+      task_id: 't-pre-1',
+      tool: 'CodexCommand',
+      command: 'git push origin x',
+      lease_token: 'lease-token-0123456789',
+    })
+  })
+})
+
+describe('卡住请求文本的路径（D15）', () => {
+  test('onSupervisorDecision 收到实际送去判定的展开路径；blockedRequestOf 用它', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flow-sent-paths-')))
+    try {
+      mkdirSync(join(dir, 'real'))
+      symlinkSync(join(dir, 'real'), join(dir, 'link'))
+      let sent: string[] | undefined
+      const precheck = createPolicyPrecheck({
+        client: createNodeHubClient({
+          url: 'http://hub.test',
+          token: TOKEN,
+          fetch: async () =>
+            json(200, { ok: true, data: { ...decision('supervisor'), decision_id: 3 } }),
+        }),
+        taskId: 't-pre-1',
+        cwd: dir,
+        onSupervisorDecision: (_id, _req, _report, paths) => {
+          sent = paths
+        },
+      })
+      const req = { tool: 'Edit', paths: ['link/a.txt'] }
+      await precheck(req)
+      expect(sent).toEqual(['link/a.txt', join(dir, 'real', 'a.txt')])
+      expect(blockedRequestOf(req, sent).paths).toEqual(sent)
+      expect(blockedRequestOf(req).paths).toEqual(['link/a.txt'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

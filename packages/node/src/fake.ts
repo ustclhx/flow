@@ -24,7 +24,7 @@ import {
   type StuckSnapshot,
   type StuckVerdict,
 } from './executor.ts'
-import { autoApprovedText, needsUserText } from './precheck.ts'
+import { autoApprovedText, needsUserText, type PrecheckRequest } from './precheck.ts'
 
 /**
  * fake 执行器（add-m1-ledger-daemon D11；add-m1-executors 1.2 / 1.3 的扩展指令）。
@@ -85,6 +85,8 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
       /** 正在执行 `hang(ignore_cancel)`：取消也不结束（测试超时后的强制结束）。 */
       let ignoringCancel = false
       const replies: DeliveredReply[] = []
+      /** 正在等待审批的请求（D15：supervisor 的批准送达前交给节点复核）。 */
+      let pendingApproval: { req: PrecheckRequest; message: string } | undefined
       let replyWaiter: (() => void) | undefined
       let wake: (() => void) | undefined
 
@@ -222,12 +224,28 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
             }
             if (verdict) queue.push({ ts: iso(), kind: 'status', text: needsUserText(verdict) })
             const message = `等待授权：${what}`
-            queue.push(idleSignal(iso(), message, { reason: 'awaiting_approval', message }))
+            const decisionId = verdict && !verdict.allow ? verdict.decision_id : undefined
+            pendingApproval = {
+              req: {
+                tool: s.tool,
+                ...(s.command === undefined ? {} : { command: s.command }),
+                ...(s.paths === undefined ? {} : { paths: s.paths }),
+              },
+              message,
+            }
+            queue.push(
+              idleSignal(iso(), message, {
+                reason: 'awaiting_approval',
+                message,
+                ...(decisionId === undefined ? {} : { decision_id: decisionId }),
+              }),
+            )
             while (replies.length === 0 && !finished) {
               await new Promise<void>((resolve) => {
                 replyWaiter = resolve
               })
             }
+            pendingApproval = undefined
             const r = replies.shift()
             if (!r) return false
             output(`收到审批回复（${r.kind}，${r.by}）`)
@@ -288,6 +306,25 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
             throw new Error('fake：模拟送达失败')
           }
           seenReplies.add(reply.reply_id)
+          const waiting = pendingApproval
+          if (waiting && reply.kind === 'approve' && ctx.confirmApproval) {
+            if (!(await ctx.confirmApproval(reply, waiting.req))) {
+              // 拒收：不放行；稍后重新报告停下（节点在确认拒收前处于 blocked，会忽略更早的信号）。
+              let left = 20
+              const again = () => {
+                if (finished || pendingApproval !== waiting || left-- <= 0) return
+                queue.push(
+                  idleSignal(iso(), waiting.message, {
+                    reason: 'awaiting_approval',
+                    message: waiting.message,
+                  }),
+                )
+                cancels.push(clock.setTimeout(again, 50))
+              }
+              cancels.push(clock.setTimeout(again, 50))
+              return 'dropped'
+            }
+          }
           if (spec.deliver_delay_ms) {
             await new Promise<void>((resolve) => {
               cancels.push(clock.setTimeout(resolve, spec.deliver_delay_ms ?? 0))

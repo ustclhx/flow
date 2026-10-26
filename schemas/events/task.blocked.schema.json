@@ -95,6 +95,43 @@
           "minimum": 1,
           "maximum": 9007199254740991
         },
+        "request": {
+          "description": "带 decision_id 时：判定所针对的请求（工具、命令与理由）",
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "paths": {
+              "description": "请求涉及的路径（与预检时送去判定的路径相同）",
+              "maxItems": 200,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            },
+            "reason": {
+              "description": "执行器给出的请求理由（例如 Codex 弹窗的 Reason 一行）",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          },
+          "required": [
+            "tool"
+          ],
+          "additionalProperties": false,
+          "title": "Blocked request"
+        },
         "no_delegate": {
           "description": "true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）",
           "type": "boolean"

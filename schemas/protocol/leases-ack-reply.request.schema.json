@@ -14,10 +14,19 @@
     },
     "outcome": {
       "default": "delivered",
+      "description": "dropped：节点拒收这条回复（例如 supervisor 的批准送达时待批请求已变），中枢写入 task.unblocked 并丢弃它，节点随后以 no_delegate 重新上报卡住",
       "type": "string",
       "enum": [
         "delivered",
-        "not_running"
+        "not_running",
+        "dropped"
+      ]
+    },
+    "reason": {
+      "description": "outcome 为 dropped 时必填：拒收的原因",
+      "type": "string",
+      "enum": [
+        "request_changed"
       ]
     }
   },

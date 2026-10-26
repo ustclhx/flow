@@ -25,6 +25,15 @@
           "type": "boolean",
           "description": "为 true 时节点应停止执行器并提交 cancelled"
         },
+        "branch_report": {
+          "description": "续约带了 branch 时的处理结果（D15）：recorded 已写入；ignored 已上报过或被拒绝（节点不再上报）；retry 临时失败（例如数据库忙），节点保留并重发",
+          "type": "string",
+          "enum": [
+            "recorded",
+            "ignored",
+            "retry"
+          ]
+        },
         "reply": {
           "default": null,
           "description": "任务处于 blocked 时最早一条未送达的回复；节点交给执行器后用 ack-reply 确认，确认前每次续约都会返回它",

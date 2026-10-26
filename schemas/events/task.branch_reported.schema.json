@@ -43,6 +43,38 @@
           "maxLength": 255,
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$",
           "description": "执行器创建的任务分支，例如 ustclhx/t-1"
+        },
+        "worktree": {
+          "description": "任务 worktree（节点 realpath 后的绝对路径）；push_to / gh_scope 要求命令在其中执行，缺失即不满足",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 4096,
+          "pattern": "^\\/[^\\0\\n\\r]*$"
+        },
+        "repo_snapshot": {
+          "description": "租约开始、worker 启动前节点对登记仓库的快照；push_to 的默认分支只取这里的值",
+          "type": "object",
+          "properties": {
+            "remote_url": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "description": "登记仓库 origin 的地址（只接受 github.com）"
+            },
+            "default_branch": {
+              "description": "登记仓库的默认分支；取不到时省略（push_to 随之不满足）",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
+            }
+          },
+          "required": [
+            "remote_url"
+          ],
+          "additionalProperties": false,
+          "title": "Repo snapshot"
         }
       },
       "required": [

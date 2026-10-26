@@ -566,15 +566,15 @@ describe('旧账本迁移', () => {
     try {
       const path = join(dir, 'flow.db')
       const db = await openDatabase(path)
-      // 旧版 DDL：去掉 resume_json（以及 ④ 的 origin、branch）列与 replies 表。
+      // 旧版 DDL：去掉 resume_json（以及 ④ 的 origin、branch、worktree）列与 replies 表。
       db.exec(
         LEDGER_DDL.replace(
-          ',\n  resume_json      TEXT,\n  origin           TEXT,\n  branch           TEXT\n',
+          ',\n  resume_json      TEXT,\n  origin           TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
           '\n',
         ).replace(/CREATE TABLE IF NOT EXISTS replies[\s\S]*$/, ''),
       )
       const before = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
-      for (const col of ['resume_json', 'origin', 'branch']) {
+      for (const col of ['resume_json', 'origin', 'branch', 'worktree', 'repo_snapshot_json']) {
         expect(before.some((c) => c.name === col)).toBe(false)
       }
       db.close()
@@ -585,7 +585,7 @@ describe('旧账本迁移', () => {
       const reopened = await openDatabase(path)
       const after = reopened.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
       reopened.close()
-      for (const col of ['resume_json', 'origin', 'branch']) {
+      for (const col of ['resume_json', 'origin', 'branch', 'worktree', 'repo_snapshot_json']) {
         expect(after.some((c) => c.name === col)).toBe(true)
       }
     } finally {

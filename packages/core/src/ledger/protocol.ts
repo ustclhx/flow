@@ -34,11 +34,14 @@ import {
   replyId,
   replyKind,
   replyView,
+  repoSnapshot,
+  taskBranch,
   taskContract,
   taskResult,
   taskResume,
   taskStatus,
   taskView,
+  taskWorktree,
   type WakeOrigin,
 } from './task.ts'
 
@@ -438,6 +441,14 @@ export const policyCheckRequest = z
     gh_env_ok: z.boolean().optional().meta({
       description: 'gh 命令的仓库检查（D15）：gh 实际解析出的仓库与登记仓库一致；缺失视为不满足',
     }),
+    command_cwd: taskWorktree.optional().meta({
+      description:
+        '命令实际执行目录（D15），节点解析符号链接后上报；push_to / gh_scope 要求它与任务 worktree 相同',
+    }),
+    lease_token: z.string().min(16).max(512).optional().meta({
+      description:
+        '持有该任务活动租约的节点证明身份（本机节点用 user token 调用）；push_env_ok、gh_env_ok、command_cwd 只在 node actor 持有租约或令牌匹配时采信。不入账',
+    }),
   })
   .meta({ title: 'POST /v1/policy/check' })
 export type PolicyCheckRequest = z.infer<typeof policyCheckRequest>
@@ -657,6 +668,10 @@ export const leaseGrant = z
       description:
         '唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略',
     }),
+    repo_snapshot: repoSnapshot.optional().meta({
+      description:
+        '中枢投影中固定的登记仓库快照（D15，任务首次上报分支时采集）；有它时节点不再重新采集；旧节点忽略',
+    }),
   })
   .meta({ title: 'Lease grant' })
 export type LeaseGrant = z.infer<typeof leaseGrant>
@@ -696,6 +711,17 @@ export const renewLeaseRequest = z
       .strictObject({ note: z.string().optional() })
       .optional()
       .meta({ description: 'worker 未经回复自行恢复（或即将结束）：中枢写入 task.unblocked' }),
+    branch: z
+      .strictObject({
+        branch: taskBranch,
+        worktree: taskWorktree,
+        repo_snapshot: repoSnapshot.optional(),
+      })
+      .optional()
+      .meta({
+        description:
+          '执行器创建的任务分支与 worktree，以及节点在任务首次上报时对执行器解析出的登记仓库的快照（D15，codex-orca 开始时）：中枢在续约生效后写入 task.branch_reported（每个任务一次；worktree 缺失的旧任务可补报一次 worktree，不补快照），结果见响应的 branch_report',
+      }),
   })
   .refine((r) => r.blocked === undefined || r.resumed === undefined, {
     message: 'blocked 与 resumed 不能同时出现',
@@ -711,6 +737,10 @@ export const renewLeaseData = z
     cancel_requested: z
       .boolean()
       .meta({ description: '为 true 时节点应停止执行器并提交 cancelled' }),
+    branch_report: z.enum(['recorded', 'ignored', 'retry']).optional().meta({
+      description:
+        '续约带了 branch 时的处理结果（D15）：recorded 已写入；ignored 已上报过或被拒绝（节点不再上报）；retry 临时失败（例如数据库忙），节点保留并重发',
+    }),
     reply: deliveredReply.nullable().default(null).meta({
       description:
         '任务处于 blocked 时最早一条未送达的回复；节点交给执行器后用 ack-reply 确认，确认前每次续约都会返回它',
@@ -766,7 +796,18 @@ export const ackReplyRequest = z
   .strictObject({
     lease_token: z.string().min(16),
     reply_id: replyId,
-    outcome: z.enum(['delivered', 'not_running']).default('delivered'),
+    outcome: z.enum(['delivered', 'not_running', 'dropped']).default('delivered').meta({
+      description:
+        'dropped：节点拒收这条回复（例如 supervisor 的批准送达时待批请求已变），中枢写入 task.unblocked 并丢弃它，节点随后以 no_delegate 重新上报卡住',
+    }),
+    reason: z
+      .enum(['request_changed'])
+      .optional()
+      .meta({ description: 'outcome 为 dropped 时必填：拒收的原因' }),
+  })
+  .refine((r) => (r.outcome === 'dropped') === (r.reason !== undefined), {
+    message: 'outcome 为 dropped 时必须带 reason，其他 outcome 不能带 reason',
+    path: ['reason'],
   })
   .meta({ title: 'POST /v1/leases/:id/ack-reply' })
 export type AckReplyRequest = z.infer<typeof ackReplyRequest>

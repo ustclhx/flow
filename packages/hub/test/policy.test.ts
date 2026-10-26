@@ -328,7 +328,7 @@ test('supervisor 档位：精确规则委托；受保护动作提升；push_to �
   expect(must(await user.checkPolicy({ ...request, push_env_ok: true })).level).toBe('user')
 })
 
-test('policy/check：非 supervisor 档位不返回 decision_id，旧节点的 strict 旧版 schema 能解析；记录环境检查', async () => {
+test('policy/check：非 supervisor 档位不返回 decision_id，旧节点的 strict 旧版 schema 能解析；不采信 user 上报的环境检查', async () => {
   // main 上旧版 policyCheckData 的副本：顶层 strict，只有 level、matched_rules、actions。
   const legacyPolicyCheckData = z.strictObject({
     level: z.enum(['auto', 'auto-report', 'draft-approve', 'user', 'notify']),
@@ -342,8 +342,12 @@ test('policy/check：非 supervisor 档位不返回 decision_id，旧节点的 s
   expect(auto.level).toBe('auto')
   expect(auto).not.toHaveProperty('decision_id')
   expect(legacyPolicyCheckData.safeParse(auto).success).toBe(true)
+  // user 调用（没有租约令牌）上报的环境字段不采信，也不入账（tasks 5.6）。
   const decided = must(await user.showTask(task.id)).events.at(-1)
-  expect(decided?.payload).toMatchObject({ request: { push_env_ok: true, gh_env_ok: false } })
+  expect(decided?.payload).toMatchObject({ request: { tool: 'Bash' } })
+  const recorded = (decided?.payload as { request?: object } | undefined)?.request ?? {}
+  expect(recorded).not.toHaveProperty('push_env_ok')
+  expect(recorded).not.toHaveProperty('gh_env_ok')
   policies([])
   const legacy = must(await user.checkPolicy(request))
   expect(legacy.level).toBe('user')
@@ -364,4 +368,100 @@ test('policyCheckResponse：只有 supervisor 档位带 decision_id', () => {
   })
   // 新版 schema 非 strict：以后加字段不破坏解析
   expect(policyCheckData.safeParse({ level: 'user', ...base, future: 1 }).success).toBe(true)
+})
+
+test('push_to / gh_scope 上下文：任务分支与 worktree 取自投影，环境字段只认租约持有者', async () => {
+  const { home, user, raw, token } = await setup([
+    {
+      scope: 'ws/xuanxue-saas',
+      action: 'git.push',
+      level: 'supervisor',
+      when: { push_to: 'task_branch' },
+    },
+    {
+      scope: 'ws/xuanxue-saas',
+      action: 'pr.create',
+      level: 'supervisor',
+      when: { gh_scope: 'workspace_repo' },
+    },
+  ])
+  const orcaTask = must(
+    await user.createTask({
+      goal: 'codex-orca 任务',
+      workspace: 'ws/xuanxue-saas',
+      role: 'dev',
+      executor: 'codex-orca',
+    }),
+  ).task
+  const nodeToken = must(await user.issueToken({ actor: 'node:n1' })).secret
+  const node = new HubClient({ home, actor: 'node:n1', token: nodeToken })
+  must(
+    await node.request('nodes-register', {
+      node_id: 'n1',
+      hostname: 'test',
+      version: '0',
+      capabilities: ['executor:codex-orca'],
+    }),
+  )
+  const lease = must(
+    await node.request('leases-acquire', {
+      node_id: 'n1',
+      capabilities: ['executor:codex-orca'],
+      wait_s: 0,
+    }),
+  ).lease
+  if (!lease || lease.task_id !== orcaTask.id) throw new Error('未领取到 codex-orca 任务的租约')
+  const push: PolicyCheckRequest = {
+    task_id: orcaTask.id,
+    tool: 'CodexCommand',
+    command: 'git push -u origin ustclhx/t-1',
+  }
+  const env = { push_env_ok: true, command_cwd: '/w/t-1' }
+  const level = async (body: unknown, asToken = nodeToken) => {
+    const r = await raw(body, asToken)
+    expect(r.status).toBe(200)
+    return policyCheckData.parse(((await r.json()) as { data: unknown }).data)
+  }
+  // 还没有上报任务分支：即使环境齐全也不满足。
+  expect((await level({ ...push, ...env })).level).toBe('user')
+  must(
+    await node.request(
+      'leases-renew',
+      {
+        lease_token: lease.lease_token,
+        branch: {
+          branch: 'ustclhx/t-1',
+          worktree: '/w/t-1',
+          repo_snapshot: { remote_url: 'https://github.com/acme/demo.git', default_branch: 'main' },
+        },
+      },
+      lease.lease_id,
+    ),
+  )
+  const delegated = await level({ ...push, ...env })
+  expect(delegated.level).toBe('supervisor')
+  expect(delegated.decision_id).toBeGreaterThan(0)
+  const events = must(await user.showTask(orcaTask.id)).events
+  expect(events.at(-1)?.payload).toMatchObject({
+    request: { push_env_ok: true, command_cwd: '/w/t-1' },
+  })
+  expect(JSON.stringify(events.at(-1)?.payload)).not.toContain(lease.lease_token)
+  // 在其他目录执行、环境不通过：都不满足；请求里的 default_branch 不再被接受（只取快照）。
+  expect((await level({ ...push, ...env, command_cwd: '/w/other' })).level).toBe('user')
+  expect((await level({ ...push, ...env, push_env_ok: false })).level).toBe('user')
+  expect((await raw({ ...push, ...env, default_branch: 'x' }, nodeToken)).status).toBe(400)
+  // user token：没有租约令牌或令牌不对时不采信；带上该任务活动租约的令牌即可（本机节点）。
+  expect((await level({ ...push, ...env }, token)).level).toBe('user')
+  expect(
+    (await level({ ...push, ...env, lease_token: `${lease.lease_token}x` }, token)).level,
+  ).toBe('user')
+  expect((await level({ ...push, ...env, lease_token: lease.lease_token }, token)).level).toBe(
+    'supervisor',
+  )
+  // gh_scope：gh_env_ok 同样只认租约持有者，命令须在任务 worktree 中执行。
+  const gh = { task_id: orcaTask.id, tool: 'CodexCommand', command: 'gh pr create --fill' }
+  const ghEnv = { gh_env_ok: true, command_cwd: '/w/t-1' }
+  expect((await level({ ...gh, ...ghEnv })).level).toBe('supervisor')
+  expect((await level({ ...gh, ...ghEnv }, token)).level).toBe('user')
+  expect((await level({ ...gh, ...ghEnv, command_cwd: '/w/x' })).level).toBe('user')
 })
