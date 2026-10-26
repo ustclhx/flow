@@ -71,6 +71,12 @@ export type EventInput = {
 export interface AppendOptions {
   /** 操作者，写入事件信封的 `actor`。 */
   actor: string
+  /**
+   * 逐条覆盖操作者（与 drafts 按下标对应，缺省项用 `actor`）。只供中枢内部在同一事务里写入不同身份的
+   * 事件（例如用户批准合并与 hub 建 merger，D10）；草稿自身的 `actor` 字段始终被忽略。每条事件仍按
+   * 写入身份白名单（`EVENT_ACTORS`）校验。
+   */
+  actors?: readonly (string | undefined)[]
 }
 
 export interface RebuildOptions {
@@ -174,9 +180,11 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   countChangesRequested(workspace: string, pr: string, roles: readonly string[]): number
   /**
    * 合并请求的资格核对（D10 第 4 步）用：workspace 中合同带 `inputs.review`，或结果中有 `kind: pr`
-   * 产物的全部任务（不分页，按创建先后）。只是预筛，PR 是否相同由调用方用 `samePrUrl` 判断。
+   * 产物、且链接以 `/pull/<prNumber>` 结尾的任务（按创建先后，最多 limit 条）。只是预筛：PR 号是各种写法
+   * （大小写、`www.`、`:443`）共有的部分，PR 是否相同由调用方用 `samePrUrl` 判断；返回条数达到 limit 时
+   * 调用方应判为无法确认（fail-closed）。
    */
-  prRelatedTasks(workspace: string): TaskView[]
+  prRelatedTasks(workspace: string, prNumber: number, limit: number): TaskView[]
   /** 某任务的全部事件（按 seq）。 */
   taskEvents(taskId: string): LedgerEvent[]
   /**
@@ -999,7 +1007,9 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
   function appendMany(drafts: readonly EventInput[], o: AppendOptions): Result<LedgerEvent[]> {
     if (drafts.length === 0) return ok([])
     const ts = iso()
-    const result = inTransaction(() => drafts.map((d) => writeOne({ ...d, actor: o.actor }, ts)))
+    const result = inTransaction(() =>
+      drafts.map((d, i) => writeOne({ ...d, actor: o.actors?.[i] ?? o.actor }, ts)),
+    )
     if (result.ok) notify(result.data)
     return result
   }
@@ -1220,14 +1230,19 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         )?.n ?? 0
       )
     },
-    prRelatedTasks(workspace) {
+    prRelatedTasks(workspace, prNumber, limit) {
+      const suffix = `%/pull/${Math.trunc(prNumber)}`
       return all<TaskRow>(
         `${TASK_SELECT} WHERE t.workspace = ?
-           AND (json_extract(t.contract_json, '$.inputs.review') IS NOT NULL
+           AND (json_extract(t.contract_json, '$.inputs.review.pr') LIKE ?
              OR EXISTS (SELECT 1 FROM json_each(t.result_json, '$.artifacts') AS a
-                        WHERE json_extract(a.value, '$.kind') = 'pr'))
-         ORDER BY t.created_seq ASC`,
+                        WHERE json_extract(a.value, '$.kind') = 'pr'
+                          AND json_extract(a.value, '$.ref') LIKE ?))
+         ORDER BY t.created_seq ASC LIMIT ?`,
         workspace,
+        suffix,
+        suffix,
+        limit,
       ).map(rowToTask)
     },
     taskEvents(taskId) {

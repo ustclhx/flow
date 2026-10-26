@@ -415,6 +415,28 @@ export const reviewResult = z
 export type ReviewResult = z.infer<typeof reviewResult>
 
 /**
+ * 任务分支名（`task.branch_reported`，D15）：git ref 的保守子集，
+ * 不允许 `..`、`//`、`@{`、以 `-`、`/`、`.` 开头或以 `/`、`.`、`.lock` 结尾。
+ */
+export const taskBranch = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/, '分支名只能包含字母、数字、`_`、`.`、`/`、`-`')
+  .refine(
+    (b) =>
+      !b.includes('..') &&
+      !b.includes('//') &&
+      !b.includes('/.') &&
+      !b.endsWith('/') &&
+      !b.endsWith('.') &&
+      !b.endsWith('.lock') &&
+      b !== 'HEAD',
+    { message: '不是合法的分支名' },
+  )
+  .meta({ description: '执行器创建的任务分支，例如 ustclhx/t-1' })
+
+/**
  * merger 任务的 `inputs.merge`（D10 第 4、5 步）：要合并的 PR 与给出 approve 结论的审查任务。
  * 由中枢在合并请求通过资格核对后填写（4.8）；pr-merge 执行器据此再次核对，**不信任其中任何结论**：
  * 审查结论、head 与仓库都由执行器重新读取。
@@ -423,6 +445,10 @@ export const mergeInputs = z
   .strictObject({
     pr: prUrl,
     review_task: taskId.meta({ description: '给出 approve 结论的审查任务（merger 的 parent）' }),
+    branch: taskBranch.meta({
+      description:
+        '开出该 PR 的任务上报的任务分支（中枢取自投影）：pr-merge 要求 PR 的 headRefName 等于它且不是 fork PR',
+    }),
   })
   .meta({ title: 'Merge inputs', description: 'merger 任务的 inputs.merge' })
 export type MergeInputs = z.infer<typeof mergeInputs>
@@ -470,28 +496,6 @@ export const protocolBlockedDelegationShape = {
   ...delegationCommon,
   diff_stat: protocolDiffStat.optional(),
 }
-
-/**
- * 任务分支名（`task.branch_reported`，D15）：git ref 的保守子集，
- * 不允许 `..`、`//`、`@{`、以 `-`、`/`、`.` 开头或以 `/`、`.`、`.lock` 结尾。
- */
-export const taskBranch = z
-  .string()
-  .min(1)
-  .max(255)
-  .regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/, '分支名只能包含字母、数字、`_`、`.`、`/`、`-`')
-  .refine(
-    (b) =>
-      !b.includes('..') &&
-      !b.includes('//') &&
-      !b.includes('/.') &&
-      !b.endsWith('/') &&
-      !b.endsWith('.') &&
-      !b.endsWith('.lock') &&
-      b !== 'HEAD',
-    { message: '不是合法的分支名' },
-  )
-  .meta({ description: '执行器创建的任务分支，例如 ustclhx/t-1' })
 
 /** 无进展阈值的默认分钟数（stuck-detection "无进展超时"）。 */
 export const DEFAULT_NO_PROGRESS_MINUTES = 15

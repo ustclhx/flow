@@ -801,11 +801,19 @@
                             "type": "string",
                             "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
                             "description": "给出 approve 结论的审查任务（merger 的 parent）"
+                          },
+                          "branch": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255,
+                            "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$",
+                            "description": "开出该 PR 的任务上报的任务分支（中枢取自投影）：pr-merge 要求 PR 的 headRefName 等于它且不是 fork PR"
                           }
                         },
                         "required": [
                           "pr",
-                          "review_task"
+                          "review_task",
+                          "branch"
                         ],
                         "additionalProperties": false,
                         "title": "Merge inputs"

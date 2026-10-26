@@ -389,12 +389,24 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       /** 本任务分支上的 PR（OPEN 或 MERGED）。gh 失败时不猜测：返回错误，由调用方上报。 */
       const checkPr = async (): Promise<PrCheck> => {
         if (!state) return { none: true }
-        const r = await gh.prList({ cwd: state.worktree_path, branch: state.branch })
+        const branch = state.branch
+        const r = await gh.prList({ cwd: state.worktree_path, branch })
         if (!r.ok) {
           logger?.warn(`查询分支 ${state.branch} 的 PR 失败`, r.error.message)
           return { error: r.error.message }
         }
-        const pr = r.data.find((p) => p.state === 'OPEN' || p.state === 'MERGED')
+        // 只认本仓库、head 正是任务分支的 PR：fork 上的同名分支开出的 PR 不是本任务的产物（D10）。
+        const own = r.data.filter((p) => !p.isCrossRepository && p.headRefName === branch)
+        if (own.length < r.data.length) {
+          logger?.warn(
+            `分支 ${branch} 查到不属于本任务的 PR（fork 或分支不符），已忽略`,
+            r.data
+              .filter((p) => !own.includes(p))
+              .map((p) => p.url)
+              .join(' '),
+          )
+        }
+        const pr = own.find((p) => p.state === 'OPEN' || p.state === 'MERGED')
         return pr ? { pr: { url: pr.url } } : { none: true }
       }
       const finishWithPr = (pr: { url: string }) => {

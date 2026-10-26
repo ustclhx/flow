@@ -121,6 +121,9 @@ export interface FakeGhState {
   autoEnabled: boolean
 }
 
+/** 开出 PR 的任务分支（fake PR 的 head 分支，merger 合同 inputs.merge.branch）。 */
+export const TASK_BRANCH = 'flow/t-dev'
+
 export function fakeGh(over: Partial<FakeGhState> = {}): { gh: GitHubCli; state: FakeGhState } {
   const state: FakeGhState = {
     pr: {
@@ -131,6 +134,8 @@ export function fakeGh(over: Partial<FakeGhState> = {}): { gh: GitHubCli; state:
       baseRefName: 'main',
       headRefOid: 'a'.repeat(40),
       mergeable: 'MERGEABLE',
+      isCrossRepository: false,
+      headRefName: TASK_BRANCH,
     },
     diff: 'diff --git a/feature.ts b/feature.ts\n+export const x = 1\n',
     checks: [{ name: 'ci', state: 'SUCCESS', bucket: 'pass', link: 'https://ci/1' }],

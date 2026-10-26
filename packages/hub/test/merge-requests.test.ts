@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import {
   defaultSupervisorConfig,
   EMPTY_INBOX_CONFIG,
+  fail,
+  git,
   type InboxItemView,
   type LedgerEvent,
   ok,
@@ -30,6 +32,7 @@ import {
   MIN_MERGER_TIMEOUT_S,
   type RoleLookup,
   rejectMergeRequest,
+  repoOriginFromGit,
   type SupervisorToolsDeps,
   WakeProjection,
 } from '../src/index.ts'
@@ -47,6 +50,7 @@ const OTHER = 'ws/xuanxue-saas'
 const PR = 'https://github.com/acme/demo/pull/7'
 const SHA_A = 'a'.repeat(40)
 const SHA_B = 'b'.repeat(40)
+const BRANCH = 'flow/t-dev'
 
 const cleanups: (() => void)[] = []
 afterEach(() => {
@@ -91,7 +95,11 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
     issueWakeToken: (g) => wakeTokens.issue(g),
   })
   const sup: SupervisorConfig = { ...defaultSupervisorConfig(), enabled: true, ...o.supervisor }
-  const config = { sup, repos: [repo] }
+  const config: {
+    sup: SupervisorConfig
+    repos: string[]
+    origin: { host: string; owner: string; repo: string } | null
+  } = { sup, repos: [repo], origin: { host: 'github.com', owner: 'acme', repo: 'demo' } }
   const workspaces = async (ref: string) =>
     ref === WS || ref === OTHER ? { ref, repos: config.repos, supervisor: config.sup } : null
   const roleList = { roles: [...ROLES] }
@@ -113,6 +121,8 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
     levels: () => EMPTY_INBOX_CONFIG,
     supervisorActive: async (ws) => ws === WS || ws === OTHER,
     mergeRoles: async () => ok(roleList.roles),
+    repoOrigin: async () =>
+      config.origin ? ok(config.origin) : fail('failure', 'repo_not_in_workspace', '没有 origin'),
     now: clock.now,
   }
   const inbox: InboxActionDeps = {
@@ -194,7 +204,13 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
   const task = (
     contract: Record<string, unknown>,
     result: Record<string, unknown> | null,
-    opts: { origin?: TaskOrigin; ws?: string; status?: 'done' | 'failed' | 'queued' } = {},
+    opts: {
+      origin?: TaskOrigin
+      ws?: string
+      status?: 'done' | 'failed' | 'queued'
+      /** codex-orca 任务上报的任务分支（task.branch_reported）。 */
+      branch?: string
+    } = {},
   ) => {
     clock.time += 1000
     const ws = opts.ws ?? WS
@@ -235,6 +251,9 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
               expires_at: '2026-10-27T09:00:00.000Z',
             },
           },
+          ...(opts.branch
+            ? [{ ...base, type: 'task.branch_reported', payload: { branch: opts.branch } }]
+            : []),
           status === 'done'
             ? { ...base, type: 'task.done', payload: { result: { node_id: 'nr', ...result } } }
             : {
@@ -256,6 +275,8 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       executor?: string
       pr?: string
       ws?: string
+      /** 任务分支；null 表示没有上报。 */
+      branch?: string | null
     } = {},
     status: 'done' | 'failed' = 'done',
   ) =>
@@ -269,6 +290,9 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       {
         ...(o.origin === undefined && 'origin' in o ? {} : { origin: o.origin ?? 'instruction' }),
         ...(o.ws ? { ws: o.ws } : {}),
+        ...((o.executor ?? 'codex-orca') === 'codex-orca' && o.branch !== null
+          ? { branch: o.branch ?? BRANCH }
+          : {}),
         status,
       },
     )
@@ -428,7 +452,11 @@ describe('合并请求的资格（D10 第 4 步）', () => {
     s.dev({ role: 'triage', executor: 'claude-sdk' }) // read
     s.dev({ role: 'ghost' }) // 角色未定义：无法确认有效类别
     s.task(
-      { role: 'merger', executor: 'pr-merge', inputs: { merge: { pr: PR, review_task: rv } } },
+      {
+        role: 'merger',
+        executor: 'pr-merge',
+        inputs: { merge: { pr: PR, review_task: rv, branch: BRANCH } },
+      },
       { summary: '合并', executor: 'pr-merge', artifacts: [{ kind: 'pr', ref: PR }] },
       { origin: 'instruction' },
     )
@@ -510,6 +538,65 @@ describe('合并请求的资格（D10 第 4 步）', () => {
     const r = await s.request(w.token, rv)
     expect(code(r)).toBe('merge_not_eligible')
     expect(reasonsOf(r).join()).toContain('不在 ws/product-res 登记的仓库内')
+  })
+})
+
+describe('PR 归属（fork、任务分支、登记仓库 origin）', () => {
+  test('开出 PR 的任务没有上报任务分支，或多个任务的分支不一致 → merge_not_eligible', async () => {
+    const s = await setup()
+    s.dev({ branch: null })
+    const rv = s.review()
+    const w = await s.wake('instruction')
+    const r = await s.request(w.token, rv)
+    expect(code(r)).toBe('merge_not_eligible')
+    expect(reasonsOf(r).join()).toContain('没有上报任务分支')
+    s.dev({ branch: 'flow/a' })
+    s.dev({ branch: 'flow/b' })
+    const r2 = await s.request(w.token, rv)
+    expect(reasonsOf(r2).join()).toContain('分支不一致')
+  })
+
+  test('PR 的 owner/repo 不是登记仓库 origin 的仓库，或 origin 读不到 → merge_not_eligible', async () => {
+    const s = await setup()
+    s.dev()
+    const rv = s.review()
+    const w = await s.wake('instruction')
+    s.config.origin = { host: 'github.com', owner: 'someone', repo: 'demo' }
+    expect(reasonsOf(await s.request(w.token, rv)).join()).toContain(
+      'PR 不属于登记仓库 github.com/someone/demo',
+    )
+    s.config.origin = null
+    expect(reasonsOf(await s.request(w.token, rv)).join()).toContain('无法确认登记仓库')
+    s.config.origin = { host: 'github.com', owner: 'ACME', repo: 'Demo' }
+    expect(code(await s.request(w.token, rv))).toBe('ok')
+  })
+
+  test('repoOriginFromGit：读真实仓库的 remote.origin.url；没有或有多个 origin 时失败', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-merge-git-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    const run = (args: string[]) => git(dir, args)
+    expect((await run(['init', '-q'])).code).toBe(0)
+    const lookup = repoOriginFromGit()
+    expect(code(await lookup(dir))).toBe('repo_not_in_workspace')
+    await run(['remote', 'add', 'origin', 'git@github.com:acme/demo.git'])
+    expect(await lookup(dir)).toEqual({
+      ok: true,
+      data: { host: 'github.com', owner: 'acme', repo: 'demo' },
+    })
+    await run(['config', '--add', 'remote.origin.url', 'https://github.com/evil/demo'])
+    expect(code(await lookup(dir))).toBe('repo_not_in_workspace')
+  })
+
+  test('prRelatedTasks 按 PR 号预筛：其他 PR（含 /pull/70 这类前缀相同的）不参与核对', async () => {
+    const s = await setup()
+    s.dev()
+    const other = s.review({ pr: 'https://github.com/acme/demo/pull/70', status: 'queued' })
+    const rv = s.review()
+    const ids = s.ledger.prRelatedTasks(WS, 7, 100).map((t) => t.id)
+    expect(ids).toContain(rv)
+    expect(ids).not.toContain(other)
+    const w = await s.wake('instruction')
+    expect(code(await s.request(w.token, rv))).toBe('ok')
   })
 })
 
@@ -598,7 +685,7 @@ describe('批准与驳回（只有 user）', () => {
         executor: 'pr-merge',
         parent: rv,
         cwd: s.repo,
-        inputs: { merge: { pr: PR, review_task: rv } },
+        inputs: { merge: { pr: PR, review_task: rv, branch: BRANCH } },
       },
     })
     expect(merger?.contract.timeout_s).toBeGreaterThanOrEqual(MIN_MERGER_TIMEOUT_S)
@@ -624,7 +711,7 @@ describe('批准与驳回（只有 user）', () => {
     expect(s.ledger.getInboxItem(item.id)?.state).toBe('open')
   })
 
-  test('驳回：写 merge_request.rejected（user）、条目关闭，唤醒调度器把它放进 instruction 队列；之后可重新请求', async () => {
+  test('驳回：写 merge_request.rejected（user）、条目关闭；唤醒 origin 取请求所在唤醒；同一审查不能再请求（rejected_before）', async () => {
     const s = await setup()
     const { item, rv } = await pendingItem(s)
     must(
@@ -647,11 +734,29 @@ describe('批准与驳回（只有 user）', () => {
     })
     expect(s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)).toBeNull()
     const p = new WakeProjection({ item: () => null })
-    for (const e of s.events('supervisor.wake_started')) p.apply(e)
+    for (const e of s.ledger.eventsAfter(0, {}, 10_000)) p.apply(e)
     expect(p.classify(rejected as LedgerEvent)).toBe('instruction')
-    // 驳回后同一审查可以再请求一次
+    // 驳回后同一审查不能再请求：必须重新审查
     const w = await s.wake('instruction')
-    expect(code(await s.request(w.token, rv))).toBe('ok')
+    const again = await s.request(w.token, rv)
+    expect(code(again)).toBe('merge_not_eligible')
+    expect(reasonsOf(again).join()).toContain('rejected_before')
+    // 重新审查（新的 approve）后可以再请求
+    const rv2 = s.review({ sha: SHA_B })
+    expect(code(await s.request(w.token, rv2))).toBe('ok')
+  })
+
+  test('autonomous 唤醒发起的请求被驳回：唤醒进 autonomous 队列（与 task_proposal.rejected 一致）', async () => {
+    const s = await setup()
+    s.dev()
+    const rv = s.review()
+    const w = await s.wake('autonomous')
+    const r = must(await s.request(w.token, rv))
+    if (!r.item) throw new Error('没有条目')
+    must(await actOnInbox(s.inbox, r.item.id, { action: 'reject' }, 'user'))
+    const p = new WakeProjection({ item: () => null })
+    for (const e of s.ledger.eventsAfter(0, {}, 10_000)) p.apply(e)
+    expect(p.classify(s.events('merge_request.rejected')[0] as LedgerEvent)).toBe('autonomous')
   })
 
   test('同一审查任务只能有一个未结束的合并请求', async () => {
@@ -675,7 +780,7 @@ describe('批准与驳回（只有 user）', () => {
     must(await actOnInbox(s.inbox, item.id, { action: 'reject' }, 'user'))
   })
 
-  test('merger 角色按有效类别 merge 查找且唯一：没有或有多个 → merge_not_eligible；补齐后重新批准完成，不能再驳回', async () => {
+  test('merger 角色按有效类别 merge 查找且唯一：没有或有多个 → merge_not_eligible，且不写批准事件；补齐后批准完成', async () => {
     const s = await setup()
     const { item, rv } = await pendingItem(s)
     s.roleList.roles = ROLES.filter((r) => r.name !== 'merger')
@@ -689,14 +794,38 @@ describe('批准与驳回（只有 user）', () => {
     expect(reasonsOf(await approveMergeRequest(s.tools, item, { via: 'cli' })).join()).toContain(
       '有多个有效类别为 merge 的角色',
     )
-    // 已经批准（批准事件已写入），merger 还没建出：不能驳回，只能重新批准或忽略
-    expect(code(await rejectMergeRequest(s.tools, item, { via: 'cli' }))).toBe('invalid_transition')
+    // 失败时不留下批准事件，条目保持打开
+    expect(s.events('merge_request.approved')).toHaveLength(0)
+    expect(s.ledger.getInboxItem(item.id)?.state).toBe('open')
     s.roleList.roles = [...ROLES]
     must(await approveMergeRequest(s.tools, item, { via: 'cli' }))
-    // 批准事件只写一次；merger 只有一个
     expect(s.events('merge_request.approved')).toHaveLength(1)
     expect(s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)?.created_by).toBe('hub')
     expect(s.ledger.getInboxItem(item.id)?.state).toBe('closed')
+    // 已批准（merger 已建出）：不能再驳回
+    expect(code(await rejectMergeRequest(s.tools, item, { via: 'cli' }))).toBe('invalid_transition')
+  })
+
+  test('批准、建 merger 与关闭条目在同一事务；条目已被关闭（并发的忽略或驳回）时整个事务回滚', async () => {
+    const s = await setup()
+    const { item, rv } = await pendingItem(s)
+    // 模拟：批准的核对通过后、写入前，条目被用户忽略
+    must(await actOnInbox(s.inbox, item.id, { action: 'dismiss' }, 'user'))
+    const stale = await approveMergeRequest(s.tools, item, { via: 'cli' })
+    expect(code(stale)).toBe('item_closed')
+    expect(s.events('merge_request.approved')).toHaveLength(0)
+    expect(s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)).toBeNull()
+    // 正常批准：三条事件 seq 连续，身份分别为 user、hub、user
+    const s2 = await setup()
+    const p2 = await pendingItem(s2)
+    must(await actOnInbox(s2.inbox, p2.item.id, { action: 'approve' }, 'user'))
+    const approved = s2.events('merge_request.approved')[0] as LedgerEvent
+    const after = s2.ledger.eventsAfter(approved.seq - 1, {}, 3)
+    expect(after.map((e) => [e.type, e.actor])).toEqual([
+      ['merge_request.approved', 'user'],
+      ['task.created', 'hub'],
+      ['inbox.item_closed', 'user'],
+    ])
   })
 
   test('幂等命中的 merger 不是本审查的（不可能经接口抢注，这里直接写账本模拟）→ conflict', async () => {
@@ -759,6 +888,19 @@ describe('自动合并与收尾', () => {
     const again = await s.request(w.token, rv)
     expect(code(again)).toBe('conflict')
     expect(s.events('merge_request.created')).toHaveLength(1)
+  })
+
+  test('auto_merge 只对 instruction 唤醒生效：autonomous 唤醒的请求只生成审批条目', async () => {
+    const s = await setup({ supervisor: { auto_merge: true } })
+    s.dev()
+    const rv = s.review()
+    const w = await s.wake('autonomous')
+    const r = must(await s.request(w.token, rv))
+    expect(r.mode).toBe('approval')
+    expect(r.task).toBeUndefined()
+    expect(r.item?.source).toBe('merge_request')
+    expect(s.events('merge_request.created')[0]?.payload).toMatchObject({ auto_merge: false })
+    expect(s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)).toBeNull()
   })
 
   test('merger 结束（done / failed(pr_not_open)）进 instruction 队列唤醒 supervisor', async () => {

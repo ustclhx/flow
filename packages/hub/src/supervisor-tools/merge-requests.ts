@@ -1,9 +1,12 @@
 import { randomBytes } from 'node:crypto'
+import { homedir as osHomedir } from 'node:os'
+import { join } from 'node:path'
 import {
   clipText,
   type EventOf,
   effectiveRoleKind,
   fail,
+  git,
   INBOX_BODY_MAX,
   INBOX_TITLE_MAX,
   type InboxItemView,
@@ -14,6 +17,9 @@ import {
   type MergeRequestRequest,
   normalizePrUrl,
   ok,
+  parseRemoteUrl,
+  prRepoOf,
+  type RepoRef,
   type Result,
   type ReviewResult,
   resolveInboxLevel,
@@ -21,6 +27,7 @@ import {
   reviewResult,
   type SupervisorConfig,
   samePrUrl,
+  sameRepo,
   type TaskContract,
   type TaskView,
   taskContract,
@@ -50,18 +57,26 @@ import type { SupervisorToolsDeps } from './common.ts'
  * - `review_task` 存在、同 workspace、角色在 `reviewer_roles`、执行器 claude-sdk、done、`inputs.review.pr`
  *   等于该 PR、`result.review.verdict = approve`（core `reviewApproves`），且是该 PR 最新一次可信审查
  *   （core `latestTrustedReview`）；
+ * - 开出 PR 的任务上报过任务分支（`task.branch_reported`，投影 `branch`）：merger 据此要求 PR 的 head 分支
+ *   等于它且不是 fork PR；多个候选任务的分支不一致时无法确定；
+ * - PR 链接的 host/owner/repo 等于 merger 所用登记仓库 `remote.origin.url` 的仓库（纵深核对，pr-merge 再核对一次）；
  * - 同一 PR 没有未结束的审查任务（任何带 `inputs.review` 指向该 PR 的未结束任务都算，比 pr-merge 更严）；
+ * - 该审查任务的合并请求没有被驳回过（`rejected_before`：驳回后必须重新审查）；
  * - merger 的工作目录能唯一确定为登记仓库（取开出 PR 的任务的 `inputs.repo` / `cwd` 所在的登记仓库；
  *   都没写时只有恰好登记一个仓库才行）；
  * - 有且只有一个有效类别为 merge、执行器为 pr-merge 的角色。
  *
- * 通过后：`supervisor.auto_merge: true` → 中枢以 hub 建 merger 任务（与 `merge_request.created` 同一事务）；
- * 否则写 `merge_request.created` 与 `source: merge_request` 的 Decide 条目。同一审查任务只能有一个未结束的
- * 合并请求，且最多建一个 merger（幂等键 `merge:<审查任务>`，保留前缀只限 hub）。
+ * 通过后：`supervisor.auto_merge: true` **且请求来自 instruction 唤醒** → 中枢以 hub 建 merger 任务（与
+ * `merge_request.created` 同一事务）；否则（含 autonomous 唤醒）写 `merge_request.created` 与 `source: merge_request`
+ * 的 Decide 条目。同一审查任务只能有一个未结束的合并请求，且最多建一个 merger（幂等键 `merge:<审查任务>`，
+ * 保留前缀只限 hub）。
  *
- * 用户批准（只有 user，经收件箱）：重新核对资格 → 写 `merge_request.approved`（actor user）→ 以 hub 建
- * merger（同上）→ 条目关闭。重试安全：已写过批准时不重复写，merger 幂等命中时核对它就是本审查的 merger。
- * 用户驳回：写 `merge_request.rejected`（actor user）并关闭条目，唤醒调度器据此唤醒 supervisor（instruction 队列）。
+ * 用户批准（只有 user，经收件箱）：重新核对资格、解析 merge 角色并构造完整的 merger 合同，任何一步失败都不写
+ * 事件；然后 `merge_request.approved`（actor user）、`task.created`（actor hub）与条目关闭（actor user）在**同一
+ * 事务**中写入——有批准事件就一定有 merger。用户驳回：写 `merge_request.rejected`（actor user）并关闭条目；
+ * 唤醒调度器按请求所在唤醒的 origin 唤醒 supervisor（与 `task_proposal.rejected` 一致）。
+ *
+ * supervisor 停用后，已生成的合并审批条目仍可由用户批准（批准是用户的决定，资格的其余各项照常核对）。
  *
  * 合并审批条目不轮询 PR 状态：批准时 PR 已关闭或已合并，merger 以 `pr_not_open` 结束（pr-merge 执行器核对）。
  */
@@ -91,9 +106,39 @@ export interface MergeEligibility {
   verdict: ReviewResult
   reviewed_sha: string
   dev: TaskView
+  /** 开出 PR 的任务上报的任务分支（投影 `branch`），写入 `inputs.merge.branch`。 */
+  branch: string
   /** merger 的工作目录：登记仓库（登记时的写法）。 */
   repo: string
 }
+
+/** 读取登记仓库 `remote.origin.url` 所指的仓库；读不到或无法解析时失败。 */
+export type RepoOriginLookup = (repoPath: string) => Promise<Result<RepoRef>>
+
+/** 基于本机 git：`git config --get-all remote.origin.url`，必须恰好一个值且能解析。 */
+export function repoOriginFromGit(opts: { homedir?: () => string } = {}): RepoOriginLookup {
+  return async (repoPath) => {
+    const home = opts.homedir ?? osHomedir
+    const dir =
+      repoPath === '~'
+        ? home()
+        : repoPath.startsWith('~/')
+          ? join(home(), repoPath.slice(2))
+          : repoPath
+    const r = await git(dir, ['config', '--get-all', 'remote.origin.url'])
+    const values = r.code === 0 ? r.stdout.split('\n').filter((l) => l !== '') : []
+    if (values.length !== 1 || values[0] === undefined) {
+      return fail('failure', 'repo_not_in_workspace', `${repoPath} 的 origin 应恰好有一个地址`)
+    }
+    const parsed = parseRemoteUrl(values[0])
+    return parsed
+      ? ok(parsed)
+      : fail('failure', 'repo_not_in_workspace', `无法从 origin 地址识别仓库：${values[0]}`)
+  }
+}
+
+/** 一次资格核对最多读取的同 PR 相关任务数；达到上限时无法确认，判不合格。 */
+export const PR_RELATED_LIMIT = 1000
 
 /** 全部角色（`config/roles/`），供按有效类别查找 merger 角色；缺省按 flow-home 读取。 */
 export function mergeRolesFromHome(home: string): () => Promise<Result<RoleForKind[]>> {
@@ -125,6 +170,15 @@ async function findDevTask(
       ],
     }
   }
+  const branches = new Set(hits.map((t) => t.branch))
+  if (branches.size !== 1) {
+    return {
+      ok: false,
+      reasons: [
+        `产出该 PR 的任务上报的分支不一致（${[...branches].join('、')}），无法确定 PR 的任务分支`,
+      ],
+    }
+  }
   const first = [...hits].sort((a, b) =>
     a.created_at === b.created_at ? (a.id < b.id ? -1 : 1) : a.created_at < b.created_at ? -1 : 1,
   )[0] as TaskView
@@ -142,6 +196,7 @@ async function devTaskProblem(deps: SupervisorToolsDeps, t: TaskView): Promise<s
   if (!found.ok || !found.data) return `角色 ${t.contract.role} 未定义或加载失败，无法确认有效类别`
   const kind = taskKind(found.data, t.contract, { actor: t.created_by })
   if (kind !== 'write') return `有效类别为 ${kind}，不是 write`
+  if (!t.branch) return '没有上报任务分支（task.branch_reported），无法核对 PR 的 head 分支'
   return null
 }
 
@@ -200,7 +255,11 @@ export async function checkMergeEligibility(
     return notEligible([`${ws.ref} 未启用 supervisor`])
   }
   const pr = normalizePrUrl(input.pr)
-  if (!pr) return notEligible([`PR 链接不合法：${input.pr}`])
+  const prNumber = Number(/\/pull\/(\d+)$/.exec(pr ?? '')?.[1])
+  const prRepo = pr ? prRepoOf(pr) : undefined
+  if (!pr || !prRepo || !Number.isSafeInteger(prNumber)) {
+    return notEligible([`PR 链接不合法：${input.pr}`])
+  }
   const sup: Pick<SupervisorConfig, 'reviewer_roles'> = ws.supervisor
   const reasons: string[] = []
 
@@ -222,8 +281,22 @@ export async function checkMergeEligibility(
     }
   }
 
+  // ---- 驳回过的审查不能再请求（必须重新审查） ----
+  if (
+    deps.ledger
+      .eventsByPayload('merge_request.rejected', 'review_task', input.review_task)
+      .some((e) => e.workspace === ws.ref)
+  ) {
+    reasons.push(
+      `rejected_before：审查任务 ${input.review_task} 的合并请求已被用户驳回，需要重新审查`,
+    )
+  }
+
   // ---- 最新一次可信审查、没有未结束的审查 ----
-  const related = deps.ledger.prRelatedTasks(ws.ref)
+  const related = deps.ledger.prRelatedTasks(ws.ref, prNumber, PR_RELATED_LIMIT)
+  if (related.length >= PR_RELATED_LIMIT) {
+    return notEligible([`同一 PR 号的相关任务超过 ${PR_RELATED_LIMIT} 个，无法确认`], { pr })
+  }
   const pendingReviews = related.filter(
     (t) =>
       !isTerminal(t) &&
@@ -255,7 +328,16 @@ export async function checkMergeEligibility(
   else {
     const r = await mergerRepo(deps, ws, dev.task)
     if (!r.ok) reasons.push(r.reason)
-    else repo = r.repo
+    else {
+      // 纵深核对：PR 必须属于该登记仓库的 origin（pr-merge 执行器合并前还会再核对一次）。
+      const origin = await (deps.repoOrigin ?? repoOriginFromGit(deps.repoCheck))(r.repo)
+      if (!origin.ok) reasons.push(`无法确认登记仓库 ${r.repo} 的 origin：${origin.error.message}`)
+      else if (!sameRepo(origin.data, prRepo)) {
+        reasons.push(
+          `PR 不属于登记仓库 ${origin.data.host}/${origin.data.owner}/${origin.data.repo}`,
+        )
+      } else repo = r.repo
+    }
   }
 
   if (
@@ -278,6 +360,7 @@ export async function checkMergeEligibility(
     verdict,
     reviewed_sha: reviewedSha,
     dev: dev.task,
+    branch: dev.task.branch as string,
     repo,
   })
 }
@@ -320,7 +403,7 @@ function mergerContract(e: MergeEligibility, role: string): TaskContract {
     executor: MERGE_EXECUTOR,
     parent: e.review.id,
     cwd: e.repo,
-    inputs: { merge: { pr: e.pr, review_task: e.review.id } },
+    inputs: { merge: { pr: e.pr, review_task: e.review.id, branch: e.branch } },
     timeout_s: Math.max(MERGER_TIMEOUT_S, MIN_MERGER_TIMEOUT_S),
     idempotency_key: mergeKey(e.review.id),
   })
@@ -332,27 +415,46 @@ function sameMerger(task: TaskView, e: MergeEligibility): string | null {
   if (task.workspace !== e.workspace.ref) return `属于 ${task.workspace}`
   if (task.contract.parent !== e.review.id) return 'parent 不是审查任务'
   const m = task.contract.inputs?.merge
-  if (m?.review_task !== e.review.id || !samePrUrl(m.pr, e.pr)) return 'inputs.merge 不一致'
-  if (task.origin !== 'instruction') return 'origin 不是 instruction'
+  if (m?.review_task !== e.review.id || !samePrUrl(m.pr, e.pr) || m.branch !== e.branch)
+    return 'inputs.merge 不一致'
+  if (task.origin !== e.dev.origin) return `origin 不是 ${e.dev.origin}`
   return null
 }
 
+/** merge 角色与 merger 合同：任何一步失败都在写入事件之前返回。 */
+async function prepareMerger(
+  deps: SupervisorToolsDeps,
+  e: MergeEligibility,
+): Promise<Result<TaskContract>> {
+  const role = await mergeRole(deps)
+  if (!role.ok) return role
+  try {
+    return ok(mergerContract(e, role.data.name))
+  } catch (err) {
+    return notEligible([`无法构造 merger 合同：${(err as Error).message}`])
+  }
+}
+
 /**
- * 以 hub 建 merger 任务。`withCreated` 在同一事务里写入（auto_merge 的 `merge_request.created`）。
- * `allowExisting`：幂等命中时（批准的重试）核对后返回已有任务；否则命中即 `conflict`。
+ * 以 hub 建 merger 任务。`withCreated`（hub）与 `coWrite`（其他身份，例如批准者 user）与 `task.created`
+ * 在同一事务里写入，只在真正新建时写。`allowExisting`：幂等命中时核对后返回已有任务；否则命中即 `conflict`。
  */
 async function createMerger(
   deps: SupervisorToolsDeps,
   e: MergeEligibility,
-  o: { allowExisting: boolean; withCreated?: (taskId: string) => EventInput[] },
-): Promise<Result<TaskView>> {
-  const role = await mergeRole(deps)
-  if (!role.ok) return role
-  const created = await deps.tasks.createTask(mergerContract(e, role.data.name), {
+  contract: TaskContract,
+  o: {
+    allowExisting: boolean
+    withCreated?: (taskId: string) => EventInput[]
+    coWrite?: { actor: string; before?: EventInput[]; after?: (taskId: string) => EventInput[] }
+  },
+): Promise<Result<{ task: TaskView; created: boolean }>> {
+  const created = await deps.tasks.createTask(contract, {
     actor: HUB_ACTOR,
     // origin 直接取自开出 PR 的任务（资格要求它是 instruction），不继承审查任务。
-    origin: 'instruction',
+    ...(e.dev.origin ? { origin: e.dev.origin } : {}),
     ...(o.withCreated ? { withCreated: o.withCreated } : {}),
+    ...(o.coWrite ? { coWrite: o.coWrite } : {}),
   })
   if (!created.ok) return created
   const task = created.data.task
@@ -369,7 +471,7 @@ async function createMerger(
       )
     }
   }
-  return ok(task)
+  return ok({ task, created: created.data.created })
 }
 
 /** 同一审查任务未结束的合并请求或已建出的 merger（D10：同一审查任务只能有一个）。 */
@@ -435,11 +537,14 @@ export async function requestMerge(
     reviewed_sha: e.reviewed_sha,
   }
 
-  if (e.workspace.supervisor.auto_merge) {
+  // auto_merge 只对 instruction 唤醒生效：autonomous 唤醒（巡检、回看）发起的请求一律交给用户批准。
+  if (e.workspace.supervisor.auto_merge && wake.origin === 'instruction') {
     // 先同步检查一次尽早拒绝；之后建任务的幂等键保证最多一个 merger（并发请求命中即 conflict）。
     const dup = existingRequest(deps, e.review.id)
     if (dup) return fail('failure', 'conflict', dup)
-    const task = await createMerger(deps, e, {
+    const contract = await prepareMerger(deps, e)
+    if (!contract.ok) return contract
+    const task = await createMerger(deps, e, contract.data, {
       allowExisting: false,
       withCreated: (taskId) => [
         {
@@ -450,7 +555,7 @@ export async function requestMerge(
       ],
     })
     if (!task.ok) return task
-    return ok({ request_id: requestId, mode: 'auto', task: task.data })
+    return ok({ request_id: requestId, mode: 'auto', task: task.data.task })
   }
 
   // 从这里到 append 都是同步代码：重复检查与写入之间不会与其他请求交错。
@@ -514,7 +619,6 @@ export async function approveMergeRequest(
   item: InboxItemView,
   opts: { via: InboxVia },
 ): Promise<Result<{ task_id: string }>> {
-  const { ledger } = deps
   const e = mergeRequestOf(deps, item)
   if (!e) return fail('failure', 'not_found', `合并请求 ${item.source_ref} 不存在`)
   const p = e.payload
@@ -530,47 +634,45 @@ export async function approveMergeRequest(
   if (elig.data.reviewed_sha !== p.reviewed_sha || elig.data.dev.id !== p.dev_task) {
     return notEligible(['审查结论或开出 PR 的任务与请求时不一致'])
   }
-  // 核对与写入之间有 await：写批准前同步地再确认条目仍未关闭（例如同时被驳回或忽略）。
-  if (ledger.getInboxItem(item.id)?.state === 'closed') {
-    return fail('failure', 'item_closed', '收件箱条目已关闭')
-  }
-  if (!approvalOf(deps, item.id)) {
-    const r = ledger.append(
-      {
-        type: 'merge_request.approved',
-        workspace,
-        payload: {
-          item_id: item.id,
-          pr: p.pr,
-          review_task: p.review_task,
-          approved_by: 'user',
-          via: opts.via,
+  // 写入任何事件之前：解析 merge 角色并构造完整的 merger 合同，失败即返回、不留下批准事件。
+  const contract = await prepareMerger(deps, elig.data)
+  if (!contract.ok) return contract
+  // 批准、建 merger、关闭条目在同一事务里：条目已被（并发的）驳回或忽略关闭时，关闭事件校验失败，
+  // 整个事务回滚，不会出现"已驳回却建了 merger"。
+  const task = await createMerger(deps, elig.data, contract.data, {
+    allowExisting: false,
+    coWrite: {
+      actor: 'user',
+      before: [
+        {
+          type: 'merge_request.approved',
+          workspace,
+          payload: {
+            item_id: item.id,
+            pr: p.pr,
+            review_task: p.review_task,
+            approved_by: 'user',
+            via: opts.via,
+          },
         },
-      },
-      { actor: 'user' },
-    )
-    if (!r.ok) return r
-  }
-  const task = await createMerger(deps, elig.data, { allowExisting: true })
-  if (!task.ok) return task
-  // 并发的重复批准已经关闭了条目：merger 是同一个，视为成功。
-  if (ledger.getInboxItem(item.id)?.state === 'closed') return ok({ task_id: task.data.id })
-  const closed = ledger.append(
-    {
-      type: 'inbox.item_closed',
-      workspace,
-      payload: {
-        item_id: item.id,
-        reason: 'acted',
-        note: `已批准，建了 merger 任务 ${task.data.id}`,
-        cause_actor: 'user',
-        via: opts.via,
-      },
+      ],
+      after: (taskId) => [
+        {
+          type: 'inbox.item_closed',
+          workspace,
+          payload: {
+            item_id: item.id,
+            reason: 'acted',
+            note: `已批准，建了 merger 任务 ${taskId}`,
+            cause_actor: 'user',
+            via: opts.via,
+          },
+        },
+      ],
     },
-    { actor: 'user' },
-  )
-  if (!closed.ok) return closed
-  return ok({ task_id: task.data.id })
+  })
+  if (!task.ok) return task
+  return ok({ task_id: task.data.task.id })
 }
 
 /** 用户驳回合并请求：写 `merge_request.rejected`（唤醒 supervisor）并关闭条目。 */
@@ -582,16 +684,13 @@ export async function rejectMergeRequest(
   const e = mergeRequestOf(deps, item)
   if (!e) return fail('failure', 'not_found', `合并请求 ${item.source_ref} 不存在`)
   const p = e.payload
-  // 已批准（merger 可能已建出或正在建）：不能再驳回，避免"驳回唤醒了 supervisor、merger 却照建"。
-  // 需要时取消 merger 任务；批准后 merger 一直建不出来时可以忽略条目。
+  // 批准与建 merger 在同一事务里：有批准事件就一定有 merger，不能再驳回（需要时取消 merger 任务）。
   if (approvalOf(deps, item.id)) {
     const built = deps.ledger.findTaskByIdempotencyKey(mergeKey(p.review_task))
     return fail(
       'failure',
       'invalid_transition',
-      built
-        ? `合并请求已批准并建出 merger 任务 ${built.id}，不能再驳回；需要时请取消该任务`
-        : '合并请求已批准，不能再驳回；请重新点"批准合并"完成剩余步骤，或忽略该条目',
+      `合并请求已批准${built ? `并建出 merger 任务 ${built.id}` : ''}，不能再驳回；需要时请取消该任务`,
       built ? { task_id: built.id } : undefined,
     )
   }

@@ -266,7 +266,17 @@ describe('gh 封装', () => {
   test('pr list：按分支查询并校验输出', async () => {
     const f = fakeCli('gh', {
       'pr list': [
-        { stdout: [{ url: 'https://github.com/o/r/pull/7', number: 7, state: 'OPEN' }] },
+        {
+          stdout: [
+            {
+              url: 'https://github.com/o/r/pull/7',
+              number: 7,
+              state: 'OPEN',
+              isCrossRepository: false,
+              headRefName: 'example-user/t-1',
+            },
+          ],
+        },
         { stdout: '', stderr: 'no git remotes found', code: 1 },
         { stdout: [{ url: 'u' }] },
       ],
@@ -275,7 +285,15 @@ describe('gh 封装', () => {
     const r = await gh.prList({ cwd: tmpdir(), branch: 'example-user/t-1' })
     expect(r).toEqual({
       ok: true,
-      data: [{ url: 'https://github.com/o/r/pull/7', number: 7, state: 'OPEN' }],
+      data: [
+        {
+          url: 'https://github.com/o/r/pull/7',
+          number: 7,
+          state: 'OPEN',
+          isCrossRepository: false,
+          headRefName: 'example-user/t-1',
+        },
+      ],
     })
     expect(f.calls()[0]).toEqual([
       'pr',
@@ -285,7 +303,7 @@ describe('gh 封装', () => {
       '--state',
       'all',
       '--json',
-      'url,number,state',
+      'url,number,state,isCrossRepository,headRefName',
     ])
     const failed = await gh.prList({ cwd: tmpdir(), branch: 'b' })
     expect(!failed.ok && failed.error.code).toBe('gh_failed')

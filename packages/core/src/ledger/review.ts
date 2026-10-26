@@ -128,3 +128,54 @@ export function reviewApproves(
     return { ok: false, reason: `审查结论为 ${trusted.review.verdict}` }
   return { ok: true, reviewed_sha: trusted.review.reviewed_sha }
 }
+
+/** 仓库标识（host/owner/repo）。 */
+export interface RepoRef {
+  host: string
+  owner: string
+  repo: string
+}
+
+const SEGMENT = /^[A-Za-z0-9_.-]+$/
+
+/**
+ * 解析 remote 地址：`https://host/owner/repo(.git)`、`ssh://[user@]host[:port]/owner/repo(.git)`、
+ * `[user@]host:owner/repo(.git)`。其他形式（本地路径、file://、多级路径、带凭证的 https）返回 undefined。
+ */
+export function parseRemoteUrl(url: string): RepoRef | undefined {
+  const trimmed = url.trim()
+  if (trimmed !== url || url === '') return undefined
+  const forms = [
+    /^https:\/\/([A-Za-z0-9.-]+(?::\d+)?)\/(.+)$/,
+    /^ssh:\/\/(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+)(?::\d+)?\/(.+)$/,
+    /^(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):(?!\/)(.+)$/,
+  ]
+  const m = forms.map((re) => re.exec(url)).find((x) => x !== null)
+  const host = m?.[1]
+  const path = m?.[2]
+  if (!host || !path) return undefined
+  // https 地址的端口保留在 host 中，与 PR 链接的 host（同样可能带端口）原样比较；ssh 的端口不属于仓库标识。
+  const parts = path
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '')
+    .split('/')
+  if (parts.length !== 2) return undefined
+  const [owner, repo] = parts
+  if (!owner || !repo || !SEGMENT.test(owner) || !SEGMENT.test(repo)) return undefined
+  if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return undefined
+  return { host: host.toLowerCase(), owner, repo }
+}
+
+/** 两个仓库是否为同一个（host、owner、repo 不区分大小写）。 */
+export function sameRepo(a: RepoRef, b: RepoRef): boolean {
+  const eq = (x: string, y: string) => x.toLowerCase() === y.toLowerCase()
+  return eq(a.host, b.host) && eq(a.owner, b.owner) && eq(a.repo, b.repo)
+}
+
+/** PR 链接所在的仓库（host 小写）；不是合法 PR 链接时返回 undefined。 */
+export function prRepoOf(url: string): RepoRef | undefined {
+  const norm = normalizePrUrl(url)
+  const m = norm ? /^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+$/.exec(norm) : null
+  if (!m?.[1] || !m[2] || !m[3]) return undefined
+  return { host: m[1], owner: m[2], repo: m[3] }
+}

@@ -180,6 +180,12 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 
 - 能读到 `state/hub.token` 的进程就是 user，它把任务挂到唤醒任务或 instruction 链上时，新任务会继承 instruction origin
   （与下文"信任边界"一致）。唤醒绑定 token 不由 `hub.token` 派生，读到 `hub.token` 也不能伪造 supervisor 身份。
+- 同理，能读到 `state/hub.token` 的 worker（例如沙箱外运行的 Codex）以 user 身份访问中枢，**也能批准 `merge_request`
+  合并条目**（或以 user 身份直接建 merge 类任务）。合并仍要经过中枢的资格核对与 pr-merge 执行器的全部条件核对
+  （审查 approve、head 未变、检查全部通过、不是 fork PR），但"用户本人批准"这一道关口对这类进程不成立。
+  把 `hub.token` 从执行器可读范围移走留到后续变更。
+- supervisor 停用（`supervisor.enabled: false`）后，已生成的合并审批条目仍可由用户批准：批准是用户的决定，
+  资格的其余各项照常重新核对；不想合并时请驳回或忽略这些条目。
 - 持有 user token 降级或绑定 token 的 AI 身份，可以把任务挂到**任意未结束**的 instruction 任务下（不限于它自己所在的任务）
   并继承 instruction origin；挂到唤醒任务下、或挂到已结束的任务下都不行。根治方案（要求调用方就是 parent 当前租约的执行者）
   记在 design 的 Open Questions。

@@ -41,6 +41,10 @@ export interface SupervisorToolsDeps {
    * 全部角色（合并请求按有效类别 merge 查找唯一的 merger 角色，D10）；缺省读 flow-home 的 `config/roles/`。
    */
   mergeRoles?: () => Promise<Result<RoleForKind[]>>
+  /**
+   * 登记仓库 `remote.origin.url` 所指的仓库（合并资格的纵深核对，D10）；缺省经本机 git 读取。
+   */
+  repoOrigin?: (repoPath: string) => Promise<Result<{ host: string; owner: string; repo: string }>>
   now: () => number
 }
 
