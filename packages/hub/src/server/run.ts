@@ -19,6 +19,7 @@ import {
   VERSION,
 } from '@flow/core'
 import { Hono } from 'hono'
+import { createBriefRoutes } from '../briefs/index.ts'
 import { buildStatusSnapshot } from '../channels/telegram/commands.ts'
 import { createTelegramLinks, type TelegramLinks } from '../channels/telegram/link.ts'
 import {
@@ -215,6 +216,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         { path: '/', app: status },
         { path: '/', app: createTaskRoutes({ ledger, tasks }) },
         { path: '/', app: createInboxRoutes(inboxDeps) },
+        { path: '/', app: createBriefRoutes({ ledger, home: options.home }) },
         { path: '/', app: createUiLoginCodeRoutes(uiSessions) },
         {
           path: '/',

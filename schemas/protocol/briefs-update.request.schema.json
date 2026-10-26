@@ -1,0 +1,28 @@
+{
+  "$id": "https://flow.local/schemas/protocol/briefs-update.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "text": {
+      "type": "string",
+      "description": "新的笔记全文（整体替换，最多 3000 字符）"
+    },
+    "base_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "读到的笔记哈希（ws_brief 的 note_hash）"
+    }
+  },
+  "required": [
+    "workspace",
+    "text",
+    "base_hash"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/briefs 请求体"
+}

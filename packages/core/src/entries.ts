@@ -9,11 +9,14 @@ import type { ValidationIssue } from './validation-issue.ts'
 /**
  * brain 条目的发现与读取。条目 = `brain/` 下的 `.md` 文件；标识 = 相对 brain 的路径去掉 `.md`。
  * 排除：顶层的 `AGENTS.md`、`index.md`、`log.md`，`journal/` 整个目录（按天的日志，不是条目），
+ * `briefs/` 整个目录（supervisor 的简报笔记，design D8：不是条目，不进校验、索引与搜索），
  * 以及所有隐藏文件和目录。
  */
 
 export const BRAIN_RESERVED_FILES = ['AGENTS.md', 'index.md', 'log.md'] as const
 export const BRAIN_JOURNAL_DIR = 'journal'
+/** supervisor 简报笔记目录：`briefs/<workspace id>.md`，只能经中枢的 `brief_update` 写入。 */
+export const BRAIN_BRIEFS_DIR = 'briefs'
 
 export interface BrainEntry {
   /** 条目标识，例如 `resources/domains/arcanumber.com`。 */
@@ -37,7 +40,8 @@ export async function listEntryFiles(brainDir: string): Promise<string[]> {
       if (item.name.startsWith('.')) continue
       const rel = relDir === '' ? item.name : `${relDir}/${item.name}`
       if (item.isDirectory()) {
-        if (relDir === '' && item.name === BRAIN_JOURNAL_DIR) continue
+        if (relDir === '' && (item.name === BRAIN_JOURNAL_DIR || item.name === BRAIN_BRIEFS_DIR))
+          continue
         await walk(join(dir, item.name), rel)
       } else if (item.isFile() && item.name.endsWith('.md')) {
         if (relDir === '' && (BRAIN_RESERVED_FILES as readonly string[]).includes(item.name))

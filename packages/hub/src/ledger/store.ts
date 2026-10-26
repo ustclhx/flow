@@ -130,6 +130,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   latestEvent(beforeSeq?: number, type?: EventType): LedgerEvent | null
   /** 某时刻（含）之后策略自动放行（auto、auto-report）的次数（Telegram `/status`）。 */
   countAutoDecisions(sinceIso: string): number
+  /** 某 workspace 中给定类型的最近 limit 条事件，按 seq 倒序（简报的代回复记录等）。 */
+  recentEvents(workspace: string, types: readonly EventType[], limit: number): LedgerEvent[]
   hasScheduleFire(ruleId: string, plannedAt: string): boolean
 
   getTask(id: string): TaskView | null
@@ -1018,6 +1020,16 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         type ?? null,
       )
       return row ? rowToEvent(row) : null
+    },
+    recentEvents(workspace, types, limit) {
+      if (types.length === 0 || limit <= 0) return []
+      return all<EventRow>(
+        `SELECT * FROM events WHERE workspace = ? AND type IN (${types.map(() => '?').join(', ')})
+           ORDER BY seq DESC LIMIT ?`,
+        workspace,
+        ...types,
+        limit,
+      ).map(rowToEvent)
     },
     countAutoDecisions(sinceIso) {
       return (

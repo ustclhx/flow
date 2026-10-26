@@ -1,4 +1,5 @@
 export { createHubApp, errorResponse, type HubDeps } from './app.ts'
+export * from './briefs/index.ts'
 export * from './channels/index.ts'
 export * from './inbox/index.ts'
 export * from './ledger/index.ts'

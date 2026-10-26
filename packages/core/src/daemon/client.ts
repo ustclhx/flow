@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { flowPaths } from '../home.ts'
 import type { InboxActRequest, inboxListQuery } from '../inbox/schema.ts'
 import {
+  type BriefUpdateRequest,
   type CancelTaskRequest,
   ENDPOINTS,
   type EndpointName,
@@ -139,6 +140,12 @@ export class HubClient {
   }
   replyTask(id: string, input: ReplyTaskRequest) {
     return this.request('tasks-reply', input, id)
+  }
+  updateBrief(input: BriefUpdateRequest) {
+    return this.request('briefs-update', input)
+  }
+  briefContext(workspace: string) {
+    return this.request('briefs-context', { workspace })
   }
   listInbox(input: z.input<typeof inboxListQuery> = {}) {
     return this.request('inbox-list', input)

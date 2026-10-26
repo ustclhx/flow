@@ -83,6 +83,13 @@ export const PROTOCOL_ERRORS = {
   role_not_allowed: { status: 403, kind: 'failure' },
   secret_suspected: { status: 400, kind: 'usage' },
   hub_busy: { status: 503, kind: 'retryable' },
+  /** base_hash 与当前内容不一致（brief_update）。 */
+  conflict: { status: 409, kind: 'failure' },
+  brief_too_long: { status: 422, kind: 'failure' },
+  /** 绑定了 workspace 的调用方写其他 workspace（design D6）。 */
+  workspace_mismatch: { status: 403, kind: 'failure' },
+  /** reply 唤醒只能调用 task_respond 与只读操作（design D15）。 */
+  reply_only_wake: { status: 403, kind: 'failure' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
 export type ProtocolErrorCode = keyof typeof PROTOCOL_ERRORS
@@ -715,6 +722,83 @@ export type AckReplyData = z.infer<typeof ackReplyData>
 // 端点清单（导出 JSON Schema 与文档用）
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 简报笔记（design D7、D8）
+// ---------------------------------------------------------------------------
+
+const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, '应为 64 位小写十六进制 sha256')
+
+export const briefUpdateRequest = z
+  .strictObject({
+    workspace: workspaceRef,
+    text: z.string().meta({ description: '新的笔记全文（整体替换，最多 3000 字符）' }),
+    base_hash: sha256Hex.meta({ description: '读到的笔记哈希（ws_brief 的 note_hash）' }),
+  })
+  .meta({ title: 'POST /v1/briefs 请求体' })
+export type BriefUpdateRequest = z.infer<typeof briefUpdateRequest>
+
+export const briefUpdateData = z
+  .object({
+    workspace: workspaceRef,
+    file: z.string(),
+    hash: sha256Hex.meta({ description: '写入后的笔记哈希' }),
+    sha: z.string().nullable().meta({ description: '提交 sha；内容未变时为 null' }),
+    changed: z.boolean(),
+  })
+  .meta({ title: 'POST /v1/briefs' })
+export type BriefUpdateData = z.infer<typeof briefUpdateData>
+
+export const briefContextQuery = z
+  .strictObject({ workspace: workspaceRef })
+  .meta({ title: 'GET /v1/briefs/context 查询参数' })
+
+/** 代回复记录中的决定：approve / deny / answer 来自 task.replied，escalate 来自 task.reply_escalated。 */
+export const BRIEF_REPLY_DECISIONS = ['approve', 'deny', 'answer', 'escalate'] as const
+
+export const briefContextData = z
+  .object({
+    workspace: workspaceRef,
+    tasks: z
+      .array(
+        z.object({
+          id: taskId,
+          role: z.string(),
+          status: taskStatus,
+          goal: z.string().meta({ description: '截断后的任务目标' }),
+          blocked_reason: blockedReason.nullable(),
+          updated_at: timestamp,
+        }),
+      )
+      .meta({ description: '未结束的任务，按更新时间倒序' }),
+    inbox: z
+      .array(
+        z.object({
+          short_id: z.string(),
+          level: z.string(),
+          source: z.string(),
+          title: z.string().meta({ description: '截断后的标题' }),
+          created_at: timestamp,
+        }),
+      )
+      .meta({ description: '本 workspace 未关闭的收件箱条目，按创建时间倒序' }),
+    replies: z
+      .array(
+        z.object({
+          task_id: taskId,
+          decision: z.enum(BRIEF_REPLY_DECISIONS),
+          reason: z.string().nullable().meta({ description: '转交原因（只有 escalate 有）' }),
+          at: timestamp,
+          text: z.string().nullable().meta({ description: '截断后的回答或拒绝理由' }),
+        }),
+      )
+      .meta({
+        description:
+          '代回复记录：中枢根据 task.replied（actor supervisor）与 task.reply_escalated 生成，按时间倒序',
+      }),
+  })
+  .meta({ title: 'GET /v1/briefs/context' })
+export type BriefContextData = z.infer<typeof briefContextData>
+
 export interface EndpointDef {
   method: 'GET' | 'POST'
   path: string
@@ -854,6 +938,20 @@ export const ENDPOINTS = {
     auth: true,
     request: completeLeaseRequest,
     response: completeLeaseData,
+  },
+  'briefs-update': {
+    method: 'POST',
+    path: '/v1/briefs',
+    auth: true,
+    request: briefUpdateRequest,
+    response: briefUpdateData,
+  },
+  'briefs-context': {
+    method: 'GET',
+    path: '/v1/briefs/context',
+    auth: true,
+    request: briefContextQuery,
+    response: briefContextData,
   },
   'leases-ack-reply': {
     method: 'POST',
