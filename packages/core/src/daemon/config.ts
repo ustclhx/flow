@@ -65,6 +65,18 @@ export const hubConfigSchema = z
       .regex(HHMM_RE, '应为 24 小时制 HH:MM')
       .default('03:30')
       .meta({ description: '每日备份的本地时间 HH:MM，默认 03:30' }),
+    ui: z
+      .strictObject({
+        public_url: z
+          .url({ protocol: /^https?$/ })
+          .optional()
+          .meta({
+            description:
+              'Web 页面（/ui）在手机上可访问的地址，例如经 Tailscale 暴露的 https://hub.example.ts.net；渠道消息据此附上条目链接。不配置时链接注明仅本机可用',
+          }),
+      })
+      .optional()
+      .meta({ description: 'Web 页面的对外设置' }),
   })
   .meta({ title: 'Flow hub config', description: 'config/hub.yaml' })
 export type HubConfig = z.infer<typeof hubConfigSchema>

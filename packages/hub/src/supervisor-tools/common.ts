@@ -34,8 +34,6 @@ export interface SupervisorToolsDeps {
   verifyPolicy: VerifyPolicyCheck
   /** 收件箱分级配置（热加载时返回新值）。 */
   levels: () => Pick<InboxConfig, 'levels'>
-  /** 条目在 Web 页面上的链接；中枢尚未监听时返回 null。 */
-  webUrl?: (itemId: string) => string | null
   /** workspace 是否启用了 supervisor（配置开启且存在 kind: supervisor 角色，D3）。 */
   supervisorActive: (workspace: string) => Promise<boolean>
   repoCheck?: RepoCheckOptions

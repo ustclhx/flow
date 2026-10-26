@@ -146,6 +146,13 @@ function renderItem(item: OutboundItem, scale: number, r: Redact): string {
     const snippet = clipTail(r(item.snippet), Math.floor(1500 * scale))
     if (snippet) lines.push(`<pre>${escapeHtml(snippet)}</pre>`)
   }
+  if (item.state === 'open' && item.web_url !== undefined) {
+    lines.push(
+      item.web_url
+        ? `<a href="${escapeHtml(item.web_url)}">在 Web 上修改目标后接受</a>`
+        : '<i>要修改目标后再接受：在电脑上运行 flow ui（Web 页面仅本机可用）</i>',
+    )
+  }
   if (item.state === 'open' && item.actions.includes('reply')) {
     lines.push(
       item.options

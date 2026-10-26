@@ -456,6 +456,9 @@ export const eventPayloads = {
     wake_task_id: taskId.meta({ description: '提交提案的唤醒任务' }),
     draft: taskContract,
     decision: taskProposalDecision.optional(),
+    decision_path: decisionPath.optional().meta({
+      description: '带决策时，接受后写入的决策条目路径（提交时由中枢确定，接受与重试都用它）',
+    }),
     reason: z.string().max(2000).optional().meta({ description: '提案理由' }),
   }),
   /** 用户接受任务提案：中枢以 user 身份建任务（origin instruction），有决策时写入 brain。 */

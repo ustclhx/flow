@@ -8,6 +8,7 @@ import {
   ok,
   type Result,
   rejectProposals,
+  SUPERVISOR_ACTOR,
 } from '@flow/core'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { TaskService } from '../ledger/tasks.ts'
@@ -44,6 +45,22 @@ export interface InboxActionDeps {
   mergeRequests?: MergeRequestHandler
 }
 
+/**
+ * supervisor 撤回提问（D11）：提问条目由 hub 代写（created_by 为 hub），但它是本 workspace 某次
+ * 唤醒发起的（`source_ref` 为该唤醒）。非 reply 唤醒可以忽略这类条目；任务提案的撤回只留给用户。
+ */
+function ownQuestion(
+  ledger: LedgerStore,
+  item: InboxItemView,
+  actor: string,
+  binding: { workspace: string; origin?: string } | undefined,
+): boolean {
+  if (actor !== SUPERVISOR_ACTOR || !binding || binding.origin === 'reply') return false
+  if (item.source !== 'supervisor' || item.workspace !== binding.workspace) return false
+  const wake = ledger.wakeOf(item.source_ref)
+  return wake !== null && wake.workspace === binding.workspace
+}
+
 /** 统一的条目操作入口，HTTP 与中枢内渠道共用；身份由调用方的认证边界提供。 */
 export async function actOnInbox(
   deps: InboxActionDeps,
@@ -51,7 +68,7 @@ export async function actOnInbox(
   input: InboxActRequest,
   actor: string,
   /** 唤醒绑定 token 认定的调用方（D6）：只能作用于绑定的 workspace。 */
-  binding?: { workspace: string },
+  binding?: { workspace: string; origin?: string },
 ): Promise<Result<{ item: InboxItemView }>> {
   const { ledger, tasks, home } = deps
   if (actor !== 'user' && input.action !== 'dismiss') {
@@ -65,7 +82,7 @@ export async function actOnInbox(
   if (binding && item.workspace !== binding.workspace) {
     return fail('failure', 'workspace_mismatch', '本次唤醒不能处理其他 workspace 的条目')
   }
-  if (actor !== 'user' && item.created_by !== actor) {
+  if (actor !== 'user' && item.created_by !== actor && !ownQuestion(ledger, item, actor, binding)) {
     return fail('failure', 'user_only', '只能忽略自己发起的条目')
   }
   if (item.state === 'closed') return fail('failure', 'item_closed', '收件箱条目已关闭')

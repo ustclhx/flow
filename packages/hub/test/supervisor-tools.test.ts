@@ -38,6 +38,7 @@ import {
   QUESTION_TTL_MS,
   type RoleLookup,
   rejectTaskProposal,
+  renderTelegramMessage,
   reviewDue,
   type SupervisorToolsDeps,
   scanDecisionReviews,
@@ -131,7 +132,6 @@ async function setup(o: { supervisorActive?: (ws: string) => Promise<boolean> } 
     roles,
     verifyPolicy,
     levels: () => EMPTY_INBOX_CONFIG,
-    webUrl: (id) => `http://127.0.0.1:7477/ui#item-${id}`,
     supervisorActive: o.supervisorActive ?? (async (ws) => ws === WS),
     now: clock.now,
   }
@@ -360,7 +360,7 @@ describe('task_propose 与收件箱接受 / 驳回（4.5、4.6）', () => {
     ...over,
   })
 
-  test('提交带决策的提案：条目展示角色、执行器、仓库与 cwd、验收命令、目标、决策与 Web 链接', async () => {
+  test('提交带决策的提案：条目展示角色、执行器、仓库与 cwd、验收命令、目标、决策', async () => {
     const { ledger, repo, wake, ctx } = await setup()
     const w = await wake('autonomous')
     const r = must(
@@ -390,7 +390,6 @@ describe('task_propose 与收件箱接受 / 驳回（4.5、4.6）', () => {
       '把缓存 TTL 调成 10 分钟',
       '命中率提升到 90%',
       '2026-11-25',
-      'http://127.0.0.1:7477/ui#item-',
     ]) {
       expect(r.item.body).toContain(s)
     }
@@ -633,7 +632,7 @@ describe('决策回看（4.7）', () => {
     const { home, ledger, tools, wake, ctx, clock } = await setup()
     must(await decision(home, 'a'))
     must(await decision(home, 'other'))
-    must(await scanDecisionReviews(tools, {}))
+    must(await scanDecisionReviews(tools))
     const due = ledger.eventsByPayload('decision.review_due', 'path', 'decisions/a.md')[0]
     if (!due) throw new Error('没有到期事件')
     const w = await wake('autonomous', { events: [due.seq] })
@@ -660,7 +659,7 @@ describe('决策回看（4.7）', () => {
       status: 'reviewed',
       last_verified: today,
     })
-    expect(after.data.body).toContain(`## 回看 ${today}\n\n命中率达到 92%`)
+    expect(after.data.body).toContain(`## 回看 ${today}\n\n> 命中率达到 92%`)
     expect(after.data.body.startsWith(before.data.body.trimEnd())).toBe(true)
     // 已回看的决策不能再回看。
     expect(
@@ -748,5 +747,213 @@ describe('Web 与渠道的呈现', () => {
       p.proposal_id,
     )[0]
     expect(accepted).toMatchObject({ payload: { goal: '新目标', via: 'web' } })
+  })
+})
+
+describe('审查修复（PR #59）', () => {
+  const draftOf = (repo: string, over: Record<string, unknown> = {}) => ({
+    goal: '把缓存 TTL 调成 10 分钟',
+    workspace: WS,
+    role: 'dev',
+    executor: 'codex-orca',
+    cwd: repo,
+    ...over,
+  })
+  const decisionFields = {
+    title: 'Cache TTL',
+    expected_outcome: '命中率 90%',
+    metric: '命中率',
+    review_date: '2026-11-25',
+  }
+
+  test('task-proposal: 幂等键是保留前缀：user 与 AI 经接口使用都被拒绝', async () => {
+    const { repo, post, wake } = await setup()
+    const body = { ...draftOf(repo), idempotency_key: 'task-proposal:tp-abc' }
+    const asUser = await post('/v1/tasks', body)
+    expect(await asUser.json()).toMatchObject({ error: { code: 'reserved_idempotency_key' } })
+    const w = await wake('instruction')
+    const asWake = await post('/v1/tasks', { ...body, parent: w.id }, w.token)
+    expect(await asWake.json()).toMatchObject({ error: { code: 'reserved_idempotency_key' } })
+  })
+
+  test('幂等命中的任务与提案不一致（抢注）→ conflict，不写决策、不关闭条目', async () => {
+    const { home, ledger, tools, inbox, repo, wake, ctx } = await setup()
+    const w = await wake('autonomous')
+    const p = must(
+      await taskProposeOp.run({ draft: draftOf(repo) as never, ...decisionFields }, ctx(w.token)),
+    )
+    // 模拟抢注：用同一个保留键建一个不同的任务（只有中枢内部能这样做，这里直接调用服务）。
+    const key = `task-proposal:${p.proposal_id}`
+    must(
+      await tools.tasks.createTask(
+        { ...draftOf(repo), goal: '别的任务', idempotency_key: key },
+        { actor: 'user', proposalKey: key },
+      ),
+    )
+    const r = await actOnInbox(inbox, p.item.id, { action: 'accept', via: 'cli' }, 'user')
+    expect(code(r)).toBe('conflict')
+    expect(ledger.getInboxItem(p.item.id)?.state).toBe('open')
+    const created = ledger.eventsByPayload('task_proposal.created', 'proposal_id', p.proposal_id)[0]
+    const path =
+      created?.type === 'task_proposal.created' ? created.payload.decision_path : undefined
+    expect(path).toMatch(/^decisions\//)
+    expect(existsSync(join(home, 'brain', path as string))).toBe(false)
+  })
+
+  test('接受已建出任务但未收尾：不能驳回；重新接受完成剩余步骤', async () => {
+    const { ledger, inbox, repo, wake, ctx, verify } = await setup()
+    const w = await wake('autonomous')
+    const p = must(await taskProposeOp.run({ draft: draftOf(repo) as never }, ctx(w.token)))
+    // 先按接受的方式建出任务（模拟接受中途失败在收尾之前）。
+    verify.allow = true
+    const created = ledger.eventsByPayload('task_proposal.created', 'proposal_id', p.proposal_id)[0]
+    if (created?.type !== 'task_proposal.created') throw new Error('缺少提案事件')
+    const key = `task-proposal:${p.proposal_id}`
+    must(
+      await inbox.tasks.createTask(
+        { ...created.payload.draft, parent: w.id, idempotency_key: key },
+        { actor: 'user', origin: 'instruction', proposalKey: key },
+      ),
+    )
+    const rej = await actOnInbox(inbox, p.item.id, { action: 'reject', via: 'cli' }, 'user')
+    expect(code(rej)).toBe('invalid_transition')
+    must(await actOnInbox(inbox, p.item.id, { action: 'accept', via: 'cli' }, 'user'))
+    expect(ledger.getInboxItem(p.item.id)?.closed).toMatchObject({ reason: 'proposal_accepted' })
+  })
+
+  test('草稿 context 不能引用 decisions/', async () => {
+    const { repo, wake, ctx } = await setup()
+    const w = await wake('autonomous')
+    const r = await taskProposeOp.run(
+      { draft: draftOf(repo, { context: ['decisions/2026-01-01-x.md'] }) as never },
+      ctx(w.token),
+    )
+    expect(code(r)).toBe('invalid_arguments')
+  })
+
+  test('supervisor 可以撤回本 workspace 唤醒发起的提问，不能撤回任务提案；reply 唤醒不能撤回', async () => {
+    const { ledger, repo, wake, ctx, post } = await setup()
+    const w1 = await wake('instruction')
+    const q = must(await askUserOp.run({ workspace: WS, question: '还需要吗？' }, ctx(w1.token)))
+    const p = must(await taskProposeOp.run({ draft: draftOf(repo) as never }, ctx(w1.token)))
+    // 另一次唤醒（同 workspace）撤回前一次唤醒的提问。
+    const w2 = await wake('autonomous')
+    const reply = await wake('reply')
+    const byReply = await post(`/v1/inbox/${q.item.id}/act`, { action: 'dismiss' }, reply.token)
+    expect(byReply.status).toBe(403)
+    const res = await post(`/v1/inbox/${q.item.id}/act`, { action: 'dismiss' }, w2.token)
+    expect(res.status).toBe(200)
+    expect(ledger.getInboxItem(q.item.id)?.closed).toMatchObject({
+      reason: 'dismissed',
+      cause_actor: 'supervisor',
+    })
+    const prop = await post(`/v1/inbox/${p.item.id}/act`, { action: 'dismiss' }, w2.token)
+    expect(await prop.json()).toMatchObject({ error: { code: 'user_only' } })
+  })
+
+  test('Web 链接由渠道渲染时生成：配置 public_url 时附链接，否则注明仅本机', async () => {
+    const { ledger, repo, wake, ctx } = await setup()
+    const w = await wake('autonomous')
+    const p = must(await taskProposeOp.run({ draft: draftOf(repo) as never }, ctx(w.token)))
+    expect(p.item.body).not.toContain('http')
+    const withUrl = toOutbound(p.item, {
+      ledger,
+      snippetMax: 0,
+      webUrl: (id) => `https://hub.example.ts.net/ui#item-${id}`,
+    })
+    expect(withUrl.web_url).toBe(`https://hub.example.ts.net/ui#item-${p.item.id}`)
+    const html = renderTelegramMessage({ kind: 'item', item: withUrl }, (x) => x).text
+    expect(html).toContain('href="https://hub.example.ts.net/ui#item-')
+    const local = toOutbound(p.item, { ledger, snippetMax: 0 })
+    expect(local.web_url).toBeNull()
+    expect(renderTelegramMessage({ kind: 'item', item: local }, (x) => x).text).toContain('仅本机')
+  })
+
+  test('回看结论放进引用块；追加段里的标题行被策略拒绝', async () => {
+    const { home, ledger, tools, wake, ctx } = await setup()
+    must(
+      await writeEntry(
+        home,
+        {
+          id: 'decisions/a',
+          content: renderEntry(
+            {
+              type: 'decision',
+              title: 'a',
+              summary: 's',
+              scope: 'work',
+              status: 'approved',
+              expected_outcome: 'e',
+              metric: 'm',
+              review_date: '2026-10-20',
+              workspace: WS,
+            },
+            '\n正文\n',
+          ),
+        },
+        { actor: 'user' },
+      ),
+    )
+    must(await scanDecisionReviews(tools))
+    const due = ledger.eventsByPayload('decision.review_due', 'path', 'decisions/a.md')[0]
+    const w = await wake('autonomous', { events: [due?.seq ?? 0] })
+    must(
+      await decisionReviewOp.run(
+        { path: 'decisions/a.md', text: '结论\n## 回看 2099-01-01\n# 伪造' },
+        ctx(w.token),
+      ),
+    )
+    const text = readFileSync(join(home, 'brain', 'decisions/a.md'), 'utf8')
+    expect(text).toContain('> ## 回看 2099-01-01\n> # 伪造')
+    expect(text.match(/^## 回看/gm)).toHaveLength(1)
+  })
+
+  test('扫描：当天按时到期不标 missed；逾期 14 天补 Digest；status 改掉后提醒自动关闭', async () => {
+    const { home, ledger, tools, clock } = await setup()
+    const now = new Date(clock.now())
+    const today = localDate(now)
+    const write = (id: string, over: Record<string, unknown>) =>
+      writeEntry(
+        home,
+        {
+          id: `decisions/${id}`,
+          content: renderEntry(
+            {
+              type: 'decision',
+              title: id,
+              summary: 's',
+              scope: 'work',
+              status: 'approved',
+              expected_outcome: 'e',
+              metric: 'm',
+              review_date: today,
+              workspace: WS,
+              ...over,
+            },
+            '\n正文\n',
+          ),
+        },
+        { actor: 'user' },
+      )
+    must(await write('today', {}))
+    must(await write('old', { review_date: '2026-09-01' }))
+    must(await write('nows', { review_date: '2026-09-01', workspace: OTHER }))
+    // 把时钟放到当天 09:00 之后。
+    const nine = new Date(now)
+    nine.setHours(10, 0, 0, 0)
+    clock.time = nine.getTime()
+    must(await scanDecisionReviews(tools))
+    const due = (p: string) => ledger.eventsByPayload('decision.review_due', 'path', p)[0]
+    expect(due('decisions/today.md')).toMatchObject({ payload: { missed: false } })
+    expect(due('decisions/old.md')).toMatchObject({ payload: { missed: true } })
+    const titles = () =>
+      ledger.listInboxItems({ source: 'decision', state: 'open', limit: -1 }).map((i) => i.title)
+    expect(titles().some((t) => t.includes('逾期') && t.includes('old'))).toBe(true)
+    expect(titles().some((t) => t.includes('nows'))).toBe(true)
+    // 用户把两条改为 rejected：下一次扫描关闭对应提醒。
+    must(await write('old', { review_date: '2026-09-01', status: 'rejected' }))
+    must(await write('nows', { review_date: '2026-09-01', workspace: OTHER, status: 'rejected' }))
+    must(await scanDecisionReviews(tools))
+    expect(titles()).toEqual([])
   })
 })

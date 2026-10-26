@@ -159,7 +159,12 @@ export async function reviewDecision(
         { status: fm.status },
       )
     }
-    const body = `${parsed.data.body.trimEnd()}\n\n## 回看 ${input.date}\n\n${text}\n`
+    // 结论整段放进引用块：任何以 # 开头的行都不会成为新的标题（不能伪造新的一节）。
+    const quoted = text
+      .split('\n')
+      .map((line) => (line.trim() === '' ? '>' : `> ${line}`))
+      .join('\n')
+    const body = `${parsed.data.body.trimEnd()}\n\n## 回看 ${input.date}\n\n${quoted}\n`
     const content = renderEntry({ ...fm, status: 'reviewed', last_verified: input.date }, body)
     const r = await commitWrite(
       home,

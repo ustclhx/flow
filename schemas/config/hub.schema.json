@@ -48,6 +48,18 @@
       "description": "每日备份的本地时间 HH:MM，默认 03:30",
       "type": "string",
       "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+    },
+    "ui": {
+      "description": "Web 页面的对外设置",
+      "type": "object",
+      "properties": {
+        "public_url": {
+          "description": "Web 页面（/ui）在手机上可访问的地址，例如经 Tailscale 暴露的 https://hub.example.ts.net；渠道消息据此附上条目链接。不配置时链接注明仅本机可用",
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,

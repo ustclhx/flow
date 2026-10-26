@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import {
   checkContractSecrets,
   clipText,
+  createTaskRequest,
   decisionPathFor,
   type EventOf,
   fail,
@@ -14,12 +16,14 @@ import {
   type InboxVia,
   localDate,
   ok,
+  parseFrontmatter,
   type Result,
   renderDecision,
   resolveInboxLevel,
   SUPERVISOR_ACTOR,
   type TaskContract,
   type TaskProposeRequest,
+  type TaskView,
   writeEntry,
 } from '@flow/core'
 import {
@@ -114,11 +118,10 @@ async function checkVerify(deps: SupervisorToolsDeps, draft: TaskContract): Prom
   )
 }
 
-/** 条目正文：角色、执行器、仓库与 cwd、验收命令、目标全文、理由、决策字段，以及 Web 链接。 */
+/** 条目正文：角色、执行器、仓库与 cwd、验收命令、目标全文、理由、决策字段（Web 链接由渠道渲染时生成）。 */
 function proposalBody(
   draft: TaskContract,
   input: Pick<TaskProposeRequest, 'reason' | 'decision'>,
-  web: string | null,
 ): string {
   const verify = draft.verify ?? []
   const repo = typeof draft.inputs?.repo === 'string' ? draft.inputs.repo : null
@@ -140,7 +143,6 @@ function proposalBody(
       `  回看日期：${d.review_date}`,
     )
   }
-  if (web) lines.push(`在 Web 上修改目标后接受：${web}`)
   lines.push('', '目标：', draft.goal)
   return lines.join('\n')
 }
@@ -177,6 +179,12 @@ export async function proposeTask(
       )
     }
   }
+  // 决策条目由中枢在接受时写入并引用：草稿不得自行引用 decisions/ 下的路径。
+  if ((raw.context ?? []).some((c) => /^(brain\/)?decisions\//i.test(c.trim()))) {
+    return fail('usage', 'invalid_arguments', '草稿的 context 不能引用 decisions/ 下的决策', [
+      { field: 'draft.context', code: 'invalid_field', message: '决策由中枢在接受时写入并引用' },
+    ])
+  }
   // parent 与幂等键由中枢在接受时填写，草稿中的值不采用。
   const { parent: _parent, idempotency_key: _key, ...rest } = raw
   const checked = await checkDraft(deps, rest)
@@ -188,6 +196,10 @@ export async function proposeTask(
   let proposalId = newProposalId()
   while (ledger.getInboxItem(taskProposalItemId(proposalId))) proposalId = newProposalId()
   const itemId = taskProposalItemId(proposalId)
+  // 决策路径在提交时确定并入账：接受与重试都取这里的值，不从合同中反查。
+  const decisionPath = input.decision
+    ? decisionPathFor(localDate(new Date(deps.now())), input.decision.title, proposalId)
+    : undefined
   const wakeTask = ledger.getTask(wake.task_id)
   if (!wakeTask || ['done', 'failed', 'cancelled'].includes(wakeTask.status)) {
     return fail('failure', 'scope_denied', '本次唤醒已结束，不能再提交提案')
@@ -202,6 +214,7 @@ export async function proposeTask(
           wake_task_id: wake.task_id,
           draft,
           ...(input.decision ? { decision: input.decision } : {}),
+          ...(decisionPath ? { decision_path: decisionPath } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
         },
       },
@@ -220,7 +233,7 @@ export async function proposeTask(
             `[${draft.workspace}] 任务提案（${draft.role}）：${oneLine(input.decision?.title ?? draft.goal, 150)}`,
             INBOX_TITLE_MAX,
           ),
-          body: clipText(proposalBody(draft, input, deps.webUrl?.(itemId) ?? null), INBOX_BODY_MAX),
+          body: clipText(proposalBody(draft, input), INBOX_BODY_MAX),
           actions: ['accept', 'reject'],
         },
       },
@@ -244,8 +257,21 @@ export function proposalOf(
   return e?.type === 'task_proposal.created' ? e : null
 }
 
-const decisionRef = (context: readonly string[] | undefined) =>
-  context?.find((c) => /^decisions\/[^/]+\.md$/.test(c))
+/** 已建任务是否就是接受这条提案建出的（幂等命中时核对，防止命中别的任务）。 */
+function sameAsProposal(
+  task: TaskView,
+  expected: TaskContract,
+  wakeTaskId: string,
+  goals: readonly string[],
+): string | null {
+  if (task.created_by !== 'user') return `创建者为 ${task.created_by}`
+  if (task.contract.parent !== wakeTaskId) return 'parent 不是提案所在的唤醒'
+  if (task.origin !== 'instruction') return 'origin 不是 instruction'
+  if (!goals.includes(task.contract.goal)) return '目标与提案不一致'
+  const { goal: _a, ...have } = task.contract
+  const { goal: _b, ...want } = expected
+  return isDeepStrictEqual(have, want) ? null : '合同与提案不一致'
+}
 
 /** 用户接受任务提案（actor 固定为 user，由收件箱入口核对）。 */
 export async function acceptTaskProposal(
@@ -268,29 +294,47 @@ export async function acceptTaskProposal(
     parent: p.wake_task_id,
     idempotency_key: key,
   }
-  let decisionPath: string | undefined
-  if (p.decision) {
-    const existing = ledger.findTaskByIdempotencyKey(key)
-    decisionPath =
-      decisionRef(existing?.contract.context) ??
-      decisionPathFor(localDate(new Date(deps.now())), p.decision.title, p.proposal_id)
-    draft.context = [...(draft.context ?? []).filter((c) => c !== decisionPath), decisionPath]
+  const decisionPath = p.decision ? p.decision_path : undefined
+  if (p.decision && !decisionPath) {
+    return fail('failure', 'internal_error', `任务提案 ${p.proposal_id} 缺少决策路径`)
   }
+  if (decisionPath) draft.context = [...(draft.context ?? []), decisionPath]
   const created = await deps.tasks.createTask(draft, {
     actor: 'user',
     origin: 'instruction',
     // D11：验收命令出自 supervisor 的草稿，按非 user 身份的规则判定，不借 user 身份跳过。
     enforceVerify: true,
+    proposalKey: key,
   })
   if (!created.ok) return created
   const task = created.data.task
+  if (!created.data.created) {
+    // 幂等命中（重试）：已有任务必须正是接受本提案建出的，否则拒绝，不在别人的任务上继续。
+    const expected = createTaskRequest.parse(draft)
+    const mismatch = sameAsProposal(task, expected, p.wake_task_id, [
+      p.draft.goal,
+      ...(goal ? [goal] : []),
+    ])
+    if (mismatch) {
+      return fail(
+        'failure',
+        'conflict',
+        `幂等键 ${key} 命中的任务 ${task.id} 不是接受本提案建出的（${mismatch}）`,
+        { task_id: task.id },
+      )
+    }
+  }
 
   if (p.decision && decisionPath) {
     const abs = join(flowPaths(deps.home).brain, decisionPath)
-    const ours = `task:${task.id}`
     if (existsSync(abs)) {
-      // 重试：已由本任务写过则跳过；被别的内容占用则拒绝（不覆盖）。
-      if (!readFileSync(abs, 'utf8').includes(ours)) {
+      // 重试：已由本任务写过则跳过；被别的内容占用则拒绝（不覆盖）。归属按 frontmatter 精确比较。
+      const fm = parseFrontmatter(readFileSync(abs, 'utf8'))
+      const ours =
+        fm.ok &&
+        fm.data.data.type === 'decision' &&
+        isDeepStrictEqual(fm.data.data.sources, [`task:${task.id}`])
+      if (!ours) {
         return fail('failure', 'base_conflict', `决策文件已存在且不属于本提案：${decisionPath}`)
       }
     } else {
@@ -355,6 +399,16 @@ export function rejectTaskProposal(
 ): Result<null> {
   const e = proposalOf(deps, item)
   if (!e) return fail('failure', 'not_found', `任务提案 ${item.source_ref} 不存在`)
+  // 接受已建出任务、但还没写完收尾（例如决策写入失败）：不能再驳回，请重新接受完成剩余步骤。
+  const built = deps.ledger.findTaskByIdempotencyKey(proposalKey(e.payload.proposal_id))
+  if (built) {
+    return fail(
+      'failure',
+      'invalid_transition',
+      `提案已据此建出任务 ${built.id}，不能再驳回；请重新点"接受"完成剩余步骤（需要时再取消该任务）`,
+      { task_id: built.id },
+    )
+  }
   // task_proposal.created 的信封必带 workspace。
   const workspace = e.workspace as string
   const note = opts.note ? clipText(opts.note, 2000) : undefined

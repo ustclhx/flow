@@ -27,16 +27,16 @@ export async function startSupervisorTools(
       o.logger?.warn('关闭过期提问失败', String(err))
     }
   }
-  const scan = async (missed = false) => {
+  const scan = async () => {
     try {
-      const r = await scanDecisionReviews(deps, { missed })
+      const r = await scanDecisionReviews(deps)
       if (!r.ok) o.logger?.warn('扫描到期决策失败', r.error)
     } catch (err) {
       o.logger?.warn('扫描到期决策失败', String(err))
     }
   }
   expire()
-  await scan(true)
+  await scan()
   const q = o.scheduler?.setInternalRules('questions:', [
     { id: 'questions:expire', cron: '0 * * * *', onFire: expire },
   ])
@@ -45,7 +45,7 @@ export async function startSupervisorTools(
     {
       id: 'decisions:review',
       cron: `0 ${DECISION_REVIEW_HOUR} * * *`,
-      onFire: (_planned, missed) => scan(missed),
+      onFire: () => scan(),
     },
   ])
   if (d && !d.ok) o.logger?.warn('决策回看规则设置失败', d.error)

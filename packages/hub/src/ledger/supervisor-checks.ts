@@ -29,8 +29,17 @@ export const HUB_ACTOR = 'hub'
 
 /** `supervisor:` 幂等键前缀只保留给 hub（D3，不区分大小写）。 */
 export const RESERVED_IDEMPOTENCY_PREFIX = 'supervisor:'
+/**
+ * `task-proposal:` 幂等键前缀只供中枢接受任务提案时使用（D11）：接受以 user 身份建任务，
+ * 由中枢内部调用方显式放行（`CreateTaskOptions.proposalKey`）；任何身份经 HTTP / MCP 使用都被拒绝，
+ * 防止抢先注册同名任务让接受命中别人的任务。
+ */
+export const TASK_PROPOSAL_IDEMPOTENCY_PREFIX = 'task-proposal:'
+const RESERVED_PREFIXES = [RESERVED_IDEMPOTENCY_PREFIX, TASK_PROPOSAL_IDEMPOTENCY_PREFIX]
 export const isReservedIdempotencyKey = (key: string) =>
-  key.toLowerCase().startsWith(RESERVED_IDEMPOTENCY_PREFIX)
+  RESERVED_PREFIXES.some((p) => key.toLowerCase().startsWith(p))
+export const isTaskProposalKey = (key: string) =>
+  key.toLowerCase().startsWith(TASK_PROPOSAL_IDEMPOTENCY_PREFIX)
 
 /**
  * 只有 hub 能在合同 `requires` 中声明的能力（不区分大小写）：唤醒任务的调度能力保留给中枢，

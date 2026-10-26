@@ -156,7 +156,7 @@ export const DECISION_REVIEW_HEADING_RE = /^## 回看 (\d{4}-\d{2}-\d{2})$/m
  * 决策回看的窄例外（design D11）：只允许
  * - 整体替换 `decisions/` 下一条 `status: approved` 的决策条目；
  * - frontmatter 只把 `status` 改为 `reviewed`、`last_verified` 改为回看日期，其他字段原样不变；
- * - 正文只在原正文末尾追加一节，且以 `## 回看 <同一日期>` 开头。
+ * - 正文只在原正文末尾追加一节，且以 `## 回看 <同一日期>` 开头，其后不再出现任何标题行。
  * 任一条不满足即拒绝（`decision_review_denied`）。
  */
 export function checkDecisionReview(
@@ -192,6 +192,14 @@ export function checkDecisionReview(
   const heading = DECISION_REVIEW_HEADING_RE.exec(added.split('\n')[0] ?? '')
   if (!heading || added.split('\n')[0] !== `## 回看 ${date}`) {
     return deny('追加的内容必须以 "## 回看 <回看日期>" 开头')
+  }
+  if (
+    added
+      .split('\n')
+      .slice(1)
+      .some((line) => /^ {0,3}#{1,6}(\s|$)/.test(line))
+  ) {
+    return deny('回看结论中不能出现 Markdown 标题行')
   }
   return null
 }

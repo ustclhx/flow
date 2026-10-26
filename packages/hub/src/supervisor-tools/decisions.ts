@@ -53,69 +53,131 @@ export interface DecisionScanResult {
   digest: string[]
 }
 
+/** 回看兜底：回看日期过了这么多天仍是 approved，补一条 Digest 提醒用户。 */
+export const REVIEW_OVERDUE_DAYS = 14
+
+const addDays = (date: string, days: number) => {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
 export async function scanDecisionReviews(
   deps: SupervisorToolsDeps,
-  opts: { missed?: boolean } = {},
 ): Promise<Result<DecisionScanResult>> {
   const read = await readBrainEntries(deps.home)
   if (!read.ok) return read
   const now = new Date(deps.now())
   const today = localDate(now)
   const out: DecisionScanResult = { due: [], digest: [] }
+  const approved = new Map<string, string>()
+
+  const remind = (
+    path: string,
+    rd: string,
+    ws: string | null,
+    fm: Record<string, unknown>,
+    title: string,
+    why: string,
+    id: string,
+  ) => {
+    if (deps.ledger.getInboxItem(id)) return
+    const r = deps.ledger.append(
+      {
+        type: 'inbox.item_created',
+        ...(ws ? { workspace: ws } : {}),
+        payload: {
+          item_id: id,
+          level: resolveInboxLevel(deps.levels(), { source: 'decision', workspace: ws }),
+          source: 'decision',
+          source_ref: clipText(path, 256),
+          title: clipText(`${ws ? `[${ws}] ` : ''}${title}`, INBOX_TITLE_MAX),
+          body: clipText(
+            [
+              `决策 brain/${path} 的回看日期 ${rd} 已到。`,
+              `预期效果：${String(fm.expected_outcome ?? '')}`,
+              `衡量指标：${String(fm.metric ?? '')}`,
+              why,
+            ].join('\n'),
+            INBOX_BODY_MAX,
+          ),
+        },
+      } satisfies EventInput,
+      { actor: 'hub' },
+    )
+    if (r.ok) out.digest.push(path)
+  }
+
   for (const e of read.data.entries) {
     const fm = e.frontmatter
     if (fm.type !== 'decision' || fm.status !== 'approved') continue
     const rd = fm.review_date
-    if (typeof rd !== 'string' || !reviewDue(rd, now)) continue
     const path = `${e.id}.md`
+    if (typeof rd !== 'string') continue
+    approved.set(path, rd)
+    if (!reviewDue(rd, now)) continue
     const ws = typeof fm.workspace === 'string' ? fm.workspace : null
     const valid = decisionPathSchema.safeParse(path).success
+    const title = oneLine(typeof fm.title === 'string' ? fm.title : e.id, 150)
     if (ws && valid && (await deps.supervisorActive(ws))) {
       const done = deps.ledger
         .eventsByPayload('decision.review_due', 'path', path)
         .some((ev) => ev.type === 'decision.review_due' && ev.payload.review_date === rd)
-      if (done) continue
-      const r = deps.ledger.append(
-        {
-          type: 'decision.review_due',
-          workspace: ws,
-          payload: { path, review_date: rd, missed: opts.missed === true || rd < today },
-        },
-        { actor: 'hub' },
-      )
-      if (r.ok) out.due.push(path)
+      if (!done) {
+        const r = deps.ledger.append(
+          {
+            type: 'decision.review_due',
+            workspace: ws,
+            // 只有回看日期早于今天才算补发；当天按时（或启动时）到期的不标 missed。
+            payload: { path, review_date: rd, missed: rd < today },
+          },
+          { actor: 'hub' },
+        )
+        if (r.ok) out.due.push(path)
+      }
+      // 兜底：supervisor 迟迟没有回看（例如唤醒失败），过期 14 天后提醒用户。
+      if (addDays(rd, REVIEW_OVERDUE_DAYS) <= today) {
+        remind(
+          path,
+          rd,
+          ws,
+          fm,
+          `决策回看已逾期：${title}`,
+          `回看日期已过 ${REVIEW_OVERDUE_DAYS} 天，决策仍为 approved：supervisor 未完成回看，请检查或自行回看。`,
+          decisionItemId(`${path}#overdue`, rd),
+        )
+      }
       continue
     }
-    const id = decisionItemId(path, rd)
-    if (deps.ledger.getInboxItem(id)) continue
-    const title = typeof fm.title === 'string' ? fm.title : e.id
-    const draft: EventInput = {
-      type: 'inbox.item_created',
-      ...(ws ? { workspace: ws } : {}),
-      payload: {
-        item_id: id,
-        level: resolveInboxLevel(deps.levels(), { source: 'decision', workspace: ws }),
-        source: 'decision',
-        source_ref: clipText(path, 256),
-        title: clipText(
-          `${ws ? `[${ws}] ` : ''}决策到期回看：${oneLine(title, 150)}`,
-          INBOX_TITLE_MAX,
-        ),
-        body: clipText(
-          [
-            `决策 brain/${path} 的回看日期 ${rd} 已到。`,
-            `预期效果：${String(fm.expected_outcome ?? '')}`,
-            `衡量指标：${String(fm.metric ?? '')}`,
-            ws
-              ? `${ws} 未启用 supervisor，请自行回看，并把决策的 status 改为 reviewed。`
-              : '该决策没有 workspace，请自行回看，并把决策的 status 改为 reviewed。',
-          ].join('\n'),
-          INBOX_BODY_MAX,
-        ),
+    remind(
+      path,
+      rd,
+      ws,
+      fm,
+      `决策到期回看：${title}`,
+      ws
+        ? `${ws} 未启用 supervisor，请自行回看，并把决策的 status 改为 reviewed。`
+        : '该决策没有 workspace，请自行回看，并把决策的 status 改为 reviewed。',
+      decisionItemId(path, rd),
+    )
+  }
+
+  // 用户已手动改了决策（status 不再是 approved、换了回看日期或删除）：关闭对应的提醒条目。
+  for (const item of deps.ledger.listInboxItems({ source: 'decision', state: 'open', limit: -1 })) {
+    const rd = approved.get(item.source_ref)
+    const current =
+      rd !== undefined &&
+      (item.id === decisionItemId(item.source_ref, rd) ||
+        item.id === decisionItemId(`${item.source_ref}#overdue`, rd))
+    if (current) continue
+    deps.ledger.append(
+      {
+        type: 'inbox.item_closed',
+        ...(item.workspace ? { workspace: item.workspace } : {}),
+        payload: { item_id: item.id, reason: 'acted', note: '决策已不是待回看状态' },
       },
-    }
-    const r = deps.ledger.append(draft, { actor: 'hub' })
-    if (r.ok) out.digest.push(path)
+      { actor: 'hub' },
+    )
   }
   return ok(out)
 }

@@ -47,6 +47,7 @@ describe('checkDecisionReview', () => {
     ['改动原正文', reviewed({}, '\n改写的正文\n\n## 回看 2026-10-26\n\n结论\n')],
     ['回看标题日期与 last_verified 不一致', reviewed({}, '\n正文\n\n## 回看 2026-10-01\n\n结论\n')],
     ['追加的不是回看一节', reviewed({}, '\n正文\n\n## 其他\n\n结论\n')],
+    ['追加段里有标题行', reviewed({}, '\n正文\n\n## 回看 2026-10-26\n\n结论\n## 伪造的一节\n')],
   ])('%s → 拒绝', (_name, content) => {
     expect(checkDecisionReview(change(content), before)?.ok).toBe(false)
   })
@@ -105,6 +106,6 @@ describe('决策条目', () => {
     const text = readFileSync(join(home, 'brain', 'decisions/2026-10-26-x.md'), 'utf8')
     expect(text).toContain('status: reviewed')
     expect(text).toContain('last_verified: 2026-11-25')
-    expect(text).toContain('## 回看 2026-11-25\n\n达到预期\n')
+    expect(text).toContain('## 回看 2026-11-25\n\n> 达到预期\n')
   })
 })
