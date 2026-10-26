@@ -406,6 +406,45 @@ describe('task.reply_delegated 的不变量', () => {
 })
 
 describe('task.reply_escalated', () => {
+  test('actor 按 reason 区分：user_replied / user_dismissed 只接受 user，其他只接受 hub', async () => {
+    const { store, newTask } = await setup()
+    const t = await newTask()
+    startTask(store, t.id)
+    const b = block(store, t.id)
+    must(delegate(store, t.id, { block_seq: b.seq }))
+    const write = (reason: string, actor: string) =>
+      store.append(
+        {
+          task_id: t.id,
+          workspace: WS,
+          type: 'task.reply_escalated',
+          payload: { reason, block_seq: b.seq },
+        } as EventInput,
+        { actor },
+      )
+    expect(code(write('timeout', 'user'))).toBe('actor_mismatch')
+    expect(code(write('supervisor', 'user'))).toBe('actor_mismatch')
+    expect(code(write('user_replied', 'hub'))).toBe('actor_mismatch')
+    expect(code(write('user_dismissed', 'hub'))).toBe('actor_mismatch')
+    expect(code(write('user_replied', 'supervisor'))).toBe('actor_mismatch')
+    must(write('user_replied', 'user'))
+    // 用户忽略：另一次卡住上由 user 写 user_dismissed
+    must(store.append(drafts(t.id)['task.unblocked'], node))
+    const b2 = block(store, t.id)
+    must(delegate(store, t.id, { block_seq: b2.seq }))
+    must(
+      store.append(
+        {
+          task_id: t.id,
+          workspace: WS,
+          type: 'task.reply_escalated',
+          payload: { reason: 'user_dismissed', block_seq: b2.seq },
+        },
+        { actor: 'user' },
+      ),
+    )
+  })
+
   test('必须有当前这次卡住上未结束的委托；actor 必须是 hub', async () => {
     const { store, newTask } = await setup()
     const t = await newTask()

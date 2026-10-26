@@ -399,7 +399,9 @@ function rowToNode(r: NodeRow): NodeView {
 /**
  * 新事件的写入身份白名单（store 层兜底；路由层另有 user-only 等检查）：
  * - 用户的决定：指令、放行、接受 / 驳回提案、批准合并只接受 user；
- * - 中枢内部：唤醒、提案登记、决策回看、代回复委托与转交只接受 hub；
+ * - 中枢内部：唤醒、提案登记、决策回看、代回复委托只接受 hub；
+ * - `task.reply_escalated` 按 reason 区分（见 `ESCALATION_BY_USER`）：user_replied、user_dismissed
+ *   在用户回复或忽略的同一次 append 中写入，只接受 user；其他原因只接受 hub；
  * - `supervisor.answered`（D11）由收件箱回复路由写入：路由以 user 身份直接写，
  *   或由中枢（hub）代为写入，取实际调用方，两者都接受。
  */
@@ -414,8 +416,10 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'task_proposal.created': ['hub'],
   'decision.review_due': ['hub'],
   'task.reply_delegated': ['hub'],
-  'task.reply_escalated': ['hub'],
 }
+
+/** 由用户操作结束委托的转交原因：与用户的 task_reply / 忽略同一次 append 写入，actor 为 user。 */
+const ESCALATION_BY_USER: ReadonlySet<string> = new Set(['user_replied', 'user_dismissed'])
 
 const invalidEvent = (message: string, details?: unknown) =>
   fail('failure', 'invalid_event', message, details)
@@ -709,6 +713,16 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       case 'task.reply_delegated':
         return validateDelegation(draft)
       case 'task.reply_escalated': {
+        // 身份按 reason 区分：user_replied / user_dismissed 只接受 user，其他原因只接受 hub。
+        const expected = ESCALATION_BY_USER.has(draft.payload.reason) ? 'user' : 'hub'
+        if (draft.actor !== expected) {
+          return fail(
+            'failure',
+            'actor_mismatch',
+            `reason 为 ${draft.payload.reason} 的 task.reply_escalated 只接受 ${expected} 身份写入（实际为 ${draft.actor}）`,
+            { type: draft.type, actor: draft.actor, reason: draft.payload.reason },
+          )
+        }
         // 只能结束当前这次卡住上仍有效的委托（未被转交过）。
         const last = lastBlocked(draft.task_id)
         if (!last || last.seq !== draft.payload.block_seq) {

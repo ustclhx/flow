@@ -276,7 +276,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - 任务从这次卡住直接进入新的卡住（`superseded`），旧委托失效，新卡住重新判定；
 - 用户忽略该条目（`user_dismissed`）。
 
-用户回复：在用户 `task_reply` 的同一次追加里写 `task.reply_escalated{reason: user_replied}` 结束委托，之后 supervisor 的 `task_respond` 返回 `stale_block`。**在 supervisor 的回复写入之前，用户的回复优先**；supervisor 的回复已写入但尚未送达时，用户再回复按现有语义得到 `reply_pending`。转交与 `task_respond` 并发时，以 store 事务的先后为准，后到者得到 `stale_block`。
+用户回复：在用户 `task_reply` 的同一次追加里写 `task.reply_escalated{reason: user_replied}` 结束委托（用户忽略条目同理写 `user_dismissed`）。这两种原因的事件 actor 为 user，store 只接受 user 写入；其他原因（`supervisor`、`timeout`、`wake_*`、`superseded`）由中枢写入，只接受 hub。委托结束后，之后 supervisor 的 `task_respond` 返回 `stale_block`。**在 supervisor 的回复写入之前，用户的回复优先**；supervisor 的回复已写入但尚未送达时，用户再回复按现有语义得到 `reply_pending`。转交与 `task_respond` 并发时，以 store 事务的先后为准，后到者得到 `stale_block`。
 
 备选：用确定性规则直接 `auto` 放行这些命令。保留为用户自己的选项（策略本来就支持），但它无法处理 `question`，也无法结合任务目标判断"这个请求是否合理"。
 
