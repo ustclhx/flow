@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse } from 'yaml'
@@ -49,17 +49,33 @@ function check(
   return decide(rules, request, context)
 }
 
+// 任务 worktree、指向它的符号链接，以及另一个目录（命令 cwd 不一致的反例）。
+const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'flow-policy-supervisor-')))
+const WORKTREE = join(ROOT, 'worktree')
+const OTHER = join(ROOT, 'other')
+const LINK = join(ROOT, 'link')
+mkdirSync(WORKTREE)
+mkdirSync(OTHER)
+symlinkSync(WORKTREE, LINK)
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+const realpath = (path: string) => realpathSync(path)
+const location = { commandCwd: WORKTREE, taskWorktree: WORKTREE, realpath }
+
 const pushInput = {
   remotes: ['origin'],
   taskBranch: BRANCH,
   defaultBranch: 'main',
   pushEnvOk: true,
+  ...location,
 }
 const pushContext: PolicyContext = {
   remotes: ['origin'],
   task_branch: BRANCH,
   default_branch: 'main',
   push_env_ok: true,
+  command_cwd: WORKTREE,
+  task_worktree: WORKTREE,
+  realpath,
 }
 
 describe('档位 supervisor 与合并次序', () => {
@@ -238,7 +254,11 @@ describe('parsePushTarget 与 push_to: task_branch', () => {
     ['git push origin "ustclhx/t-1"', 'unsafe_characters'],
     ['git push origin ustclhx/t-*', 'unsafe_characters'],
     ['git push origin ustclhx/t-1 # x', 'unsafe_characters'],
-    ['git push origin ustclhx/t-1​', 'unsafe_characters'],
+    ['git push origin ustclhx/t-1\u200b', 'unsafe_characters'],
+    ['git push origin\u00a0ustclhx/t-1', 'unsafe_characters'],
+    ['git push origin ustclhx/t-1\u2000-f', 'unsafe_characters'],
+    ['git push origin ustclhx/t-1\u3000--force', 'unsafe_characters'],
+    ['git push origin ustclhx/t-1\t-q', 'unsafe_characters'],
     ['git pull origin ustclhx/t-1', 'not_git_push'],
     ['git push origin ustclhx/../main', 'invalid_refspec'],
     ['git push origin a:b:c', 'invalid_refspec'],
@@ -280,6 +300,27 @@ describe('parsePushTarget 与 push_to: task_branch', () => {
     expect(pushToTaskBranch({ ...pushInput, command, remotes: [] }).ok).toBe(false)
   })
 
+  test('命令 cwd 必须是任务 worktree（realpath 相同），缺失即不满足', () => {
+    const command = 'git push origin ustclhx/t-1'
+    expect(pushToTaskBranch({ ...pushInput, command, commandCwd: LINK })).toEqual({ ok: true })
+    expect(pushToTaskBranch({ ...pushInput, command, commandCwd: OTHER })).toEqual({
+      ok: false,
+      reason: 'cwd_not_task_worktree',
+    })
+    for (const missing of [
+      { commandCwd: undefined },
+      { taskWorktree: undefined },
+      { realpath: undefined },
+      { commandCwd: 'worktree' },
+      { commandCwd: join(ROOT, 'missing') },
+    ]) {
+      expect(pushToTaskBranch({ ...pushInput, command, ...missing })).toEqual({
+        ok: false,
+        reason: 'cwd_unverified',
+      })
+    }
+  })
+
   test('parsePushTarget 返回 remote 与目标分支', () => {
     expect(parsePushTarget('git push -u origin feat/x:refs/heads/feat/y')).toEqual({
       ok: true,
@@ -318,27 +359,22 @@ describe('parsePushTarget 与 push_to: task_branch', () => {
       delete context[key]
       expect(check(pushRule, 'CodexCommand', command, context).level).toBe('user')
     }
+    for (const key of ['command_cwd', 'task_worktree', 'realpath'] as const) {
+      const context = { ...pushContext }
+      delete context[key]
+      expect(check(pushRule, 'CodexCommand', command, context).level).toBe('user')
+    }
   })
 })
 
 describe('gh_scope: workspace_repo', () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-gh-scope-')))
-  const cwd = join(root, 'repo')
-  mkdirSync(join(cwd, 'docs'), { recursive: true })
-  writeFileSync(join(cwd, 'body.md'), 'x')
-  writeFileSync(join(cwd, 'docs', 'pr.md'), 'x')
-  writeFileSync(join(root, 'secret.yml'), 'x')
-  symlinkSync(join(root, 'secret.yml'), join(cwd, 'link.md'))
-  afterAll(() => rmSync(root, { recursive: true, force: true }))
-  const input = { ghEnvOk: true, cwd, realpath: (p: string) => realpathSync(p) }
+  const input = { ghEnvOk: true, taskBranch: BRANCH, ...location }
 
   test.each([
     ['gh pr create --fill'],
-    ['gh pr create --title "feat: 新功能 -> v2" --body "修复 #12；见 [文档](x)"'],
+    ['gh pr create --title "feat: x -> v2" --body "fix #12; see [doc](x)"'],
     ["gh pr create -t 'x' -b 'a $b' --base main --head ustclhx/t-1 --draft"],
-    ['gh pr create --body-file body.md'],
-    ['gh pr create -F docs/pr.md'],
-    [`gh pr create --body-file=${cwd}/body.md`],
+    ['gh pr create --head=ustclhx/t-1 --fill'],
     ['gh pr view'],
     ['gh pr view 12 --json title,body'],
     ['gh pr view ustclhx/t-1 --comments'],
@@ -350,13 +386,19 @@ describe('gh_scope: workspace_repo', () => {
 
   test.each([
     ['gh pr create --body-file ~/.config/gh/hosts.yml', 'unsafe_characters'],
-    ["gh pr create --body-file '~/.config/gh/hosts.yml'", 'body_file_outside_cwd'],
-    ['gh pr create --body-file ../secret.yml', 'body_file_outside_cwd'],
-    [`gh pr create -F ${root}/secret.yml`, 'body_file_outside_cwd'],
-    ['gh pr create -F link.md', 'body_file_outside_cwd'],
-    ['gh pr create -F missing.md', 'body_file_unverifiable'],
-    ['gh pr create -F -', 'body_file_outside_cwd'],
-    ['gh pr create -F', 'missing_value'],
+    ["gh pr create --body-file '~/.config/gh/hosts.yml'", 'body_file_not_allowed'],
+    ['gh pr create --body-file body.md', 'body_file_not_allowed'],
+    ['gh pr create --body-file=body.md', 'body_file_not_allowed'],
+    ['gh pr create -F body.md', 'body_file_not_allowed'],
+    ['gh pr create -F -', 'body_file_not_allowed'],
+    ['gh pr create -F', 'body_file_not_allowed'],
+    ['gh pr create -t x -F a\u00a0-d', 'unsafe_characters'],
+    ['gh pr view 1\u3000--web', 'unsafe_characters'],
+    ['gh pr view 1\u2000-R\u2000o/r', 'unsafe_characters'],
+    ['gh pr create --title "\u65b0\u529f\u80fd" --fill', 'unsafe_characters'],
+    ['gh pr create\t--fill', 'unsafe_characters'],
+    ['gh pr create --body "a\nb"', 'unsafe_characters'],
+    ['gh pr create -T bug.md --fill', 'unknown_option'],
     ['gh pr create -R other/repo --fill', 'repo_flag'],
     ['gh pr create --repo other/repo --fill', 'repo_flag'],
     ['gh pr create --repo=other/repo --fill', 'repo_flag'],
@@ -380,6 +422,8 @@ describe('gh_scope: workspace_repo', () => {
     ['gh pr create --web', 'unknown_option'],
     ['gh pr create -tx', 'unknown_option'],
     ['gh pr create --head other:branch', 'foreign_head'],
+    ['gh pr create --head ustclhx/t-2 --fill', 'foreign_head'],
+    ['gh pr create -H main --fill', 'foreign_head'],
     ['gh pr create extra', 'unexpected_argument'],
     ['gh pr view https://github.com/other/repo/pull/1', 'foreign_selector'],
     ['gh pr diff 1 2', 'unexpected_argument'],
@@ -391,34 +435,105 @@ describe('gh_scope: workspace_repo', () => {
     expect(ghScopeWorkspaceRepo({ ...input, command })).toEqual({ ok: false, reason })
   })
 
-  test('gh_env_ok 缺失、cwd 或 realpath 缺失', () => {
-    expect(ghScopeWorkspaceRepo({ command: 'gh pr view 1', cwd }).ok).toBe(false)
-    expect(ghScopeWorkspaceRepo({ command: 'gh pr view 1', ghEnvOk: false }).ok).toBe(false)
-    expect(ghScopeWorkspaceRepo({ command: 'gh pr view 1', ghEnvOk: true })).toEqual({ ok: true })
-    expect(ghScopeWorkspaceRepo({ command: 'gh pr create -F body.md', ghEnvOk: true }).ok).toBe(
-      false,
-    )
+  test('--head 在任务分支缺失时不满足；不带 --head 不需要任务分支', () => {
+    const noBranch = { ...input, taskBranch: undefined }
+    expect(ghScopeWorkspaceRepo({ ...noBranch, command: 'gh pr create --fill' })).toEqual({
+      ok: true,
+    })
     expect(
-      ghScopeWorkspaceRepo({ command: 'gh pr create -F body.md', ghEnvOk: true, cwd }).ok,
-    ).toBe(false)
+      ghScopeWorkspaceRepo({ ...noBranch, command: 'gh pr create --head ustclhx/t-1 --fill' }),
+    ).toEqual({ ok: false, reason: 'foreign_head' })
   })
 
-  test('hasShellHazard：单引号内按字面', () => {
+  test('gh_env_ok 缺失、命令 cwd 不是任务 worktree', () => {
+    const command = 'gh pr view 1'
+    expect(ghScopeWorkspaceRepo({ ...input, command, ghEnvOk: undefined }).ok).toBe(false)
+    expect(ghScopeWorkspaceRepo({ ...input, command, ghEnvOk: false }).ok).toBe(false)
+    expect(ghScopeWorkspaceRepo({ command, ghEnvOk: true })).toEqual({
+      ok: false,
+      reason: 'cwd_unverified',
+    })
+    expect(ghScopeWorkspaceRepo({ ...input, command, commandCwd: OTHER })).toEqual({
+      ok: false,
+      reason: 'cwd_not_task_worktree',
+    })
+    expect(ghScopeWorkspaceRepo({ ...input, command, commandCwd: LINK })).toEqual({ ok: true })
+  })
+
+  test('hasShellHazard：单引号内按字面，只接受空格与可见 ASCII', () => {
     expect(hasShellHazard("echo '$x > y'")).toBe(false)
     expect(hasShellHazard('echo "$x"')).toBe(true)
     expect(hasShellHazard('echo ~/x')).toBe(true)
+    expect(hasShellHazard("echo 'a\u00a0b'")).toBe(true)
   })
 
   test('用凭证文件做 PR 正文：交给用户', () => {
     const rules = indexed(rule(WS, 'pr.create', 'supervisor', { gh_scope: 'workspace_repo' }))
-    const context: PolicyContext = { gh_env_ok: true, cwd, realpath: (p) => realpathSync(p) }
+    const context: PolicyContext = {
+      gh_env_ok: true,
+      command_cwd: WORKTREE,
+      task_worktree: WORKTREE,
+      realpath,
+    }
     expect(check(rules, 'CodexCommand', 'gh pr create --fill', context).level).toBe('supervisor')
-    expect(
-      check(rules, 'CodexCommand', 'gh pr create --body-file ~/.config/gh/hosts.yml', context)
-        .level,
-    ).toBe('user')
-    expect(check(rules, 'CodexCommand', 'gh pr create -R o/r --fill', context).level).toBe('user')
-    expect(check(rules, 'CodexCommand', 'gh pr create --fill', { cwd }).level).toBe('user')
+    for (const command of [
+      'gh pr create --body-file ~/.config/gh/hosts.yml',
+      "gh pr create --body-file '/Users/x/.config/gh/hosts.yml'",
+      'gh pr create -R o/r --fill',
+    ]) {
+      expect(check(rules, 'CodexCommand', command, context).level).toBe('user')
+    }
+    expect(check(rules, 'CodexCommand', 'gh pr create --fill', { gh_env_ok: true }).level).toBe(
+      'user',
+    )
+  })
+})
+
+describe('command_prefix 严格匹配（所有档位）', () => {
+  const autoRules = indexed(rule(WS, 'tool:Bash', 'auto', { command_prefix: 'pnpm test' }))
+  test.each([
+    ['sudo pnpm test'],
+    ['./pnpm test'],
+    ['/tmp/x/pnpm test'],
+    ['/usr/local/bin/pnpm test'],
+    ['env -i PATH=/tmp/x pnpm test'],
+    ['env pnpm test'],
+    ['NODE_OPTIONS="--require ./x.js" pnpm test'],
+    ['FOO=1 pnpm test'],
+    ['xargs pnpm test'],
+    ['exec -a foo pnpm test'],
+    ['nohup pnpm test'],
+    ['timeout 5 pnpm test'],
+    ['command pnpm test'],
+    ['nice -n 1 pnpm test'],
+    ['time pnpm test'],
+    ['stdbuf -o0 pnpm test'],
+    ['pnpm\u00a0test'],
+    ['pnpm test\u3000--x'],
+    ['pnpm\ttest'],
+    ['pnpm test && sudo pnpm test'],
+  ])('auto 与 supervisor 都不命中：%s', (command) => {
+    expect(check(autoRules, 'Bash', command).level).not.toBe('auto')
+    const supervisorRules = indexed(
+      rule(WS, 'tool:CodexCommand', 'supervisor', { command_prefix: 'pnpm test' }),
+    )
+    expect(check(supervisorRules, 'CodexCommand', command).level).not.toBe('supervisor')
+  })
+
+  test.each([['pnpm test'], ['pnpm test --x'], ['"pnpm" test'], ['pnpm test && pnpm test -w']])(
+    '命中：%s',
+    (command) => {
+      expect(check(autoRules, 'Bash', command).level).toBe('auto')
+    },
+  )
+
+  test('动作识别仍消去包装：sudo git push 识别为 git.push', () => {
+    expect(classifyAction({ tool: 'Bash', command: 'sudo git push origin x' })).toContain(
+      'git.push',
+    )
+    expect(classifyAction({ tool: 'Bash', command: 'git\u00a0push origin x' })).toContain(
+      'shell.opaque',
+    )
   })
 })
 
@@ -430,14 +545,7 @@ describe('policies.yaml 模板的代回复白名单', () => {
     const parsed = parse(ruleLines.join('\n').replaceAll('ws/<id>', WS)) as unknown[]
     return indexed(...parsed.map((raw) => policyRuleSchema.parse(raw)))
   })()
-  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'flow-policy-template-')))
-  afterAll(() => rmSync(tmp, { recursive: true, force: true }))
-  const context: PolicyContext = {
-    ...pushContext,
-    gh_env_ok: true,
-    cwd: tmp,
-    realpath: (p) => realpathSync(p),
-  }
+  const context: PolicyContext = { ...pushContext, gh_env_ok: true }
 
   test('模板本身全部注释掉，取消注释后每条规则都合法', () => {
     expect(parse(POLICIES_YAML)).toBeNull()
@@ -471,6 +579,12 @@ describe('policies.yaml 模板的代回复白名单', () => {
     ['pnpm test | sh', 'user'],
     ['bash -c "pnpm test"', 'user'],
     ['pnpm test $(id)', 'user'],
+    ['sudo pnpm test', 'user'],
+    ['./pnpm test', 'user'],
+    ['NODE_OPTIONS=--require=./x.js pnpm test', 'user'],
+    ['env -i pnpm test', 'user'],
+    ['timeout 5 pnpm test', 'user'],
+    ['pnpm\u00a0test', 'user'],
     ['git status', 'user'],
   ])('%s → %s（Codex 与 Bash 一致）', (command, expected) => {
     expect(check(rules, 'CodexCommand', command, context).level).toBe(expected as PolicyLevel)

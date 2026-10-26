@@ -1155,7 +1155,7 @@
                                   "type": "object",
                                   "properties": {
                                     "command_prefix": {
-                                      "description": "按命令词匹配前缀；串联请求的每段命令都必须满足",
+                                      "description": "按原始命令词严格匹配前缀（不消去环境变量赋值、包装命令或执行文件路径，只接受空格与可见 ASCII）；串联请求的每段命令都必须满足",
                                       "type": "string",
                                       "minLength": 1
                                     },
@@ -1169,12 +1169,12 @@
                                       }
                                     },
                                     "push_to": {
-                                      "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），且节点上报 push_env_ok；任何不确定都不满足",
+                                      "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），节点上报 push_env_ok，命令在任务 worktree 中执行；任何不确定都不满足",
                                       "type": "string",
                                       "const": "task_branch"
                                     },
                                     "gh_scope": {
-                                      "description": "用于 gh pr create|view|diff：不带 -R/--repo、无环境变量前缀、节点上报 gh_env_ok，--body-file 只能在 cwd 内",
+                                      "description": "用于 gh pr create|view|diff：不带 -R/--repo 与 --body-file、无环境变量前缀、--head 只能是任务分支、节点上报 gh_env_ok，命令在任务 worktree 中执行",
                                       "type": "string",
                                       "const": "workspace_repo"
                                     }
@@ -1280,7 +1280,7 @@
                                         "type": "object",
                                         "properties": {
                                           "command_prefix": {
-                                            "description": "按命令词匹配前缀；串联请求的每段命令都必须满足",
+                                            "description": "按原始命令词严格匹配前缀（不消去环境变量赋值、包装命令或执行文件路径，只接受空格与可见 ASCII）；串联请求的每段命令都必须满足",
                                             "type": "string",
                                             "minLength": 1
                                           },
@@ -1294,12 +1294,12 @@
                                             }
                                           },
                                           "push_to": {
-                                            "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），且节点上报 push_env_ok；任何不确定都不满足",
+                                            "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），节点上报 push_env_ok，命令在任务 worktree 中执行；任何不确定都不满足",
                                             "type": "string",
                                             "const": "task_branch"
                                           },
                                           "gh_scope": {
-                                            "description": "用于 gh pr create|view|diff：不带 -R/--repo、无环境变量前缀、节点上报 gh_env_ok，--body-file 只能在 cwd 内",
+                                            "description": "用于 gh pr create|view|diff：不带 -R/--repo 与 --body-file、无环境变量前缀、--head 只能是任务分支、节点上报 gh_env_ok，命令在任务 worktree 中执行",
                                             "type": "string",
                                             "const": "workspace_repo"
                                           }

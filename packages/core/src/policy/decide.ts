@@ -1,12 +1,10 @@
 import { z } from 'zod'
 import {
-  commandWords,
   GUARDED_ACTIONS as GUARDED_ACTION_LIST,
-  hasCommandPrefix,
   isGuardedTool,
   normalizePolicyPath,
 } from './actions.ts'
-import { ghScopeWorkspaceRepo, pushToTaskBranch } from './conditions.ts'
+import { commandPrefixMatches, ghScopeWorkspaceRepo, pushToTaskBranch } from './conditions.ts'
 import {
   type IndexedPolicyRule,
   type PolicyRule,
@@ -53,8 +51,10 @@ export interface PolicyContext {
   push_env_ok?: boolean | undefined
   /** 节点随请求上报的 gh 仓库解析检查结果。 */
   gh_env_ok?: boolean | undefined
-  /** 任务工作目录的绝对路径。 */
-  cwd?: string | undefined
+  /** 节点上报的命令实际执行目录（绝对路径）。 */
+  command_cwd?: string | undefined
+  /** 投影中记录的任务 worktree（绝对路径）；两者 realpath 相同才可能满足 push_to / gh_scope。 */
+  task_worktree?: string | undefined
   /** 解析符号链接（路径不存在时抛错）；core 不访问文件系统，由调用方注入。 */
   realpath?: ((path: string) => string) | undefined
 }
@@ -124,11 +124,8 @@ function conditionsMatch(
   context: PolicyContext,
 ): boolean {
   if (rule.when?.command_prefix !== undefined) {
-    const prefixes = commandWords(rule.when.command_prefix)
-    const commands = commandWords(request.command ?? '')
-    const prefix = prefixes[0]
-    if (prefixes.length !== 1 || !prefix || commands.length === 0) return false
-    if (!commands.every((words) => hasCommandPrefix(words, prefix))) return false
+    if (request.command === undefined) return false
+    if (!commandPrefixMatches(request.command, rule.when.command_prefix)) return false
   }
   const patterns = rule.when?.paths
   if (patterns) {
@@ -149,6 +146,9 @@ function conditionsMatch(
       taskBranch: context.task_branch,
       defaultBranch: context.default_branch,
       pushEnvOk: context.push_env_ok,
+      commandCwd: context.command_cwd,
+      taskWorktree: context.task_worktree,
+      realpath: context.realpath,
     })
     if (!result.ok) return false
   }
@@ -157,7 +157,9 @@ function conditionsMatch(
     const result = ghScopeWorkspaceRepo({
       command: request.command,
       ghEnvOk: context.gh_env_ok,
-      cwd: context.cwd,
+      taskBranch: context.task_branch,
+      commandCwd: context.command_cwd,
+      taskWorktree: context.task_worktree,
       realpath: context.realpath,
     })
     if (!result.ok) return false

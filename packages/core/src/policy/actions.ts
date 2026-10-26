@@ -127,7 +127,8 @@ export function splitCommands(command: string): ParsedCommands {
       while (i < command.length && command[i] !== '\n') i++
       flushCommand()
     } else if (';&|()\n'.includes(char)) flushCommand()
-    else if (/\s/.test(char)) flushWord()
+    // 与 bash 一致只在空格与制表符处断词；NBSP、U+3000 等 Unicode 空白属于词的一部分。
+    else if (char === ' ' || char === '\t') flushWord()
     else {
       word += char
       started = true
@@ -322,6 +323,7 @@ const DYNAMIC_RE = /[*?[]|\$[A-Za-z_{(]|`|[<>]\(/
 const CONFIG_HINT_RE = /polic|\/config\/|flow-home/i
 /** 非打印字符（换行、回车、制表符之外的控制字符与格式字符）：显示内容与实际执行可能不一致。 */
 const UNPRINTABLE_RE = /[\p{Cc}\p{Cf}\u2028\u2029]/u
+const ODD_WHITESPACE_RE = /[^\S \t\n]/u
 const unprintable = (text: string) => UNPRINTABLE_RE.test(text.replace(/[\t\n\r]/g, ''))
 const LOOPBACK_RE = /(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]|::1):(\d+)/gi
 const SCRIPT_FILE_RE = /\.(?:[cm]?[jt]s|[jt]sx)$/
@@ -442,6 +444,8 @@ export function classifyAction(
     // 动态写法可能拼出策略或配置文件（polic*.yaml、${p}ies.yaml）：按不透明处理。
     if (DYNAMIC_RE.test(command) && (hintRe.test(command) || hintRe.test(folded))) markOpaque()
     if (unprintable(command)) markOpaque()
+    // 空格、制表符、换行之外的空白（NBSP、U+2000、U+3000、\r、\v……）：显示与 shell 分词可能不一致。
+    if (ODD_WHITESPACE_RE.test(command)) markOpaque()
     // 直接访问中枢（curl 127.0.0.1:7477/v1/…）绕过了 flow 工具的识别：按不透明处理。
     const loopbackPorts = [...folded.matchAll(LOOPBACK_RE)].map((m) => Number(m[1]))
     if (loopbackPorts.some((port) => ports.has(port))) markOpaque()

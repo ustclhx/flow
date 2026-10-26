@@ -90,21 +90,38 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 合并或汇总命中规则。没有具体动作时才按工具动作判定，例如 `ls` 可由 `tool:Bash` 的
 `auto` 规则放行。每个参与判定的动作分别按 workspace、角色、全局排序，同层精确 action
 优先，其余通配模式一律并列，最后
-取最保守档位。`when` 不增加具体程度：条件之间按且组合，命令前缀按归一后的词边界匹配，
+取最保守档位。`when` 不增加具体程度：条件之间按且组合，命令前缀按原始词严格匹配（见下文），
 串联请求的每段命令都须满足；每个请求路径须匹配至少一个模式。路径 `*` 不跨 `/`，
 `**` 跨目录，`?` 匹配单字符，其余字符按字面处理。缺少条件输入时不匹配该规则。
+
+### 命令前缀 `command_prefix`：严格匹配（行为变更）
+
+`when.command_prefix` 对所有档位都按**原始词**严格匹配（`commandPrefixMatches`）：不消去环境变量
+赋值、包装命令（`sudo`、`env`、`command`、`exec`、`nohup`、`timeout`、`nice`、`time`、`stdbuf`、
+`xargs`……）或执行文件路径，因此首词必须与前缀首词完全相同（`./pnpm`、`/usr/bin/git` 不命中）；
+命令与前缀只能含空格与可见 ASCII（制表符、换行、NBSP、U+3000 等不命中）；解析不确定时不命中；
+串联命令的每段都须满足。
+
+**行为变更**：此前前缀匹配先消去包装与赋值，`FOO=1 sudo /usr/bin/git push` 能命中 `git push`
+前缀。现在它不命中，请求落到其他规则或交给用户（只会更保守）。动作识别（`classifyAction`）仍然
+消去包装，保守识别敏感动作。分词只在空格与制表符处断词（与 bash 一致），命令中出现其他空白时
+`classifyAction` 按 `shell.opaque` 处理。
 
 ### 条件 `push_to` 与 `gh_scope`（`conditions.ts`，D15）
 
 两个条件让 supervisor 代为批准越出沙箱的推送与 gh 调用，采用**白名单**：只接受明确列出的写法，
 任何不确定都视为不满足（规则不命中）。判定需要的上下文由 `decide(rules, request, context)` 的第三个
 参数 `PolicyContext` 传入（`task_branch`、`default_branch`、`remotes`、`push_env_ok`、`gh_env_ok`、
-`cwd`、`realpath`）；字段缺失时条件不满足。core 不访问文件系统，`realpath` 由调用方注入。
+`command_cwd`、`task_worktree`、`realpath`）；字段缺失时条件不满足。core 不访问文件系统，
+`realpath` 由调用方注入。
+
+两个条件都要求**命令在任务 worktree 中执行**：`command_cwd`（节点上报的命令实际执行目录）与
+`task_worktree`（投影记录的任务 worktree）都存在、都是绝对路径，且 realpath 相同。
 
 `when.push_to: task_branch`（schema 只允许用于 `action: git.push`）由 `pushToTaskBranch` 判定，
 命令先经 `parsePushTarget` 解析。以下全部满足才满足：
 - 命令只含字母、数字、空格与 `._/:@=+-`：引号、`$`、glob、重定向、`~`、`;`、`&`、`|`、`#`、
-  换行与非 ASCII 字符一律不满足（分支名与 remote 名用不到它们）；
+  制表符、换行、Unicode 空白与非 ASCII 字符一律不满足；
 - 只有一段，第一个词就是 `git`（不带路径、没有环境变量赋值或 `env`、`sudo` 等包装），第二个词就是
   `push`（`-c`、`-C`、`--git-dir`、`--exec-path`、`--config-env` 等全局选项都不满足）；
 - 选项只能是 `-u`、`--set-upstream`、`-q`、`--quiet`、`-v`、`--verbose`、`--progress`、
@@ -114,28 +131,36 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 - 恰好一个 remote 加一个 refspec；remote 是名字（不是 URL 或路径），且在 `remotes` 中；
 - refspec 不以 `+` 或 `:` 开头，来源与目标都不是 `HEAD`、不含 `@`，是普通分支名；目标（去掉
   `refs/heads/`，无冒号时等于来源）等于 `task_branch`；
-- `task_branch` 存在且不等于 `default_branch`（缺默认分支即不满足）；`push_env_ok` 严格为 `true`。
+- `task_branch` 存在且不等于 `default_branch`（缺默认分支即不满足）；`push_env_ok` 严格为 `true`；
+- 命令在任务 worktree 中执行。
 
 `when.gh_scope: workspace_repo` 由 `ghScopeWorkspaceRepo` 判定：
 - `gh_env_ok` 严格为 `true`；
-- 没有 shell 元字符：引号外的 `` $ ` \ < > { } * ? [ ] ~ ; & | ( ) # ``、换行，双引号内的
-  `` $ ` \ ``，未闭合的引号，不可打印字符（单引号内按字面）；
+- 只含空格与可见 ASCII，且没有 shell 元字符：引号外的 `` $ ` \ < > { } * ? [ ] ~ ; & | ( ) # ``，
+  双引号内的 `` $ ` \ ``，未闭合的引号（单引号内按字面）；
 - 只有一段，第一个词就是 `gh`（没有 `GH_REPO`、`GH_HOST`、`GH_TOKEN` 等环境变量赋值或包装），
   第二、三个词是 `pr create`、`pr view` 或 `pr diff`；
-- 只带白名单选项（不含 `-R` / `--repo`、`--recover`、`--web`、`--editor` 等），`--head` 不含 `:`；
-  create 没有位置参数，view / diff 最多一个 PR 编号或分支名（不接受 URL）；
-- `--body-file` / `-F` 的文件解析符号链接后位于 `cwd`（同样 realpath）内；`-`、`~` 开头、
-  文件不存在或未提供 `cwd` / `realpath` 都不满足。
+- 只带白名单选项：不含 `-R` / `--repo`、`--recover`、`--web`、`--editor`、`--template`；
+  **不接受 `-F` / `--body-file`**（文件在核对与 gh 读取之间可能被替换，正文用 `--body` 或 `--fill`）；
+- `--head` 缺省或等于 `task_branch`（任务分支缺失时带 `--head` 不满足）；create 没有位置参数，
+  view / diff 最多一个 PR 编号或分支名（不接受 URL）；
+- 命令在任务 worktree 中执行。
 
-中枢 `policy/check` 从请求取 `push_env_ok`、`gh_env_ok`（只认 `true`），从合同取 `cwd`，`remotes`
-固定为 `origin`；任务分支（`task.branch_reported`）与默认分支接入前 `push_to` 永不满足。
+gh 在有 TTY 时可能提示推送分支：supervisor 批准 `pr create` 不等于批准推送，推送仍按 `git.push`
+单独判定。**不要写 `scope: *` 或通配 action 的 `supervisor` 规则**：受保护的工具与动作会被提升为
+`draft-approve`，其余请求则会被大面积委托，白名单应写成具体 scope 加精确 action。
+
+中枢 `policy/check` 从请求取 `push_env_ok`、`gh_env_ok`（只认 `true`；以后只接受 node actor 上报的
+值），`remotes` 暂时固定为 `origin`（以后从登记仓库取）。任务分支（`task.branch_reported`）、默认分支、
+`command_cwd` 与 `task_worktree` 接入前，`push_to` 与 `gh_scope` 恒不满足。
 推送环境（push 地址、`core.sshCommand`、`url.*.insteadOf`、`remote.*.push`、hook 等）与 gh 实际
 解析的仓库由节点检查，core 只判定命令文本。
 
 `flow init` 生成的 `config/policies.yaml` 带一组注释掉的模板：supervisor 角色的 `task.create`
-auto（scope 用角色名 `supervisor`，避免 workspace scope 顺带放行该 workspace 其他角色建任务），
-以及代回复白名单（`tool:CodexCommand` 与 `tool:Bash` 的 `pnpm check|test|lint` 前缀、带
-`gh_scope` 的 `pr.create` 与 `gh pr view|diff`、带 `push_to` 的 `git.push`）。
+auto（scope 用角色名 `supervisor`；workspace 由 D5 的 parent 与仓库检查约束，同一 workspace 的
+ws 级 `task.create` 规则会覆盖它），以及代回复白名单（`tool:CodexCommand` 与 `tool:Bash` 的
+`pnpm check|test|lint` 前缀、带 `gh_scope` 的 `pr.create` 与 `gh pr view|diff`、带 `push_to` 的
+`git.push`）。
 
 每个参与判定的动作都必须命中规则，否则该动作返回 `user`，最终取最保守的结果。
 只配置 workspace 的 `pr.merge: auto` 即可放行直接的 `gh pr merge`，无需另配工具规则；

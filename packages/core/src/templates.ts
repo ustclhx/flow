@@ -129,7 +129,9 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
 ## —— 卡住时代用户回复的白名单（D15）——
 ## level: supervisor 表示委托给本 workspace 的 supervisor 判断，不是直接放行；
 ## supervisor 拿不准时转交用户，超时或无法唤醒时同样转交用户。
-## 命令前缀按词边界匹配（pnpm test --x 命中、pnpm test:e2e 不命中），串联命令的每段都须满足同一前缀。
+## 只写具体 scope 加精确 action 的 supervisor 规则，不要写 scope: * 或通配 action 的 supervisor 规则。
+## 命令前缀严格按原始词匹配（pnpm test --x 命中；pnpm test:e2e、sudo pnpm test、./pnpm test、
+## FOO=1 pnpm test 都不命中），串联命令的每段都须满足同一前缀。
 # - scope: ws/<id>
 #   action: tool:CodexCommand
 #   level: supervisor
@@ -156,7 +158,8 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
 #   when: {command_prefix: pnpm lint}
 ##
 ## gh 只作用于本 workspace 的登记仓库：不带 -R/--repo、无环境变量前缀、节点核对 gh 解析出的仓库，
-## --body-file 只能指向工作目录内的文件。
+## 命令须在任务 worktree 中执行；不接受 --body-file / -F（正文用 --body 或 --fill），--head 只能是任务分支。
+## 注意：gh 在有 TTY 时可能提示推送分支，supervisor 批准 pr create 不等于批准推送。
 # - scope: ws/<id>
 #   action: pr.create
 #   level: supervisor

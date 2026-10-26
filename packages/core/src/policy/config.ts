@@ -28,18 +28,19 @@ export const policyRuleSchema = z
     when: z
       .strictObject({
         command_prefix: z.string().trim().min(1).optional().meta({
-          description: '按命令词匹配前缀；串联请求的每段命令都必须满足',
+          description:
+            '按原始命令词严格匹配前缀（不消去环境变量赋值、包装命令或执行文件路径，只接受空格与可见 ASCII）；串联请求的每段命令都必须满足',
         }),
         paths: z.array(z.string().min(1)).min(1).optional().meta({
           description: '每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /',
         }),
         push_to: z.literal('task_branch').optional().meta({
           description:
-            '只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），且节点上报 push_env_ok；任何不确定都不满足',
+            '只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），节点上报 push_env_ok，命令在任务 worktree 中执行；任何不确定都不满足',
         }),
         gh_scope: z.literal('workspace_repo').optional().meta({
           description:
-            '用于 gh pr create|view|diff：不带 -R/--repo、无环境变量前缀、节点上报 gh_env_ok，--body-file 只能在 cwd 内',
+            '用于 gh pr create|view|diff：不带 -R/--repo 与 --body-file、无环境变量前缀、--head 只能是任务分支、节点上报 gh_env_ok，命令在任务 worktree 中执行',
         }),
       })
       .optional(),

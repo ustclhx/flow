@@ -101,7 +101,31 @@ export function parsePushTarget(command: string): PushTargetResult {
   return { ok: true, remote, src, dst }
 }
 
-export interface PushToInput {
+/**
+ * 命令实际执行的目录必须就是任务 worktree（两者 realpath 相同）：push_to 与 gh_scope 判定的
+ * 远端、分支与 gh 仓库都取决于命令在哪个仓库里执行。任一缺失或无法解析即不满足。
+ */
+export interface CommandLocation {
+  /** 节点上报的命令实际执行目录（绝对路径）。 */
+  commandCwd?: string | undefined
+  /** 投影中记录的任务 worktree（绝对路径）。 */
+  taskWorktree?: string | undefined
+  /** 解析符号链接；路径不存在时应抛错。core 不访问文件系统，由调用方注入。 */
+  realpath?: ((path: string) => string) | undefined
+}
+
+export function commandInTaskWorktree(input: CommandLocation): ConditionResult {
+  const { commandCwd, taskWorktree, realpath } = input
+  if (!commandCwd || !taskWorktree || !realpath) return no('cwd_unverified')
+  if (!posix.isAbsolute(commandCwd) || !posix.isAbsolute(taskWorktree)) return no('cwd_unverified')
+  try {
+    return realpath(commandCwd) === realpath(taskWorktree) ? YES : no('cwd_not_task_worktree')
+  } catch {
+    return no('cwd_unverified')
+  }
+}
+
+export interface PushToInput extends CommandLocation {
   command: string
   /** 登记仓库中可接受的 remote 名（如 `origin`）。 */
   remotes: readonly string[]
@@ -125,23 +149,46 @@ export function pushToTaskBranch(input: PushToInput): ConditionResult {
   if (!target.ok) return target
   if (!input.remotes.includes(target.remote)) return no('remote_not_registered')
   if (target.dst !== taskBranch) return no('not_task_branch')
-  return YES
+  return commandInTaskWorktree(input)
+}
+
+// ---------------------------------------------------------------------------
+// command_prefix
+// ---------------------------------------------------------------------------
+
+/** 空格加可见 ASCII：Unicode 空白（NBSP、U+3000……）、制表符、换行与非 ASCII 字符一律不满足。 */
+const VISIBLE_ASCII_RE = /^[\x20-\x7e]*$/
+
+/**
+ * `when.command_prefix` 的严格匹配（所有档位通用）：按原始词比较，**不**消去环境变量赋值、包装命令
+ * （sudo、env、command、exec、nohup、timeout、nice、xargs……）或执行文件路径，因此首词必须与前缀
+ * 首词完全相同；命令与前缀都只能含空格与可见 ASCII，解析不确定（命令替换、未闭合引号等）不满足。
+ * 串联命令的每一段都必须满足。动作识别（classifyAction）仍消去包装，保守识别敏感动作。
+ */
+export function commandPrefixMatches(command: string, prefix: string): boolean {
+  if (!VISIBLE_ASCII_RE.test(command) || !VISIBLE_ASCII_RE.test(prefix)) return false
+  const head = splitCommands(prefix)
+  const prefixWords = head.commands[0]
+  if (head.opaque || head.commands.length !== 1 || !prefixWords?.length) return false
+  const parsed = splitCommands(command)
+  if (parsed.opaque || parsed.commands.length === 0) return false
+  return parsed.commands.every(
+    (words) =>
+      words.length >= prefixWords.length && prefixWords.every((word, i) => words[i] === word),
+  )
 }
 
 // ---------------------------------------------------------------------------
 // gh_scope
 // ---------------------------------------------------------------------------
 
-/** 不可打印字符（换行、回车、制表符之外的控制字符与格式字符）。 */
-const UNPRINTABLE_RE = /[\p{Cc}\p{Cf}\u2028\u2029]/u
-
 /**
  * 检查 shell 会解释的元字符：引号外的 `$ \` \\ < > { } * ? [ ] ~ ; & | ( ) #` 与换行，双引号内的
  * `$ \` \\`，以及未闭合的引号。出现任何一个都视为不确定（变量展开、glob、重定向、串联、后台执行……）。
- * 单引号内的内容按字面处理。
+ * 单引号内的内容按字面处理。另外只接受空格与可见 ASCII（与 bash 分词一致）。
  */
 export function hasShellHazard(command: string): boolean {
-  if (UNPRINTABLE_RE.test(command.replace(/[\t\n\r]/g, ''))) return true
+  if (!VISIBLE_ASCII_RE.test(command)) return true
   let quote = ''
   for (const char of command) {
     if (quote === "'") {
@@ -150,7 +197,7 @@ export function hasShellHazard(command: string): boolean {
       if (char === '"') quote = ''
       else if ('$`\\'.includes(char)) return true
     } else if (char === "'" || char === '"') quote = char
-    else if ('$`\\<>{}*?[]~;&|()#\n\r'.includes(char)) return true
+    else if ('$`\\<>{}*?[]~;&|()#'.includes(char)) return true
   }
   return quote !== ''
 }
@@ -163,12 +210,13 @@ const ghOptions = (values: string, flags: string): ReadonlyMap<string, GhOptionK
   ])
 
 /**
- * 允许的子命令与选项（白名单）。没有列出的选项（`-R/--repo`、`--recover`、`--web`、`--editor` 等）
- * 一律不满足。短选项只接受单独写法，带值选项接受分离写法与长选项 `=value`。
+ * 允许的子命令与选项（白名单）。没有列出的选项（`-R/--repo`、`--recover`、`--web`、`--editor`、
+ * `--template` 等）一律不满足。`-F/--body-file` 在表中只为给出明确原因：读取文件存在检查与使用之间的
+ * 竞态（TOCTOU），一律不满足。短选项只接受单独写法，带值选项接受分离写法与长选项 `=value`。
  */
 const GH_PR_SUBCOMMANDS: Readonly<Record<string, ReadonlyMap<string, GhOptionKind>>> = {
   create: ghOptions(
-    '-t --title -b --body -F --body-file -B --base -H --head -a --assignee -l --label -m --milestone -p --project -r --reviewer -T --template',
+    '-t --title -b --body -F --body-file -B --base -H --head -a --assignee -l --label -m --milestone -p --project -r --reviewer',
     '-d --draft -f --fill --fill-first --fill-verbose --no-maintainer-edit --dry-run',
   ),
   view: ghOptions('--json -q --jq -t --template', '-c --comments'),
@@ -177,37 +225,19 @@ const GH_PR_SUBCOMMANDS: Readonly<Record<string, ReadonlyMap<string, GhOptionKin
 /** view / diff 的位置参数：PR 编号或分支名；不接受 URL（可能指向其他仓库）。 */
 const GH_PR_SELECTOR_RE = /^(?:[1-9][0-9]*|[A-Za-z0-9._/-]+)$/
 
-export interface GhScopeInput {
+export interface GhScopeInput extends CommandLocation {
   command: string
   /** 节点上报：gh 实际解析出的仓库就是本 workspace 登记仓库；只有严格的 `true` 才满足。 */
   ghEnvOk?: boolean | undefined
-  /** 任务工作目录的绝对路径（`--body-file` 只能指向其中）。 */
-  cwd?: string | undefined
-  /** 解析符号链接；路径不存在时应抛错。未提供时带 `--body-file` 的请求不满足。 */
-  realpath?: ((path: string) => string) | undefined
-}
-
-const within = (root: string, path: string) =>
-  path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`)
-
-function bodyFileInsideCwd(value: string, input: GhScopeInput): ConditionResult {
-  const { cwd, realpath } = input
-  if (value === '' || value === '-' || value.startsWith('~')) return no('body_file_outside_cwd')
-  if (!cwd || !posix.isAbsolute(cwd) || !realpath) return no('body_file_unverifiable')
-  try {
-    const root = realpath(cwd)
-    const target = realpath(posix.resolve(cwd, value))
-    return within(root, target) ? YES : no('body_file_outside_cwd')
-  } catch {
-    return no('body_file_unverifiable')
-  }
+  /** 执行器上报的任务分支：`pr create --head` 只能缺省或等于它。 */
+  taskBranch?: string | undefined
 }
 
 /**
  * `when.gh_scope: workspace_repo`：整条命令只有一段 `gh pr create|view|diff`（`gh` 不带路径、之前没有
- * 环境变量赋值或包装命令、`gh` 与 `pr` 之间没有选项）、没有 shell 元字符、只带白名单选项且不带
- * `-R/--repo`；`--head` 不指向其他 owner；view / diff 的选择参数不是 URL；`--body-file/-F` 解析符号
- * 链接后位于 cwd 内；节点上报 `gh_env_ok` 为真。
+ * 环境变量赋值或包装命令、`gh` 与 `pr` 之间没有选项）、只含空格与可见 ASCII 且没有 shell 元字符、
+ * 只带白名单选项（不带 `-R/--repo`、`-F/--body-file`）；`--head` 缺省或等于任务分支；view / diff
+ * 的选择参数不是 URL；节点上报 `gh_env_ok` 为真；命令在任务 worktree 中执行。
  */
 export function ghScopeWorkspaceRepo(input: GhScopeInput): ConditionResult {
   if (input.ghEnvOk !== true) return no('gh_env_unverified')
@@ -237,6 +267,7 @@ export function ghScopeWorkspaceRepo(input: GhScopeInput): ConditionResult {
     if (name === '-R' || name.startsWith('-R') || name === '--repo') return no('repo_flag')
     const kind = table.get(name)
     if (!kind) return no('unknown_option')
+    if (name === '-F' || name === '--body-file') return no('body_file_not_allowed')
     const attached = word.startsWith('--') && word.includes('=')
     if (kind === 'flag') {
       if (attached) return no('unknown_option')
@@ -249,10 +280,8 @@ export function ghScopeWorkspaceRepo(input: GhScopeInput): ConditionResult {
       index++
       value = args[index] as string
     }
-    if ((name === '-H' || name === '--head') && value.includes(':')) return no('foreign_head')
-    if (name === '-F' || name === '--body-file') {
-      const inside = bodyFileInsideCwd(value, input)
-      if (!inside.ok) return inside
+    if (name === '-H' || name === '--head') {
+      if (input.taskBranch === undefined || value !== input.taskBranch) return no('foreign_head')
     }
   }
   if (subcommand === 'create') {
@@ -264,5 +293,5 @@ export function ghScopeWorkspaceRepo(input: GhScopeInput): ConditionResult {
       return no('foreign_selector')
     }
   }
-  return YES
+  return commandInTaskWorktree(input)
 }
