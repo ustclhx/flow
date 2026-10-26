@@ -157,7 +157,14 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   /** 某 workspace 中给定类型的最近 limit 条事件，按 seq 倒序（简报的代回复记录等）。 */
   recentEvents(workspace: string, types: readonly EventType[], limit: number): LedgerEvent[]
   /** 某类型在时间窗 [fromIso, toIso) 内的事件，按 seq 升序，最多 limit 条（每日摘要等）。 */
-  eventsBetween(type: EventType, fromIso: string, toIso: string, limit?: number): LedgerEvent[]
+  /** 某类型、`ts` 在 [fromIso, toIso) 内、seq > afterSeq（缺省 0）的事件，按 seq 升序，最多 limit 条。 */
+  eventsBetween(
+    type: EventType,
+    fromIso: string,
+    toIso: string,
+    limit?: number,
+    afterSeq?: number,
+  ): LedgerEvent[]
   hasScheduleFire(ruleId: string, plannedAt: string): boolean
   /**
    * 某类型中载荷字段 `key`（顶层）等于 `value` 的事件，按 seq 升序（任务提案、决策回看去重等按载荷查找）。
@@ -1236,12 +1243,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         )?.n ?? 0
       )
     },
-    eventsBetween(type, fromIso, toIso, limit = 1000) {
+    eventsBetween(type, fromIso, toIso, limit = 1000, afterSeq = 0) {
       return all<EventRow>(
-        'SELECT * FROM events WHERE type = ? AND ts >= ? AND ts < ? ORDER BY seq LIMIT ?',
+        'SELECT * FROM events WHERE type = ? AND ts >= ? AND ts < ? AND seq > ? ORDER BY seq LIMIT ?',
         type,
         fromIso,
         toIso,
+        afterSeq,
         limit,
       ).map(rowToEvent)
     },

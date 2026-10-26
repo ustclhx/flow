@@ -78,6 +78,10 @@ export function sanitizePatrolText(text: string): string {
 /**
  * 重试去重：账本写入失败后再次提交时，journal 里可能已有本次唤醒的日报。
  * 只查今天与昨天的 journal（巡检唤醒不会跨更多天）；正文行首的 `#` 已转义，标题行无法伪造。
+ * 只认 supervisor 写的记录：标题行 `## <时间> · supervisor[ · <workspace>]` 的身份段必须是 `supervisor`，
+ * 其他身份（例如用户经 kb_journal）写出的同样文字不算。
+ * 命中时返回的 sha 是该 journal 文件**最近一次**的提交（`git log -1 -- <文件>`），不一定是写入这条日报的
+ * 那次提交——之后同一天的其他 journal 追加也会落在同一文件上。
  */
 async function existingJournal(
   home: string,
@@ -85,7 +89,7 @@ async function existingJournal(
   now: Date,
 ): Promise<{ file: string; sha: string } | null> {
   const record = new RegExp(
-    `^## [^\n]*\n\n${patrolHeading(wakeTaskId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+    `^## [^\n·]* · ${SUPERVISOR_ACTOR}(?: · [^\n]*)?\n\n${patrolHeading(wakeTaskId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
     'm',
   )
   for (const date of [localDate(now), localDate(new Date(now.getTime() - 24 * 3600_000))]) {
