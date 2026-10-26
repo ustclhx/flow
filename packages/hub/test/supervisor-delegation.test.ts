@@ -365,6 +365,12 @@ describe('core delegationRequestMatches', () => {
     expect(delegationRequestMatches(r('x', ['a']), r('x', ['a']))).toBe(true)
     expect(delegationRequestMatches(r('x', ['a']), r('x'))).toBe(false)
     expect(delegationRequestMatches(r('x', ['a', 'b']), r('x', ['b', 'a']))).toBe(false)
+    // 可能被截断或脱敏过：两侧相同也判为不一致。
+    for (const t of ['a [REDACTED:cli-flag]', 'a [secret:gh/token]', 'abc…', 'x'.repeat(2000)]) {
+      expect(delegationRequestMatches(r(t), r(t))).toBe(false)
+      expect(delegationRequestMatches(r('x', [t]), r('x', [t]))).toBe(false)
+    }
+    expect(delegationRequestMatches(r('x'.repeat(1999)), r('x'.repeat(1999)))).toBe(true)
   })
 })
 
@@ -419,6 +425,24 @@ describe('委托判定（3.5）', () => {
     ['路径不一致', { decidedPaths: ['a'], blockedPaths: ['b'] }],
     ['只有一侧带路径', { decidedPaths: ['a'] }],
     ['工具不一致', { decidedTool: 'Bash' }],
+    [
+      '命令含脱敏标记（两侧相同）',
+      {
+        decidedCommand: 'curl -H [REDACTED:bearer] x',
+        blockedCommand: 'curl -H [REDACTED:bearer] x',
+      },
+    ],
+    [
+      '命令以截断符结尾（两侧相同）',
+      { decidedCommand: 'pnpm test a…', blockedCommand: 'pnpm test a…' },
+    ],
+    [
+      '命令达到 2000 字符上限（两侧相同）',
+      {
+        decidedCommand: `pnpm test ${'a'.repeat(1990)}`,
+        blockedCommand: `pnpm test ${'a'.repeat(1990)}`,
+      },
+    ],
     ['判定不是策略引擎写的', { actor: 'hub' }],
   ] as const)('不委托：%s', async (_name, opts) => {
     const env = await setup()
@@ -1277,7 +1301,7 @@ describe('每日摘要列出 supervisor 代回复的内容', () => {
     await inbox.pusher.fireDigest(new Date(2026, 9, 27, 8, 30).getTime())
     const digest = env.store.getInboxItem('dig.2026-10-27')
     expect(digest?.body).toContain('supervisor 代回复 1 次')
-    expect(digest?.body).toContain(`回答 ${id}：选 A：只改 README`)
+    expect(digest?.body).toContain(`回答 ${id}【待送达】：选 A：只改 README`)
     expect(digest?.body).toContain('理由：目标只限 README')
   })
 })
@@ -1448,5 +1472,190 @@ describe('推送：被挡住的条目不计入 Decide 提前推送阈值', () =>
     await inbox.pusher.tick()
     await clock.advance(0)
     expect(channel.sentIds().flat().sort()).toEqual(['sup.1', 'sup.2', 'sup.3', 'sup.4', 'sup.5'])
+  })
+})
+
+describe('纵深防御（审查后补充）', () => {
+  test('请求取消：委托结束，条目恢复标题并立即推送', async () => {
+    const env = await setup()
+    const channel = new MemoryChannel()
+    const inbox = await startInbox({
+      ledger: env.store,
+      home: join(mkdtempSync(join(tmpdir(), 'flow-delegation-cancel-')), 'home'),
+      clock: env.clock,
+      watch: false,
+      channels: [specOf(channel)],
+      held: env.delegation.held,
+      logger: { warn() {} },
+    })
+    cleanups.push(() => inbox.stop())
+    const settle = async () => {
+      for (let i = 0; i < 4; i++) {
+        await env.settle()
+        await inbox.idle()
+        await inbox.pusher.tick()
+        await env.clock.advance(0)
+      }
+    }
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const blockSeq = blockQuestion(env, lease)
+    await settle()
+    expect(channel.sentIds().flat()).not.toContain(`blk.${blockSeq}`)
+    const released = env.released()
+    must(env.tasks.cancelTask(id, { actor: 'user' }))
+    await settle()
+    expect(env.released()).toBeGreaterThan(released)
+    const item = env.store.getInboxItem(`blk.${blockSeq}`)
+    expect(item?.title.startsWith(DELEGATED_TITLE_PREFIX)).toBe(false)
+    expect(channel.sentIds().flat()).toContain(`blk.${blockSeq}`)
+  })
+
+  test('store：判定之后、卡住之前还有别的策略判定时不能委托', async () => {
+    const env = await setup()
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const first = must(
+      env.store.append(
+        {
+          task_id: id,
+          workspace: WS,
+          type: 'policy.decided',
+          payload: {
+            task_id: id,
+            request: { tool: 'CodexCommand', command: 'pnpm check', actions: [] },
+            level: 'supervisor',
+            matched_rules: [],
+            actions: [],
+          },
+        },
+        { actor: 'policy' },
+      ),
+    )
+    // 第二个请求的判定（例如预检之后 worker 又发起了别的请求）：卡住带的是第一个判定。
+    blockApproval(env, lease, { withDecision: false })
+    const blockSeq = blockSeqOf(env, id)
+    const r = env.store.append(
+      {
+        task_id: id,
+        workspace: WS,
+        type: 'task.reply_delegated',
+        payload: {
+          task_id: id,
+          block_seq: blockSeq,
+          kind: 'awaiting_approval',
+          decision_id: first.seq,
+          deadline: '2099-01-01T00:00:00.000Z',
+        },
+      },
+      { actor: 'hub' },
+    )
+    expect(code(r)).toBe('invalid_event')
+  })
+
+  test('store：判定早于这一轮执行开始（task.started）时不能委托', async () => {
+    const env = await setup()
+    const id = await create(env)
+    const decided = must(
+      env.store.append(
+        {
+          task_id: id,
+          workspace: WS,
+          type: 'policy.decided',
+          payload: {
+            task_id: id,
+            request: { tool: 'CodexCommand', command: 'pnpm check', actions: [] },
+            level: 'supervisor',
+            matched_rules: [],
+            actions: [],
+          },
+        },
+        { actor: 'policy' },
+      ),
+    )
+    const lease = await grant(env, 'fake')
+    must(
+      env.protocol.service.renew(lease.lease_id, {
+        lease_token: lease.lease_token,
+        blocked: {
+          reason: 'awaiting_approval',
+          message: '等待授权',
+          decision_id: decided.seq,
+          request: { tool: 'CodexCommand', command: 'pnpm check' },
+        },
+      }),
+    )
+    await env.settle()
+    expect(delegationsOf(env, id)).toHaveLength(0)
+  })
+
+  test('判定超时（读配置挂起）：不委托、放开条目，串行链不被堵住', async () => {
+    let hang = false
+    const roles: RoleLookup = async (name) => {
+      if (hang && name === 'developer') return new Promise(() => {})
+      return ok((ROLES[name] ?? null) as Role | null)
+    }
+    const env = await setup({ roles })
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    hang = true
+    const blockSeq = blockQuestion(env, lease)
+    // 判定挂起中（不等 delegation.idle()：它要等到判定结束）。
+    for (let i = 0; i < 3; i++) await tick()
+    expect(env.delegation.held({ id: `blk.${blockSeq}`, source: 'task', task_id: id })).toBe(true)
+    await env.clock.advance(30_000)
+    await env.settle()
+    expect(env.delegation.held({ id: `blk.${blockSeq}`, source: 'task', task_id: id })).toBe(false)
+    expect(delegationsOf(env, id)).toHaveLength(0)
+    // 之后的判定照常进行。
+    hang = false
+    const other = await create(env)
+    const ol = await grant(env, 'fake')
+    blockQuestion(env, ol)
+    await env.settle()
+    expect(delegationsOf(env, other)).toHaveLength(1)
+  })
+
+  test('store：task.replied 只接受 user 与 supervisor；supervisor 的回复类型必须与卡住类型一致', async () => {
+    const env = await setup()
+    const { id } = await delegatedQuestion(env)
+    const reply = (actor: string, kind: 'approve' | 'text', via: 'cli' | 'supervisor') =>
+      env.store.append(
+        {
+          task_id: id,
+          workspace: WS,
+          type: 'task.replied',
+          payload: {
+            reply_id: `r-${actor}-${kind}`,
+            kind,
+            via,
+            ...(kind === 'text' ? { text: 'A' } : {}),
+          },
+        },
+        { actor },
+      )
+    expect(code(reply('hub', 'text', 'cli'))).toBe('actor_mismatch')
+    expect(code(reply('codex', 'text', 'cli'))).toBe('actor_mismatch')
+    expect(code(reply('supervisor', 'approve', 'supervisor'))).toBe('invalid_event')
+    must(reply('supervisor', 'text', 'supervisor'))
+  })
+
+  test('supervisor 的回复待送达时，用户忽略条目被拒绝（reply_pending）', async () => {
+    const env = await setup()
+    const reactor = createInboxReactor({ ledger: env.store })
+    reactor.start()
+    cleanups.push(() => reactor.stop())
+    const { id, blockSeq, caller } = await delegatedQuestion(env)
+    must(respond(env, caller, { task_id: id, block_seq: blockSeq }))
+    await reactor.idle()
+    const deps = {
+      ledger: env.store,
+      tasks: env.tasks,
+      home: '/nonexistent',
+      scanProposals: async () => {},
+    }
+    const r = await actOnInbox(deps, `blk.${blockSeq}`, { action: 'dismiss', via: 'cli' }, 'user')
+    expect(code(r)).toBe('reply_pending')
+    expect(env.store.getInboxItem(`blk.${blockSeq}`)?.state).toBe('open')
   })
 })

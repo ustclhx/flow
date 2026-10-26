@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_task ON events (task_id, seq);
 CREATE INDEX IF NOT EXISTS events_workspace ON events (workspace, seq);
+CREATE INDEX IF NOT EXISTS events_type_ts ON events (type, ts);
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
   BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events

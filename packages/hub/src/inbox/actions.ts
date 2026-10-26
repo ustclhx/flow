@@ -91,6 +91,17 @@ export async function actOnInbox(
   const { action, text } = input
   const via = input.via ?? 'cli'
   if (action === 'dismiss') {
+    // supervisor 的回复已写入、正在送达（D15）：此时忽略条目会让用户以为卡住被丢下了，拒绝并说明。
+    const pending =
+      item.source === 'task' && item.task_id !== null ? ledger.pendingReply(item.task_id) : null
+    if (pending && pending.by === SUPERVISOR_ACTOR) {
+      return fail(
+        'failure',
+        'reply_pending',
+        'supervisor 的回复正在送达，任务恢复后条目会自动关闭；如需改变决定，请等送达后再处理',
+        { reply_id: pending.id },
+      )
+    }
     // D15：用户忽略仍委托给 supervisor 的卡住条目即结束委托（同一次追加写 user_dismissed，之后不再推送）。
     const delegation =
       actor === 'user' && item.source === 'task' && item.task_id !== null

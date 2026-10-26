@@ -335,6 +335,22 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     })
   }
 
+  /** 请求取消结束了这次卡住上的委托（不写转交事件）：去掉"supervisor 处理中"。 */
+  function onCancelRequested(e: EventOf<'task.cancel_requested'>) {
+    const task = ledger.getTask(e.task_id ?? '')
+    if (task?.status !== 'blocked') return
+    const blocked = latestBlocked(task.id)
+    if (!blocked) return
+    const item = ledger.getInboxItem(blockedItemId(blocked.seq))
+    if (item?.state !== 'open' || !item.title.startsWith(DELEGATED_TITLE_PREFIX)) return
+    write({
+      type: 'inbox.item_updated',
+      task_id: task.id,
+      workspace: task.workspace,
+      payload: { item_id: item.id, title: blockedTitle(task, blocked.payload.reason) },
+    })
+  }
+
   function handle(e: LedgerEvent) {
     if (e.seq <= done) return
     try {
@@ -342,7 +358,8 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
       else if (e.type === 'policy.decided') onPolicyDecided(e)
       else if (e.type === 'task.reply_delegated' || e.type === 'task.reply_escalated') {
         onDelegation(e)
-      } else {
+      } else if (e.type === 'task.cancel_requested') onCancelRequested(e)
+      else {
         const reason = CLOSING[e.type]
         if (reason !== undefined) onTaskLeft(e, reason)
       }

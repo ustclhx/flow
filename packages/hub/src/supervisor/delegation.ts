@@ -65,6 +65,11 @@ export interface DelegationServiceOptions {
   logger?: Pick<HubLogger, 'warn'>
   newReplyId?: () => string
   /**
+   * 一次委托判定（读配置等异步部分）的总时限，默认 30 秒：超时即判为不委托、放开条目，
+   * 一次挂起的读取不会堵住整条串行处理链。
+   */
+  decisionTimeoutMs?: number
+  /**
    * 条目不再被挡住时（判定为不委托、委托被转交）通知收件箱重新推送；中枢里接 `inbox.pusher.tick`。
    */
   onRelease?: () => void
@@ -92,6 +97,9 @@ export interface DelegationService {
   ): Result<TaskRespondData>
 }
 
+/** 委托判定的默认总时限。 */
+export const DECISION_TIMEOUT_MS = 30_000
+
 const DELEGABLE: ReadonlySet<string> = new Set(DELEGABLE_BLOCKED_REASONS)
 const TERMINAL: ReadonlySet<string> = new Set(['task.done', 'task.failed', 'task.cancelled'])
 const BLOCKED_ITEM_PREFIX = 'blk.'
@@ -113,6 +121,7 @@ const no = (why: string): Verdict => ({ delegate: false, why })
 export function createDelegationService(o: DelegationServiceOptions): DelegationService {
   const { ledger, clock } = o
   const newReplyId = o.newReplyId ?? generateReplyId
+  const decisionTimeoutMs = o.decisionTimeoutMs ?? DECISION_TIMEOUT_MS
   /** 判定进行中的卡住（task.blocked 的 seq）：判定完成前条目不推送。 */
   const deciding = new Set<number>()
   /** 每个任务当前委托的超时定时器（任务 id → 委托 seq 与取消函数）。 */
@@ -277,10 +286,23 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
     deciding.add(e.seq)
     enqueue(async () => {
       let delegated = false
+      let cancelTimer = () => {}
       try {
-        const verdict = await evaluate(e)
-        if (verdict.delegate) delegated = delegateNow(e, verdict.timeoutS)
+        const timedOut = new Promise<Verdict>((resolve) => {
+          cancelTimer = clock.setTimeout(
+            () => resolve(no(`委托判定超过 ${decisionTimeoutMs} 毫秒`)),
+            decisionTimeoutMs,
+          )
+        })
+        // 超时之后到达的判定结果被丢弃（race 只取先到的一个）。
+        const verdict = await Promise.race([evaluate(e), timedOut])
+        if (!verdict.delegate) {
+          if (verdict.why.startsWith('委托判定超过')) {
+            warn('代回复：委托判定超时，交给用户', { task_id: e.task_id, block_seq: e.seq })
+          }
+        } else delegated = delegateNow(e, verdict.timeoutS)
       } finally {
+        cancelTimer()
         deciding.delete(e.seq)
         if (!delegated) release()
       }
@@ -381,6 +403,24 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
         enqueue(() => settleWake(id, e.type === 'task.failed' ? 'wake_failed' : 'wake_ended'))
       }
       clearTimer(id)
+      return
+    }
+    if (e.type === 'task.cancel_requested' && e.task_id !== undefined) {
+      // 请求取消即结束这次卡住上的委托（DELEGATION_ENDING_EVENTS，不写转交事件）：条目立即放开推送，
+      // 标题由收件箱反应器恢复。
+      const id = e.task_id
+      const blockSeq = latestBlockSeq(id)
+      if (
+        blockSeq !== null &&
+        ledger.getTask(id)?.status === 'blocked' &&
+        everDelegated(id, blockSeq) &&
+        !ledger
+          .taskEvents(id)
+          .some((x) => x.type === 'task.reply_escalated' && x.payload.block_seq === blockSeq)
+      ) {
+        clearTimer(id)
+        enqueue(() => release())
+      }
       return
     }
     if (e.type === 'task.reply_delegated') {
@@ -505,6 +545,11 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
         }
         if (!wake.events.includes(d.seq)) return notDelegated('这次委托没有分配给本次唤醒')
         if (ledger.pendingReply(t.id) !== null) return staleBlock('该任务已有尚未送达的回复')
+        // 授权请求的批准必须送到仍在等待的那个 worker：节点已不持有租约时，带着批准重新排队会让
+        // 下一轮执行（可能是另一个请求）拿到它，拒绝。
+        if (d.kind === 'awaiting_approval' && ledger.activeLease(t.id) === null) {
+          return staleBlock('节点已不持有该任务的租约，这次授权请求已不在等待')
+        }
         if (d.kind === 'question' && (input.decision === 'approve' || input.decision === 'deny')) {
           return invalidArguments('提问只能 answer 或 escalate，不能 approve / deny', 'decision')
         }

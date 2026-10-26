@@ -81,14 +81,23 @@ const REPLY_LABEL = { approve: '批准', deny: '拒绝', text: '回答' } as con
 /** 摘要中每条代回复最多展示的字符数（回答原文与理由）。 */
 const REPLY_SNIPPET_MAX = 300
 
-function supervisorReplyLine(e: LedgerEvent): string {
+/** 回复的送达状态（`ReplyView.state`）：让用户知道代回复有没有真正生效。 */
+const REPLY_STATE_LABEL: Record<string, string> = {
+  pending: '待送达',
+  delivered: '已送达',
+  requeued: '已随任务重新排队',
+  dropped: '被节点拒收',
+}
+
+function supervisorReplyLine(e: LedgerEvent, state: string | undefined): string {
   if (e.type !== 'task.replied') return ''
   const p = e.payload
+  const status = `【${(state && REPLY_STATE_LABEL[state]) ?? '状态未知'}】`
   const text = p.text ? `：${clipText(p.text.replace(/\s+/g, ' '), REPLY_SNIPPET_MAX)}` : ''
   const reason = p.reason
     ? `（理由：${clipText(p.reason.replace(/\s+/g, ' '), REPLY_SNIPPET_MAX)}）`
     : ''
-  return `- [${e.workspace ?? ''}] ${REPLY_LABEL[p.kind]} ${e.task_id ?? ''}${text}${reason}`
+  return `- [${e.workspace ?? ''}] ${REPLY_LABEL[p.kind]} ${e.task_id ?? ''}${status}${text}${reason}`
 }
 
 function listLines<T>(items: readonly T[], line: (x: T) => string): string[] {
@@ -215,16 +224,24 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
     }
     // supervisor 代回复（add-m1-supervisor D15）：昨天 supervisor 代用户回复的内容。回答原文只进这里
     // （用户可见），不进 ws_brief——它出自 reply 唤醒，不能进入后续唤醒的上下文。
-    const inWindow = (e: { ts: string }) => {
-      const at = Date.parse(e.ts)
-      return at >= from && at < to
-    }
     const replied = ledger
-      .eventsByPayload('task.replied', 'via', 'supervisor')
-      .filter((e) => e.actor === SUPERVISOR_ACTOR && inWindow(e))
+      .eventsBetween('task.replied', new Date(from).toISOString(), new Date(to).toISOString())
+      .filter(
+        (e) =>
+          e.type === 'task.replied' &&
+          e.actor === SUPERVISOR_ACTOR &&
+          e.payload.via === 'supervisor',
+      )
     if (replied.length > 0) {
       lines.push(`supervisor 代回复 ${replied.length} 次：`)
-      lines.push(...listLines(replied, supervisorReplyLine))
+      lines.push(
+        ...listLines(replied, (e) =>
+          supervisorReplyLine(
+            e,
+            e.type === 'task.replied' ? ledger.getReply(e.payload.reply_id)?.state : undefined,
+          ),
+        ),
+      )
     }
     lines.push(`待处理的 Decide 条目 ${decide} 个。`)
     lines.push(`可能过时的知识条目 ${stale} 个。`)

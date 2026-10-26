@@ -150,6 +150,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   countAutoDecisions(sinceIso: string): number
   /** 某 workspace 中给定类型的最近 limit 条事件，按 seq 倒序（简报的代回复记录等）。 */
   recentEvents(workspace: string, types: readonly EventType[], limit: number): LedgerEvent[]
+  /** 某类型在时间窗 [fromIso, toIso) 内的事件，按 seq 升序，最多 limit 条（每日摘要等）。 */
+  eventsBetween(type: EventType, fromIso: string, toIso: string, limit?: number): LedgerEvent[]
   hasScheduleFire(ruleId: string, plannedAt: string): boolean
   /**
    * 某类型中载荷字段 `key`（顶层）等于 `value` 的事件，按 seq 升序（任务提案、决策回看去重等按载荷查找）。
@@ -476,6 +478,8 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'task_proposal.created': ['hub'],
   'decision.review_due': ['hub'],
   'task.reply_delegated': ['hub'],
+  // 回复只有用户本人与 supervisor（经 task_respond、落在有效委托上）能写（D15）。
+  'task.replied': ['user', 'supervisor'],
 }
 
 /** 由用户操作结束委托的转交原因：与用户的 task_reply / 忽略同一次 append 写入，actor 为 user。 */
@@ -631,12 +635,14 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     if (decision?.type !== 'policy.decided' || decision.task_id !== draft.task_id) {
       return invalidEvent(`decision_id ${p.decision_id} 不是本任务的策略判定`)
     }
-    // 下界取"上一次离开 blocked"与"上一次 task.blocked"中较晚者：blocked → blocked 时
-    // 前一次卡住期间的判定属于前一次卡住，不能拿来委托新的卡住。
+    // 下界取"上一次离开 blocked"、"上一次 task.blocked"与这一轮执行开始（task.started、
+    // task.lease_expired）中最晚者：blocked → blocked 时前一次卡住期间的判定属于前一次卡住；
+    // 上一轮执行（另一个租约、可能是另一个 worker）里的判定也不能拿来委托这一轮的卡住。
     const left =
       get<{ seq: number | null }>(
         `SELECT MAX(seq) AS seq FROM events WHERE task_id = ? AND seq < ?
-           AND type IN ('task.unblocked', 'task.requeued_with_reply', 'task.requeued', 'task.blocked')`,
+           AND type IN ('task.unblocked', 'task.requeued_with_reply', 'task.requeued', 'task.blocked',
+                        'task.started', 'task.lease_expired')`,
         draft.task_id ?? null,
         p.block_seq,
       )?.seq ?? 0
@@ -644,6 +650,18 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return invalidEvent(
         `策略判定 ${p.decision_id} 不属于这次卡住（早于上一次离开 blocked 或上一次卡住）`,
       )
+    }
+    // 判定之后、卡住之前本任务不能再有别的策略判定：否则卡住的可能是后一个请求（判定不能错套）。
+    if (
+      get(
+        `SELECT 1 FROM events WHERE task_id = ? AND type = 'policy.decided' AND seq > ? AND seq < ?
+           LIMIT 1`,
+        draft.task_id ?? null,
+        p.decision_id,
+        p.block_seq,
+      )
+    ) {
+      return invalidEvent(`策略判定 ${p.decision_id} 之后、卡住之前还有别的策略判定`)
     }
     const level = (JSON.parse(decision.payload_json) as { level?: string }).level
     if (level !== 'supervisor') {
@@ -666,6 +684,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       const active = currentDelegation(draft.task_id)
       if (!active || active.block_seq !== lastBlocked(draft.task_id)?.seq) {
         return fail('failure', 'not_delegated', '这次卡住没有仍有效的 supervisor 委托')
+      }
+      // 回复类型必须与委托的卡住类型一致：提问只能文字回答，授权请求只能批准或拒绝。
+      const allowed = active.kind === 'question' ? ['text'] : ['approve', 'deny']
+      if (!allowed.includes(draft.payload.kind)) {
+        return invalidEvent(
+          `委托的卡住为 ${active.kind}，supervisor 不能以 ${draft.payload.kind} 回复`,
+        )
       }
       return ok(null)
     }
@@ -1187,6 +1212,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           sinceIso,
         )?.n ?? 0
       )
+    },
+    eventsBetween(type, fromIso, toIso, limit = 1000) {
+      return all<EventRow>(
+        'SELECT * FROM events WHERE type = ? AND ts >= ? AND ts < ? ORDER BY seq LIMIT ?',
+        type,
+        fromIso,
+        toIso,
+        limit,
+      ).map(rowToEvent)
     },
     hasScheduleFire(ruleId, plannedAt) {
       return !!get(
