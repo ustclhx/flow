@@ -231,6 +231,12 @@
             ],
             "additionalProperties": false
           }
+        },
+        "decision_id": {
+          "description": "只在判定为 supervisor 档位时返回：本次判定的 id（对应 policy.decided 的 seq），节点上报卡住时带上。其他档位与 dry_run 没有该字段",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
         }
       },
       "required": [

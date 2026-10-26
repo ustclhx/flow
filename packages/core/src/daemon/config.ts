@@ -69,6 +69,24 @@ export const hubConfigSchema = z
   .meta({ title: 'Flow hub config', description: 'config/hub.yaml' })
 export type HubConfig = z.infer<typeof hubConfigSchema>
 
+export const NODE_RESERVED_DEFAULTS = { supervisor: 1, reply: 1 } as const
+
+/** 节点为 supervisor 预留的执行槽（D12）；调度使用由后续任务（5.5）实现。 */
+export const nodeReservedSchema = z
+  .strictObject({
+    supervisor: z.number().int().min(0).max(8).default(NODE_RESERVED_DEFAULTS.supervisor).meta({
+      description: '只给普通 supervisor 唤醒（instruction / autonomous）的槽位数，默认 1',
+    }),
+    reply: z
+      .number()
+      .int()
+      .min(0)
+      .max(8)
+      .default(NODE_RESERVED_DEFAULTS.reply)
+      .meta({ description: '只给代回复（reply）唤醒的槽位数，默认 1' }),
+  })
+  .meta({ title: 'Node reserved slots' })
+
 export const nodeConfigSchema = z
   .strictObject({
     capabilities: z
@@ -86,6 +104,10 @@ export const nodeConfigSchema = z
       .url({ protocol: /^https?$/ })
       .optional()
       .meta({ description: '中枢地址；缺省为 http://127.0.0.1:<hub.yaml 的 port>' }),
+    reserved: nodeReservedSchema.default({ ...NODE_RESERVED_DEFAULTS }).meta({
+      description:
+        '在 concurrency 之外为 supervisor 预留的执行槽（add-m1-supervisor D12）：普通槽满时仍为它们领取任务',
+    }),
   })
   .meta({ title: 'Flow node config', description: 'config/node.yaml' })
 export type NodeConfig = z.infer<typeof nodeConfigSchema>

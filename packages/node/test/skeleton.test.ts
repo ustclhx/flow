@@ -7,6 +7,9 @@ import { loadNodeConfig, resolveHubUrl } from '../src/index.ts'
 test('节点包骨架：从临时 flow-home 读取默认配置', async () => {
   const home = join(mkdtempSync(join(tmpdir(), 'flow-node-')), 'home')
   const r = await loadNodeConfig(home)
-  expect(r).toEqual({ ok: true, data: { capabilities: [], concurrency: 1 } })
+  expect(r).toEqual({
+    ok: true,
+    data: { capabilities: [], concurrency: 1, reserved: { supervisor: 1, reply: 1 } },
+  })
   expect(resolveHubUrl({ port: 7477 }, r.ok ? r.data : undefined)).toBe('http://127.0.0.1:7477')
 })

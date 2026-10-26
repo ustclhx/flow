@@ -78,7 +78,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_by       TEXT NOT NULL,
   last_activity_at TEXT,
   activity_json    TEXT NOT NULL DEFAULT '[]',
-  resume_json      TEXT
+  resume_json      TEXT,
+  origin           TEXT,
+  branch           TEXT
 );
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, created_seq);
 CREATE INDEX IF NOT EXISTS tasks_workspace ON tasks (workspace, created_seq);
@@ -201,4 +203,7 @@ export const LEDGER_COLUMN_MIGRATIONS: ReadonlyArray<{
   ddl: string
 }> = [
   { table: 'tasks', column: 'resume_json', ddl: 'ALTER TABLE tasks ADD COLUMN resume_json TEXT' },
+  // add-m1-supervisor：task.created 的 origin（D2）与 task.branch_reported 的分支（D15）。
+  { table: 'tasks', column: 'origin', ddl: 'ALTER TABLE tasks ADD COLUMN origin TEXT' },
+  { table: 'tasks', column: 'branch', ddl: 'ALTER TABLE tasks ADD COLUMN branch TEXT' },
 ]

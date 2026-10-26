@@ -8,9 +8,13 @@ import {
   HubClient,
   initFlowHome,
   type PolicyCheckRequest,
+  type PolicyDecision,
+  policyCheckData,
 } from '@flow/core'
 import { stringify } from 'yaml'
+import { z } from 'zod'
 import { type RunningHub, runHub } from '../src/index.ts'
+import { policyCheckResponse } from '../src/policy/routes.ts'
 import { must } from './ledger-helpers.ts'
 import { FakeClock } from './server-fixtures.ts'
 
@@ -100,7 +104,9 @@ test('具体规则优先：合同 scope 决定 draft-approve，事件可查询�
     payload: {
       task_id: task.id,
       request: { tool: request.tool, command: request.command, actions: ['tool:Bash', 'git.push'] },
-      ...checked,
+      level: checked.level,
+      matched_rules: checked.matched_rules,
+      actions: checked.actions,
     },
   })
   // 客户端不能通过伪造 workspace / role 影响结果。
@@ -287,4 +293,40 @@ test('不存在的任务返回 404，非法或超长请求返回 400；文件级
     errors: [{ code: 'invalid_config' }],
   })
   expect(must(await user.showTask(task.id)).events).toHaveLength(before)
+})
+
+test('policy/check：非 supervisor 档位不返回 decision_id，旧节点的 strict 旧版 schema 能解析；记录环境检查', async () => {
+  // main 上旧版 policyCheckData 的副本：顶层 strict，只有 level、matched_rules、actions。
+  const legacyPolicyCheckData = z.strictObject({
+    level: z.enum(['auto', 'auto-report', 'draft-approve', 'user', 'notify']),
+    matched_rules: z.array(z.unknown()),
+    actions: z.array(z.unknown()),
+  })
+  const { user, task, request, policies } = await setup([
+    { scope: 'ws/xuanxue-saas', action: 'git.push', level: 'auto' },
+  ])
+  const auto = must(await user.checkPolicy({ ...request, push_env_ok: true, gh_env_ok: false }))
+  expect(auto.level).toBe('auto')
+  expect(auto).not.toHaveProperty('decision_id')
+  expect(legacyPolicyCheckData.safeParse(auto).success).toBe(true)
+  const decided = must(await user.showTask(task.id)).events.at(-1)
+  expect(decided?.payload).toMatchObject({ request: { push_env_ok: true, gh_env_ok: false } })
+  policies([])
+  const legacy = must(await user.checkPolicy(request))
+  expect(legacy.level).toBe('user')
+  expect(legacyPolicyCheckData.safeParse(legacy).success).toBe(true)
+  const last = must(await user.showTask(task.id)).events.at(-1)
+  expect((last?.payload as { request?: object } | undefined)?.request).not.toHaveProperty(
+    'push_env_ok',
+  )
+})
+
+test('policyCheckResponse：只有 supervisor 档位带 decision_id', () => {
+  const base = { matched_rules: [], actions: [] }
+  expect(policyCheckResponse({ level: 'user', ...base }, 9)).toEqual({ level: 'user', ...base })
+  expect(
+    policyCheckResponse({ level: 'supervisor' as PolicyDecision['level'], ...base }, 9),
+  ).toEqual({ level: 'supervisor' as PolicyDecision['level'], ...base, decision_id: 9 })
+  // 新版 schema 非 strict：以后加字段不破坏解析
+  expect(policyCheckData.safeParse({ level: 'user', ...base, future: 1 }).success).toBe(true)
 })

@@ -1,8 +1,12 @@
 import {
   ACTIVITY_TEXT_MAX,
+  type ActiveDelegation,
   type Activity,
+  activeDelegation,
   checkTaskEvent,
   type Database,
+  DELEGATION_ENDING_EVENTS,
+  type EventPayload,
   type EventType,
   type eventPayloads,
   fail,
@@ -134,6 +138,11 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   findTaskByIdempotencyKey(key: string): TaskView | null
   /** 某任务的全部事件（按 seq）。 */
   taskEvents(taskId: string): LedgerEvent[]
+  /**
+   * 该任务当前有效的代回复委托（D15，core `activeDelegation`）：任务离开该次卡住
+   * （包括进入新的卡住）时隐式失效。调度与 task_respond 统一用它判断。
+   */
+  activeDelegation(taskId: string): ActiveDelegation | null
   getNode(nodeId: string): NodeView | null
   listNodes(): NodeView[]
   getLease(leaseId: string): LeaseRecord | null
@@ -226,6 +235,8 @@ interface TaskRow {
   blocked_json: string | null
   result_json: string | null
   created_by: string
+  origin: TaskView['origin']
+  branch: string | null
   last_activity_at: string | null
   lease_id: string | null
   lease_node_id: string | null
@@ -373,6 +384,8 @@ function rowToTask(r: TaskRow): TaskView {
         : { lease_id: r.lease_id, node_id: r.lease_node_id, expires_at: r.lease_expires_at },
     result: r.result_json === null ? null : JSON.parse(r.result_json),
     created_by: r.created_by,
+    origin: r.origin ?? null,
+    branch: r.branch ?? null,
     last_activity_at: r.last_activity_at,
   }
 }
@@ -390,6 +403,31 @@ function rowToNode(r: NodeRow): NodeView {
     active_leases: r.active_leases,
   }
 }
+
+/**
+ * 新事件的写入身份白名单（store 层兜底；路由层另有 user-only 等检查）：
+ * - 用户的决定：指令、放行、接受 / 驳回提案、批准合并只接受 user；
+ * - 中枢内部：唤醒、提案登记、决策回看、代回复委托只接受 hub；
+ * - `task.reply_escalated` 按 reason 区分（见 `ESCALATION_BY_USER`）：user_replied、user_dismissed
+ *   在用户回复或忽略的同一次 append 中写入，只接受 user；其他原因只接受 hub；
+ * - `supervisor.answered`（D11）由收件箱回复路由写入：路由以 user 身份直接写，
+ *   或由中枢（hub）代为写入，取实际调用方，两者都接受。
+ */
+const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>> = {
+  'user.instruction': ['user'],
+  'supervisor.release': ['user'],
+  'task_proposal.accepted': ['user'],
+  'task_proposal.rejected': ['user'],
+  'merge_request.approved': ['user'],
+  'supervisor.wake_started': ['hub'],
+  'supervisor.answered': ['hub', 'user'],
+  'task_proposal.created': ['hub'],
+  'decision.review_due': ['hub'],
+  'task.reply_delegated': ['hub'],
+}
+
+/** 由用户操作结束委托的转交原因：与用户的 task_reply / 忽略同一次 append 写入，actor 为 user。 */
+const ESCALATION_BY_USER: ReadonlySet<string> = new Set(['user_replied', 'user_dismissed'])
 
 const invalidEvent = (message: string, details?: unknown) =>
   fail('failure', 'invalid_event', message, details)
@@ -433,8 +471,131 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       : invalidEvent(`回复 ${draft.payload.reply_id} 不是该任务待送达的回复`)
   }
 
+  const taskEventsOf = (taskId: string) =>
+    all<EventRow>('SELECT * FROM events WHERE task_id = ? ORDER BY seq', taskId).map(rowToEvent)
+  const currentDelegation = (taskId: string | undefined) => {
+    const t = taskId === undefined ? undefined : taskState(taskId)
+    return t && taskId !== undefined ? activeDelegation(t, taskEventsOf(taskId)) : null
+  }
+
+  /** 该任务最近一次 task.blocked（即当前或最后一次卡住）。 */
+  const lastBlocked = (taskId: string | undefined) => {
+    const row = get<{ seq: number; payload_json: string }>(
+      `SELECT seq, payload_json FROM events WHERE task_id = ? AND type = 'task.blocked'
+       ORDER BY seq DESC LIMIT 1`,
+      taskId ?? null,
+    )
+    return row
+      ? { seq: row.seq, payload: JSON.parse(row.payload_json) as EventPayload<'task.blocked'> }
+      : null
+  }
+  /** 该任务针对某次卡住的委托 / 转交事件。 */
+  const delegationOf = (
+    taskId: string | undefined,
+    blockSeq: number,
+    type: 'task.reply_delegated' | 'task.reply_escalated',
+  ) =>
+    !!get(
+      `SELECT 1 FROM events WHERE task_id = ? AND type = ?
+         AND json_extract(payload_json, '$.block_seq') = ? LIMIT 1`,
+      taskId ?? null,
+      type,
+      blockSeq,
+    )
+
+  const notDelegable = (why: string) => fail('failure', 'not_delegable', why)
+
+  /**
+   * `task.reply_delegated` 的不变量（D15 "判定与卡住绑定"）：
+   * - block_seq 是当前这次卡住，kind 与卡住原因一致；同一次卡住只委托一次；
+   * - 卡住带 no_delegate 或 prior_reason（node_lost 遗留）时不委托；
+   * - awaiting_approval：卡住时节点持有租约；必须带 decision_id，且等于卡住上报的 decision_id、
+   *   指向本任务的 policy.decided，写于上一次离开 blocked 之后、本次卡住之前，档位为 supervisor。
+   */
+  function validateDelegation(draft: Extract<LedgerEventDraft, { type: 'task.reply_delegated' }>) {
+    const p = draft.payload
+    if (p.task_id !== draft.task_id) {
+      return invalidEvent('task.reply_delegated 的 task_id 必须与信封一致')
+    }
+    const last = lastBlocked(draft.task_id)
+    if (!last || last.seq !== p.block_seq) {
+      return invalidEvent(`block_seq ${p.block_seq} 不是该任务当前的卡住`)
+    }
+    const blocked = last.payload
+    if (blocked.reason !== p.kind) {
+      return invalidEvent(`委托的 kind ${p.kind} 与卡住原因 ${blocked.reason} 不一致`)
+    }
+    if (blocked.no_delegate === true) return notDelegable('这次卡住带 no_delegate，不能委托')
+    if (blocked.prior_reason !== undefined) {
+      return notDelegable('节点掉线后保留 prior_reason 的卡住不能委托')
+    }
+    if (
+      get(
+        `SELECT 1 FROM events WHERE task_id = ? AND seq > ? AND type IN (${[
+          ...DELEGATION_ENDING_EVENTS,
+        ]
+          .map((t) => `'${t}'`)
+          .join(', ')}) LIMIT 1`,
+        draft.task_id ?? null,
+        p.block_seq,
+      )
+    ) {
+      return notDelegable('任务已离开这次卡住（例如租约过期），不能委托')
+    }
+    if (delegationOf(draft.task_id, p.block_seq, 'task.reply_delegated')) {
+      return fail('failure', 'duplicate_delegation', `卡住 ${p.block_seq} 已经委托过`, {
+        block_seq: p.block_seq,
+      })
+    }
+    if (p.kind !== 'awaiting_approval') return ok(null)
+    if (blocked.lease_held !== undefined && blocked.lease_held !== true) {
+      return notDelegable('授权请求卡住时节点必须持有租约（lease_held）')
+    }
+    if (p.decision_id === undefined) {
+      return invalidEvent('awaiting_approval 的委托必须带 decision_id')
+    }
+    if (blocked.decision_id !== p.decision_id) {
+      return invalidEvent(`decision_id ${p.decision_id} 与卡住上报的判定不一致`)
+    }
+    const decision = get<{ type: string; task_id: string | null; payload_json: string }>(
+      'SELECT type, task_id, payload_json FROM events WHERE seq = ?',
+      p.decision_id,
+    )
+    if (decision?.type !== 'policy.decided' || decision.task_id !== draft.task_id) {
+      return invalidEvent(`decision_id ${p.decision_id} 不是本任务的策略判定`)
+    }
+    // 下界取"上一次离开 blocked"与"上一次 task.blocked"中较晚者：blocked → blocked 时
+    // 前一次卡住期间的判定属于前一次卡住，不能拿来委托新的卡住。
+    const left =
+      get<{ seq: number | null }>(
+        `SELECT MAX(seq) AS seq FROM events WHERE task_id = ? AND seq < ?
+           AND type IN ('task.unblocked', 'task.requeued_with_reply', 'task.requeued', 'task.blocked')`,
+        draft.task_id ?? null,
+        p.block_seq,
+      )?.seq ?? 0
+    if (p.decision_id <= left || p.decision_id >= p.block_seq) {
+      return invalidEvent(
+        `策略判定 ${p.decision_id} 不属于这次卡住（早于上一次离开 blocked 或上一次卡住）`,
+      )
+    }
+    const level = (JSON.parse(decision.payload_json) as { level?: string }).level
+    if (level !== 'supervisor') {
+      return invalidEvent(`策略判定 ${p.decision_id} 的档位是 ${level}，不是 supervisor`)
+    }
+    return ok(null)
+  }
+
   /** 写入前的校验：信封、状态机与投影一致性。只读投影，不写任何东西。 */
   function validate(draft: LedgerEventDraft): Result<null> {
+    const allowed = EVENT_ACTORS[draft.type]
+    if (allowed && !allowed.includes(draft.actor)) {
+      return fail(
+        'failure',
+        'actor_mismatch',
+        `${draft.type} 只接受 ${allowed.join('、')} 身份写入（实际为 ${draft.actor}）`,
+        { type: draft.type, actor: draft.actor },
+      )
+    }
     const task = draft.task_id === undefined ? undefined : taskState(draft.task_id)
     const checked = checkTaskEvent(task?.status ?? null, draft)
     if (!checked.ok) return checked
@@ -578,6 +739,104 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           return fail('failure', 'item_closed', `收件箱条目 ${draft.payload.item_id} 已关闭`, {
             item_id: draft.payload.item_id,
           })
+        }
+        return ok(null)
+      }
+      case 'task.reply_delegated':
+        return validateDelegation(draft)
+      case 'task.reply_escalated': {
+        // 身份按 reason 区分：user_replied / user_dismissed 只接受 user，其他原因只接受 hub。
+        const expected = ESCALATION_BY_USER.has(draft.payload.reason) ? 'user' : 'hub'
+        if (draft.actor !== expected) {
+          return fail(
+            'failure',
+            'actor_mismatch',
+            `reason 为 ${draft.payload.reason} 的 task.reply_escalated 只接受 ${expected} 身份写入（实际为 ${draft.actor}）`,
+            { type: draft.type, actor: draft.actor, reason: draft.payload.reason },
+          )
+        }
+        // 只能结束当前这次卡住上仍有效的委托：任务离开该次卡住（含进入新的卡住）后委托已隐式失效，
+        // 不再写转交事件（activeDelegation）。
+        const last = lastBlocked(draft.task_id)
+        if (!last || last.seq !== draft.payload.block_seq) {
+          return invalidEvent(`block_seq ${draft.payload.block_seq} 不是该任务当前的卡住`)
+        }
+        const active = currentDelegation(draft.task_id)
+        if (!active || active.block_seq !== draft.payload.block_seq) {
+          return fail('failure', 'not_delegated', '这次卡住没有仍有效的 supervisor 委托', {
+            block_seq: draft.payload.block_seq,
+          })
+        }
+        return ok(null)
+      }
+      case 'task.branch_reported': {
+        // D15：只有自己创建任务分支的执行器（codex-orca）上报；只接受持有该任务活动租约的节点写入；
+        // 每个任务只写一次、不可更改。
+        const row = get<{ contract_json: string; branch: string | null }>(
+          'SELECT contract_json, branch FROM tasks WHERE id = ?',
+          draft.task_id ?? null,
+        )
+        const executor = row
+          ? (JSON.parse(row.contract_json) as { executor?: string }).executor
+          : null
+        if (executor !== 'codex-orca') {
+          return invalidEvent(`只有 codex-orca 任务上报任务分支（该任务执行器为 ${executor}）`)
+        }
+        const lease = get<{ node_id: string }>(
+          "SELECT node_id FROM leases WHERE task_id = ? AND state = 'active'",
+          draft.task_id ?? null,
+        )
+        if (!lease || draft.actor !== `node:${lease.node_id}`) {
+          return fail(
+            'failure',
+            'invalid_lease_token',
+            '只有持有该任务活动租约的节点能上报任务分支',
+            { task_id: draft.task_id },
+          )
+        }
+        if (row?.branch != null) {
+          return fail('failure', 'invalid_transition', '任务分支已上报，不能更改', {
+            from: task?.status ?? null,
+            type: draft.type,
+          })
+        }
+        return ok(null)
+      }
+      case 'supervisor.wake_started': {
+        // 必须与唤醒任务的 task.created 在同一次 appendMany 中写入（D1：唤醒身份以本事件为准，
+        // 不能留下"已建但没有 wake_started"的窗口）；这里要求任务创建后还没有其他任务事件。
+        // TODO(3.2)：G3 的 effectiveRoleKind 已合入，但 store 不读角色配置；唤醒调度在 createTask
+        // 前用 findSupervisorRole / effectiveRoleKind 确认角色有效类别为 supervisor。
+        const p = draft.payload
+        if (p.task_id !== draft.task_id || p.workspace !== draft.workspace) {
+          return invalidEvent('supervisor.wake_started 的 task_id、workspace 必须与信封一致')
+        }
+        const dup = get<{ seq: number }>(
+          `SELECT seq FROM events WHERE type = 'supervisor.wake_started' AND task_id = ? LIMIT 1`,
+          draft.task_id ?? null,
+        )
+        if (dup) {
+          return fail('failure', 'duplicate_wake', '该任务已记录为唤醒任务', { seq: dup.seq })
+        }
+        const row = get<{ created_seq: number; last_seq: number }>(
+          'SELECT created_seq, last_seq FROM tasks WHERE id = ?',
+          draft.task_id ?? null,
+        )
+        if (!row || row.created_seq !== row.last_seq) {
+          return invalidEvent('supervisor.wake_started 必须紧随唤醒任务的 task.created 写入')
+        }
+        const max = get<{ g: number | null }>(
+          `SELECT MAX(json_extract(payload_json, '$.generation')) AS g FROM events
+           WHERE type = 'supervisor.wake_started' AND workspace = ?`,
+          draft.workspace ?? null,
+        )?.g
+        if (max != null && p.generation <= max) {
+          return fail(
+            'failure',
+            'duplicate_wake',
+            `唤醒代数必须严格递增：${draft.workspace} 已有第 ${max} 代`,
+            { generation: max },
+          )
         }
         return ok(null)
       }
@@ -817,9 +1076,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return r ? rowToTask(r) : null
     },
     taskEvents(taskId) {
-      return all<EventRow>('SELECT * FROM events WHERE task_id = ? ORDER BY seq', taskId).map(
-        rowToEvent,
-      )
+      return taskEventsOf(taskId)
+    },
+    activeDelegation(taskId) {
+      return currentDelegation(taskId)
     },
     getNode(nodeId) {
       const r = get<NodeRow>(`${NODE_SELECT} WHERE n.node_id = ?`, nodeId)

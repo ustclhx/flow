@@ -290,6 +290,14 @@
                 "type": "string",
                 "maxLength": 2000
               }
+            },
+            "push_env_ok": {
+              "description": "节点上报的推送环境检查结果（D15）；缺失视为不满足",
+              "type": "boolean"
+            },
+            "gh_env_ok": {
+              "description": "节点上报的 gh 仓库解析检查结果（D15）；缺失视为不满足",
+              "type": "boolean"
             }
           },
           "required": [

@@ -199,6 +199,48 @@
               "additionalProperties": false,
               "title": "Task cost",
               "description": "执行器上报的费用与用量（估算）"
+            },
+            "review": {
+              "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
+              "type": "object",
+              "properties": {
+                "verdict": {
+                  "type": "string",
+                  "enum": [
+                    "approve",
+                    "changes_requested"
+                  ],
+                  "description": "approve 没有阻塞问题；changes_requested 需要修改"
+                },
+                "blocking": {
+                  "default": [],
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  }
+                },
+                "notes": {
+                  "default": "",
+                  "type": "string",
+                  "maxLength": 16384
+                },
+                "reviewed_sha": {
+                  "type": "string",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "description": "审查时 PR 的 head（执行器记录）"
+                }
+              },
+              "required": [
+                "verdict",
+                "blocking",
+                "notes",
+                "reviewed_sha"
+              ],
+              "additionalProperties": false,
+              "title": "Review result"
             }
           },
           "required": [

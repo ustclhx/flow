@@ -23,6 +23,8 @@ import {
   type Role,
   SUPERVISOR_ACTOR,
 } from './roles.ts'
+import type { SupervisorConfig } from './schema/supervisor.ts'
+import { loadWorkspaces } from './workspaces.ts'
 
 /** gitleaks 需 staged/stdin；Codex 需 exec --json/resume；Codex、Orca 下限取已验证的 fixture 版本。 */
 export const MIN_VERSIONS = {
@@ -420,6 +422,8 @@ export async function runDoctor(
     checks.push(...checkRoleKinds(roles.data.roles))
   }
 
+  checks.push(...(await checkWorkspaces(home)))
+
   checks.push(...(await checkExecutors(roles.ok ? roles.data.roles : [], env, opts, run, find)))
 
   for (const plist of checkDaemonPlists(opts.launchAgentsDir ?? launchAgentsDirectory())) {
@@ -446,6 +450,60 @@ export async function runDoctor(
   }
   if (!report.ok) return fail('failure', 'doctor_failed', formatDoctorReport(report), report)
   return ok(report)
+}
+
+/** supervisor 设置的一行摘要（add-m1-supervisor 1.2：doctor 显示）。 */
+export function describeSupervisorConfig(c: SupervisorConfig): string {
+  if (!c.enabled) return '未启用'
+  const l = c.limits
+  return [
+    '启用（需要 kind: supervisor 角色才会唤醒）',
+    `自动合并 ${c.auto_merge ? '开' : '关'}`,
+    `合并方式 ${c.merge_method}`,
+    `无检查时${c.allow_no_checks ? '允许' : '不允许'}合并`,
+    `审查角色 ${c.reviewer_roles.join('、')}`,
+    `代回复 ${c.delegate_replies ? `开（超时 ${c.reply_timeout_s}s）` : '关'}`,
+    `上限：每次唤醒 ${l.tasks_per_wake} 个任务，每天 ${l.wakes_per_day} 次唤醒（autonomous ${l.autonomous_wakes_per_day}、reply ${l.reply_wakes_per_day}），链深 ${l.chain_depth}，审查 ${l.review_rounds} 轮，未答提问 ${l.open_questions}`,
+  ].join('；')
+}
+
+/** workspace 定义文件的问题与每个 workspace 的 supervisor 设置。 */
+async function checkWorkspaces(home: string): Promise<DoctorCheck[]> {
+  const loaded = await loadWorkspaces(home)
+  if (!loaded.ok) return [{ id: 'workspaces.config', ok: false, message: loaded.error.message }]
+  const checks: DoctorCheck[] = loaded.data.issues.map((issue) => ({
+    id: `workspaces.config.${issue.file}.${issue.field ?? ''}`,
+    ok: false,
+    message: `${issue.file}${issue.field ? `：${issue.field}` : ''}：${issue.message}`,
+    hint: '修正 workspace 配置后重新运行 flow doctor；有问题的文件不会被加载',
+  }))
+  for (const issue of loaded.data.warnings) {
+    checks.push({
+      id: `workspaces.config.${issue.file}.${issue.field ?? ''}`,
+      ok: false,
+      severity: 'warning',
+      message: `${issue.file}${issue.field ? `：${issue.field}` : ''}：${issue.message}（supervisor 视为未启用）`,
+      hint: '修正 supervisor 段后重新运行 flow doctor；该 workspace 其余配置照常生效',
+    })
+  }
+  for (const ws of loaded.data.workspaces) {
+    if (ws.file === null) {
+      checks.push({
+        id: `workspace.${ws.id}.supervisor`,
+        ok: true,
+        severity: 'info',
+        message: `${ws.ref} supervisor：未启用（global 不启用 supervisor，不唤醒、不代回复）`,
+      })
+      continue
+    }
+    checks.push({
+      id: `workspace.${ws.id}.supervisor`,
+      ok: true,
+      severity: 'info',
+      message: `${ws.ref} supervisor：${describeSupervisorConfig(ws.supervisor)}`,
+    })
+  }
+  return checks
 }
 
 /** 可直接复制进已有 dev.yaml 的片段（design D14：升级用户）。 */

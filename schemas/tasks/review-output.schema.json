@@ -1,0 +1,38 @@
+{
+  "$id": "https://flow.local/schemas/tasks/review-output.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "changes_requested"
+      ],
+      "description": "approve 没有阻塞问题；changes_requested 需要修改"
+    },
+    "blocking": {
+      "default": [],
+      "description": "阻塞合并的问题，每条一句；approve 时为空",
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "notes": {
+      "default": "",
+      "description": "其他说明与非阻塞建议",
+      "type": "string",
+      "maxLength": 16384
+    }
+  },
+  "required": [
+    "verdict"
+  ],
+  "additionalProperties": false,
+  "title": "Review output",
+  "description": "审查会话的结构化输出（模型部分）"
+}

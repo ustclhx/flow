@@ -4,6 +4,11 @@ import { join, relative } from 'node:path'
 import { parse } from 'yaml'
 import { flowPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
+import {
+  disabledSupervisorConfig,
+  globalSupervisorConfig,
+  type SupervisorConfig,
+} from './schema/supervisor.ts'
 import { workspaceSchema } from './schema/workspace.ts'
 import { formatZodIssues, type ValidationIssue } from './validation-issue.ts'
 
@@ -20,6 +25,8 @@ export interface Workspace {
   repos: string[]
   /** 定义文件（相对 flow-home）；`ws/global` 为 null。 */
   file: string | null
+  /** supervisor 设置（已补默认值；add-m1-supervisor 1.2）。 */
+  supervisor: SupervisorConfig
 }
 
 export interface WorkspaceSet {
@@ -27,6 +34,8 @@ export interface WorkspaceSet {
   workspaces: Workspace[]
   /** 定义文件中的问题；有问题的文件不会出现在 workspaces 中。 */
   issues: ValidationIssue[]
+  /** 只影响 supervisor 段的问题：workspace 照常加载，supervisor 视为未启用（按警告处理）。 */
+  warnings: ValidationIssue[]
 }
 
 export const GLOBAL_WORKSPACE: Workspace = {
@@ -37,6 +46,8 @@ export const GLOBAL_WORKSPACE: Workspace = {
   description: '隐式存在的全局 workspace，不需要定义文件',
   repos: [],
   file: null,
+  // ws/global 固定不启用 supervisor：不唤醒、不代回复（design D3）。
+  supervisor: globalSupervisorConfig(),
 }
 
 /**
@@ -47,7 +58,8 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
   const dir = flowPaths(home).workspaces
   const workspaces: Workspace[] = []
   const issues: ValidationIssue[] = []
-  if (!existsSync(dir)) return ok({ workspaces: [GLOBAL_WORKSPACE], issues })
+  const warnings: ValidationIssue[] = []
+  if (!existsSync(dir)) return ok({ workspaces: [GLOBAL_WORKSPACE], issues, warnings })
   let names: string[]
   try {
     names = (await readdir(dir)).filter((n) => /\.ya?ml$/.test(n) && !n.startsWith('.')).sort()
@@ -66,7 +78,23 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
       issues.push(issue('invalid_yaml', `不是合法的 YAML：${(err as Error).message}`))
       continue
     }
-    const parsed = workspaceSchema.safeParse(data)
+    let parsed = workspaceSchema.safeParse(data)
+    // 只有 supervisor 段有问题时不丢弃整个 workspace：supervisor 视为未启用，问题照常报告。
+    let supervisorInvalid = false
+    if (
+      !parsed.success &&
+      parsed.error.issues.every((i) => i.path[0] === 'supervisor') &&
+      data !== null &&
+      typeof data === 'object'
+    ) {
+      const { supervisor: _bad, ...rest } = data as Record<string, unknown>
+      const retry = workspaceSchema.safeParse(rest)
+      if (retry.success) {
+        warnings.push(...formatZodIssues(parsed.error.issues, data, { file }))
+        supervisorInvalid = true
+        parsed = retry
+      }
+    }
     if (!parsed.success) {
       issues.push(...formatZodIssues(parsed.error.issues, data, { file }))
       continue
@@ -88,7 +116,8 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
       description: ws.description,
       repos: ws.repos ?? [],
       file,
+      supervisor: supervisorInvalid ? disabledSupervisorConfig() : ws.supervisor,
     })
   }
-  return ok({ workspaces: [GLOBAL_WORKSPACE, ...workspaces], issues })
+  return ok({ workspaces: [GLOBAL_WORKSPACE, ...workspaces], issues, warnings })
 }

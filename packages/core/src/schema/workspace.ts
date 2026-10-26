@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { WORKSPACE_ID_RE } from './common.ts'
+import { defaultSupervisorConfig, supervisorConfigSchema } from './supervisor.ts'
 
 /** `config/workspaces/<id>.yaml` 的格式（resource-registry）。 */
 
@@ -10,6 +11,9 @@ const shared = {
     .meta({ description: 'workspace id，与文件名一致；标识写作 ws/<id>' }),
   name: z.string().min(1).meta({ description: '显示名称' }),
   description: z.string().min(1).meta({ description: '一句话说明' }),
+  supervisor: supervisorConfigSchema
+    .default(defaultSupervisorConfig)
+    .meta({ description: 'supervisor 设置（add-m1-supervisor）；缺省全部取默认值' }),
 }
 
 export const productWorkspace = z

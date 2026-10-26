@@ -94,8 +94,8 @@ export function createApplier(db: Database): Applier {
         const c = e.payload.contract
         stmt(
           `INSERT INTO tasks (id, workspace, status, contract_json, idempotency_key, parent,
-             attempt, created_seq, last_seq, created_at, updated_at, created_by)
-           VALUES (?, ?, 'queued', ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+             attempt, created_seq, last_seq, created_at, updated_at, created_by, origin)
+           VALUES (?, ?, 'queued', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
         ).run(
           e.task_id ?? null,
           e.workspace ?? null,
@@ -107,6 +107,7 @@ export function createApplier(db: Database): Applier {
           e.ts,
           e.ts,
           e.actor,
+          e.payload.origin ?? null,
         )
         return
       }
@@ -159,6 +160,9 @@ export function createApplier(db: Database): Applier {
           ...(p.tail ? { tail: p.tail } : {}),
           ...(p.session ? { session: p.session } : {}),
           ...(p.prior_reason ? { prior_reason: p.prior_reason } : {}),
+          ...(p.decision_id !== undefined ? { decision_id: p.decision_id } : {}),
+          ...(p.diff_stat ? { diff_stat: p.diff_stat } : {}),
+          ...(p.no_delegate !== undefined ? { no_delegate: p.no_delegate } : {}),
         }
         setStatus(e, 'blocked', ', blocked_json = ?', JSON.stringify(blocked))
         return
@@ -227,6 +231,15 @@ export function createApplier(db: Database): Applier {
           e.ts,
           e.payload.lease_id,
         )
+        touchTask(e, '')
+        return
+      case 'task.branch_reported':
+        touchTask(e, ', branch = ?', e.payload.branch)
+        return
+      case 'task.reply_delegated':
+      case 'task.reply_escalated':
+      case 'supervisor.wake_started':
+        // 代回复委托与唤醒的队列投影由调度器（tasks 3.x）维护；这里只推进任务的 last_seq。
         touchTask(e, '')
         return
       case 'node.registered': {
@@ -398,9 +411,16 @@ export function createApplier(db: Database): Applier {
       case 'hub.backup_done':
       case 'hub.rebuilt':
       case 'user.instruction':
+      case 'supervisor.answered':
+      case 'supervisor.release':
+      case 'task_proposal.created':
+      case 'task_proposal.accepted':
+      case 'task_proposal.rejected':
+      case 'decision.review_due':
+      case 'merge_request.approved':
       case 'channel.rebound':
       case 'channel.unlinked':
-        // 中枢运维事件与用户指令（变更 ④ 消费）不影响投影（租约顺延属于软状态，由调用方直接更新 expires_at）。
+        // 中枢运维事件、用户指令与 supervisor 事件（由 ④ 的调度器与收件箱消费）不影响这些投影（租约顺延属于软状态，由调用方直接更新 expires_at）。
         return
       default: {
         const never: never = e

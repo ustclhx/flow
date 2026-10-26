@@ -14,6 +14,7 @@ export * from '../proposals/schema.ts'
 export * from './common.ts'
 export * from './entries.ts'
 export * from './search.ts'
+export * from './supervisor.ts'
 export * from './workspace.ts'
 
 type JsonSchema = Record<string, unknown>
@@ -32,7 +33,8 @@ function toJson(schema: z.ZodType, file: string, io: 'input' | 'output' = 'outpu
 export function jsonSchemas(): Record<string, JsonSchema> {
   const out: Record<string, JsonSchema> = {
     'entry.schema.json': toJson(entrySchema, 'entry.schema.json'),
-    'workspace.schema.json': toJson(workspaceSchema, 'workspace.schema.json'),
+    // 用户编写的配置文件：input 形态，带默认值的字段（如 supervisor）可省略。
+    'workspace.schema.json': toJson(workspaceSchema, 'workspace.schema.json', 'input'),
     'proposal.schema.json': toJson(proposalSchema, 'proposal.schema.json'),
     'config/role.schema.json': toJson(roleSchema, 'config/role.schema.json', 'input'),
     'config/policies.schema.json': toJson(

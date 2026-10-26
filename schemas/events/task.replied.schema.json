@@ -56,9 +56,10 @@
           "enum": [
             "telegram",
             "web",
-            "cli"
+            "cli",
+            "supervisor"
           ],
-          "description": "操作发起的渠道"
+          "description": "回复发起的渠道；supervisor 表示 supervisor 代用户回复"
         },
         "text": {
           "description": "回复文字或拒绝理由",

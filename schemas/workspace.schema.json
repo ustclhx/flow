@@ -20,6 +20,151 @@
           "minLength": 1,
           "description": "一句话说明"
         },
+        "supervisor": {
+          "default": {
+            "enabled": true,
+            "auto_merge": false,
+            "merge_method": "squash",
+            "allow_no_checks": false,
+            "reviewer_roles": [
+              "pr-reviewer"
+            ],
+            "delegate_replies": true,
+            "reply_timeout_s": 600,
+            "limits": {
+              "tasks_per_wake": 5,
+              "wakes_per_day": 24,
+              "autonomous_wakes_per_day": 4,
+              "reply_wakes_per_day": 48,
+              "chain_depth": 8,
+              "review_rounds": 2,
+              "open_questions": 3
+            }
+          },
+          "description": "supervisor 设置（add-m1-supervisor）；缺省全部取默认值",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "是否唤醒本 workspace 的 supervisor；缺省 true，仅在存在 kind: supervisor 角色时生效",
+              "type": "boolean"
+            },
+            "auto_merge": {
+              "default": false,
+              "description": "true：审查通过后中枢直接建 merger 任务；默认 false，需要用户在收件箱批准合并",
+              "type": "boolean"
+            },
+            "merge_method": {
+              "default": "squash",
+              "description": "pr-merge 的合并方式：squash（默认）、merge 或 rebase",
+              "type": "string",
+              "enum": [
+                "squash",
+                "merge",
+                "rebase"
+              ]
+            },
+            "allow_no_checks": {
+              "default": false,
+              "description": "true：PR 没有任何检查时也允许合并；默认 false（至少要有一项检查且全部成功）",
+              "type": "boolean"
+            },
+            "reviewer_roles": {
+              "default": [
+                "pr-reviewer"
+              ],
+              "description": "审查结论被采信的角色（只接受 claude-sdk 执行器）；默认 [pr-reviewer]",
+              "minItems": 1,
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                "description": "角色名"
+              }
+            },
+            "delegate_replies": {
+              "default": true,
+              "description": "卡住时先交给 supervisor 代回复（D15）；启用 supervisor 时默认 true",
+              "type": "boolean"
+            },
+            "reply_timeout_s": {
+              "default": 600,
+              "description": "代回复的等待秒数，超时转交用户；默认 600",
+              "type": "integer",
+              "minimum": 30,
+              "maximum": 86400
+            },
+            "limits": {
+              "default": {
+                "tasks_per_wake": 5,
+                "wakes_per_day": 24,
+                "autonomous_wakes_per_day": 4,
+                "reply_wakes_per_day": 48,
+                "chain_depth": 8,
+                "review_rounds": 2,
+                "open_questions": 3
+              },
+              "type": "object",
+              "properties": {
+                "tasks_per_wake": {
+                  "default": 5,
+                  "description": "每次唤醒最多创建的任务数，超出返回 limit_exceeded；默认 5",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "wakes_per_day": {
+                  "default": 24,
+                  "description": "每天普通唤醒（instruction + autonomous，不含 reply）的次数上限；默认 24",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "autonomous_wakes_per_day": {
+                  "default": 4,
+                  "description": "其中 autonomous 唤醒的次数上限；默认 4",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "reply_wakes_per_day": {
+                  "default": 48,
+                  "description": "每天代回复（reply）唤醒的次数上限，超出时委托立即转交用户；默认 48",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "chain_depth": {
+                  "default": 8,
+                  "description": "parent 链深度上限；默认 8",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                },
+                "review_rounds": {
+                  "default": 2,
+                  "description": "同一 PR 的 changes_requested 轮数上限，超出返回 review_rounds_exceeded；默认 2",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 20
+                },
+                "open_questions": {
+                  "default": 3,
+                  "description": "同一 workspace 未回答的提问上限，超出返回 too_many_questions；默认 3",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 20
+                }
+              },
+              "additionalProperties": false,
+              "title": "Supervisor limits",
+              "description": "中枢强制的硬性上限（D4）"
+            }
+          },
+          "additionalProperties": false,
+          "title": "Workspace supervisor"
+        },
         "kind": {
           "type": "string",
           "const": "product",
@@ -61,6 +206,151 @@
           "type": "string",
           "minLength": 1,
           "description": "一句话说明"
+        },
+        "supervisor": {
+          "default": {
+            "enabled": true,
+            "auto_merge": false,
+            "merge_method": "squash",
+            "allow_no_checks": false,
+            "reviewer_roles": [
+              "pr-reviewer"
+            ],
+            "delegate_replies": true,
+            "reply_timeout_s": 600,
+            "limits": {
+              "tasks_per_wake": 5,
+              "wakes_per_day": 24,
+              "autonomous_wakes_per_day": 4,
+              "reply_wakes_per_day": 48,
+              "chain_depth": 8,
+              "review_rounds": 2,
+              "open_questions": 3
+            }
+          },
+          "description": "supervisor 设置（add-m1-supervisor）；缺省全部取默认值",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "是否唤醒本 workspace 的 supervisor；缺省 true，仅在存在 kind: supervisor 角色时生效",
+              "type": "boolean"
+            },
+            "auto_merge": {
+              "default": false,
+              "description": "true：审查通过后中枢直接建 merger 任务；默认 false，需要用户在收件箱批准合并",
+              "type": "boolean"
+            },
+            "merge_method": {
+              "default": "squash",
+              "description": "pr-merge 的合并方式：squash（默认）、merge 或 rebase",
+              "type": "string",
+              "enum": [
+                "squash",
+                "merge",
+                "rebase"
+              ]
+            },
+            "allow_no_checks": {
+              "default": false,
+              "description": "true：PR 没有任何检查时也允许合并；默认 false（至少要有一项检查且全部成功）",
+              "type": "boolean"
+            },
+            "reviewer_roles": {
+              "default": [
+                "pr-reviewer"
+              ],
+              "description": "审查结论被采信的角色（只接受 claude-sdk 执行器）；默认 [pr-reviewer]",
+              "minItems": 1,
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                "description": "角色名"
+              }
+            },
+            "delegate_replies": {
+              "default": true,
+              "description": "卡住时先交给 supervisor 代回复（D15）；启用 supervisor 时默认 true",
+              "type": "boolean"
+            },
+            "reply_timeout_s": {
+              "default": 600,
+              "description": "代回复的等待秒数，超时转交用户；默认 600",
+              "type": "integer",
+              "minimum": 30,
+              "maximum": 86400
+            },
+            "limits": {
+              "default": {
+                "tasks_per_wake": 5,
+                "wakes_per_day": 24,
+                "autonomous_wakes_per_day": 4,
+                "reply_wakes_per_day": 48,
+                "chain_depth": 8,
+                "review_rounds": 2,
+                "open_questions": 3
+              },
+              "type": "object",
+              "properties": {
+                "tasks_per_wake": {
+                  "default": 5,
+                  "description": "每次唤醒最多创建的任务数，超出返回 limit_exceeded；默认 5",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "wakes_per_day": {
+                  "default": 24,
+                  "description": "每天普通唤醒（instruction + autonomous，不含 reply）的次数上限；默认 24",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "autonomous_wakes_per_day": {
+                  "default": 4,
+                  "description": "其中 autonomous 唤醒的次数上限；默认 4",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "reply_wakes_per_day": {
+                  "default": 48,
+                  "description": "每天代回复（reply）唤醒的次数上限，超出时委托立即转交用户；默认 48",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "chain_depth": {
+                  "default": 8,
+                  "description": "parent 链深度上限；默认 8",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                },
+                "review_rounds": {
+                  "default": 2,
+                  "description": "同一 PR 的 changes_requested 轮数上限，超出返回 review_rounds_exceeded；默认 2",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 20
+                },
+                "open_questions": {
+                  "default": 3,
+                  "description": "同一 workspace 未回答的提问上限，超出返回 too_many_questions；默认 3",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 20
+                }
+              },
+              "additionalProperties": false,
+              "title": "Supervisor limits",
+              "description": "中枢强制的硬性上限（D4）"
+            }
+          },
+          "additionalProperties": false,
+          "title": "Workspace supervisor"
         },
         "kind": {
           "type": "string",

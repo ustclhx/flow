@@ -90,6 +90,24 @@ const samples: Record<
     valid: { ...task, payload: { lease_id: 'l1', node_id: 'n1', expired_at: ts, attempt: 1 } },
     invalid: { ...task, payload: { lease_id: 'l1', node_id: 'n1', attempt: 1 } },
   },
+  'task.reply_delegated': {
+    valid: {
+      ...task,
+      payload: { task_id: 't_1', block_seq: 7, kind: 'question', deadline: ts },
+    },
+    invalid: {
+      ...task,
+      payload: { task_id: 't_1', block_seq: 7, kind: 'no_progress', deadline: ts },
+    },
+  },
+  'task.reply_escalated': {
+    valid: { ...task, payload: { reason: 'timeout', block_seq: 7 } },
+    invalid: { ...task, payload: { reason: 'bored' } },
+  },
+  'task.branch_reported': {
+    valid: { ...task, payload: { branch: 'ustclhx/t-1' } },
+    invalid: { ...task, payload: { branch: 'feature/../main' } },
+  },
   'lease.granted': {
     valid: {
       ...task,
@@ -201,6 +219,88 @@ const samples: Record<
     valid: { workspace: 'ws/global', payload: { text: '看看昨天的部署', via: 'telegram' } },
     invalid: { payload: { text: '缺少 workspace', via: 'telegram' } },
   },
+  'supervisor.wake_started': {
+    valid: {
+      ...task,
+      payload: {
+        task_id: 't_1',
+        workspace: 'ws/product-res',
+        origin: 'reply',
+        events: [3, 5],
+        generation: 2,
+      },
+    },
+    invalid: {
+      ...task,
+      payload: { task_id: 't_1', workspace: 'ws/product-res', origin: 'patrol', events: [] },
+    },
+  },
+  'supervisor.answered': {
+    valid: { ...task, payload: { item_id: 'sup.12', text: 'B', via: 'telegram' } },
+    invalid: { payload: { item_id: 'sup.12', text: 'B' } },
+  },
+  'supervisor.release': {
+    valid: { workspace: 'ws/product-res', payload: { queue: 'autonomous' } },
+    invalid: { workspace: 'ws/product-res', payload: { queue: 'reply' } },
+  },
+  'task_proposal.created': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: {
+        proposal_id: 'tp-1',
+        wake_task_id: 't_1',
+        draft: contract,
+        decision: {
+          title: '加缓存',
+          expected_outcome: 'p95 降到 200ms',
+          metric: 'p95 延迟',
+          review_date: '2026-11-30',
+        },
+      },
+    },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: { proposal_id: 'p-1', wake_task_id: 't_1', draft: contract },
+    },
+  },
+  'task_proposal.accepted': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: {
+        proposal_id: 'tp-1',
+        task_id: 't_2',
+        decision_path: 'decisions/2026-10-26-cache.md',
+      },
+    },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: { proposal_id: 'tp-1', task_id: 't_2', decision_path: '../x.md' },
+    },
+  },
+  'task_proposal.rejected': {
+    valid: { workspace: 'ws/product-res', payload: { proposal_id: 'tp-1', via: 'web' } },
+    invalid: { payload: { proposal_id: 'tp-1' } },
+  },
+  'decision.review_due': {
+    valid: { payload: { path: 'decisions/2026-10-26-cache.md', review_date: '2026-11-30' } },
+    invalid: { payload: { path: 'decisions/x.md', review_date: '11/30' } },
+  },
+  'merge_request.approved': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: {
+        item_id: 'mr.9',
+        pr: 'https://github.com/o/r/pull/12',
+        review_task: 't_3',
+        approved_by: 'user',
+        via: 'telegram',
+      },
+    },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: { pr: 'https://github.com/o/r/issues/12', review_task: 't_3', approved_by: 'user' },
+    },
+  },
 }
 
 const envelope = (type: EventType, body: Record<string, unknown>) => ({
@@ -294,6 +394,14 @@ describe('事件触发的状态转换', () => {
       ['verifying', 'verifying'],
       ['blocked', 'blocked'],
     ],
+    'task.reply_delegated': [['blocked', 'blocked']],
+    'task.reply_escalated': [['blocked', 'blocked']],
+    'task.branch_reported': [
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
+    ],
+    'supervisor.wake_started': [['queued', 'queued']],
   }
 
   test('规则覆盖全部任务事件', () => {
