@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: supervisor 操作
-系统 SHALL 提供 `brief_update`、`task_propose`、`ask_user`、`pr_merge_request`、`decision_review` 操作，在 `packages/core/src/ops/` 中定义并自动生成 CLI 与 MCP 工具，均由中枢执行；除 `brief_update` 允许 user 外，只有 supervisor 身份能调用。`ws_brief` SHALL 增加 supervisor 笔记、进行中的任务、待处理条目、近期决策几节，总长度仍受预算限制。
+系统 SHALL 提供 `brief_update`、`task_propose`、`ask_user`、`pr_merge_request`、`decision_review` 操作，在 `packages/core/src/ops/` 中定义并自动生成 CLI 与 MCP 工具，均由中枢执行；除 `brief_update` 允许 user 外，只有 supervisor 身份能调用。`ws_brief` SHALL 增加 supervisor 笔记与近期决策两节；workspace 启用 supervisor 时（`supervisor.enabled` 且存在 `kind: supervisor` 角色）SHALL 另向中枢取进行中的任务、待处理条目与代回复记录几节，未启用时不请求中枢、不出现这几节。总长度仍受预算限制。
 
 #### Scenario: 其他 AI 身份调用
 - **WHEN** reviewer 身份调用 `ask_user`

@@ -5,6 +5,7 @@ import { delimiter, join } from 'node:path'
 import { z } from 'zod'
 import { checkDaemonPlists, launchAgentsDirectory } from './daemon/plist.ts'
 import { type DoctorSdk, inspectClaudeSdk } from './doctor-sdk.ts'
+import { reservedNameVariants } from './entries.ts'
 import type { execCommand } from './git.ts'
 import { isRepoRoot } from './git.ts'
 import { type Env, flowPaths, GIT_REPOS } from './home.ts'
@@ -385,6 +386,17 @@ export async function runDoctor(
         ? { id: `brain.${name}`, ok: true, message: `brain/${name} 存在` }
         : { id: `brain.${name}`, ok: false, message: `缺少 brain/${name}`, hint: INIT_HINT },
     )
+  }
+  // 保留名的大小写变体（`Journal/`、`Index.md`）：不当作条目，写入路径也拒绝产生；已有的提示改名。
+  const variants = await reservedNameVariants(paths.brain)
+  if (variants.length > 0) {
+    checks.push({
+      id: 'brain.reserved-names',
+      ok: false,
+      severity: 'warning',
+      message: `brain 中有与保留名只差大小写的目录或文件：${variants.map((v) => `brain/${v}`).join('、')}`,
+      hint: '改名或移出 brain/：在不区分大小写的文件系统上它们与 journal/、briefs/、index.md 等保留文件冲突',
+    })
   }
 
   const roles = await loadRoles(home)

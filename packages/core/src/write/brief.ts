@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { BRAIN_BRIEFS_DIR } from '../entries.ts'
-import { type GitOptions, git } from '../git.ts'
+import { type GitOptions, git, hasCommits } from '../git.ts'
 import { flowPaths } from '../home.ts'
 import { redactSecrets } from '../ledger/redact.ts'
 import { fail, ok, type Result } from '../result.ts'
@@ -58,6 +58,8 @@ async function committedBrief(
   opts: GitOptions = {},
 ): Promise<Result<string | null>> {
   const dir = flowPaths(home).brain
+  // 还没有任何提交（没有 HEAD）：笔记一定没有提交过，按不存在处理。
+  if (!(await hasCommits(dir, opts))) return ok(null)
   const listed = await git(dir, ['ls-tree', '--name-only', 'HEAD', '--', path], opts)
   if (listed.code !== 0) return fail('failure', 'read_failed', '无法读取 brain 仓库中的简报笔记')
   if (listed.stdout.trim() !== path) return ok(null)

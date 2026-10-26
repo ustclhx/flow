@@ -19,7 +19,7 @@ import {
   VERSION,
 } from '@flow/core'
 import { Hono } from 'hono'
-import { createBriefRoutes } from '../briefs/index.ts'
+import { createBriefRoutes, wakeBinding } from '../briefs/index.ts'
 import { buildStatusSnapshot } from '../channels/telegram/commands.ts'
 import { createTelegramLinks, type TelegramLinks } from '../channels/telegram/link.ts'
 import {
@@ -234,10 +234,9 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
           app: createBriefRoutes({
             ledger,
             home: options.home,
-            // TODO(G5 #51)：唤醒绑定 token 合入后改为从 c.get('auth') 取绑定的 workspace 与唤醒 origin。
-            // 在此之前没有可信的绑定信息：恒返回 null，supervisor 的 brief_update 一律被拒绝（失败即拒绝），
-            // user 不受影响。
-            binding: () => null,
+            // 调用方的唤醒只取自鉴权中间件按唤醒绑定 token 认定的结果（D6）；其他认证方式没有绑定，
+            // supervisor 的写请求因此失败即拒绝。
+            binding: wakeBinding,
           }),
         },
         { path: '/', app: createUiLoginCodeRoutes(uiSessions) },

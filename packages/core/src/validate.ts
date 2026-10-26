@@ -1,4 +1,5 @@
-import { readBrainEntries } from './entries.ts'
+import { readBrainEntries, reservedNameVariants } from './entries.ts'
+import { flowPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import { isCalendarDate, WS_REF_RE } from './schema/common.ts'
 import { entrySchemas, isEntryType, isFactType, isResourceType } from './schema/entries.ts'
@@ -118,6 +119,13 @@ export async function validateBrain(
   const warnings: ValidationIssue[] = [...wsResult.data.warnings]
   const stale: VerificationItem[] = []
   const neverVerified: VerificationItem[] = []
+  for (const name of await reservedNameVariants(flowPaths(home).brain)) {
+    warnings.push({
+      file: `brain/${name}`,
+      code: 'reserved_name_variant',
+      message: `brain/${name} 与保留名只差大小写，不会被当作条目读取；在不区分大小写的文件系统上它与保留文件冲突，请改名或移走`,
+    })
+  }
 
   for (const entry of read.data.entries) {
     const { id, file, frontmatter: fm } = entry

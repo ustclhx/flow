@@ -145,7 +145,7 @@ claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor -
 
 | 操作 | 谁能调用 | 执行位置 | 作用 |
 | --- | --- | --- | --- |
-| `ws_brief`（扩展） | 所有 | 本地 | 增加 supervisor 笔记、进行中的任务、待处理条目、近期决策 |
+| `ws_brief`（扩展） | 所有 | 本地 | 增加 supervisor 笔记、近期决策；启用 supervisor 时再向中枢取进行中的任务、待处理条目与代回复记录（未启用时不请求中枢） |
 | `brief_update` | supervisor、user | 中枢 | 整体替换本 workspace 的笔记（带 `base_hash`） |
 | `task_propose` | supervisor | 中枢 | 提交任务提案 |
 | `ask_user` | supervisor | 中枢 | 发一条提问，可带 2–4 个选项 |
