@@ -37,22 +37,36 @@ export interface VerifyVerdict {
 }
 
 /**
- * 验收命令中每个词（含可执行文件与前缀词）允许的形态：白名单，逐段的相对路径或普通词。
- * 不能以 `-` 开头（选项可以用 `=`、拼接等方式夹带路径，例如 `-r/tmp/x.js`、`--preload=/tmp/x.js`），
- * 不能含 `:`、`@`、`~`、`%` 等字符（`file:///tmp/x`、`@/tmp/x`、`~/x`），不能以 `/` 开头，不能含 `..`，
- * `=` 之后也不能紧跟 `/`。
+ * 验收命令中普通词（可执行文件、前缀词、位置参数）允许的形态：白名单，逐段的相对路径或普通词。
+ * 不能含 `:`、`@`、`~`、`%` 等字符（`file:///tmp/x`、`@/tmp/x`、`~/x`），不能以 `/` 或 `-` 开头，
+ * 不能含 `..`，`=` 之后也不能紧跟 `/`（`a=b=/tmp`）。
  */
 export const VERIFY_WORD_RE = /^[A-Za-z0-9_][A-Za-z0-9_.,=+-]*(\/[A-Za-z0-9_.,=+-]+)*$/
+/** 选项名：`-u`、`--fix`、`--watch`（不能把值直接拼在后面，例如 `-r/tmp/x.js`、`-c~/x`）。 */
+export const VERIFY_OPTION_RE = /^--?[A-Za-z0-9][A-Za-z0-9-]*$/
+/** `--name=值`：值必须是普通词。 */
+const VERIFY_OPTION_VALUE_RE = /^--[A-Za-z0-9][A-Za-z0-9-]*=(.*)$/s
+
+const plainWord = (word: string) =>
+  VERIFY_WORD_RE.test(word) && !word.includes('..') && !word.includes('=/')
+
+/** 单个词是否在白名单内。 */
+export function verifyWordAllowed(word: string): boolean {
+  // 单独的 `--`：参数分隔符（`pnpm test -- --watch=false`），其后的词照样逐个校验。
+  if (word === '--') return true
+  if (VERIFY_OPTION_RE.test(word)) return true
+  const withValue = VERIFY_OPTION_VALUE_RE.exec(word)
+  if (withValue) return plainWord(withValue[1] ?? '')
+  return plainWord(word)
+}
 
 /**
- * 第一个不符合白名单的词；全部符合时为 undefined。
- * 词法检查拦不住仓库内指向仓库外的符号链接（例如 `src/link-to-outside`），这是已接受的风险。
+ * 第一个不符合白名单的词；全部符合时为 undefined。选项与它的值分成两个词写时（`--reporter ./x.js`）
+ * 两个词分别校验。词法检查拦不住仓库内指向仓库外的符号链接（例如 `src/link-to-outside`），
+ * 也拦不住引用仓库内相对路径执行代码（`--reporter=x.js`），这些是已接受的风险（design D15）。
  */
 export function verifyRejectedWord(cmd: readonly string[]): string | undefined {
-  // `=` 之后紧跟 `/`（`a=b=/tmp`、`x=/etc/y`）：值是绝对路径，同样拒绝。
-  return cmd.find(
-    (word) => !VERIFY_WORD_RE.test(word) || word.includes('..') || word.includes('=/'),
-  )
+  return cmd.find((word) => !verifyWordAllowed(word))
 }
 
 /** 逐条判定；`allowed` 只在 auto / auto-report 时为 true。 */

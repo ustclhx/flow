@@ -120,7 +120,7 @@ workspace 配置 `supervisor.limits`，默认值：
 2. 目标角色的有效类别（D9）为 `write` 且唤醒 origin 为 `autonomous` → 403 `proposal_required`；
 3. 目标角色类别为 `merge` 或 `supervisor` → 403 `role_not_allowed`；
 4. 合同 `cwd` / `inputs.repo` 必须位于本 workspace 登记的仓库内，否则 `repo_not_in_workspace`：必须是绝对路径或 `~/`；executor 为 codex-orca 时必须恰好是登记仓库（与节点一致），其他执行器允许子目录；先按节点的方式词法 `resolve`，再 `realpath` 比较（避免 `链接/../..` 在中枢与节点解释不同）；通过后把规范化路径（登记仓库写法加 realpath 中仓库以下部分，不含 `..` 与符号链接）写回合同；节点执行前仍须再核对一次（tasks 5.6）；
-5. 验收命令（`verify`）：非 user 身份建任务时，每条命令在**创建时**经策略引擎判定——动作取 `tool:Verify` 加 `classifyAction` 的结果，scope 为新任务的 workspace 与角色，`command_prefix` 严格匹配；只有 `auto` / `auto-report` 放行，否则 403 `verify_not_allowed`，错误中列出未通过的命令；命令的每个词都必须符合白名单 `^[A-Za-z0-9_][A-Za-z0-9_.,=+-]*(/[A-Za-z0-9_.,=+-]+)*$` 且不含 `..`、`=` 之后不紧跟 `/`（因而不能带 `-` 开头的选项，不能出现 `:`、`@`、`~`、`%` 或以 `/` 开头的路径），否则不放行。`tool:Verify` 列为受保护的工具（通配规则最多 draft-approve）。验收命令由节点在执行器沙箱之外直接运行，不经运行时审批，这一步堵住"建一个只读任务、借 verify 外传 `hub.token`"。`flow init` 的 `policies.yaml` 带一组注释掉的 `tool:Verify` auto 模板（`pnpm check`、`pnpm test`、`pnpm lint` 前缀）；不启用时 supervisor 建的任务不能带 verify。所有非 user 身份都受此限（不只 supervisor）；
+5. 验收命令（`verify`）：非 user 身份建任务时，每条命令在**创建时**经策略引擎判定——动作取 `tool:Verify` 加 `classifyAction` 的结果，scope 为新任务的 workspace 与角色，`command_prefix` 严格匹配；只有 `auto` / `auto-report` 放行，否则 403 `verify_not_allowed`，错误中列出未通过的命令；命令的每个词都必须在白名单内，否则不放行：普通词匹配 `^[A-Za-z0-9_][A-Za-z0-9_.,=+-]*(/[A-Za-z0-9_.,=+-]+)*$` 且不含 `..`、`=` 之后不紧跟 `/`；选项匹配 `^--?[A-Za-z0-9][A-Za-z0-9-]*$`，或写成 `--name=<普通词>`；单独的 `--` 作为分隔符；选项与值分开写时分别校验。因此不能出现 `:`、`@`、`~`、`%`、以 `/` 开头的路径或把值直接拼在单横线选项后（`-r/tmp/x.js`）。`tool:Verify` 列为受保护的工具（通配规则最多 draft-approve）。验收命令由节点在执行器沙箱之外直接运行，不经运行时审批，这一步堵住"建一个只读任务、借 verify 外传 `hub.token`"。`flow init` 的 `policies.yaml` 带一组注释掉的 `tool:Verify` auto 模板（`pnpm check`、`pnpm test`、`pnpm lint` 前缀）；不启用时 supervisor 建的任务不能带 verify。所有非 user 身份都受此限（不只 supervisor）；
 6. D4 的数量和深度上限。
 
 非 hub 身份不能在 `requires` 中声明保留能力（`wake`），否则 `invalid_arguments`。
@@ -306,7 +306,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 备选：用确定性规则直接 `auto` 放行这些命令。保留为用户自己的选项（策略本来就支持），但它无法处理 `question`，也无法结合任务目标判断"这个请求是否合理"。
 
-**已接受的风险（验收命令）**：D5 第 5 步对 `tool:Verify` 的参数只做词法白名单检查，拦不住仓库内指向仓库外的符号链接（例如 worker 提交的 `src/link-to-outside`，`pnpm test src/link-to-outside` 会加载仓库外的文件）；与代回复白名单一样，放行 `pnpm test` 本来就等于在沙箱外执行仓库中（可能被 worker 改过）的脚本，这一项不额外扩大风险。
+**已接受的风险（验收命令）**：D5 第 5 步对 `tool:Verify` 的参数只做词法白名单检查，拦不住仓库内指向仓库外的符号链接（例如 worker 提交的 `src/link-to-outside`，`pnpm test src/link-to-outside` 会加载仓库外的文件），也拦不住用仓库内相对路径加载代码（`--reporter x.js`）；与代回复白名单一样，放行 `pnpm test` 本来就等于在沙箱外执行仓库中（可能被 worker 改过）的脚本，这一项不额外扩大风险。
 
 ## Risks / Trade-offs
 

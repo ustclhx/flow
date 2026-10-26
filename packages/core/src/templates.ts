@@ -130,9 +130,11 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
 ## 验收命令由节点在执行器沙箱之外直接运行。supervisor 等 AI 身份建任务时，中枢在创建时逐条判定：
 ## 动作为 tool:Verify 加上命令识别出的动作，只有 auto / auto-report 才允许，否则拒绝（verify_not_allowed）。
 ## 不启用下面的规则时，supervisor 建的任务不能带 verify。命令前缀同样严格按原始词匹配。
-## 命令的每个词都必须是白名单形态：字母数字或 _ 开头、只含字母数字与 _ . , = + -、可用 / 分段的相对路径，
-## 且不含 ..、= 之后不紧跟 /；因此不能带以 - 开头的选项（-r/tmp/x.js、--preload=/tmp/x.js），也不能出现 : @ ~ % 或以 / 开头的路径。
-## 词法检查拦不住仓库内指向仓库外的符号链接（例如 src/link-to-outside），这是已接受的风险。
+## 命令的每个词都必须在白名单内：普通词是字母数字或 _ 开头、只含字母数字与 _ . , = + -、可用 / 分段的相对路径，
+## 不含 ..、= 之后不紧跟 /；选项只能是 -x、--name，或 --name=<普通词>，单独的 -- 作为分隔符。
+## 因此 -r/tmp/x.js、-c~/x、--preload=/tmp/x.js、file:///tmp/x.js、@/tmp/x 这类写法都不放行。
+## 词法检查拦不住仓库内指向仓库外的符号链接（例如 src/link-to-outside），也拦不住用仓库内相对路径加载代码
+## （--reporter x.js），这是已接受的风险。
 ## 风险：与代回复白名单相同，批准 pnpm test 等于在沙箱外执行仓库中的脚本。
 # - scope: ws/<id>
 #   action: tool:Verify

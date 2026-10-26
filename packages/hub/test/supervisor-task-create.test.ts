@@ -930,7 +930,7 @@ describe('复核修复：verify 通道（blocker）', () => {
     const dev = { parent: w.id, role: 'dev', executor: 'codex-orca' }
     const good = await s.supCreate(w.token, {
       ...dev,
-      verify: [{ cmd: ['pnpm', 'test'] }, { cmd: ['pnpm', 'lint', 'src'] }],
+      verify: [{ cmd: ['pnpm', 'test'] }, { cmd: ['pnpm', 'lint', '--fix'] }],
     })
     expect(good.code).toBe('ok')
     const bad = await s.supCreate(w.token, {
