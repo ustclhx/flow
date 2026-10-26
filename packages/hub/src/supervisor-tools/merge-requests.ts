@@ -59,7 +59,8 @@ import type { SupervisorToolsDeps } from './common.ts'
  *   （core `latestTrustedReview`）；
  * - 开出 PR 的任务上报过任务分支（`task.branch_reported`，投影 `branch`）：merger 据此要求 PR 的 head 分支
  *   等于它且不是 fork PR；多个候选任务的分支不一致时无法确定；
- * - PR 链接的 host/owner/repo 等于 merger 所用登记仓库 `remote.origin.url` 的仓库（纵深核对，pr-merge 再核对一次）；
+ * - PR 链接的 host/owner/repo 等于开出 PR 的任务在 worker 启动前采集的 `repo_snapshot.remote_url`，且等于 merger
+ *   所用登记仓库当前 `remote.origin.url` 的仓库（纵深核对，pr-merge 再核对一次）；
  * - 同一 PR 没有未结束的审查任务（任何带 `inputs.review` 指向该 PR 的未结束任务都算，比 pr-merge 更严）；
  * - 该审查任务的合并请求没有被驳回过（`rejected_before`：驳回后必须重新审查）；
  * - merger 的工作目录能唯一确定为登记仓库（取开出 PR 的任务的 `inputs.repo` / `cwd` 所在的登记仓库；
@@ -327,16 +328,30 @@ export async function checkMergeEligibility(
   if (!dev.ok) reasons.push(...dev.reasons)
   else {
     const r = await mergerRepo(deps, ws, dev.task)
+    // 纵深核对：PR 必须属于开出它的任务在 worker 启动前采集的仓库快照（`repo_snapshot.remote_url`）。
+    // worker 在沙箱外运行，可能改写登记仓库的 remote（worktree 与主仓库共用配置），只认快照。
+    const snapshot = dev.task.repo_snapshot
+      ? parseRemoteUrl(dev.task.repo_snapshot.remote_url)
+      : undefined
+    if (!snapshot) {
+      reasons.push(
+        `开出 PR 的任务 ${dev.task.id} 没有可识别的登记仓库快照（repo_snapshot），无法确认 PR 属于登记仓库`,
+      )
+    } else if (!sameRepo(snapshot, prRepo)) {
+      reasons.push(
+        `PR 不属于开出它的任务启动前的登记仓库 ${snapshot.host}/${snapshot.owner}/${snapshot.repo}`,
+      )
+    }
     if (!r.ok) reasons.push(r.reason)
     else {
-      // 纵深核对：PR 必须属于该登记仓库的 origin（pr-merge 执行器合并前还会再核对一次）。
+      // 当前的 origin 也必须仍是同一仓库（merger 在登记仓库里调用 gh；pr-merge 执行器合并前还会再核对一次）。
       const origin = await (deps.repoOrigin ?? repoOriginFromGit(deps.repoCheck))(r.repo)
       if (!origin.ok) reasons.push(`无法确认登记仓库 ${r.repo} 的 origin：${origin.error.message}`)
       else if (!sameRepo(origin.data, prRepo)) {
         reasons.push(
           `PR 不属于登记仓库 ${origin.data.host}/${origin.data.owner}/${origin.data.repo}`,
         )
-      } else repo = r.repo
+      } else if (snapshot && sameRepo(snapshot, prRepo)) repo = r.repo
     }
   }
 
@@ -446,7 +461,7 @@ async function createMerger(
   o: {
     allowExisting: boolean
     withCreated?: (taskId: string) => EventInput[]
-    coWrite?: { actor: string; before?: EventInput[]; after?: (taskId: string) => EventInput[] }
+    coWrite?: { actor: 'user'; before?: EventInput[]; after?: (taskId: string) => EventInput[] }
   },
 ): Promise<Result<{ task: TaskView; created: boolean }>> {
   const created = await deps.tasks.createTask(contract, {
@@ -639,8 +654,10 @@ export async function approveMergeRequest(
   if (!contract.ok) return contract
   // 批准、建 merger、关闭条目在同一事务里：条目已被（并发的）驳回或忽略关闭时，关闭事件校验失败，
   // 整个事务回滚，不会出现"已驳回却建了 merger"。
+  // allowExisting：并发的两次批准都通过核对时，后到者幂等命中先到者建出的 merger（sameMerger 核对），
+  // 下面再确认条目已由本条目的批准关闭，才按成功返回。
   const task = await createMerger(deps, elig.data, contract.data, {
-    allowExisting: false,
+    allowExisting: true,
     coWrite: {
       actor: 'user',
       before: [
@@ -672,6 +689,17 @@ export async function approveMergeRequest(
     },
   })
   if (!task.ok) return task
+  if (!task.data.created) {
+    const closed = deps.ledger.getInboxItem(item.id)?.state === 'closed'
+    if (!closed || !approvalOf(deps, item.id)) {
+      return fail(
+        'failure',
+        'conflict',
+        `审查任务 ${p.review_task} 已建过 merger 任务 ${task.data.task.id}（${task.data.task.status}），不是本条目批准建出的`,
+        { task_id: task.data.task.id },
+      )
+    }
+  }
   return ok({ task_id: task.data.task.id })
 }
 

@@ -109,6 +109,45 @@ describe('append：事件与投影同事务写入', () => {
     expect(store.activeLease('t1')).toBeNull()
   })
 
+  test('appendMany 的 actors 逐条覆盖身份：缺省项用 actor，每条仍按写入身份白名单校验', async () => {
+    const { store } = await ledger()
+    const instruction = {
+      type: 'user.instruction' as const,
+      workspace: WS,
+      payload: { text: '修一下 README', via: 'cli' as const },
+    }
+    const written = must(
+      store.appendMany([instruction, drafts('t1')['task.created']], {
+        actor: 'hub',
+        actors: ['user', undefined],
+      }),
+    )
+    expect(written.map((e) => [e.type, e.actor])).toEqual([
+      ['user.instruction', 'user'],
+      ['task.created', 'hub'],
+    ])
+    // 覆盖成白名单之外的身份：整个事务不写。
+    const r = store.appendMany([drafts('t2')['task.created'], instruction], {
+      actor: 'user',
+      actors: [undefined, 'hub'],
+    })
+    expect(r.ok ? 'ok' : r.error.code).toBe('actor_mismatch')
+    expect(store.getTask('t2')).toBeNull()
+    expect(store.seq()).toBe(2)
+  })
+
+  test('appendMany 的 actors 长度与事件数不一致：invalid_arguments，整体不写', async () => {
+    const { store } = await ledger()
+    for (const actors of [['user'], ['user', undefined, 'hub']]) {
+      const r = store.appendMany([drafts('t1')['task.created'], drafts('t2')['task.created']], {
+        actor: 'user',
+        actors,
+      })
+      expect(r.ok ? 'ok' : r.error.code).toBe('invalid_arguments')
+    }
+    expect(store.seq()).toBe(0)
+  })
+
   test('appendMany 中后面的事件看到前面事件的投影（lease_expired + blocked）', async () => {
     const { store } = await ledger()
     create(store, 't1')

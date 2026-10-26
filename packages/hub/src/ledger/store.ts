@@ -74,7 +74,7 @@ export interface AppendOptions {
   /**
    * 逐条覆盖操作者（与 drafts 按下标对应，缺省项用 `actor`）。只供中枢内部在同一事务里写入不同身份的
    * 事件（例如用户批准合并与 hub 建 merger，D10）；草稿自身的 `actor` 字段始终被忽略。每条事件仍按
-   * 写入身份白名单（`EVENT_ACTORS`）校验。
+   * 写入身份白名单（`EVENT_ACTORS`）校验。给出时长度必须等于 drafts，否则整体不写（`invalid_arguments`）。
    */
   actors?: readonly (string | undefined)[]
   /**
@@ -1103,6 +1103,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
 
   function appendMany(drafts: readonly EventInput[], o: AppendOptions): Result<LedgerEvent[]> {
     if (drafts.length === 0) return ok([])
+    if (o.actors !== undefined && o.actors.length !== drafts.length) {
+      return fail(
+        'usage',
+        'invalid_arguments',
+        `actors 的长度 ${o.actors.length} 与事件数 ${drafts.length} 不一致`,
+      )
+    }
     const ts = iso()
     const result = inTransaction(() => {
       if (o.check) {

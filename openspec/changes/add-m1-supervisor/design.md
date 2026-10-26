@@ -206,7 +206,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 3. `changes_requested` → supervisor 被唤醒，可以建修改任务（同一分支），受 D4 轮数上限。
 4. `approve` → supervisor 调用 `pr_merge_request{pr, review_task}`。中枢核对（全部取自账本与配置，任一项拿不准即 `merge_not_eligible`，`details.reasons` 列出原因）：
    - 该 PR 是本 workspace 内某个已 done、origin 为 instruction、有效类别恰为 write 的任务的 `kind: pr` 产物（唤醒、审查、合并任务的产物不算）；该任务上报过任务分支（`task.branch_reported`，投影 `branch`），多个候选任务的分支必须一致；
-   - PR 链接的 host/owner/repo 等于 merger 所用登记仓库 `remote.origin.url` 的仓库（纵深核对；pr-merge 合并前再核对一次）；
+   - PR 链接的 host/owner/repo 等于开出 PR 的任务在 worker 启动前采集的 `repo_snapshot.remote_url`（worker 在沙箱外运行，可能改写登记仓库的 remote，只认快照；没有快照即不合格），且等于 merger 所用登记仓库当前 `remote.origin.url` 的仓库（纵深核对；pr-merge 合并前两者都再核对一次）；
    - `review_task` 属于同一 workspace、角色在 `reviewer_roles` 中、`inputs.review.pr` 等于该 PR、`verdict = approve`，且是该 PR 最新一次可信审查（core `latestTrustedReview`）；同一 PR 没有未结束的审查任务；
    - 该审查任务的合并请求没有被驳回过（`rejected_before`：驳回后必须重新审查才能再请求）；
    - merger 的工作目录与唯一的 merge 角色能确定；
