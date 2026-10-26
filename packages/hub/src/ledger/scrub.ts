@@ -46,7 +46,15 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task.done': RESULT_TEXT,
   'task.failed': [...RESULT_TEXT, ['message']],
   'task.cancelled': [...RESULT_TEXT, ['reason']],
-  'task.blocked': [['message'], ['tail', '*'], ['diff_stat']],
+  // request.command 与 policy.decided 的 request.command 同样按自由文本脱敏，两者仍可逐字比较（D15）。
+  'task.blocked': [
+    ['message'],
+    ['tail', '*'],
+    ['diff_stat'],
+    ['request', 'command'],
+    ['request', 'paths', '*'],
+    ['request', 'reason'],
+  ],
   'task.reply_escalated': [['note']],
   'supervisor.answered': [['text']],
   // 提案的目标会展示在收件箱条目与渠道消息中（D11），按自由文本处理。
@@ -69,7 +77,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
  * 保证脱敏后的载荷仍不超过 schema 的上限。未列出的字段由各自的协议 / 写入方限长。
  */
 export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string, number>>>> = {
-  'task.blocked': { diff_stat: DIFF_STAT_MAX },
+  'task.blocked': { diff_stat: DIFF_STAT_MAX, 'request.reason': 2000 },
   'task.reply_escalated': { note: 2000 },
   'supervisor.answered': { text: INBOX_BODY_MAX },
   'task_proposal.created': { reason: 2000 },
@@ -108,7 +116,8 @@ export function scrubPayload(
       out,
       path,
       // 策略命令先在协议上限内脱敏，再裁剪审计文本，避免 2000 字符边界切断 token。
-      type === 'policy.decided'
+      type === 'policy.decided' ||
+        (type === 'task.blocked' && path[0] === 'request' && path[1] !== 'reason')
         ? (s) => clipText(sanitizeText(s, PROTOCOL_MESSAGE_MAX), 2000)
         : max === undefined
           ? redactSecrets

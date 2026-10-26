@@ -35,6 +35,7 @@ import {
   redactSecrets,
   reviewerRoleProblem,
   reviewOutput,
+  SUPERVISOR_ACTOR,
   type SupervisorConfig,
   supervisorRoleProblem,
   type TaskContract,
@@ -435,6 +436,10 @@ interface PendingApproval {
   toolName: string
   input: Record<string, unknown>
   message: string
+  /** 预检判定为 supervisor 档位时的判定 id（D15）：随 idle 信号的 hint 上报。 */
+  decisionId?: number
+  /** 预检时的请求（工具、命令、路径）：supervisor 的批准送达前交给节点复核。 */
+  request?: PrecheckRequest
   resolve(r: PermissionResult): void
   cancelTimer(): void
 }
@@ -621,6 +626,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
             message: head.message,
             tool: head.toolName,
             tool_use_id: head.toolUseID,
+            ...(head.decisionId === undefined ? {} : { decision_id: head.decisionId }),
             ...(session ? { session } : {}),
           }),
         )
@@ -679,8 +685,10 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           // ---- 策略预检（add-m1-inbox 2.3）：交给用户之前先问策略引擎。 ----
           // 只有中枢明确判定 auto / auto-report 才放行；其余结果与调用失败一律交给用户。
           const pre = ctx.precheck ? claudePrecheckRequest(toolName, toolInput) : undefined
+          let decisionId: number | undefined
           if (ctx.precheck && pre) {
             const verdict = await ctx.precheck(pre)
+            if (!verdict.allow) decisionId = verdict.decision_id
             if (finished) return { behavior: 'deny', message: '任务已结束', interrupt: true }
             if (verdict.allow && !opts.signal.aborted) {
               status(autoApprovedText(`${toolName}：${summary}`, verdict), {
@@ -699,6 +707,8 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
               toolName,
               input: toolInput,
               message,
+              ...(decisionId === undefined ? {} : { decisionId }),
+              ...(pre ? { request: pre } : {}),
               resolve,
               cancelTimer: () => {},
             }
@@ -1110,6 +1120,22 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           const head = pending[0]
           // 答复只作用于用户看到的那条审批（按 tool_use_id 匹配，而不是队列位置）。
           if (head && head.toolUseID === presented) {
+            // 只有 supervisor 的批准才复核、才可能拒收（用户的回复中枢不接受 dropped）。
+            if (reply.kind === 'approve' && reply.by === SUPERVISOR_ACTOR && ctx.confirmApproval) {
+              // D15：待批的工具调用不会变，但推送与 gh 环境可能已变；按预检时的请求交给节点复核。
+              const live = head.request ?? claudePrecheckRequest(head.toolName, head.input)
+              const confirmed = await ctx.confirmApproval(reply, live)
+              if (finished) return 'not_running'
+              if (!confirmed || pending[0] !== head) {
+                status(
+                  `回复 ${reply.reply_id}（${reply.by} 批准 ${head.toolName}）未送达：待批请求已变化或环境复查未通过`,
+                )
+                // 不放行；之后重新上报队首（节点以 no_delegate 交给用户）。
+                delete head.decisionId
+                resetAnnounce()
+                return 'dropped'
+              }
+            }
             if (reply.kind === 'approve') {
               status(`已批准 ${head.toolName}（${reply.by}）`)
               settleHead({ behavior: 'allow', updatedInput: head.input })

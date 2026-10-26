@@ -7,6 +7,7 @@ import type { OrcaTerminalRead } from '../src/codex-orca/orca.ts'
 import {
   createNodeHubClient,
   createPolicyPrecheck,
+  type ExecutorContext,
   type ExecutorOutcome,
   type Precheck,
   type PrecheckRequest,
@@ -41,7 +42,11 @@ const approvalWith = (edit: (tail: string[]) => string[]): OrcaTerminalRead => (
 const replaceLine = (from: string, to: string) => (tail: string[]) =>
   tail.map((l) => (l.includes(from) ? l.replace(from, to) : l))
 
-async function start(reads: OrcaTerminalRead[], precheck?: Precheck) {
+async function start(
+  reads: OrcaTerminalRead[],
+  precheck?: Precheck,
+  extra: Partial<Pick<ExecutorContext, 'reportBranch' | 'confirmApproval'>> = {},
+) {
   h = orcaHome()
   const clock = new ManualClock()
   const orca = new FakeOrca(h.worktree)
@@ -70,6 +75,7 @@ async function start(reads: OrcaTerminalRead[], precheck?: Precheck) {
     nodeId: 'n-test',
     signal: abort.signal,
     ...(precheck ? { precheck } : {}),
+    ...extra,
   })
   const activity: Activity[] = []
   void (async () => {
@@ -185,7 +191,15 @@ describe('codex-orca 监控循环中的预检', () => {
     const { precheck, calls } = stub(ALLOW)
     const s = await start([APPROVAL, APPROVAL, tuiFixture('working')], precheck)
     await s.poll(1)
-    expect(calls).toEqual([{ tool: CODEX_ORCA_PRECHECK_TOOL, command: COMMAND }])
+    // 命令在 Orca worktree 中执行（D15 command_cwd），弹窗的 Reason 一并带上（只用于请求文本）。
+    expect(calls).toEqual([
+      {
+        tool: CODEX_ORCA_PRECHECK_TOOL,
+        command: COMMAND,
+        cwd: h?.worktree as string,
+        reason: '当前沙箱为只读，是否授权执行 mkdir -p /tmp/flow-tui-probe-dir2 创建目录？',
+      },
+    ])
     expect(s.enters()).toHaveLength(1)
     expect(s.texts().some((t) => t.startsWith('策略自动放行：执行命令 mkdir'))).toBe(true)
     await s.poll(3)
@@ -308,6 +322,124 @@ describe('codex-orca 监控循环中的预检', () => {
     await s.poll(2)
     expect(s.orca.ops('terminalSend')).toHaveLength(0)
     expect(s.idles()).toHaveLength(1)
+    await s.run.cancel()
+  })
+})
+
+describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
+  const SUPERVISOR: PrecheckVerdict = { allow: false, level: 'supervisor', decision_id: 77 }
+
+  test('开始时上报任务分支与 worktree', async () => {
+    const reports: Array<{ branch: string; worktree: string }> = []
+    const s = await start([APPROVAL], undefined, { reportBranch: (r) => reports.push(r) })
+    expect(reports).toHaveLength(1)
+    expect(reports[0]?.worktree).toBe(h?.worktree as string)
+    expect(reports[0]?.branch).toBeTruthy()
+    await s.run.cancel()
+  })
+
+  test('supervisor 档位：不发回车；停下时 hint 带 decision_id', async () => {
+    const { precheck } = stub(SUPERVISOR)
+    const s = await start([APPROVAL], precheck)
+    await s.poll(3)
+    expect(s.orca.ops('terminalSend')).toHaveLength(0)
+    const [idle] = s.idles()
+    expect((idle?.data?.hint as { decision_id?: number } | undefined)?.decision_id).toBe(77)
+    await s.run.cancel()
+  })
+
+  test('弹窗换了：新的停下不带旧的 decision_id', async () => {
+    const other = approvalWith(replaceLine(COMMAND, 'ls /other'))
+    let orca: FakeOrca | undefined
+    const calls: string[] = []
+    const s = await start([APPROVAL], async (req) => {
+      calls.push(req.command ?? '')
+      if (calls.length === 1) {
+        // 第一个弹窗判为 supervisor；随后界面换成另一条命令（交给用户）。
+        orca?.reads.splice(0, orca.reads.length, ok(other))
+        return SUPERVISOR
+      }
+      return { allow: false, level: 'user' }
+    })
+    orca = s.orca
+    await s.poll(4)
+    expect(calls).toEqual([COMMAND, 'ls /other'])
+    expect(s.idles().length).toBeGreaterThan(0)
+    for (const idle of s.idles()) {
+      expect(idle.data?.hint as Record<string, unknown>).not.toHaveProperty('decision_id')
+    }
+    await s.run.cancel()
+  })
+
+  test('批准送达：重读弹窗交给 confirmApproval；拒收时不发任何按键并返回 dropped，幂等', async () => {
+    const lives: unknown[] = []
+    let answer = false
+    const { precheck } = stub(SUPERVISOR)
+    const s = await start([APPROVAL], precheck, {
+      confirmApproval: async (_reply, live) => {
+        lives.push(live)
+        return answer
+      },
+    })
+    await s.poll(3)
+    const reply = { reply_id: 'r-1', kind: 'approve' as const, by: 'supervisor' }
+    expect(await s.run.deliver?.(reply)).toBe('dropped')
+    expect(lives).toEqual([
+      { tool: CODEX_ORCA_PRECHECK_TOOL, command: COMMAND, cwd: h?.worktree as string },
+    ])
+    expect(s.orca.ops('terminalSend')).toHaveLength(0)
+    // 同一条回复再次送达：仍是 dropped，不再复核。
+    expect(await s.run.deliver?.(reply)).toBe('dropped')
+    expect(lives).toHaveLength(1)
+    // 拒收后：同一弹窗不再预检，监控循环随后重新上报停下（交给用户）。
+    const before = s.idles().length
+    await s.poll(3)
+    expect(s.idles().length).toBeGreaterThan(before)
+    answer = true
+    expect(await s.run.deliver?.({ ...reply, reply_id: 'r-2' })).toBe('delivered')
+    expect(s.enters()).toHaveLength(1)
+    await s.run.cancel()
+  })
+
+  test('复核通过后、发回车前界面变了：不发回车，按拒收处理；用户的批准不重读', async () => {
+    let orca: FakeOrca | undefined
+    const other = approvalWith(replaceLine(COMMAND, 'ls /other'))
+    const { precheck } = stub(SUPERVISOR)
+    const s = await start([APPROVAL], precheck, {
+      confirmApproval: async () => {
+        // 复核期间终端换成了另一条命令的弹窗。
+        orca?.reads.splice(0, orca.reads.length, ok(other))
+        return true
+      },
+    })
+    orca = s.orca
+    await s.poll(3)
+    expect(await s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'supervisor' })).toBe(
+      'dropped',
+    )
+    expect(s.enters()).toHaveLength(0)
+    // 用户的批准：复核直接通过，不再重读，照常发回车。
+    expect(await s.run.deliver?.({ reply_id: 'r-2', kind: 'approve', by: 'user' })).toBe(
+      'delivered',
+    )
+    expect(s.enters()).toHaveLength(1)
+    await s.run.cancel()
+  })
+
+  test('弹窗已不在时的批准：以 undefined 复核', async () => {
+    const lives: unknown[] = []
+    const s = await start([tuiFixture('question')], undefined, {
+      confirmApproval: async (_reply, live) => {
+        lives.push(live)
+        return false
+      },
+    })
+    await s.poll(2)
+    expect(await s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'supervisor' })).toBe(
+      'dropped',
+    )
+    expect(lives).toEqual([undefined])
+    expect(s.orca.ops('terminalSend')).toHaveLength(0)
     await s.run.cancel()
   })
 })

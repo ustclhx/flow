@@ -1,11 +1,13 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { hostname as osHostname } from 'node:os'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   type Activity,
+  BLOCKED_REQUEST_TEXT_MAX,
   type BlockedReason,
+  type BlockedRequest,
   type CompleteLeaseRequest,
   clipTail,
   clipText,
@@ -24,14 +26,17 @@ import {
   loadRoles,
   ok,
   PROTOCOL_MESSAGE_MAX,
+  type RepoSnapshot,
   type Result,
   redactLines,
   resolveHubUrl,
   type TaskContract,
+  taskBranch,
   VERSION,
 } from '@flow/core'
 import { createNodeHubClient, type FetchLike, type NodeHubClient } from './client.ts'
 import { type NodeClock, sleep, systemClock } from './clock.ts'
+import type { CommandRunner } from './codex-orca/orca.ts'
 import { executorEnv } from './env.ts'
 import {
   createExecutorRegistry,
@@ -45,10 +50,11 @@ import {
   type StuckVerdict,
 } from './executor.ts'
 import { createFakeExecutor } from './fake.ts'
-import { createPolicyPrecheck } from './precheck.ts'
+import { createPolicyPrecheck, type Precheck, type PrecheckRequest } from './precheck.ts'
+import { computeDiffStat, type NodeEnvReport, nodeEnvReport, snapshotRepo } from './push-env.ts'
 import { verifyTask } from './verify.ts'
 import { cleanWakeTokenDir, removeWakeTokenFile, writeWakeTokenFile } from './wake-token.ts'
-import { resolveContractCwd } from './workdir.ts'
+import { resolveContractCwd, workspaceRepos } from './workdir.ts'
 
 /**
  * `flow node` 执行节点（tasks.md 4.3；design D6；node-protocol spec）。
@@ -117,6 +123,12 @@ export interface StartNodeOptions {
   deliverGiveUpMs?: number
   /** 策略预检的超时毫秒（add-m1-inbox 2.3），默认 5 秒；超时按需要用户处理。 */
   precheckTimeoutMs?: number
+  /**
+   * 节点自己执行 git / gh 的方式（推送与 gh 环境检查、diff_stat，D15）；测试注入，缺省 execFile。
+   */
+  envRunner?: CommandRunner
+  /** 上述检查使用的环境变量（含禁用变量的检查），缺省为 `executorEnv()`；测试注入。 */
+  envVars?: NodeJS.ProcessEnv
   logger?: NodeLogger
 }
 
@@ -179,6 +191,8 @@ interface Env {
   deliverTimeoutMs: number
   deliverGiveUpMs: number
   precheckTimeoutMs: number | undefined
+  envRunner: CommandRunner | undefined
+  envVars: NodeJS.ProcessEnv | undefined
 }
 
 /** 按合同（通常按角色）给出无进展阈值分钟数；返回 undefined 表示没有设定。 */
@@ -194,8 +208,54 @@ export function noProgressMs(contract: TaskContract, resolver?: NoProgressResolv
   return Math.max(1, Math.round(minutes * 60_000))
 }
 
+/** 经续约上报的卡住（含代回复相关字段，D15）。 */
+interface BlockedSignal {
+  reason: BlockedReason
+  message: string
+  tail?: string[]
+  session?: string
+  decision_id?: number
+  request?: BlockedRequest
+  diff_stat?: string
+  no_delegate?: boolean
+}
+
+/** 本租约预检得到的 supervisor 档位判定：请求与当时上报的环境（D15）。 */
+interface SupervisorDecision {
+  req: PrecheckRequest
+  report: NodeEnvReport
+  /** 实际送去判定的路径（含 realpath 展开），与 policy.decided 一致。 */
+  sentPaths?: string[] | undefined
+}
+
+/** 每个租约最多记住的 supervisor 判定数（只有最近的会被卡住引用）。 */
+const DECISIONS_KEEP = 20
+
+/** 由节点记录的预检请求生成卡住的请求文本；命令超长时省略（中枢无法核对，交给用户）。 */
+export function blockedRequestOf(
+  req: PrecheckRequest,
+  sentPaths: readonly string[] | undefined = req.paths,
+): BlockedRequest {
+  const reason = req.reason?.trim()
+  const paths = sentPaths
+  return {
+    tool: req.tool.slice(0, 128),
+    ...(req.command !== undefined &&
+    req.command.length > 0 &&
+    req.command.length <= BLOCKED_REQUEST_TEXT_MAX
+      ? { command: req.command }
+      : {}),
+    ...(paths?.length &&
+    paths.length <= 200 &&
+    paths.every((p) => p.length > 0 && p.length <= BLOCKED_REQUEST_TEXT_MAX)
+      ? { paths: [...paths] }
+      : {}),
+    ...(reason ? { reason: clipText(reason, BLOCKED_REQUEST_TEXT_MAX) } : {}),
+  }
+}
+
 type RenewSignal =
-  | { blocked: { reason: BlockedReason; message: string; tail?: string[]; session?: string } }
+  | { blocked: BlockedSignal }
   | { resumed: { note: string } }
   | { phase: 'verifying' }
 
@@ -275,6 +335,32 @@ class LeaseRunner {
   private timeoutLeftMs: number
   private timeoutArmedAt = 0
   private forceDone: ((r: Result<ExecutorOutcome>) => void) | undefined
+  /** 本租约预检得到的 supervisor 判定（decision_id → 请求与环境，D15）。 */
+  private decisions = new Map<number, SupervisorDecision>()
+  /** 当前这次卡住引用的判定：supervisor 的批准送达前据此复核。 */
+  private blockedDecision: SupervisorDecision | undefined
+  /** supervisor 的批准被拒收后：下一次卡住以 no_delegate 上报，直接交给用户。 */
+  private noDelegateNext = false
+  /** 待随续约上报的任务分支（codex-orca 开始时，D15）；上报成功后清空。 */
+  private pendingBranch:
+    | { branch: string; worktree: string; repo_snapshot?: RepoSnapshot }
+    | undefined
+  /** 已上报的任务分支（推送来源必须解析为它）。 */
+  private reportedBranch: string | undefined
+  /** 租约开始、worker 启动前对登记仓库的快照（D15）。 */
+  private snapshot: RepoSnapshot | undefined
+  /** 执行器最近一次预检得到的 supervisor 判定 id；最近一次不是 supervisor 时为 undefined。 */
+  private latestDecision: number | undefined
+  private precheckSeq = 0
+  private branchReported = false
+  /** 执行器上报的 worktree（realpath）：diff_stat 在这里计算。 */
+  private workdir: string | undefined
+  /** 节点解析的合同工作目录。 */
+  private cwd: string | undefined
+  /** workspace 登记的仓库（推送与 gh 环境检查）。 */
+  private repos: string[] = []
+  /** 卡住上报的代数：异步计算 diff_stat 期间状态变化（恢复、送达）时作废这次上报。 */
+  private stuckGen = 0
   readonly finished: Promise<void>
 
   constructor(
@@ -340,20 +426,37 @@ class LeaseRunner {
     const batch = this.buffer.splice(0, ACTIVITY_PER_RENEW)
     const signal = this.signal
     this.signal = undefined
+    const branch = this.pendingBranch
     const r = await this.env.client.renew(this.grant.lease_id, {
       lease_token: this.grant.lease_token,
       activity: batch,
       ...(signal && 'blocked' in signal
         ? { blocked: clipBlocked(signal.blocked) }
         : (signal ?? {})),
+      ...(branch ? { branch } : {}),
     })
     if (this.released) return
+    // 中枢已处理分支上报（写入或因已上报而忽略）：不再重复发送。
+    // 分支上报的结果（D15）：只有中枢明确说临时失败（retry）时保留重发；写入、忽略或旧版中枢
+    // （没有该字段）都不再上报。
+    if (r.ok && branch && this.pendingBranch === branch && r.data.branch_report !== 'retry') {
+      this.pendingBranch = undefined
+    }
     if (!r.ok) {
       if (r.error.kind === 'retryable') {
         this.buffer.unshift(...batch)
         // 续约期间产生了更新的状态变化时以新的为准。
         this.signal ??= signal
         this.scheduleRenew(Math.min(this.intervalMs, this.env.retryMs))
+        return
+      }
+      if (branch && r.error.code === 'invalid_arguments') {
+        // 旧版中枢不认识 `branch` 字段：不再上报分支（push_to 随之恒不满足），其余照常重试，不放弃任务。
+        this.env.logger.warn('中枢不接受任务分支上报，忽略', r.error.message)
+        if (this.pendingBranch === branch) this.pendingBranch = undefined
+        this.buffer.unshift(...batch)
+        this.signal ??= signal
+        this.scheduleRenew(0)
         return
       }
       this.env.logger.warn(`租约 ${this.grant.lease_id} 续约被拒绝，放弃任务`, r.error.code)
@@ -448,6 +551,7 @@ class LeaseRunner {
       lease_token: this.grant.lease_token,
       reply_id: u.reply_id,
       outcome: u.outcome,
+      ...(u.outcome === 'dropped' ? { reason: 'request_changed' as const } : {}),
     })
     if (this.released) return
     if (!r.ok) {
@@ -464,6 +568,12 @@ class LeaseRunner {
     if (u.outcome === 'delivered') {
       // 中枢已写入 task.unblocked：回到 running，重新开始计时。
       this.enterRunning()
+    } else if (u.outcome === 'dropped') {
+      // supervisor 的批准被拒收（D15）：中枢已写 task.unblocked 并丢弃这条回复。worker 仍在等待，
+      // 执行器随后重新报告停下；这次卡住以 no_delegate 上报，直接交给用户。
+      this.env.logger.info(`回复 ${u.reply_id} 已拒收：待批请求已变化或环境复查未通过`)
+      this.enterRunning()
+      this.noDelegateNext = true
     } else {
       // worker 已不在：中枢让任务带着回复重新排队，本租约随之结束。
       this.release()
@@ -535,19 +645,176 @@ class LeaseRunner {
     this.cancelIdle()
     this.pauseTimeout()
     const session = v.session ?? (typeof hint?.session === 'string' ? hint.session : undefined)
-    this.signal = {
-      blocked: {
-        reason: v.reason,
-        message: v.message,
-        ...(tail.length > 0 ? { tail } : {}),
-        ...(session ? { session } : {}),
-      },
+    const delegation = this.delegationFor(v.reason, hint)
+    const gen = ++this.stuckGen
+    const report = (diff?: string) => {
+      // 计算期间 worker 已恢复、回复已送达或租约已结束：这次上报作废。
+      if (gen !== this.stuckGen || this.phase !== 'blocked' || this.released) return
+      this.signal = {
+        blocked: {
+          reason: v.reason,
+          message: v.message,
+          ...(tail.length > 0 ? { tail } : {}),
+          ...(session ? { session } : {}),
+          ...delegation,
+          ...(diff ? { diff_stat: diff } : {}),
+        },
+      }
+      void this.renewNow()
     }
-    void this.renewNow()
+    // 改动摘要（D15）：工作目录在 git 仓库中时附带；不是 git 目录直接上报，取不到时省略。
+    if (!this.inGitRepo()) report()
+    else void this.diffStat().then(report)
+  }
+
+  /** 工作目录是否在 git 仓库中（向上找 `.git`，不启动进程）。 */
+  private inGitRepo(): boolean {
+    let dir = this.workdir ?? this.cwd
+    if (!dir) return false
+    for (;;) {
+      if (existsSync(join(dir, '.git'))) return true
+      const parent = dirname(dir)
+      if (parent === dir) return false
+      dir = parent
+    }
+  }
+
+  /**
+   * 这次卡住的代回复字段（D15）：
+   * - supervisor 的批准刚被拒收：`no_delegate: true`，不带 decision_id；
+   * - 授权卡住且执行器在 hint 中给出 `decision_id`，并且它确实来自本租约的预检：带上 decision_id 与
+   *   节点记录的请求文本（工具、命令来自节点发出的预检，不取执行器的说法）；
+   * - 其他：不带。
+   */
+  private delegationFor(
+    reason: BlockedReason,
+    hint: Record<string, unknown> | undefined,
+  ): Pick<BlockedSignal, 'decision_id' | 'request' | 'no_delegate'> {
+    this.blockedDecision = undefined
+    if (this.noDelegateNext) {
+      this.noDelegateNext = false
+      return { no_delegate: true }
+    }
+    if (reason !== 'awaiting_approval') return {}
+    const id = hint?.decision_id
+    if (typeof id !== 'number' || !Number.isInteger(id)) return {}
+    // 只认执行器最近一次预检的判定：更早的判定可能对应已经消失的请求。
+    if (id !== this.latestDecision) return {}
+    const rec = this.decisions.get(id)
+    if (!rec) return {}
+    this.blockedDecision = rec
+    return { decision_id: id, request: blockedRequestOf(rec.req, rec.sentPaths) }
+  }
+
+  private async diffStat(): Promise<string | undefined> {
+    const dir = this.workdir ?? this.cwd
+    if (!dir || !this.inGitRepo()) return undefined
+    try {
+      // gitdir 必须指向登记仓库，否则不计算（computeDiffStat 内校验，所有 git 走安全 git）。
+      return await computeDiffStat(dir, {
+        registeredRepos: this.repos,
+        ...(this.env.envRunner ? { run: this.env.envRunner } : {}),
+        env: this.env.envVars ?? executorEnv(),
+      })
+    } catch {
+      return undefined
+    }
+  }
+
+  private envReport(command: string | undefined, cwd: string): Promise<NodeEnvReport> {
+    return nodeEnvReport(command, cwd, {
+      registeredRepos: this.repos,
+      snapshot: this.snapshot,
+      taskBranch: this.reportedBranch,
+      ...(this.env.envRunner ? { run: this.env.envRunner } : {}),
+      env: this.env.envVars ?? executorEnv(),
+    })
+  }
+
+  /**
+   * supervisor 的批准送达前的复核（D15）：执行器传入实时读到的待批请求。只有与这次卡住引用的
+   * 判定请求一致才放行；判定时上报过环境（执行目录可信）的，还要重新校验 gitdir、执行目录不变、
+   * 推送或 gh 环境复查通过。其他回复（用户的、拒绝、文字）直接通过。任何不确定都返回 false。
+   */
+  private async confirmApproval(
+    reply: DeliveredReply,
+    live: PrecheckRequest | undefined,
+  ): Promise<boolean> {
+    if (reply.by !== 'supervisor' || reply.kind !== 'approve') return true
+    try {
+      const rec = this.blockedDecision
+      if (!rec || !live) return false
+      if (live.tool !== rec.req.tool || live.command !== rec.req.command) return false
+      if (JSON.stringify(live.paths ?? []) !== JSON.stringify(rec.req.paths ?? [])) return false
+      if (live.workdirTrusted !== rec.req.workdirTrusted) return false
+      // 判定时没有上报环境（执行目录不可信）：只核对请求本身。
+      if (rec.req.workdirTrusted !== true) return true
+      const cwd = live.cwd
+      if (!cwd || cwd !== rec.req.cwd) return false
+      // 重新计算（含 gitdir 校验）：gitfile 在等待期间被改写时 command_cwd 缺失，复核不通过。
+      const now = await this.envReport(live.command, cwd)
+      if (now.command_cwd === undefined || now.command_cwd !== rec.report.command_cwd) return false
+      if (rec.report.push_env_ok !== undefined || now.push_env_ok !== undefined) {
+        if (now.push_env_ok !== true) return false
+      }
+      if (rec.report.gh_env_ok !== undefined || now.gh_env_ok !== undefined) {
+        if (now.gh_env_ok !== true) return false
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 执行器上报任务分支（codex-orca 开始时，Codex 启动之前）：worktree realpath 后随下一次续约上报，
+   * 每个租约一次。中枢还没有快照时，对执行器解析出的登记仓库（`report.repo`）采集快照一并上报；
+   * 已有快照（随租约下发）时只用它，不重新采集。
+   */
+  private reportBranch(report: { branch: string; worktree: string; repo?: string }) {
+    if (this.branchReported) return
+    if (!taskBranch.safeParse(report.branch).success) {
+      this.env.logger.warn(`执行器上报的任务分支不合法，忽略：${report.branch}`)
+      return
+    }
+    this.branchReported = true
+    void (async () => {
+      let worktree: string
+      try {
+        worktree = await realpath(report.worktree)
+      } catch {
+        this.env.logger.warn(`任务 worktree ${report.worktree} 无法解析，不上报任务分支`)
+        return
+      }
+      let collected: RepoSnapshot | undefined
+      if (!this.snapshot && report.repo) {
+        try {
+          collected = await snapshotRepo(report.repo, {
+            registeredRepos: this.repos,
+            ...(this.env.envRunner ? { run: this.env.envRunner } : {}),
+            env: this.env.envVars ?? executorEnv(),
+          })
+        } catch {
+          collected = undefined
+        }
+      }
+      if (this.released) return
+      this.snapshot ??= collected
+      this.workdir = worktree
+      this.reportedBranch = report.branch
+      this.pendingBranch = {
+        branch: report.branch,
+        worktree,
+        ...(collected ? { repo_snapshot: collected } : {}),
+      }
+      void this.renewNow()
+    })()
   }
 
   private enterRunning() {
     this.phase = 'running'
+    this.stuckGen++
+    this.blockedDecision = undefined
     if (this.runEnded) return
     this.lastActivityAt = this.mono()
     this.armIdle()
@@ -615,6 +882,38 @@ class LeaseRunner {
         },
       })
     } else {
+      this.cwd = cwd.data
+      this.repos = await workspaceRepos(env.home, grant.contract.workspace)
+      // 登记仓库快照（D15）：中枢投影里已固定的快照随租约下发，节点直接使用、不再采集；
+      // 没有时在任务首次上报分支时对执行器解析出的仓库采集（见 reportBranch）。
+      this.snapshot = grant.repo_snapshot
+      if (this.released) return
+      const basePrecheck = createPolicyPrecheck({
+        client: env.client,
+        taskId: grant.task_id,
+        cwd: cwd.data,
+        clock: env.clock,
+        signal: this.abort.signal,
+        ...(env.precheckTimeoutMs === undefined ? {} : { timeoutMs: env.precheckTimeoutMs }),
+        leaseToken: grant.lease_token,
+        envReport: (command, dir) => this.envReport(command, dir),
+        onSupervisorDecision: (id, req, report, sentPaths) => {
+          this.decisions.set(id, { req, report, sentPaths })
+          while (this.decisions.size > DECISIONS_KEEP) {
+            const oldest = this.decisions.keys().next().value
+            if (oldest === undefined) break
+            this.decisions.delete(oldest)
+          }
+        },
+      })
+      // 记下执行器最近一次预检的判定：卡住只能引用它（更早的判定可能对应已消失的请求）。
+      const precheck: Precheck = async (req) => {
+        const seq = ++this.precheckSeq
+        this.latestDecision = undefined
+        const v = await basePrecheck(req)
+        if (seq === this.precheckSeq) this.latestDecision = v.allow ? undefined : v.decision_id
+        return v
+      }
       this.armTimeout()
       this.armIdle()
       // 唤醒绑定 token 写进 state/wake/<task>.token，执行器只拿到路径（tasks 5.3；D6）：token 不进 argv、
@@ -633,14 +932,9 @@ class LeaseRunner {
           signal: this.abort.signal,
           ...(grant.resume ? { resume: grant.resume } : {}),
           ...(wakeTokenFile ? { wakeTokenFile } : {}),
-          precheck: createPolicyPrecheck({
-            client: env.client,
-            taskId: grant.task_id,
-            cwd: cwd.data,
-            clock: env.clock,
-            signal: this.abort.signal,
-            ...(env.precheckTimeoutMs === undefined ? {} : { timeoutMs: env.precheckTimeoutMs }),
-          }),
+          precheck,
+          reportBranch: (report) => this.reportBranch(report),
+          confirmApproval: (reply, live) => this.confirmApproval(reply, live),
         })
         const run = this.run
         const forced = new Promise<Result<ExecutorOutcome>>((resolve) => {
@@ -685,7 +979,22 @@ class LeaseRunner {
     // 有待送达的回复时带着回复重新排队（PR #16 审查第 5 条）。
     if (this.phase === 'blocked' && req.outcome === 'done') {
       this.phase = 'running'
+      this.stuckGen++
       this.signal = { resumed: { note: '执行器已结束' } }
+    }
+    if (req.outcome === 'blocked') {
+      // 以 blocked 结束（崩溃、执行器自己判定卡住）时同样附带改动摘要；刚拒收过批准时不委托。
+      const diff = await this.diffStat()
+      if (this.released) return
+      const noDelegate = this.noDelegateNext
+      this.noDelegateNext = false
+      if (diff || noDelegate) {
+        req = {
+          ...req,
+          ...(diff ? { diff_stat: diff } : {}),
+          ...(noDelegate ? { no_delegate: true } : {}),
+        }
+      }
     }
     // 最后一批活动与状态变化随续约送达，再提交结束。
     while (!this.released && (this.buffer.length > 0 || this.signal)) {
@@ -894,6 +1203,8 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     deliverTimeoutMs: options.deliverTimeoutMs ?? DELIVER_TIMEOUT_MS,
     deliverGiveUpMs: options.deliverGiveUpMs ?? DELIVER_GIVE_UP_MS,
     precheckTimeoutMs: options.precheckTimeoutMs,
+    envRunner: options.envRunner,
+    envVars: options.envVars,
   }
 
   const reserved = options.reserved ?? nodeConfig.data.reserved

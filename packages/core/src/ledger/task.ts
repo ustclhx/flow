@@ -451,9 +451,33 @@ export const policyDecisionId = z
   .min(1)
   .meta({ description: '策略判定 id，即对应 policy.decided 事件的 seq' })
 
+/** 卡住时上报的请求文本里，命令与理由的上限（与 policy.decided 的 command 上限一致）。 */
+export const BLOCKED_REQUEST_TEXT_MAX = 2000
+
+/**
+ * 卡住对应的待批请求（D15）：节点按自己发起的策略预检记录填写（工具、命令），理由取自执行器的弹窗。
+ * 中枢据此核对"判定的请求与上报的请求一致"（与 `decision_id` 对应的 `policy.decided.request` 比较）。
+ */
+export const blockedRequest = z
+  .strictObject({
+    tool: z.string().trim().min(1).max(128),
+    command: z.string().min(1).max(BLOCKED_REQUEST_TEXT_MAX).optional(),
+    paths: z.array(z.string().min(1).max(BLOCKED_REQUEST_TEXT_MAX)).max(200).optional().meta({
+      description: '请求涉及的路径（与预检时送去判定的路径相同）',
+    }),
+    reason: z.string().min(1).max(BLOCKED_REQUEST_TEXT_MAX).optional().meta({
+      description: '执行器给出的请求理由（例如 Codex 弹窗的 Reason 一行）',
+    }),
+  })
+  .meta({ title: 'Blocked request', description: '这次卡住等待批准的请求' })
+export type BlockedRequest = z.infer<typeof blockedRequest>
+
 const delegationCommon = {
   decision_id: policyDecisionId.optional().meta({
     description: '策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq',
+  }),
+  request: blockedRequest.optional().meta({
+    description: '带 decision_id 时：判定所针对的请求（工具、命令与理由）',
   }),
   no_delegate: z.boolean().optional().meta({
     description: 'true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）',
@@ -470,6 +494,17 @@ export const protocolBlockedDelegationShape = {
   ...delegationCommon,
   diff_stat: protocolDiffStat.optional(),
 }
+
+/**
+ * 任务 worktree（`task.branch_reported.worktree`，D15）：节点解析符号链接后的绝对路径。
+ * 中枢只做字符串相等比较（命令执行目录 `command_cwd` 同样由节点 realpath 后上报）。
+ */
+export const taskWorktree = z
+  .string()
+  .min(2)
+  .max(4096)
+  .regex(/^\/[^\0\n\r]*$/, '必须是不含换行与 NUL 的绝对路径')
+  .meta({ description: '节点上解析符号链接后的绝对路径' })
 
 /**
  * 任务分支名（`task.branch_reported`，D15）：git ref 的保守子集，
@@ -492,6 +527,26 @@ export const taskBranch = z
     { message: '不是合法的分支名' },
   )
   .meta({ description: '执行器创建的任务分支，例如 ustclhx/t-1' })
+
+/**
+ * 登记仓库快照（D15）：租约开始、worker 启动之前，节点读取登记仓库的 origin 地址与默认分支
+ * （`refs/remotes/origin/HEAD`），随 `task.branch_reported` 上报，中枢投影固定下来。
+ * 之后的推送与 gh 检查都与快照比对，`push_to` 的默认分支只取这里的值。
+ */
+export const repoSnapshot = z
+  .strictObject({
+    remote_url: z
+      .string()
+      .min(1)
+      .max(2048)
+      .regex(/^[\x21-\x7e]+$/, '只能是可见 ASCII')
+      .meta({ description: '登记仓库 origin 的地址（只接受 github.com）' }),
+    default_branch: taskBranch.optional().meta({
+      description: '登记仓库的默认分支；取不到时省略（push_to 随之不满足）',
+    }),
+  })
+  .meta({ title: 'Repo snapshot' })
+export type RepoSnapshot = z.infer<typeof repoSnapshot>
 
 /** 无进展阈值的默认分钟数（stuck-detection "无进展超时"）。 */
 export const DEFAULT_NO_PROGRESS_MINUTES = 15
@@ -779,6 +834,14 @@ export const taskView = z
     branch: taskBranch
       .nullable()
       .meta({ description: '执行器上报的任务分支（task.branch_reported）；没有上报时为 null' }),
+    repo_snapshot: repoSnapshot.nullable().optional().meta({
+      description:
+        '租约开始、worker 启动前节点对登记仓库的快照（随任务分支上报，之后不变）；没有上报时为 null',
+    }),
+    worktree: taskWorktree.nullable().optional().meta({
+      description:
+        '执行器随任务分支上报的任务 worktree（节点侧 realpath）；没有上报时为 null。旧版中枢的响应没有该字段',
+    }),
     last_activity_at: timestamp
       .nullable()
       .meta({ description: '最近一次活动（续约上报）时间；非事件派生，重建后为 null' }),

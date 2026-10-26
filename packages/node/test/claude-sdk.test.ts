@@ -902,6 +902,57 @@ describe('运行中的回复与会话恢复', () => {
   })
 })
 
+describe('supervisor 档位与批准复核（D15，tasks 5.6）', () => {
+  test('预检判为 supervisor：挂起审批，hint 带 decision_id；supervisor 的批准经 confirmApproval，拒收时不放行', async () => {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      await io.ask('Bash', { command: 'git push origin ustclhx/t-1' })
+      yield result()
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(reviewer()),
+      reannounceMs: 20,
+    })
+    const lives: unknown[] = []
+    let answer = false
+    const run = ex.run(
+      contract(),
+      ctx({
+        precheck: async () => ({ allow: false, level: 'supervisor', decision_id: 9 }),
+        confirmApproval: async (_reply: DeliveredReply, live: unknown) => {
+          lives.push(live)
+          return answer
+        },
+      }),
+    )
+    const hints: Array<Record<string, unknown>> = []
+    const pumped = (async () => {
+      for await (const a of run.activity) {
+        if (a.data?.idle) hints.push(a.data.hint as Record<string, unknown>)
+      }
+    })()
+    await waitFor(() => hints.length > 0, 'canUseTool 挂起审批')
+    expect(hints[0]).toMatchObject({ reason: 'awaiting_approval', decision_id: 9 })
+    const approve: DeliveredReply = { reply_id: 'r-s', kind: 'approve', by: 'supervisor' }
+    expect(await run.deliver?.(approve)).toBe('dropped')
+    expect(lives).toEqual([{ tool: 'Bash', command: 'git push origin ustclhx/t-1' }])
+    expect(state.permissions).toHaveLength(0)
+    // 拒收后重新上报队首，不再带 decision_id。
+    const before = hints.length
+    await waitFor(() => hints.length > before, '重新上报')
+    expect(hints.at(-1)).not.toHaveProperty('decision_id')
+    answer = true
+    expect(await run.deliver?.({ ...approve, reply_id: 'r-s2' })).toBe('delivered')
+    await waitFor(() => state.permissions.length === 1, 'SDK 收到审批结果')
+    expect(state.permissions[0]?.behavior).toBe('allow')
+    const r = await run.done
+    expect(r.ok && r.data.outcome).toBe('done')
+    await pumped
+  })
+})
+
 describe('权限模式与设置来源', () => {
   const runOnce = async (role: Role, cwd = '/repo/demo') => {
     const { query, state } = mockSdk(async function* (io) {

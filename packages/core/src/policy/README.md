@@ -87,6 +87,23 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
   别名、网络请求、写入后再执行……）做任何事，上面的映射只能挡住常见写法与误操作。
   因此对能写代码的角色，不建议配置宽泛的 Bash auto；安全边界应当放在沙箱和角色权限
   （允许的工具、文件系统与网络范围）上，策略只用来减少打扰。
+- **动作识别是尽力而为，不是安全边界**。间接执行器（`xargs`、`find -exec/-execdir/-ok/-okdir`、
+  `git rebase --exec`/`-x`、`git bisect run`、`git submodule foreach`、`git difftool -x`、
+  `watch`、`parallel`、`script`、`su`、`ssh`、`doas` 等）与 `git -c …`、`--config-env`、
+  `--exec-path` 会让 git 或其他程序执行任意命令，`classifyAction` 照常识别其后的动作，同时整段
+  按 `shell.opaque` 处理；清单（`INDIRECT_EXECUTORS`）只覆盖常见写法。**不要配置不带
+  `command_prefix` 的宽泛工具级 `auto` / `supervisor` 规则**（例如 `action: tool:Bash` 或
+  `tool:CodexCommand` 而没有 `when.command_prefix`）：它们会放行识别不到的任意命令。
+  命令前的环境变量赋值只允许白名单 `CI`、`FORCE_COLOR`、`NODE_ENV`、`TZ`、`LANG`、`LC_*`、`NO_COLOR`
+  （`SAFE_ASSIGNMENT_RE`），其余赋值（`GIT_*`、`LD_*`、`DYLD_*`、`BASH_ENV`、`PYTHON*`、`NODE_OPTIONS`……）
+  以及经 `arch`、`sandbox-exec`、`osascript` 执行，都按不透明处理；`caffeinate` 按包装剥离。
+  git 子命令中会执行外部程序的写法（`grep -O`、`fetch/clone/ls-remote --upload-pack`、`archive --exec`、
+  `push --receive-pack/--exec`、`send-email`、`help --web`、`instaweb`、`difftool`、`mergetool` 等）同样不透明。
+- **不要给 `rg`、`fd`、`tar`、`make`、`awk`、`sed` 这类能执行命令或写任意文件的程序写宽泛的
+  `command_prefix` auto**（例如 `command_prefix: rg`）：`rg --pre`、`fd -x`、`tar --to-command`、
+  `make` 的 Makefile、`awk 'system()'`、`sed e` 都能执行任意命令。
+- `shell.opaque` 会展开为全部受保护动作（`pr.merge`、`deploy`、`secrets`、`policy.edit`、
+  `config.edit` 等），只能交给用户；判为不透明的写法越多，自动放行与代回复的可用性越低，这是有意的取舍。
 
 `decide(config.rules, request)` 是纯函数。workspace 使用完整的 `ws/<id>`。
 `tool:<名称>` 只作为兜底：请求中存在任何非 `tool:` 开头的具体动作（包括 `shell.opaque`）
@@ -169,11 +186,30 @@ gh 在有 TTY 时可能提示推送分支：supervisor 批准 `pr create` 不等
 单独判定。**不要写 `scope: *` 或通配 action 的 `supervisor` 规则**：受保护的工具与动作会被提升为
 `draft-approve`，其余请求则会被大面积委托，白名单应写成具体 scope 加精确 action。
 
-中枢 `policy/check` 从请求取 `push_env_ok`、`gh_env_ok`（只认 `true`；以后只接受 node actor 上报的
-值），`remotes` 暂时固定为 `origin`（以后从登记仓库取）。任务分支（`task.branch_reported`）、默认分支、
-`command_cwd` 与 `task_worktree` 接入前，`push_to` 与 `gh_scope` 恒不满足。
-推送环境（push 地址、`core.sshCommand`、`url.*.insteadOf`、`remote.*.push`、hook 等）与 gh 实际
-解析的仓库由节点检查，core 只判定命令文本。
+中枢 `policy/check`（`packages/hub/src/policy/routes.ts`）这样组装上下文（tasks 5.6）：
+- `task_branch`、`task_worktree`、`default_branch` 取自投影：codex-orca 开始时经续约上报
+  `branch: {branch, worktree, repo_snapshot}`，中枢写 `task.branch_reported`（只接受持有活动租约的节点、
+  每个任务一次、不可更改；worktree 缺失的旧任务可补报一次 worktree，不补快照）。`repo_snapshot` 是任务
+  首次上报时节点对执行器解析出的登记仓库的快照（origin 地址、`refs/remotes/origin/HEAD` 指向的默认分支），
+  之后随租约下发、节点不再重新采集；默认分支只取这里的值。分支写入在续约生效之后进行，结果随续约响应的
+  `branch_report` 返回（只有数据库忙等临时错误才让节点重发）；
+- `push_env_ok`、`gh_env_ok`、`command_cwd` 取自请求，**只认节点上报**：调用方是持有该任务活动租约的
+  node actor，或请求带的 `lease_token` 与该任务未过期的活动租约匹配（本机节点用 user token 调用）；
+  其他调用方上报的这些字段一律视为缺失，也不入账；
+- `remotes` 取登记仓库的 remote 名：workspace 登记仓库只有本地路径，缺省为 `origin`；
+- realpath 在节点侧完成（`command_cwd` 与上报的 worktree 都是 realpath 后的路径），中枢只比较字符串
+  （目前仅适用于中枢与节点同机部署）。
+
+推送环境（gitdir 校验、地址与快照比对、按作用域的 git 配置禁用清单、hook、同名 tag、来源分支）与
+gh 实际解析的仓库由节点检查（`packages/node/src/push-env.ts`，所有 git 经 `safe-git.ts`），core
+只判定命令文本。配置禁用清单分两类：`include*`、`core.fsmonitor`、`core.hooksPath`、`core.sshCommand`、
+`hook.*` 等在所有作用域禁止；`filter.*`、`diff.*`、`http.*`、`url.*`、`pager.*`、`gpg.*`、`protocol.*`、
+`core.pager` 只在 local / worktree 作用域禁止（system / global 由用户自己负责）；local / worktree 中的
+任何 `credential.*` 都禁止。注意：Git LFS 仓库会在 `.git/hooks` 里装 `pre-push`，会被 hook 检查拒绝，
+这类仓库的推送不会委托。**节点只在执行器能可靠确定命令实际执行目录时上报这些字段**：codex-orca 拿不到 Codex
+提权命令的实际 workdir，claude-sdk 的 Bash 会在调用之间保留 cwd，二者目前都不上报，因此
+**codex-orca 与 claude-sdk 的 `git push`、`gh pr create` 暂不委托给 supervisor**（`push_to`、
+`gh_scope` 不满足，交给用户）；白名单模板中的这两类规则要等执行器能提供可信的执行目录后才会生效。
 
 `flow init` 生成的 `config/policies.yaml` 带一组注释掉的模板：supervisor 角色的 `task.create`
 auto（scope 用角色名 `supervisor`；workspace 由 D5 的 parent 与仓库检查约束，同一 workspace 的

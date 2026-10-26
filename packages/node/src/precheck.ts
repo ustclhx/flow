@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { type PolicyCheckData, type PolicyDecisionLevel, redactSecrets } from '@flow/core'
 import type { NodeHubClient } from './client.ts'
 import { type NodeClock, systemClock } from './clock.ts'
+import type { NodeEnvReport } from './push-env.ts'
 
 /**
  * 节点侧的策略预检（add-m1-inbox 2.3；design D2、D3；policy-engine spec）。
@@ -12,6 +13,7 @@ import { type NodeClock, systemClock } from './clock.ts'
  * - 结果为 `auto` / `auto-report`：执行器在本地直接放行，任务不进入 blocked；
  *   审计以中枢写入的 `policy.decided`（操作者 `policy`）为准，执行器的活动只是补充；
  * - 其余结果（`draft-approve` / `notify` / `user`）：照常上报 `blocked(awaiting_approval)`；
+ * - `supervisor`（D15）：同样不放行、上报 blocked，并带上中枢返回的 `decision_id`，由中枢决定是否委托；
  * - **调用失败一律按需要用户处理**：网络错误、5xx、超时、401/403、响应不符合 schema、
  *   结果与逐动作明细不一致，都不会被当作放行。
  *
@@ -23,6 +25,19 @@ export interface PrecheckRequest {
   tool: string
   command?: string
   paths?: string[]
+  /**
+   * 命令实际执行的目录（例如 codex-orca 的 Orca worktree）；缺省为任务的工作目录。节点 realpath 后
+   * 作为 `command_cwd` 上报，并在这里检查推送与 gh 环境（D15）。
+   */
+  cwd?: string
+  /**
+   * 执行器能可靠确定命令实际执行目录（`cwd`）时设为 true：只有这时节点才计算并上报
+   * `command_cwd`、`push_env_ok`、`gh_env_ok`（D15）。codex-orca 拿不到 Codex 命令的实际 workdir，
+   * claude-sdk 的 Bash 会在调用之间保留 cwd，二者都不设置，push / pr.create 因此不会委托给 supervisor。
+   */
+  workdirTrusted?: boolean
+  /** 请求的理由（例如 Codex 弹窗的 Reason 一行）：不送去判定，只随 blocked 的请求文本上报。 */
+  reason?: string
 }
 
 /** 预检结论：allow 表示可在本地放行；否则交给用户。 */
@@ -32,6 +47,11 @@ export type PrecheckVerdict =
       allow: false
       /** 中枢给出的档位；调用失败时没有。 */
       level?: PolicyDecisionLevel
+      /**
+       * 档位为 supervisor 时中枢返回的判定 id（D15）：执行器上报这次卡住时放进 idle 信号的
+       * `hint.decision_id`，节点核对它确实来自本租约的预检后随 blocked 上报。
+       */
+      decision_id?: number
       /** 调用失败的原因（错误码与说明），用于活动与日志。 */
       error?: string
     }
@@ -101,6 +121,23 @@ export interface PolicyPrecheckOptions {
   signal?: AbortSignal
   /** 解析相对路径的目录（任务的工作目录），缺省为进程 cwd。 */
   cwd?: string
+  /**
+   * 本租约的令牌：本机节点用 user token 调用 policy/check，中枢凭它确认环境字段来自租约持有者（D15）。
+   */
+  leaseToken?: string
+  /** 计算随请求上报的环境字段（`command_cwd`、`push_env_ok`、`gh_env_ok`）；只用于 `workdirTrusted` 的请求。 */
+  envReport?: (command: string | undefined, cwd: string) => Promise<NodeEnvReport>
+  /** 判定为 supervisor 档位时回调：节点据此记录本租约发出的判定（请求与当时的环境）。 */
+  /**
+   * `sentPaths` 是实际送去判定的路径（原路径加 realpath 展开），卡住上报的请求文本用它，
+   * 与 `policy.decided.request.paths` 一致。
+   */
+  onSupervisorDecision?: (
+    decisionId: number,
+    req: PrecheckRequest,
+    report: NodeEnvReport,
+    sentPaths: string[] | undefined,
+  ) => void
 }
 
 /** 构造绑定到一个任务的预检函数。永不抛出：异常同样按需要用户处理。 */
@@ -123,21 +160,35 @@ export function createPolicyPrecheck(o: PolicyPrecheckOptions): Precheck {
     const checked = (async (): Promise<PrecheckVerdict> => {
       try {
         // 符号链接与大小写变体由中枢的识别处理，节点负责把真实路径一并送去（不信任原路径的字面）。
-        const paths =
-          req.paths === undefined
-            ? undefined
-            : await expandPolicyPaths(req.paths, o.cwd ?? process.cwd())
+        const cwd = req.cwd ?? o.cwd ?? process.cwd()
+        const paths = req.paths === undefined ? undefined : await expandPolicyPaths(req.paths, cwd)
+        const report =
+          o.envReport && req.workdirTrusted === true && req.cwd !== undefined
+            ? await o.envReport(req.command, req.cwd)
+            : {}
+        if (controller.signal.aborted) return { allow: false, error: 'aborted：预检已中止' }
         const r = await o.client.policyCheck(
           {
             task_id: o.taskId,
             tool: req.tool,
             ...(req.command === undefined ? {} : { command: req.command }),
             ...(paths === undefined ? {} : { paths }),
+            ...report,
+            ...(o.leaseToken ? { lease_token: o.leaseToken } : {}),
           },
           { signal: controller.signal, timeoutMs },
         )
         if (!r.ok) return { allow: false, error: `${r.error.code}：${r.error.message}` }
-        if (!isAutoDecision(r.data)) return { allow: false, level: r.data.level }
+        if (!isAutoDecision(r.data)) {
+          // decision_id 只认 supervisor 档位（D15）；其他档位即使带了也忽略。
+          const id = r.data.level === 'supervisor' ? r.data.decision_id : undefined
+          if (id !== undefined) o.onSupervisorDecision?.(id, req, report, paths)
+          return {
+            allow: false,
+            level: r.data.level,
+            ...(id === undefined ? {} : { decision_id: id }),
+          }
+        }
         return {
           allow: true,
           level: r.data.level,

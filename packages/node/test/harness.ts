@@ -128,7 +128,14 @@ export async function bench(
     ...(tokens ? { tokens } : {}),
     mount: [
       { path: '/', app: createTaskRoutes({ ledger, tasks }) },
-      ...(policies ? [{ path: '/', app: createPolicyRoutes({ home, ledger, leaseHolders }) }] : []),
+      ...(policies
+        ? [
+            {
+              path: '/',
+              app: createPolicyRoutes({ home, ledger, leaseHolders, now: clock.now }),
+            },
+          ]
+        : []),
       { path: '/', app: protocol.routes },
     ],
   })

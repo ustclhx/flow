@@ -619,11 +619,17 @@ describe('旧账本迁移：origin、branch 列', () => {
     try {
       const path = join(dir, 'flow.db')
       const db = await openDatabase(path)
-      db.exec(LEDGER_DDL.replace(',\n  origin           TEXT,\n  branch           TEXT\n', '\n'))
+      db.exec(
+        LEDGER_DDL.replace(
+          ',\n  origin           TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
+          '\n',
+        ),
+      )
       const cols = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
       expect(cols.map((c) => c.name)).toContain('resume_json')
       expect(cols.map((c) => c.name)).not.toContain('origin')
       expect(cols.map((c) => c.name)).not.toContain('branch')
+      expect(cols.map((c) => c.name)).not.toContain('worktree')
       db.close()
       const store = await openLedger(path)
       try {
@@ -645,7 +651,7 @@ describe('旧账本迁移：origin、branch 列', () => {
               task_id: 't-old',
               workspace: WS,
               type: 'task.branch_reported',
-              payload: { branch: 'ustclhx/t-old' },
+              payload: { branch: 'ustclhx/t-old', worktree: '/w/t-old' },
             },
             node,
           ),
@@ -653,6 +659,7 @@ describe('旧账本迁移：origin、branch 列', () => {
         expect(store.getTask('t-old')).toMatchObject({
           origin: 'autonomous',
           branch: 'ustclhx/t-old',
+          worktree: '/w/t-old',
         })
       } finally {
         store.close()

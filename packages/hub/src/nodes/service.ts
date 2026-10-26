@@ -4,12 +4,14 @@ import {
   type AcquireLeaseData,
   ackReplyRequest,
   acquireLeaseRequest,
+  type BlockedRequest,
   type CompleteLeaseData,
   type CompleteLeaseRequest,
   capabilitiesSatisfy,
   clipDiffStat,
   completeLeaseRequest,
   fail,
+  isSqliteBusy,
   type LeaseGrant,
   type LeaseSlots,
   type LedgerEvent,
@@ -22,6 +24,7 @@ import {
   type Result,
   registerNodeRequest,
   renewLeaseRequest,
+  SUPERVISOR_ACTOR,
   sanitizeMessage,
   sanitizeTail,
   stripUntrustedReview,
@@ -152,11 +155,13 @@ const WAKING: ReadonlySet<LedgerEvent['type']> = new Set([
  */
 function delegationFields(b: {
   decision_id?: number | undefined
+  request?: BlockedRequest | undefined
   diff_stat?: string | undefined
   no_delegate?: boolean | undefined
 }) {
   return {
     ...(b.decision_id !== undefined ? { decision_id: b.decision_id } : {}),
+    ...(b.request !== undefined ? { request: b.request } : {}),
     // 协议允许 8192 字符，入账前截到 2000（clipDiffStat，与 scrub 的 clipText 同一截断标记）。
     ...(b.diff_stat !== undefined ? { diff_stat: clipDiffStat(b.diff_stat) } : {}),
     ...(b.no_delegate !== undefined ? { no_delegate: b.no_delegate } : {}),
@@ -407,6 +412,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       ttl_s: ttl,
       expires_at: expiresAt,
       ...(resume ? { resume } : {}),
+      // 投影中固定的登记仓库快照（D15）：节点据此检查，不再重新采集。
+      ...(task.repo_snapshot ? { repo_snapshot: task.repo_snapshot } : {}),
     }
   }
 
@@ -586,6 +593,10 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       const expiresAt = iso(clock.now() + lease.ttl_s * 1000)
       ledger.renewLease(lease.lease_id, expiresAt)
       ledger.touchNode(lease.node_id)
+      // 任务分支在续约生效之后写入：无论结果如何都不影响续约，结果随响应返回。
+      const branchReport = req.data.branch
+        ? reportBranch(ledger.getTask(task.id) ?? task, lease, req.data.branch)
+        : undefined
       const after = ledger.getTask(task.id) ?? task
       // 已请求取消的任务不再送达回复。
       const pending =
@@ -594,6 +605,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         lease_id: lease.lease_id,
         expires_at: expiresAt,
         cancel_requested: after.cancel_requested,
+        ...(branchReport ? { branch_report: branchReport } : {}),
         reply: pending
           ? {
               reply_id: pending.id,
@@ -615,8 +627,20 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       if (!reply || reply.task_id !== task.id) {
         return fail('failure', 'reply_not_found', `任务 ${task.id} 没有回复 ${req.data.reply_id}`)
       }
-      // 重复确认（例如上一次的响应丢失）：已送达就直接返回，保证只送达一次。
+      // 重复确认（例如上一次的响应丢失）：已送达或已拒收就直接返回，保证只处理一次。
       if (reply.state === 'delivered' && req.data.outcome === 'delivered') return ok({ task })
+      if (reply.state === 'dropped' && req.data.outcome === 'dropped') return ok({ task })
+      // 拒收只用于 supervisor 的回复（D15）：用户的回复按原有语义送达，节点不能静默丢弃。
+      if (
+        req.data.outcome === 'dropped' &&
+        (reply.by !== SUPERVISOR_ACTOR || reply.kind !== 'approve')
+      ) {
+        return fail(
+          'usage',
+          'invalid_arguments',
+          `只有 supervisor 的批准可以拒收（回复 ${reply.id} 来自 ${reply.by}，类型 ${reply.kind}）`,
+        )
+      }
       if (reply.state !== 'pending' || task.status !== 'blocked') {
         return fail(
           'failure',
@@ -641,11 +665,23 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
                 type: 'task.unblocked',
                 payload: { reply_id: reply.id, note: replyNote(reply) },
               }
-            : {
-                ...base,
-                type: 'task.requeued_with_reply',
-                payload: { reply_id: reply.id, ...(session ? { session } : {}) },
-              }
+            : req.data.outcome === 'dropped'
+              ? {
+                  // 节点拒收（D15：supervisor 的批准送达时待批请求已变或环境复查未通过）：
+                  // 任务回到 running、这条回复标记为 dropped（不带 reply_id 的 unblocked 丢弃全部待送达回复），
+                  // 节点随后以 no_delegate 重新上报卡住，直接交给用户。
+                  ...base,
+                  type: 'task.unblocked',
+                  payload: {
+                    note: `${reply.by} 的${reply.kind === 'approve' ? '批准' : '回复'}未送达：待批请求已变化或环境复查未通过（${req.data.reason ?? 'request_changed'}）`,
+                    dropped_reply_ids: [reply.id],
+                  },
+                }
+              : {
+                  ...base,
+                  type: 'task.requeued_with_reply',
+                  payload: { reply_id: reply.id, ...(session ? { session } : {}) },
+                }
       const written = ledger.append(draft, { actor: `node:${lease.node_id}` })
       if (!written.ok) return written
       ledger.touchNode(lease.node_id)
@@ -702,11 +738,45 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     },
   }
 
+  /**
+   * 写入任务分支（D15）：每个任务只写一次、不可更改；worktree 缺失的旧任务可补报一次 worktree
+   * （分支相同，不补快照）。返回 recorded / ignored / retry：只有明确的临时性错误（SQLITE_BUSY）
+   * 才让节点重发，其他失败（已上报、不是 codex-orca、数据不合法……）节点放弃上报——没有分支时
+   * push_to 恒不满足。
+   */
+  function reportBranch(
+    task: TaskView,
+    lease: LeaseRecord,
+    b: NonNullable<RenewLeaseRequest['branch']>,
+  ): 'recorded' | 'ignored' | 'retry' {
+    const first = task.branch == null
+    const backfill = !first && task.worktree == null && task.branch === b.branch
+    if (!first && !backfill) return 'ignored'
+    try {
+      const written = ledger.append(
+        {
+          task_id: task.id,
+          workspace: task.workspace,
+          type: 'task.branch_reported',
+          payload: {
+            branch: b.branch,
+            worktree: b.worktree,
+            ...(first && b.repo_snapshot ? { repo_snapshot: b.repo_snapshot } : {}),
+          },
+        },
+        { actor: `node:${lease.node_id}` },
+      )
+      return written.ok ? 'recorded' : 'ignored'
+    } catch (err) {
+      return isSqliteBusy(err) ? 'retry' : 'ignored'
+    }
+  }
+
   /** 续约附带的动作：记录活动、阶段切换、卡住与自行恢复（D7a）。各步独立。 */
   function renewSteps(task: TaskView, lease: LeaseRecord, req: RenewLeaseRequest): Result<null> {
-    if (req.activity.length > 0) ledger.recordActivity(task.id, req.activity)
     const base = { task_id: task.id, workspace: task.workspace }
     const actor = { actor: `node:${lease.node_id}` }
+    if (req.activity.length > 0) ledger.recordActivity(task.id, req.activity)
     // 重复上报（上一次的响应丢失后重试）时任务已经处于目标状态，忽略即可。
     if (req.resumed && task.status === 'blocked') {
       // 自行恢复时尚未送达的回复会被丢弃：记下它们的 id，供收件箱通知回复者（PR #16 审查第 5 条）。
