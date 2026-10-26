@@ -158,3 +158,60 @@ describe('按执行槽类别分配', () => {
     expect(c.ledger.getTask(d)?.status).toBe('queued')
   })
 })
+
+describe('预留槽等待者优先接唤醒', () => {
+  test('不带 slots 的普通领取先把唤醒让给同一节点等待中的预留槽，自己继续领下一个任务', async () => {
+    const c = await setup()
+    const sup = c.acquire(slots({ supervisor: 1 }), 30)
+    const rep = c.acquire(slots({ reply: 1 }), 30)
+    await tick()
+    expect(c.protocol.service.waiting()).toBe(2)
+    const w = await c.wake('instruction')
+    const r = await c.wake('reply', 'ws/r')
+    const d = await c.dev()
+    // drain 已在微任务中把唤醒分给预留槽等待者
+    expect(await sup).toBe(w)
+    expect(await rep).toBe(r)
+    expect(await c.acquire()).toBe(d)
+  })
+
+  test('普通等待者排在前面时，唤醒仍分给同一节点后到的 supervisor 等待者', async () => {
+    const c = await setup()
+    const gen = c.acquire(undefined, 30)
+    const sup = c.acquire(slots({ supervisor: 1 }), 30)
+    await tick()
+    expect(c.protocol.service.waiting()).toBe(2)
+    const w = await c.wake('instruction')
+    expect(await sup).toBe(w)
+    await tick()
+    expect(c.protocol.service.waiting()).toBe(1)
+    const d = await c.dev()
+    expect(await gen).toBe(d)
+  })
+
+  test('同一节点没有预留槽等待者时，唤醒落到普通领取', async () => {
+    const c = await setup()
+    const rep = c.acquire(slots({ reply: 1 }), 30)
+    await tick()
+    const w = await c.wake('autonomous')
+    // reply 等待者不能接普通唤醒，普通领取照常拿到它
+    expect(await c.acquire()).toBe(w)
+    expect(c.protocol.service.waiting()).toBe(1)
+    const r = await c.wake('reply')
+    expect(await rep).toBe(r)
+  })
+
+  test('等待者被中止后 waiting() 归零', async () => {
+    const c = await setup()
+    const ac = new AbortController()
+    const p = c.protocol.service.acquire(
+      { node_id: 'n1', capabilities: ['executor:fake'], wait_s: 30, slots: slots({ reply: 1 }) },
+      { signal: ac.signal },
+    )
+    await tick()
+    expect(c.protocol.service.waiting()).toBe(1)
+    ac.abort()
+    expect(await p).toMatchObject({ ok: true, data: { lease: null } })
+    expect(c.protocol.service.waiting()).toBe(0)
+  })
+})

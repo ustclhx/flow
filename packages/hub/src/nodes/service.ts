@@ -25,6 +25,7 @@ import {
   sanitizeMessage,
   sanitizeTail,
   type TaskView,
+  type WakeOrigin,
 } from '@flow/core'
 import type { z } from 'zod'
 import type { EventInput, LeaseRecord, LedgerStore } from '../ledger/store.ts'
@@ -41,7 +42,9 @@ import { type HubClock, systemClock } from '../server/clock.ts'
  *   这里遇到 invalid_transition 时换下一个任务重试。
  * - 执行槽（add-m1-supervisor D12）：请求带 `slots` 时只分配有可用空位的任务——普通任务只用
  *   general，普通唤醒可用 supervisor 或 general，reply 唤醒可用 reply 或 general；
- *   唤醒身份以账本 `supervisor.wake_started` 为准（`leaseSlotFor`）。不带 `slots` 的旧节点按原语义。
+ *   唤醒身份以账本 `supervisor.wake_started` 为准（`leaseSlotFor`）。不带 `slots` 的请求
+ *   （旧节点、新节点的普通循环）只有普通空位；唤醒要分给普通空位前，先交给同一节点正在等待、
+ *   类别匹配的预留槽领取，避免挤占普通槽。
  * - 无可领取任务时挂入内存等待队列（不进投影），`task.created` / `task.requeued` 到来时唤醒。
  * - 续约 / 提交校验租约令牌（账本只存 SHA-256）；租约已不是 active（过期或已被处理）时返回
  *   `lease_expired`。
@@ -334,58 +337,106 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   let draining = false
   let closed = false
 
-  /** 选出并分配第一个满足能力的 queued 任务；没有时返回 null。全程同步。 */
+  /** 在同一事务写 `task.started` + `lease.granted`；被其他请求抢先时返回 null。 */
+  function grantTask(task: TaskView, nodeId: string): LeaseGrant | null {
+    // resume 只交给紧接着的这一次执行：task.started 会在投影里清空它（PR #16 审查第 1 条）。
+    const resume = ledger.taskResume(task.id)
+    const leaseId = newLeaseId()
+    const token = newLeaseToken()
+    const attempt = task.attempt + 1
+    const ttl = o.leaseTtlS
+    const expiresAt = iso(clock.now() + ttl * 1000)
+    const base = { task_id: task.id, workspace: task.workspace }
+    const written = ledger.appendMany(
+      [
+        {
+          ...base,
+          type: 'task.started',
+          payload: { node_id: nodeId, lease_id: leaseId, attempt },
+        },
+        {
+          ...base,
+          type: 'lease.granted',
+          payload: {
+            lease_id: leaseId,
+            node_id: nodeId,
+            token_sha256: sha256(token),
+            ttl_s: ttl,
+            expires_at: expiresAt,
+          },
+        },
+      ],
+      { actor: `node:${nodeId}` },
+    )
+    // 被其他请求抢先（理论上不会发生，见文件头）。
+    if (!written.ok) return null
+    ledger.touchNode(nodeId)
+    return {
+      lease_id: leaseId,
+      lease_token: token,
+      task_id: task.id,
+      workspace: task.workspace,
+      contract: task.contract,
+      attempt,
+      ttl_s: ttl,
+      expires_at: expiresAt,
+      ...(resume ? { resume } : {}),
+    }
+  }
+
+  /**
+   * 同一节点上正在等待、能用预留槽（supervisor / reply）接这个唤醒的等待者（D12）。
+   * 唤醒落到普通空位之前先交给它，避免挤占普通槽。
+   */
+  function reservedWaiterFor(
+    task: TaskView,
+    wake: WakeOrigin | null,
+    nodeId: string,
+    self: Waiter | undefined,
+  ): Waiter | undefined {
+    if (wake === null) return undefined
+    return waiters.find((w) => {
+      if (w === self || w.nodeId !== nodeId || !w.slots) return false
+      if (!capabilitiesSatisfy(w.capabilities, task.contract)) return false
+      const slot = leaseSlotFor(w.slots, wake)
+      return slot === 'supervisor' || slot === 'reply'
+    })
+  }
+
+  /**
+   * 选出并分配第一个可领取的 queued 任务；没有时返回 null。全程同步。
+   * - `slots` 只有预留空位时，按 `leaseSlotFor` 过滤（需要查唤醒身份）；
+   * - 有普通空位（含旧节点不带 `slots`）时任何任务都可以接，只在同一节点另有预留槽等待者时
+   *   才查唤醒身份：唤醒先交给那个等待者，本请求继续找下一个任务。
+   */
   function tryGrant(
     nodeId: string,
     capabilities: readonly string[],
-    slots?: LeaseSlots,
+    slots: LeaseSlots | undefined,
+    self?: Waiter,
   ): LeaseGrant | null {
+    const general = !slots || slots.general > 0
     for (const task of ledger.queuedTasks()) {
       if (!capabilitiesSatisfy(capabilities, task.contract)) continue
-      if (slots && leaseSlotFor(slots, ledger.wakeOrigin(task.id)) === null) continue
-      // resume 只交给紧接着的这一次执行：task.started 会在投影里清空它（PR #16 审查第 1 条）。
-      const resume = ledger.taskResume(task.id)
-      const leaseId = newLeaseId()
-      const token = newLeaseToken()
-      const attempt = task.attempt + 1
-      const ttl = o.leaseTtlS
-      const expiresAt = iso(clock.now() + ttl * 1000)
-      const base = { task_id: task.id, workspace: task.workspace }
-      const written = ledger.appendMany(
-        [
-          {
-            ...base,
-            type: 'task.started',
-            payload: { node_id: nodeId, lease_id: leaseId, attempt },
-          },
-          {
-            ...base,
-            type: 'lease.granted',
-            payload: {
-              lease_id: leaseId,
-              node_id: nodeId,
-              token_sha256: sha256(token),
-              ttl_s: ttl,
-              expires_at: expiresAt,
-            },
-          },
-        ],
-        { actor: `node:${nodeId}` },
-      )
-      // 被其他请求抢先（理论上不会发生，见文件头）：换下一个任务。
-      if (!written.ok) continue
-      ledger.touchNode(nodeId)
-      return {
-        lease_id: leaseId,
-        lease_token: token,
-        task_id: task.id,
-        workspace: task.workspace,
-        contract: task.contract,
-        attempt,
-        ttl_s: ttl,
-        expires_at: expiresAt,
-        ...(resume ? { resume } : {}),
+      const hasReservedWaiter = waiters.some((w) => w !== self && w.nodeId === nodeId && w.slots)
+      if (general && !hasReservedWaiter) {
+        const grant = grantTask(task, nodeId)
+        if (grant) return grant
+        continue
       }
+      const wake = ledger.wakeOrigin(task.id)
+      const slot = leaseSlotFor(slots, wake)
+      if (slot === null) continue
+      if (slot === 'general') {
+        const other = reservedWaiterFor(task, wake, nodeId, self)
+        if (other) {
+          const grant = grantTask(task, nodeId)
+          if (grant) other.resolve(grant)
+          continue
+        }
+      }
+      const grant = grantTask(task, nodeId)
+      if (grant) return grant
     }
     return null
   }
@@ -398,7 +449,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       draining = false
       if (closed) return
       for (const w of [...waiters]) {
-        const grant = tryGrant(w.nodeId, w.capabilities, w.slots)
+        // 可能已在本轮中作为预留槽等待者被分配（见 tryGrant）。
+        if (!waiters.includes(w)) continue
+        const grant = tryGrant(w.nodeId, w.capabilities, w.slots, w)
         if (grant) w.resolve(grant)
       }
     })

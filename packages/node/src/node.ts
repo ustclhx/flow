@@ -58,7 +58,7 @@ import { resolveContractCwd } from './workdir.ts'
  * - 时钟跳变检测：墙钟比单调时钟多走超过 30 秒（睡眠唤醒）时立即续约全部租约（D5）；
  * - 并发上限按执行槽类别计数（add-m1-supervisor D12）：普通槽 concurrency，另有 `reserved.supervisor`
  *   与 `reserved.reply` 两类预留槽。每个容量大于 0 的类别各有一个领取循环，领取时只上报本类别的
- *   空位（`slots`），因此普通槽占满（例如 dev 任务卡住并持有租约）时仍为唤醒任务领取；
+ *   空位（`slots`；普通循环不带 slots，兼容旧中枢），因此普通槽占满（例如 dev 任务卡住并持有租约）时仍为唤醒任务领取；
  * - `stop()` 不提交结果：停止续约并取消执行器，租约到期后由中枢按合同处理（与进程被杀一致）。
  */
 
@@ -96,6 +96,11 @@ export interface StartNodeOptions {
   waitS?: number
   /** 中枢不可用等错误后的重试间隔，默认 1000 毫秒。 */
   retryMs?: number
+  /**
+   * 中枢拒绝 `slots`（旧中枢的 strict 校验返回 invalid_arguments）后，预留槽循环的重试间隔，
+   * 默认 5 分钟；中枢升级后自动恢复。
+   */
+  slotsRetryMs?: number
   /** 时钟跳变阈值，默认 30 秒。 */
   jumpThresholdMs?: number
   /**
@@ -125,6 +130,8 @@ export interface RunningNode {
 }
 
 export const JUMP_THRESHOLD_MS = 30_000
+/** 中枢拒绝 slots 后预留槽循环的重试间隔。 */
+export const SLOTS_RETRY_MS = 5 * 60_000
 const JUMP_CHECK_MS = 1_000
 const ACTIVITY_PER_RENEW = 500
 const ACTIVITY_BUFFER_MAX = 5_000
@@ -943,6 +950,9 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
     return registration
   }
 
+  const slotsRetryMs = options.slotsRetryMs ?? SLOTS_RETRY_MS
+  const slotsRejected = new Set<LeaseSlotKind>()
+
   /** 一个类别的领取循环：只为本类别的空位领取，计数也只算本类别（D12）。 */
   const loop = async (kind: LeaseSlotKind) => {
     while (!stopper.signal.aborted) {
@@ -953,11 +963,13 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
         await waitForSlot()
         continue
       }
-      const slots: LeaseSlots = { general: 0, supervisor: 0, reply: 0, [kind]: free }
+      // 普通循环不带 slots：在新中枢上与 {general: n} 等价，同时兼容不认识 slots 的旧中枢。
+      const slots: LeaseSlots | undefined =
+        kind === 'general' ? undefined : { general: 0, supervisor: 0, reply: 0, [kind]: free }
       const abort = new AbortController()
       acquireAborts.add(abort)
       const r = await client.acquire(
-        { node_id: nodeId, capabilities, wait_s: options.waitS ?? 30, slots },
+        { node_id: nodeId, capabilities, wait_s: options.waitS ?? 30, ...(slots ? { slots } : {}) },
         AbortSignal.any([abort.signal, stopper.signal]),
       )
       acquireAborts.delete(abort)
@@ -966,9 +978,20 @@ export async function startNode(options: StartNodeOptions): Promise<Result<Runni
         // 中枢丢失了注册（例如重建）：重新注册；多个循环同时发现时只重置一次。
         if (r.error.code === 'node_not_registered') {
           if (registration === current) registration = undefined
+        } else if (slots && r.error.code === 'invalid_arguments') {
+          // 旧中枢不认识 slots：只告警一次，长退避后再试（中枢升级后自动恢复）。
+          if (!slotsRejected.has(kind)) {
+            slotsRejected.add(kind)
+            logger.warn(`中枢不接受执行槽（slots），${kind} 预留槽暂停领取，稍后重试`, r.error.code)
+          }
+          await sleep(clock, slotsRetryMs, stopper.signal)
+          continue
         } else logger.warn('领取任务失败，稍后重试', r.error.code)
         await sleep(clock, retryMs, stopper.signal)
         continue
+      }
+      if (slots && slotsRejected.delete(kind)) {
+        logger.info(`中枢已接受执行槽（slots），${kind} 预留槽恢复领取`)
       }
       if (r.data.lease) await startRunner(r.data.lease, kind)
     }

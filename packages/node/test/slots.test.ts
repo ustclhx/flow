@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { TaskContractInput, WakeOrigin } from '@flow/core'
-import { type Bench, bench, fake } from './harness.ts'
+import { type Bench, bench, fake, type Intercept } from './harness.ts'
 
 /**
  * 预留执行槽（add-m1-supervisor 5.5；design D12；node-protocol "supervisor 预留执行槽"）：
@@ -118,5 +118,82 @@ describe('节点预留执行槽', () => {
     const d = await b.create(fake({}))
     await b.until(d, (t) => t.status === 'done', 60_000)
     expect(b.node.active()).toBe(0)
+  })
+
+  test('空闲节点上卡住的普通唤醒占 supervisor 槽，之后的 dev 任务仍能领到普通槽', async () => {
+    const b = await open({ concurrency: 1 })
+    const w = await wake(b, 'instruction', 'ws/demo', stuck())
+    await b.until(w, (t) => t.status === 'blocked')
+    const d = await b.create(fake({}))
+    await b.until(d, (t) => t.status === 'done', 60_000)
+    expect(b.task(w).status).toBe('blocked')
+  })
+
+  test('普通槽满时，预留槽的租约结束后能再次领取唤醒', async () => {
+    const b = await open({ concurrency: 1 })
+    const dev = await b.create(stuck())
+    await b.until(dev, (t) => t.status === 'blocked')
+    const w1 = await wake(b, 'instruction')
+    await b.until(w1, (t) => t.status === 'done', 60_000)
+    const w2 = await wake(b, 'autonomous')
+    await b.until(w2, (t) => t.status === 'done', 60_000)
+    const r = await wake(b, 'reply')
+    await b.until(r, (t) => t.status === 'done', 60_000)
+    expect(b.task(dev).status).toBe('blocked')
+  })
+
+  test('节点停止时三个 long-poll 都被中止', async () => {
+    const b = await open({ concurrency: 1 })
+    await b.clock.advance(0)
+    expect(b.protocol.service.waiting()).toBe(3)
+    await b.node.stop()
+    await b.clock.advance(0)
+    expect(b.protocol.service.waiting()).toBe(0)
+  })
+})
+
+describe('中枢不接受 slots（旧中枢）', () => {
+  /** 模拟旧中枢的 strict 校验：带 slots 的领取请求返回 invalid_arguments。 */
+  const rejectSlots: Intercept = (url, init) => {
+    if (!url.endsWith('/v1/leases') || !String(init?.body ?? '').includes('"slots"')) return
+    return Response.json(
+      {
+        ok: false,
+        error: {
+          kind: 'usage',
+          code: 'invalid_arguments',
+          message: '领取请求不合法：未知字段 slots',
+          retryable: false,
+        },
+      },
+      { status: 400 },
+    )
+  }
+
+  test('普通任务照常领取，预留槽循环只告警一次并长退避，中枢升级后自动恢复', async () => {
+    const warns: string[] = []
+    let upgraded = false
+    const logger = { info() {}, warn: (m: string) => void warns.push(m) }
+    const b = await open({ concurrency: 1, logger, slotsRetryMs: 300_000 }, 60, (url, init) =>
+      upgraded ? undefined : rejectSlots(url, init),
+    )
+    const d = await b.create(fake({}))
+    await b.until(d, (t) => t.status === 'done', 60_000)
+    await b.clock.advance(20 * 60_000)
+    const slotWarns = warns.filter((m) => m.includes('slots'))
+    // supervisor 与 reply 各一次，不随重试刷屏；也没有其他告警
+    expect(slotWarns).toHaveLength(2)
+    expect(warns).toHaveLength(2)
+    // 普通循环不带 slots：旧中枢上也能领取唤醒（落到普通槽）
+    const w = await wake(b, 'instruction')
+    await b.until(w, (t) => t.status === 'done', 60_000)
+
+    // 中枢升级后，下一次重试起预留槽恢复：dev 卡住占满普通槽时唤醒仍能运行
+    upgraded = true
+    const dev = await b.create(stuck())
+    await b.until(dev, (t) => t.status === 'blocked')
+    const w2 = await wake(b, 'instruction')
+    await b.until(w2, (t) => t.status === 'done', 10 * 60_000)
+    expect(warns).toHaveLength(2)
   })
 })

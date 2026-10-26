@@ -541,9 +541,16 @@ export const leaseSlots = z
 export type LeaseSlots = z.infer<typeof leaseSlots>
 
 /**
- * 某任务可以占用的执行槽（纯函数，D12）。`wake` 是该任务 `supervisor.wake_started` 的 origin，
- * 不是唤醒任务时为 null。唤醒优先占用对应的预留槽，把普通空位留给其他任务；
- * `slots` 缺省（旧节点）时视为只有普通空位、数量不限，保持原有语义。没有可用空位时返回 null。
+ * 某任务在一次领取请求中可以占用的执行槽（纯函数，D12）。`wake` 是该任务
+ * `supervisor.wake_started` 的 origin，不是唤醒任务时为 null。
+ *
+ * - `slots` 缺省时视为只有普通空位、数量不限：旧节点，以及新节点的普通（general）领取循环
+ *   都不带 `slots`（新节点因此也能连旧中枢）；任何任务都返回 `general`。
+ * - 带 `slots` 时（新节点的 supervisor / reply 循环）：唤醒优先占对应的预留槽，其次普通空位；
+ *   普通任务只用普通空位；没有可用空位时返回 null。
+ *
+ * 唤醒落到普通空位之前，中枢会先把它交给同一节点正在等待的预留槽领取（见 hub 的 tryGrant），
+ * 避免唤醒挤占普通槽。
  */
 export function leaseSlotFor(
   slots: LeaseSlots | undefined,
