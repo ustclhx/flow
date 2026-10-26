@@ -381,6 +381,9 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
     // supervisor 段非法：workspace 照常加载，supervisor 显示为未启用
     expect(find('workspace.bad.supervisor')?.message).toBe('ws/bad supervisor：未启用')
     expect(find('workspace.global.supervisor')?.message).toContain('global 不启用 supervisor')
+    // 启用 supervisor 却没有登记仓库：不可唤醒，给 warning；未启用的不提示
+    expect(find('workspace.on.supervisor_repo')).toMatchObject({ ok: false, severity: 'warning' })
+    expect(find('workspace.off.supervisor_repo')).toBeUndefined()
   })
 
   test('delegationEnabled = enabled && delegate_replies', () => {

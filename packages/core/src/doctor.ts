@@ -524,6 +524,16 @@ async function checkWorkspaces(home: string, roles?: Role[]): Promise<DoctorChec
       severity: 'info',
       message: `${ws.ref} supervisor：${describeSupervisorConfig(ws.supervisor)}`,
     })
+    // 唤醒任务以登记仓库为工作目录：没有仓库时视为不可唤醒（design D3），积压事件会被丢弃。
+    if (ws.supervisor.enabled && ws.repos.length === 0) {
+      checks.push({
+        id: `workspace.${ws.id}.supervisor_repo`,
+        ok: false,
+        severity: 'warning',
+        message: `${ws.ref} 启用了 supervisor 但没有登记仓库：中枢不会唤醒它，期间的指令与事件会被丢弃`,
+        hint: `在 config/workspaces/${ws.id}.yaml 的 repos 中登记仓库，或设置 supervisor.enabled: false`,
+      })
+    }
   }
   checks.push(...reviewers)
   return checks

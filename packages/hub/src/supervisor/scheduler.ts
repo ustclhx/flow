@@ -5,6 +5,7 @@ import {
   type LedgerEvent,
   MANUAL_WAKE_TEXT,
   ok,
+  type QueueDropReason,
   type Result,
   type Role,
   type SupervisorStatusData,
@@ -40,7 +41,9 @@ import {
  *   `supervisor.wake_started` 同一次 append（`withCreated`）；
  * - 每日上限（普通唤醒总数与 autonomous 分别计；放行与失败后的重试不计入）：超出时事件留在队列，
  *   收件箱出现一条 Decide；
- * - 普通唤醒失败：立即重试一次；仍失败则进收件箱（Interrupt）并暂停该队列，满 1 小时自动恢复一次，
+ * - 不可唤醒时丢弃普通队列积压（`supervisor.queue_dropped`），首次启用时按 upgrade 丢弃旧事件；
+ * - 合并取最新 200 个事件，同一巡检规则只留最新一次，`inputs.wake` 超出字符预算时只带事件引用；
+ * - 普通唤醒失败：立即新建一次唤醒重试（合同本身不带 retry，只有这一层）；仍失败则进收件箱（Interrupt）并暂停该队列，满 1 小时自动恢复一次，
  *   再失败退避翻倍（最长 24 小时）；`supervisor.release` 或取消唤醒即放行；
  * - reply 唤醒：开始前剔除已失效的委托（`activeDelegation`），全部失效不唤醒；失败不重试、不暂停、
  *   不能放行。委托的判定与转交属于 3.5，这里只留 `onReplyUnavailable` 钩子。
@@ -50,8 +53,14 @@ import {
 export const PAUSE_BASE_MS = 60 * 60 * 1000
 export const PAUSE_MAX_MS = 24 * 60 * 60 * 1000
 
-/** 普通唤醒的合同重试次数（租约过期时重新排队一次）。 */
-const WAKE_MAX_ATTEMPTS = 2
+/** 一次唤醒最多合并的事件数（取最新的）。 */
+const WAKE_MERGE_MAX = WAKE_EVENTS_MAX
+/** `inputs.wake.events` 的总字符预算：超出时只带事件引用（seq、类型、任务）。 */
+export const WAKE_INPUT_BUDGET = 16_000
+/** 唤醒创建失败后的重试退避：30 秒起翻倍，最长 1 小时；连续失败到 3 次写 Interrupt。 */
+const CREATE_RETRY_BASE_MS = 30_000
+const CREATE_RETRY_MAX_MS = 60 * 60 * 1000
+const CREATE_FAILURES_ALERT = 3
 const TAIL_LINES = 40
 const FIELD_MAX = 2000
 
@@ -73,7 +82,10 @@ export interface WakeSchedulerOptions {
   logger?: Pick<HubLogger, 'warn'>
   /**
    * reply 唤醒无法开始（3.5 据此以 `wake_unavailable` 转交委托）：未启用、reply 配额用尽，或当前 reply
-   * 唤醒处于 blocked。每次调度都可能再次调用，实现必须幂等。
+   * 唤醒处于 blocked。
+   * - `delegations` 只含尚未被任何唤醒消费、且仍有效（`activeDelegation`）的委托；
+   * - 之后每次调度都会再次触发，直到委托失效：调用方必须在回调里**同步**写 `task.reply_escalated`
+   *   （转交后委托失效、随即出队），否则会被重复通知。
    */
   onReplyUnavailable?: (info: {
     workspace: string
@@ -105,7 +117,13 @@ export interface WakeScheduler {
 
 type Availability =
   | { ok: true; ws: WorkspaceInfo; role: Role }
-  | { ok: false; code: 'unknown_workspace' | 'supervisor_disabled'; reason: string }
+  | {
+      ok: false
+      code: 'unknown_workspace' | 'supervisor_disabled'
+      reason: string
+      /** 写 `supervisor.queue_dropped` 时记录的原因。 */
+      drop: QueueDropReason
+    }
 
 const pad = (n: number) => String(n).padStart(2, '0')
 export const localDayKey = (ms: number) => {
@@ -137,8 +155,13 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
   const dayKey = o.dayKey ?? localDayKey
   const nextDay = o.nextDay ?? localNextDay
   const projection = new WakeProjection({
-    itemSourceRef: (id) => ledger.getInboxItem(id)?.source_ref ?? null,
+    item: (id) => {
+      const it = ledger.getInboxItem(id)
+      return it ? { source: it.source, source_ref: it.source_ref, workspace: it.workspace } : null
+    },
   })
+  /** 每个 workspace 连续创建唤醒失败的次数（内存，重启清零）。 */
+  const createFailures = new Map<string, number>()
   let unsubscribe: (() => void) | undefined
   let stopped = false
   /** 每个 workspace 的调度串行执行；`dirty` 表示执行期间又有新事件，结束后再跑一次。 */
@@ -160,18 +183,32 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
 
   async function availability(ref: string): Promise<Availability> {
     const ws = await o.workspaces(ref)
-    if (!ws) return { ok: false, code: 'unknown_workspace', reason: `workspace ${ref} 未定义` }
-    const off = (reason: string): Availability => ({
+    if (!ws) {
+      return {
+        ok: false,
+        code: 'unknown_workspace',
+        reason: `workspace ${ref} 未定义`,
+        drop: 'unknown_workspace',
+      }
+    }
+    const off = (reason: string, drop: QueueDropReason): Availability => ({
       ok: false,
       code: 'supervisor_disabled',
       reason,
+      drop,
     })
-    if (ref === 'ws/global') return off('global 不启用 supervisor')
-    if (!ws.supervisor.enabled) return off(`${ref} 未启用 supervisor（supervisor.enabled: false）`)
+    if (ref === 'ws/global') return off('global 不启用 supervisor', 'global')
+    if (!ws.supervisor.enabled) {
+      return off(`${ref} 未启用 supervisor（supervisor.enabled: false）`, 'disabled')
+    }
     const role = await o.supervisorRole()
-    if (!role.ok) return off(`supervisor 角色不可用：${role.error.message}`)
-    if (!role.data) return off('没有 kind: supervisor 角色（运行 flow init 补齐角色模板）')
-    if (ws.repos.length === 0) return off(`${ref} 没有登记仓库，supervisor 唤醒没有工作目录`)
+    if (!role.ok) return off(`supervisor 角色不可用：${role.error.message}`, 'role_invalid')
+    if (!role.data) {
+      return off('没有 kind: supervisor 角色（运行 flow init 补齐角色模板）', 'no_role')
+    }
+    if (ws.repos.length === 0) {
+      return off(`${ref} 没有登记仓库，supervisor 唤醒没有工作目录`, 'no_repo')
+    }
     return { ok: true, ws, role: role.data }
   }
 
@@ -209,23 +246,29 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     }
   }
 
-  function limitItem(ref: string, kind: 'total' | 'autonomous', max: number, date: string) {
+  /** 达到上限的条目：按实际被拦下的队列各一条（每天）。 */
+  function limitItem(
+    ref: string,
+    queue: TaskOrigin,
+    kind: 'total' | 'autonomous',
+    max: number,
+    date: string,
+  ) {
     const id = wsId(ref)
     const what = kind === 'total' ? '普通唤醒' : '自主（巡检、回看）唤醒'
     const key = kind === 'total' ? 'wakes_per_day' : 'autonomous_wakes_per_day'
-    const queue = kind === 'total' ? 'instruction' : 'autonomous'
     ensureItem({
       type: 'inbox.item_created',
       workspace: ref,
       payload: {
-        item_id: `wake.${kind === 'total' ? 'limit' : 'alimit'}.${id}.${date}`,
+        item_id: `wake.limit.${id}.${date}.${queue}`,
         level: 'decide',
         source: 'supervisor',
         source_ref: ref,
         reason: 'wake_limit',
-        title: `${ref} 今日唤醒已达上限`,
+        title: `${ref} 今日唤醒已达上限，${queue} 队列的事件在等待`,
         body: [
-          `今天的${what}已达 ${max} 次（supervisor.limits.${key}），新事件留在队列中，明天自动继续。`,
+          `今天的${what}已达 ${max} 次（supervisor.limits.${key}），${queue} 队列的新事件留在队列中，明天自动继续。`,
           `需要现在处理：flow supervisor wake ${id} --release ${queue}（放行一次，不计入上限）。`,
         ].join('\n'),
         actions: [],
@@ -265,6 +308,44 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         actions: [],
       },
     })
+  }
+
+  function createFailedItem(ref: string, failures: number, error: string, date: string) {
+    ensureItem({
+      type: 'inbox.item_created',
+      workspace: ref,
+      payload: {
+        item_id: `wake.create.${wsId(ref)}.${date}`,
+        level: 'interrupt',
+        source: 'supervisor',
+        source_ref: ref,
+        reason: 'wake_create_failed',
+        title: `${ref} 的 supervisor 唤醒无法创建`,
+        body: clipText(
+          `已连续 ${failures} 次创建唤醒任务失败：${error}\n中枢会按退避继续重试；可运行 flow supervisor status ${wsId(ref)} 查看，或 flow doctor 检查配置。`,
+          4000,
+        ),
+        actions: [],
+      },
+    })
+  }
+
+  /** 丢弃不可唤醒的 workspace 中普通队列的积压（重放确定，之后启用不会带出旧事件）。 */
+  function dropQueues(ref: string, reason: QueueDropReason) {
+    for (const queue of NORMAL_QUEUES) {
+      const pending = projection.pending(ref, queue)
+      const last = pending.at(-1)
+      if (!last) continue
+      const r = ledger.append(
+        {
+          type: 'supervisor.queue_dropped',
+          workspace: ref,
+          payload: { queue, up_to_seq: last.seq, reason },
+        },
+        { actor: 'hub' },
+      )
+      if (!r.ok) logger.warn('supervisor 队列积压丢弃失败', { workspace: ref, error: r.error })
+    }
   }
 
   // ---- 唤醒内容（只供提示词，D1） ----
@@ -348,6 +429,11 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         }
       case 'task.reply_delegated':
         return { ...base, ...describeDelegation(ev) }
+      case 'inbox.item_closed':
+        return {
+          summary: `你的提问 ${ev.payload.item_id} 已过期，用户没有回答`,
+          data: { item_id: ev.payload.item_id, reason: ev.payload.reason },
+        }
       default:
         return base
     }
@@ -389,6 +475,14 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
   }
 
   function wakeEvents(events: readonly QueuedEvent[], bare: boolean): WakeEventInput[] {
+    if (!bare) {
+      const full = describeAll(events)
+      if (JSON.stringify(full).length <= WAKE_INPUT_BUDGET) return full
+    }
+    return describeAll(events, true)
+  }
+
+  function describeAll(events: readonly QueuedEvent[], bare = false): WakeEventInput[] {
     return events.map((q) => {
       const ev = eventAt(q.seq)
       const head = {
@@ -408,7 +502,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     origin: Queue,
     events: QueuedEvent[],
     note?: string,
-  ): Promise<WakeState | null> {
+  ): Promise<WakeState | null | { retryAt: number }> {
     const ref = a.ws.ref
     const generation = projection.workspace(ref).generation + 1
     const seqs = events.map((e) => e.seq)
@@ -421,7 +515,6 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
       role: a.role.name,
       executor: 'claude-sdk',
       cwd: a.ws.repos[0] as string,
-      ...(origin === 'reply' ? {} : { retry: { max_attempts: WAKE_MAX_ATTEMPTS } }),
       inputs: {
         wake: {
           origin,
@@ -449,9 +542,20 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     // 事件说明里有疑似密钥时退回只带事件引用（seq、类型、任务），唤醒照常进行。
     if (!r.ok && r.error.code === 'secret_suspected') r = await create(true)
     if (!r.ok) {
-      logger.warn('supervisor 唤醒创建失败', { workspace: ref, origin, error: r.error })
-      return null
+      const n = (createFailures.get(ref) ?? 0) + 1
+      createFailures.set(ref, n)
+      logger.warn('supervisor 唤醒创建失败', {
+        workspace: ref,
+        origin,
+        failures: n,
+        error: r.error,
+      })
+      if (n >= CREATE_FAILURES_ALERT) createFailedItem(ref, n, r.error.message, dayKey(clock.now()))
+      return {
+        retryAt: clock.now() + Math.min(CREATE_RETRY_MAX_MS, CREATE_RETRY_BASE_MS * 2 ** (n - 1)),
+      }
     }
+    createFailures.delete(ref)
     return projection.wake(r.data.task.id)
   }
 
@@ -477,13 +581,17 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     const a = await availability(ref)
     if (stopped) return
     const now = clock.now()
+    // 失效的委托（已转交、用户已回复、任务已离开该次卡住）随过滤一并出队。
     const replyPending = () =>
       projection.pending(ref, 'reply').filter((q) => {
-        if (q.task_id === undefined) return false
-        const d = ledger.activeDelegation(q.task_id)
-        return d !== null && d.seq === q.seq
+        const d = q.task_id === undefined ? null : ledger.activeDelegation(q.task_id)
+        const valid = d !== null && d.seq === q.seq
+        if (!valid) projection.forget(ref, 'reply', q.seq)
+        return valid
       })
     if (!a.ok) {
+      // 不可唤醒时丢弃普通队列积压（写 queue_dropped），之后启用不会带出这段时间的旧事件。
+      dropQueues(ref, a.drop)
       const delegations = replyPending()
       if (delegations.length)
         o.onReplyUnavailable?.({ workspace: ref, reason: 'unavailable', delegations })
@@ -509,7 +617,11 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         if (pause && !q.releasePending && q.lastFailedWake) {
           pausedItem(ref, queue, q.lastFailedWake, pause.failures, pause.until)
         }
-        const pending = projection.pending(ref, queue)
+        // 放行只作用于放行当时已有的事件。
+        const releaseSeq = q.releasePending ? q.releaseSeq : null
+        const pending = projection
+          .pending(ref, queue)
+          .filter((e) => releaseSeq === null || e.seq < releaseSeq)
         if (pending.length === 0) continue
         const bypass = q.releasePending || q.failures === 1
         if (!bypass) {
@@ -519,12 +631,12 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
           }
           const today = todayWakes(ref, now)
           if (today.wakes >= limits.wakes_per_day) {
-            limitItem(ref, 'total', limits.wakes_per_day, today.date)
+            limitItem(ref, queue, 'total', limits.wakes_per_day, today.date)
             later(nextDay(now))
             continue
           }
           if (queue === 'autonomous' && today.autonomous >= limits.autonomous_wakes_per_day) {
-            limitItem(ref, 'autonomous', limits.autonomous_wakes_per_day, today.date)
+            limitItem(ref, queue, 'autonomous', limits.autonomous_wakes_per_day, today.date)
             later(nextDay(now))
             continue
           }
@@ -536,7 +648,8 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
             : pause
               ? '队列暂停后自动恢复'
               : undefined
-        await createWake(a, queue, pending.slice(0, WAKE_EVENTS_MAX), note)
+        const made = await createWake(a, queue, pending.slice(-WAKE_MERGE_MAX), note)
+        if (made && 'retryAt' in made) later(made.retryAt)
         break
       }
     }
@@ -552,7 +665,8 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
       } else if (todayWakes(ref, now).reply >= limits.reply_wakes_per_day) {
         o.onReplyUnavailable?.({ workspace: ref, reason: 'quota', delegations })
       } else {
-        await createWake(a, 'reply', delegations.slice(0, WAKE_EVENTS_MAX))
+        const made = await createWake(a, 'reply', delegations.slice(-WAKE_MERGE_MAX))
+        if (made && 'retryAt' in made) later(made.retryAt)
       }
     }
     arm(ref, wakeAt)
@@ -684,6 +798,11 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         after = batch[batch.length - 1]?.seq ?? after
       }
       unsubscribe = ledger.subscribe(onEvent)
+      // 首次启用唤醒调度（账本里还没有任何唤醒或丢弃记录）：此前写下的旧事件（例如 G10 之前的
+      // user.instruction）统一按 upgrade 丢弃，不回放。订阅之后写，投影随通知同步折叠。
+      if (!projection.hasHistory()) {
+        for (const ref of projection.workspaces()) dropQueues(ref, 'upgrade')
+      }
       for (const ref of projection.workspaces()) void schedule(ref)
     },
     stop() {

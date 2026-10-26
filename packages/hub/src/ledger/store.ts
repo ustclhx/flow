@@ -447,7 +447,7 @@ function rowToNode(r: NodeRow): NodeView {
 /**
  * 新事件的写入身份白名单（store 层兜底；路由层另有 user-only 等检查）：
  * - 用户的决定：指令、放行、接受 / 驳回提案、批准合并只接受 user；
- * - 中枢内部：唤醒、提案登记、决策回看、代回复委托只接受 hub；
+ * - 中枢内部：唤醒、丢弃队列积压、定时触发、提案登记、决策回看、代回复委托只接受 hub；
  * - `task.reply_escalated` 按 reason 区分（见 `ESCALATION_BY_USER`）：user_replied、user_dismissed
  *   在用户回复或忽略的同一次 append 中写入，只接受 user；其他原因只接受 hub；
  * - `supervisor.answered`（D11）由收件箱回复路由写入：路由以 user 身份直接写，
@@ -456,6 +456,8 @@ function rowToNode(r: NodeRow): NodeView {
 const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>> = {
   'user.instruction': ['user'],
   'supervisor.release': ['user'],
+  'supervisor.queue_dropped': ['hub'],
+  'schedule.fired': ['hub'],
   'task_proposal.accepted': ['user'],
   'task_proposal.rejected': ['user'],
   'merge_request.approved': ['user'],

@@ -109,7 +109,7 @@ async function runSeed(seed: number) {
                 },
               },
             ],
-            'scheduler',
+            'hub',
           )
         } else if (kind === 'started') {
           write('hub.started', [

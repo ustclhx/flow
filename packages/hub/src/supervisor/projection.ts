@@ -1,4 +1,10 @@
-import type { BlockedReason, LedgerEvent, TaskOrigin, WakeOrigin } from '@flow/core'
+import {
+  type BlockedReason,
+  DELEGATION_ENDING_EVENTS,
+  type LedgerEvent,
+  type TaskOrigin,
+  type WakeOrigin,
+} from '@flow/core'
 
 /**
  * supervisor 唤醒队列的投影（add-m1-supervisor D2、D3、D15；tasks 3.1、3.2）。
@@ -34,6 +40,8 @@ export interface QueuedEvent {
   type: LedgerEvent['type']
   ts: string
   task_id?: string
+  /** 同一 key 的事件只保留最新一条（同一条巡检规则的多次触发）。 */
+  key?: string
 }
 
 export interface WakeState {
@@ -59,8 +67,10 @@ export interface QueueState {
   failures: number
   lastFailTs: string | null
   lastFailedWake: string | null
-  /** 已放行、尚未被唤醒消费。 */
+  /** 已放行、尚未被唤醒消费（放行时队列非空才有"通行证"）。 */
   releasePending: boolean
+  /** 放行事件的 seq：放行只作用于 seq 小于它的事件（放行当时已存在的）。 */
+  releaseSeq: number | null
 }
 
 export interface WorkspaceWakes {
@@ -73,9 +83,14 @@ export interface WorkspaceWakes {
 
 /** 查询中枢其他投影的只读信息（提问条目所属的唤醒，D11）。 */
 export interface ProjectionLookups {
-  /** 收件箱条目的 source_ref（提问条目为提问所在的唤醒任务 id）。 */
-  itemSourceRef(itemId: string): string | null
+  /**
+   * 收件箱条目的来源信息（条目创建后不变）：提问条目的 source_ref 为提问所在的唤醒任务 id（D11）。
+   */
+  item(itemId: string): { source: string; source_ref: string; workspace: string | null } | null
 }
+
+/** 本组自己写的收件箱条目（上限、失败）的 id 前缀：它们关闭时不唤醒。 */
+export const WAKE_ITEM_PREFIX = 'wake.'
 
 const newQueue = (): QueueState => ({
   pending: new Map(),
@@ -83,6 +98,7 @@ const newQueue = (): QueueState => ({
   lastFailTs: null,
   lastFailedWake: null,
   releasePending: false,
+  releaseSeq: null,
 })
 
 export class WakeProjection {
@@ -96,6 +112,8 @@ export class WakeProjection {
   /** 普通唤醒合并的原始事件（出队时记下，失败放回队列时用）。 */
   private readonly originals = new Map<string, QueuedEvent[]>()
   private last = 0
+  /** 是否已有过唤醒或丢弃记录（没有时是首次启用调度，旧积压按 upgrade 丢弃）。 */
+  private history = false
 
   constructor(private readonly lookups: ProjectionLookups) {}
 
@@ -122,12 +140,36 @@ export class WakeProjection {
     return [...this.ws.keys()]
   }
 
+  /** 账本里是否已有 `supervisor.wake_started` 或 `supervisor.queue_dropped`。 */
+  hasHistory(): boolean {
+    return this.history
+  }
+
   wake(taskId: string): WakeState | null {
     return this.wakes.get(taskId) ?? null
   }
 
   /** 唤醒会合并的事件所在队列；不是唤醒事件时为 null（D2 表、D3）。 */
   classify(e: LedgerEvent): Queue | null {
+    return this.classifyIn(e)?.queue ?? null
+  }
+
+  /** 事件所在的 workspace 与队列（收件箱关闭事件的 workspace 取自条目）。 */
+  private classifyIn(e: LedgerEvent): { workspace: string; queue: Queue } | null {
+    if (e.type === 'inbox.item_closed') {
+      // G13：supervisor 提问 7 天未回答关闭为 expired 时唤醒一次，origin 取提问所在唤醒。
+      if ((e.payload.reason as string) !== 'expired') return null
+      if (e.payload.item_id.startsWith(WAKE_ITEM_PREFIX)) return null
+      const item = this.lookups.item(e.payload.item_id)
+      if (item?.source !== 'supervisor' || !item.workspace) return null
+      return { workspace: item.workspace, queue: this.normalOriginOf(item.source_ref) }
+    }
+    if (e.workspace === undefined) return null
+    const queue = this.queueOf(e)
+    return queue === null ? null : { workspace: e.workspace, queue }
+  }
+
+  private queueOf(e: LedgerEvent): Queue | null {
     switch (e.type) {
       case 'user.instruction':
         return e.actor === 'user' ? 'instruction' : null
@@ -151,10 +193,8 @@ export class WakeProjection {
         this.blockedSeen.add(key)
         return origin
       }
-      case 'supervisor.answered': {
-        const ref = this.lookups.itemSourceRef(e.payload.item_id)
-        return this.normalOriginOf(ref === null ? undefined : ref)
-      }
+      case 'supervisor.answered':
+        return this.normalOriginOf(this.lookups.item(e.payload.item_id)?.source_ref)
       case 'task_proposal.accepted':
         return 'instruction'
       case 'task_proposal.rejected':
@@ -193,8 +233,23 @@ export class WakeProjection {
       case 'supervisor.release': {
         if (e.workspace === undefined) return null
         const q = this.workspace(e.workspace).queues[e.payload.queue]
-        q.releasePending = true
+        // 放行只对当时已有的事件生效；队列为空时不保留通行证（只解除暂停）。
+        q.releasePending = q.pending.size > 0
+        q.releaseSeq = q.releasePending ? e.seq : null
         q.failures = 0
+        return e.workspace
+      }
+      case 'supervisor.queue_dropped': {
+        this.history = true
+        if (e.workspace === undefined) return null
+        const q = this.workspace(e.workspace).queues[e.payload.queue]
+        for (const seq of [...q.pending.keys()]) {
+          if (seq <= e.payload.up_to_seq) q.pending.delete(seq)
+        }
+        if (q.pending.size === 0) {
+          q.releasePending = false
+          q.releaseSeq = null
+        }
         return e.workspace
       }
       default:
@@ -212,26 +267,52 @@ export class WakeProjection {
     if (e.task_id !== undefined && this.wakes.has(e.task_id)) {
       touched = this.wakes.get(e.task_id)?.workspace ?? null
     }
-    const queue = this.classify(e)
-    if (queue !== null && e.workspace !== undefined) {
-      this.workspace(e.workspace).queues[queue].pending.set(e.seq, {
+    if (e.task_id !== undefined && e.workspace !== undefined) this.purgeReplies(e)
+    const hit = this.classifyIn(e)
+    if (hit !== null) {
+      const pending = this.workspace(hit.workspace).queues[hit.queue].pending
+      const key = e.type === 'schedule.fired' ? `schedule:${e.payload.rule_id}` : undefined
+      if (key !== undefined) {
+        for (const [seq, ev] of pending) if (ev.key === key) pending.delete(seq)
+      }
+      pending.set(e.seq, {
         seq: e.seq,
         type: e.type,
         ts: e.ts,
         ...(e.task_id === undefined ? {} : { task_id: e.task_id }),
+        ...(key === undefined ? {} : { key }),
       })
-      touched = e.workspace
+      touched = hit.workspace
     }
     return touched
+  }
+
+  /**
+   * reply 队列中已失效的委托随事件清掉（D15 的隐式失效与转交）：该任务写了 `task.reply_escalated`、
+   * 离开这次卡住（DELEGATION_ENDING_EVENTS）或进入终态时，它此前的委托事件出队。
+   */
+  private purgeReplies(e: LedgerEvent) {
+    const ending =
+      e.type === 'task.reply_escalated' ||
+      DELEGATION_ENDING_EVENTS.has(e.type) ||
+      e.type in TERMINAL_EVENTS
+    if (!ending || e.workspace === undefined) return
+    const pending = this.ws.get(e.workspace)?.queues.reply.pending
+    if (!pending) return
+    for (const [seq, ev] of pending) {
+      if (ev.task_id === e.task_id && seq < e.seq) pending.delete(seq)
+    }
   }
 
   private started(e: Extract<LedgerEvent, { type: 'supervisor.wake_started' }>): string {
     const p = e.payload
     const w = this.workspace(p.workspace)
     const q = w.queues[p.origin]
+    this.history = true
     const retry = p.origin !== 'reply' && q.failures === 1 && !q.releasePending
     const bypass = p.origin !== 'reply' && (q.releasePending || retry)
     q.releasePending = false
+    q.releaseSeq = null
     const wake: WakeState = {
       task_id: p.task_id,
       workspace: p.workspace,
@@ -288,6 +369,11 @@ export class WakeProjection {
       if ((wake.origin === 'reply') === (kind === 'reply')) return wake
     }
     return null
+  }
+
+  /** 从队列中移除一条已失效的事件（reply 委托失效时；与账本推出的结果一致，只是提前清掉）。 */
+  forget(ref: string, queue: Queue, seq: number) {
+    this.ws.get(ref)?.queues[queue].pending.delete(seq)
   }
 
   /** 某队列待处理的事件，按 seq 升序。 */

@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: 巡检规则
-`config/schedules.yaml` 中 `payload.kind = supervisor_patrol` 的规则 SHALL 在触发时唤醒对应 workspace 的 supervisor（origin `patrol`）。`flow init` MUST 只生成注释掉的示例，默认不启用任何巡检。
+`config/schedules.yaml` 中 `payload.kind = supervisor_patrol` 的规则 SHALL 在触发时唤醒对应 workspace 的 supervisor（origin `autonomous`）。`flow init` MUST 只生成注释掉的示例，默认不启用任何巡检。
 
 #### Scenario: 每日巡检
 - **WHEN** 规则 `0 9 * * *` 在 09:00 触发

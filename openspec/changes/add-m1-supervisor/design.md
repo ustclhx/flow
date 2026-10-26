@@ -84,10 +84,15 @@ origin 只有两类：
 - 每个 workspace 有三条队列：instruction、autonomous、reply（reply 只用于代回复，规则见 D15）。同一 workspace 同时最多一个未结束（含 `blocked`）的**普通唤醒**（instruction 或 autonomous），空闲时**先处理 instruction 队列**；另可并行最多一个 reply 唤醒。一次唤醒只合并同一条队列里的事件，所以每次唤醒恰好有一个 origin（`instruction`、`autonomous` 或 `reply`）。
 - 队列与代数（generation，每创建一次唤醒加一）由账本投影，中枢重启后恢复。唤醒任务的幂等键为 `supervisor:<ws>:<generation>`；`supervisor:` 前缀保留给 `hub`，其他身份使用返回 `reserved_idempotency_key`。
 - 唤醒任务 `blocked` 时新事件继续排队；用户取消它即放行队列。
-- 普通唤醒任务失败（reply 唤醒见 D15）：按重试设置重试一次；仍失败则进收件箱（Interrupt），该队列暂停：新事件继续排队但不触发唤醒，直到用户 `--release`，或暂停满 1 小时后自动恢复一次（再失败则回到暂停，退避时间翻倍，最长 24 小时）。
+- 普通唤醒任务失败（reply 唤醒见 D15）：重试一次；仍失败则进收件箱（Interrupt），该队列暂停：新事件继续排队但不触发唤醒，直到用户 `--release`，或暂停满 1 小时后自动恢复一次（再失败则回到暂停，退避时间翻倍，最长 24 小时）。
+- 重试只有一层：唤醒失败（`failed`）后由调度器用同一批事件新建一次唤醒（不计入每日上限）。唤醒任务合同不带 `retry.max_attempts`，租约过期不重新排队（按普通任务进入 `node_lost` 等卡住，用户取消即放行队列），避免与调度器的重试叠加。
+- 合并时取队列中最新的 200 个事件（更早的留在队列，下一次唤醒处理）；同一条巡检规则的多次触发只保留最新一次。`inputs.wake.events` 有总字符预算（16000），超出时只带事件引用（seq、类型、任务 id）。
+- 放行（`supervisor.release`）只作用于放行当时队列里已有的事件；放行时队列为空则只解除暂停，不保留"通行证"。
+- 唤醒任务创建失败（例如角色或配置临时不可读）：按退避（30 秒起翻倍、最长 1 小时）重试；连续 3 次失败写一条 Interrupt（每天每 workspace 一条）。
 - 手动控制（user-only）：`flow supervisor wake <ws> <说明>` 写一条 `user.instruction`；`flow supervisor wake <ws> --release <instruction|autonomous>` 写 `supervisor.release{queue}`，立刻用该队列现有事件创建一次唤醒，origin 保持该队列的类别。手动放行不计入每日上限。
 - 一个 workspace 只能有一个 `kind: supervisor` 角色可用（全局最多一个，doctor 对多个报错）；唤醒任务使用它。
-- workspace 配置 `supervisor.enabled: false` 或没有 `kind: supervisor` 角色时不唤醒，`/ask` 回复未启用。
+- workspace 配置 `supervisor.enabled: false`、没有（或有多个、可写的）`kind: supervisor` 角色、或**没有登记仓库**（唤醒任务以登记仓库为工作目录，节点不会回退到 flow-home）时视为不可唤醒，`/ask` 回复未启用；doctor 对启用了 supervisor 却没有仓库的 workspace 给 warning。
+- 不可唤醒期间不积压：调度器发现某 workspace 不可唤醒而普通队列里有事件时，由 hub 写 `supervisor.queue_dropped{queue, up_to_seq, reason}`，投影据此清掉该队列中不大于 `up_to_seq` 的事件，重放结果确定，之后重新启用不会带出旧事件。首次启用唤醒调度（账本里还没有任何 `supervisor.wake_started` 与 `supervisor.queue_dropped`）时，对已有积压统一写一次 `reason: upgrade`，不回放此前写下的 `user.instruction` 等旧事件。
 - `ws/global` 固定不启用 supervisor（`supervisor.enabled` 恒为 false）：不唤醒，也不代回复其中任务的卡住；doctor 显示"global 不启用 supervisor"。workspace 文件的 `supervisor` 段校验失败时，该 workspace 照常加载，supervisor 视为未启用，问题由 doctor 报告。
 - 是否代回复统一由 `delegationEnabled(workspace)`（`enabled && delegate_replies`）判断。
 

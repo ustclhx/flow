@@ -13,11 +13,14 @@ import {
 } from '@flow/core'
 import { Hono } from 'hono'
 import {
+  createHubApp,
   createSupervisorRoutes,
   createTaskService,
   createWakeScheduler,
+  createWakeTokenAuthority,
   type EventInput,
   type LedgerStore,
+  openTokenStore,
   pauseMs,
   type QueuedEvent,
   type RoleLookup,
@@ -25,7 +28,7 @@ import {
   type WorkspaceInfo,
 } from '../src/index.ts'
 import { contract, must, result, tempLedger } from './ledger-helpers.ts'
-import { FakeClock } from './server-fixtures.ts'
+import { FakeClock, testToken } from './server-fixtures.ts'
 
 /**
  * add-m1-supervisor 3.1–3.4：唤醒事件识别、三条队列、合并与串行、代数与幂等键、重启恢复、
@@ -65,6 +68,8 @@ interface SetupOptions {
   role?: () => Promise<Result<Role | null>>
   store?: LedgerStore
   clock?: FakeClock
+  /** 包装建任务（测试创建失败）。 */
+  wrapTasks?: (t: ReturnType<typeof createTaskService>) => ReturnType<typeof createTaskService>
 }
 
 async function setup(o: SetupOptions = {}) {
@@ -98,7 +103,7 @@ async function setup(o: SetupOptions = {}) {
   const unavailable: { workspace: string; reason: string; delegations: QueuedEvent[] }[] = []
   const scheduler = createWakeScheduler({
     ledger: store,
-    tasks,
+    tasks: o.wrapTasks ? o.wrapTasks(tasks) : tasks,
     clock,
     workspaces: async (ref) => workspaces[ref] ?? null,
     listWorkspaces: async () => Object.values(workspaces),
@@ -117,6 +122,7 @@ async function setup(o: SetupOptions = {}) {
     scheduler,
     workspaces,
     unavailable,
+    tasks,
     settle: async () => {
       await scheduler.idle()
     },
@@ -259,6 +265,8 @@ describe('唤醒事件识别（3.1）', () => {
         },
       },
     })
+    // 只有调度器一层重试：合同不带 retry，租约过期不重新排队（design D3）
+    expect(task?.contract.retry).toBeUndefined()
     const events = env.store.taskEvents(w?.task_id ?? '')
     expect(events.map((e) => e.type)).toEqual(['task.created', 'supervisor.wake_started'])
     expect(events[1]?.seq).toBe((events[0]?.seq ?? 0) + 1)
@@ -427,8 +435,8 @@ describe('队列、合并与串行（3.2）', () => {
     const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
     const l = await tempLedger({ now: clock.now })
     cleanups.push(l.cleanup)
-    const seq = instruction(l.store)
     const first = await setup({ store: l.store, clock })
+    const seq = instruction(l.store)
     await first.settle()
     expect(first.wakes()).toEqual([expect.objectContaining({ events: [seq], generation: 1 })])
     first.scheduler.stop()
@@ -479,9 +487,9 @@ describe('每日上限、失败与放行（3.3）', () => {
     }
     const third = instruction(env.store, '第三条')
     expect(await wakeCount(env)).toBe(2)
-    const item = env.store.getInboxItem(`wake.limit.demo.2026-10-26`)
+    const item = env.store.getInboxItem('wake.limit.demo.2026-10-26.instruction')
     expect(item).toMatchObject({ level: 'decide', source: 'supervisor', state: 'open' })
-    expect(item?.title).toContain('今日唤醒已达上限')
+    expect(item?.title).toContain('今日唤醒已达上限，instruction 队列')
     const placed = await env.scheduler.status(WS)
     expect(must(placed).workspaces[0]?.today).toMatchObject({ wakes: 2, wakes_per_day: 2 })
     await env.clock.advance(24 * HOUR)
@@ -498,7 +506,7 @@ describe('每日上限、失败与放行（3.3）', () => {
     finish(env.store, env.wakes()[0]?.task_id ?? '')
     patrol(env.store, '2026-10-26T09:00:00.000Z')
     expect(await wakeCount(env)).toBe(1)
-    expect(env.store.getInboxItem('wake.alimit.demo.2026-10-26')).not.toBeNull()
+    expect(env.store.getInboxItem('wake.limit.demo.2026-10-26.autonomous')).not.toBeNull()
     instruction(env.store)
     await env.settle()
     expect(env.wakes()[1]).toMatchObject({ origin: 'instruction' })
@@ -526,7 +534,8 @@ describe('每日上限、失败与放行（3.3）', () => {
     expect(await wakeCount(env)).toBe(2)
     const st = must(await env.scheduler.status(WS)).workspaces[0]
     expect(st?.paused.autonomous).toMatchObject({ failures: 2 })
-    expect(st?.queues.autonomous).toBe(2)
+    // 同一条巡检规则只保留最新一次触发
+    expect(st?.queues.autonomous).toBe(1)
     // instruction 队列不受影响
     instruction(env.store)
     await env.settle()
@@ -536,7 +545,7 @@ describe('每日上限、失败与放行（3.3）', () => {
 
     await env.clock.advance(pauseMs(2))
     await env.settle()
-    expect(env.wakes()[3]).toMatchObject({ origin: 'autonomous', events: [p, p2] })
+    expect(env.wakes()[3]).toMatchObject({ origin: 'autonomous', events: [p2] })
     const resumed = env.wakes()[3]?.task_id ?? ''
     failTask(env.store, resumed)
     await env.settle()
@@ -548,7 +557,7 @@ describe('每日上限、失败与放行（3.3）', () => {
     const before = must(await env.scheduler.status(WS)).workspaces[0]?.today.wakes
     const r = must(await env.scheduler.release(WS, 'autonomous'))
     expect(r).toMatchObject({ state: 'started', wake: { origin: 'autonomous' } })
-    expect(env.wakes()[4]).toMatchObject({ origin: 'autonomous', events: [p, p2] })
+    expect(env.wakes()[4]).toMatchObject({ origin: 'autonomous', events: [p2] })
     expect(must(await env.scheduler.status(WS)).workspaces[0]?.today.wakes).toBe(before)
     expect(
       env.store.eventsAfter(0, {}, 1000).find((e) => e.type === 'supervisor.release')?.actor,
@@ -744,5 +753,251 @@ describe('用户接口（3.4）', () => {
       { actor: 'hub' },
     )
     expect(rel).toMatchObject({ ok: false, error: { code: 'actor_mismatch' } })
+  })
+})
+
+const drops = (store: LedgerStore) =>
+  store
+    .eventsAfter(0, {}, 10_000)
+    .filter((e) => e.type === 'supervisor.queue_dropped')
+    .map((e) => ({ actor: e.actor, ...(e.payload as { reason: string }) }))
+
+describe('积压丢弃与合并上限（G10 审查）', () => {
+  test('升级：首次启动时库里已有旧指令，按 upgrade 丢弃、不唤醒；之后的新指令只带新事件', async () => {
+    const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
+    const l = await tempLedger({ now: clock.now })
+    cleanups.push(l.cleanup)
+    const old = instruction(l.store, 'G10 之前写下的旧指令')
+    patrol(l.store)
+    const env = await setup({ store: l.store, clock })
+    await env.settle()
+    expect(env.wakes()).toEqual([])
+    expect(drops(l.store)).toEqual([
+      { actor: 'hub', queue: 'instruction', up_to_seq: old, reason: 'upgrade' },
+      expect.objectContaining({ queue: 'autonomous', reason: 'upgrade' }),
+    ])
+    const fresh = instruction(l.store, '新指令')
+    await env.settle()
+    expect(env.wakes()).toEqual([expect.objectContaining({ events: [fresh] })])
+    // 已有历史后重启不再写 upgrade
+    env.scheduler.stop()
+    const again = await setup({ store: l.store, clock })
+    await again.settle()
+    expect(drops(l.store)).toHaveLength(2)
+  })
+
+  test('禁用期间的事件被丢弃（重放确定），再启用不会带出旧事件', async () => {
+    const env = await setup({ supervisor: { enabled: false } })
+    instruction(env.store, '禁用时的指令')
+    for (let i = 0; i < 3; i++) patrol(env.store, `2026-10-2${i}T09:00:00.000Z`)
+    await env.settle()
+    expect(env.wakes()).toEqual([])
+    expect(drops(env.store).map((d) => d.reason)).toContain('disabled')
+    expect(env.scheduler.projection().pending(WS, 'instruction')).toEqual([])
+    expect(env.scheduler.projection().pending(WS, 'autonomous')).toEqual([])
+    // 重放得到同样的结果
+    env.scheduler.stop()
+    const ws = env.workspaces[WS] as WorkspaceInfo
+    ws.supervisor = { ...ws.supervisor, enabled: true }
+    const replay = await setup({ store: env.store, clock: env.clock })
+    await replay.settle()
+    expect(replay.wakes()).toEqual([])
+    const fresh = instruction(env.store, '启用后的指令')
+    await replay.settle()
+    expect(replay.wakes()).toEqual([expect.objectContaining({ events: [fresh] })])
+  })
+
+  test('合并取最新的 200 条；inputs.wake 超出字符预算时只带事件引用', async () => {
+    const env = await setup()
+    instruction(env.store)
+    await env.settle()
+    const seqs: number[] = []
+    for (let i = 0; i < 230; i++)
+      seqs.push(instruction(env.store, `第 ${i} 条 ${'很长的说明'.repeat(20)}`))
+    finish(env.store, env.wakes()[0]?.task_id ?? '')
+    await env.settle()
+    const w = env.wakes()[1]
+    expect(w?.events).toEqual(seqs.slice(-200))
+    const events = env.store.getTask(w?.task_id ?? '')?.contract.inputs?.wake?.events ?? []
+    expect(events).toHaveLength(200)
+    expect(events[0]).toEqual({
+      seq: seqs[30] as number,
+      type: 'user.instruction',
+      ts: expect.any(String),
+    })
+    expect(events.some((e) => e.summary !== undefined)).toBe(false)
+  })
+
+  test('放行只作用于当时已有的事件；空队列放行不留通行证', async () => {
+    const env = await setup({
+      supervisor: { limits: { ...defaultSupervisorConfig().limits, wakes_per_day: 1 } },
+    })
+    instruction(env.store)
+    await env.settle()
+    const before = instruction(env.store, '放行前')
+    must(await env.scheduler.release(WS, 'instruction'))
+    const after = instruction(env.store, '放行后')
+    finish(env.store, env.wakes()[0]?.task_id ?? '')
+    await env.settle()
+    expect(env.wakes()[1]).toMatchObject({ events: [before] })
+    finish(env.store, env.wakes()[1]?.task_id ?? '')
+    await env.settle()
+    // 上限已满，放行后到达的事件不跟着放行
+    expect(env.wakes()).toHaveLength(2)
+    expect(
+      env.scheduler
+        .projection()
+        .pending(WS, 'instruction')
+        .map((e) => e.seq),
+    ).toEqual([after])
+
+    const empty = await setup({
+      supervisor: { limits: { ...defaultSupervisorConfig().limits, wakes_per_day: 0 } },
+    })
+    expect(must(await empty.scheduler.release(WS, 'instruction')).state).toBe('empty')
+    instruction(empty.store)
+    expect(await wakeCount(empty)).toBe(0)
+    expect(empty.scheduler.projection().workspace(WS).queues.instruction.releasePending).toBe(false)
+  })
+
+  test('唤醒创建失败：按退避重试，连续失败写一条 Interrupt（去重），恢复后正常', async () => {
+    let failing = 4
+    const env = await setup({
+      wrapTasks: (t) => ({
+        ...t,
+        createTask: async (c, opts) =>
+          failing-- > 0 ? fail('failure', 'internal_error', '磁盘满了') : t.createTask(c, opts),
+      }),
+    })
+    instruction(env.store)
+    expect(await wakeCount(env)).toBe(0)
+    await env.clock.advance(30_000)
+    await env.clock.advance(60_000)
+    await env.settle()
+    const item = env.store.getInboxItem('wake.create.demo.2026-10-26')
+    expect(item).toMatchObject({ level: 'interrupt', source: 'supervisor' })
+    await env.clock.advance(120_000)
+    expect(await wakeCount(env)).toBe(0)
+    expect(env.store.listInboxItems({ source: 'supervisor' })).toHaveLength(1)
+    await env.clock.advance(240_000)
+    expect(await wakeCount(env)).toBe(1)
+  })
+})
+
+describe('reply 委托出队与 G13 衔接', () => {
+  test('委托被转交（task.reply_escalated）或任务离开卡住后出队', async () => {
+    const env = await setup({
+      supervisor: { limits: { ...defaultSupervisorConfig().limits, reply_wakes_per_day: 0 } },
+    })
+    derived(env.store, 'q1')
+    start(env.store, 'q1')
+    const b = block(env.store, 'q1', 'question')
+    must(
+      env.store.append(
+        {
+          type: 'task.reply_delegated',
+          task_id: 'q1',
+          workspace: WS,
+          payload: {
+            task_id: 'q1',
+            block_seq: b,
+            kind: 'question',
+            deadline: '2026-10-26T08:10:00.000Z',
+          },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    await env.settle()
+    expect(env.scheduler.projection().pending(WS, 'reply')).toHaveLength(1)
+    must(
+      env.store.append(
+        {
+          type: 'task.reply_escalated',
+          task_id: 'q1',
+          workspace: WS,
+          payload: { reason: 'wake_unavailable', block_seq: b },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    await env.settle()
+    expect(env.scheduler.projection().pending(WS, 'reply')).toEqual([])
+  })
+
+  test('supervisor.answered 的 origin 取自条目 source_ref 指向的唤醒', async () => {
+    const env = await setup()
+    patrol(env.store)
+    await env.settle()
+    const wake = env.wakes()[0]?.task_id ?? ''
+    must(
+      env.store.append(
+        {
+          type: 'inbox.item_created',
+          workspace: WS,
+          payload: {
+            item_id: 'ask.1',
+            level: 'decide',
+            source: 'supervisor',
+            source_ref: wake,
+            title: '用 A 还是 B？',
+            actions: ['reply'],
+          },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    finish(env.store, wake)
+    const answered = must(
+      env.store.append(
+        { type: 'supervisor.answered', workspace: WS, payload: { item_id: 'ask.1', text: 'A' } },
+        { actor: 'user' },
+      ),
+    ).seq
+    await env.settle()
+    expect(env.wakes()[1]).toMatchObject({ origin: 'autonomous', events: [answered] })
+  })
+})
+
+describe('经 hubAuth 的身份检查', () => {
+  test('唤醒绑定 token 与绑定 token 调用 /v1/supervisor/wake|status 返回 403', async () => {
+    const env = await setup()
+    instruction(env.store)
+    await env.settle()
+    const wakeId = env.wakes()[0]?.task_id ?? ''
+    start(env.store, wakeId)
+    const wakeTokens = createWakeTokenAuthority({ ledger: () => env.store, now: env.clock.now })
+    const wakeSecret = wakeTokens.issue({ lease_id: `l-${wakeId}-1`, task_id: wakeId }) ?? ''
+    expect(wakeSecret).not.toBe('')
+    const root = mkdtempSync(join(tmpdir(), 'flow-sup-auth-'))
+    mkdirSync(join(root, 'state'), { recursive: true })
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }))
+    const tokens = must(await openTokenStore(root))
+    const bound = must(await tokens.issue({ actor: 'reviewer' })).secret
+    const app = createHubApp({
+      token: testToken,
+      tokens,
+      wakeTokens,
+      ledger: env.store,
+      mount: [{ path: '/', app: createSupervisorRoutes({ scheduler: () => env.scheduler }) }],
+    })
+    const before = env.store.seq()
+    for (const secret of [wakeSecret, bound]) {
+      const headers = { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' }
+      const w = await app.request('/v1/supervisor/wake', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ workspace: WS, text: '越权' }),
+      })
+      expect(w.status).toBe(403)
+      expect(((await w.json()) as { error: { code: string } }).error.code).toBe('user_only')
+      const st = await app.request('/v1/supervisor/status', { headers })
+      expect(st.status).toBe(403)
+    }
+    expect(env.store.seq()).toBe(before)
+    const user = await app.request('/v1/supervisor/status', {
+      headers: { Authorization: `Bearer ${testToken}` },
+    })
+    expect(user.status).toBe(200)
   })
 })

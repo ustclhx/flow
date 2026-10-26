@@ -112,6 +112,22 @@ export const delegableBlockedReason = z.enum(DELEGABLE_BLOCKED_REASONS)
 export const SUPERVISOR_QUEUES = ['instruction', 'autonomous'] as const
 export const supervisorQueue = z.enum(SUPERVISOR_QUEUES)
 
+/** 丢弃队列积压的原因（`supervisor.queue_dropped`）。 */
+export const QUEUE_DROP_REASONS = [
+  'unknown_workspace',
+  'global',
+  'disabled',
+  'no_role',
+  'role_invalid',
+  'no_repo',
+  'upgrade',
+] as const
+export type QueueDropReason = (typeof QUEUE_DROP_REASONS)[number]
+export const queueDropReason = z.enum(QUEUE_DROP_REASONS).meta({
+  description:
+    'unknown_workspace / global / disabled / no_role / role_invalid / no_repo：当时不可唤醒；upgrade：首次启用唤醒调度时清理旧积压',
+})
+
 /** 任务提案 id：`tp-<随机串>`。 */
 export const taskProposalId = z
   .string()
@@ -450,6 +466,16 @@ export const eventPayloads = {
   }),
   /** 用户手动放行一条普通唤醒队列（`flow supervisor wake <ws> --release <queue>`，D3）。 */
   'supervisor.release': z.strictObject({ queue: supervisorQueue }),
+  /**
+   * 中枢丢弃一条普通唤醒队列中的积压（G10 审查）：该 workspace 当时不可唤醒（未启用、global、没有或
+   * 不合格的 supervisor 角色、没有登记仓库），或首次启用唤醒调度时清理此前的旧事件（`upgrade`）。
+   * 投影据此清掉该队列中 seq 不大于 `up_to_seq` 的事件，重放结果确定；之后启用不会带出旧事件。
+   */
+  'supervisor.queue_dropped': z.strictObject({
+    queue: supervisorQueue,
+    up_to_seq: z.number().int().min(1).meta({ description: '清掉该队列中 seq 不大于它的事件' }),
+    reason: queueDropReason,
+  }),
   /** supervisor 提交任务提案（D11）：`draft` 是接受后要建的任务合同。 */
   'task_proposal.created': z.strictObject({
     proposal_id: taskProposalId,
@@ -538,6 +564,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'supervisor.wake_started': 'task',
   'supervisor.answered': 'workspace',
   'supervisor.release': 'workspace',
+  'supervisor.queue_dropped': 'workspace',
   'task_proposal.created': 'workspace',
   'task_proposal.accepted': 'workspace',
   'task_proposal.rejected': 'workspace',
@@ -642,6 +669,7 @@ export const TASK_EVENT_RULES: Readonly<
       | `merge_request.${string}`
       | 'supervisor.answered'
       | 'supervisor.release'
+      | 'supervisor.queue_dropped'
       | 'schedule.fired'
     >,
     TransitionRule
