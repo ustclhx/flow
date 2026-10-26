@@ -65,8 +65,8 @@ test('runHub：打开账本、挂载任务路由、写入 hub.started，认证�
   const health = (await (await fetch(`${hub.url}/v1/health`)).json()) as {
     data: { ledger_seq: number }
   }
-  // hub.started、task.created，以及可能的启动补做备份
-  expect(health.data.ledger_seq).toBe(2 + backupEvents(home))
+  // hub.started、supervisor.scheduler_initialized（首次启动）、task.created，以及可能的启动补做备份
+  expect(health.data.ledger_seq).toBe(3 + backupEvents(home))
 
   const second = await runHub({ home, port: 0, logger: quiet as never })
   expect(second.ok).toBe(false)
@@ -84,8 +84,8 @@ test('runHub：停止后重启，账本保留并追加新的 hub.started', async
   const health = (await (await fetch(`${hub.url}/v1/health`)).json()) as {
     data: { ledger_seq: number }
   }
-  // 两次 hub.started，加上可能的一次补做备份（同一天只做一次）
-  expect(health.data.ledger_seq).toBe(2 + backupEvents(home))
+  // 两次 hub.started、一次初始化标记（只在首次启动写），加上可能的一次补做备份（同一天只做一次）
+  expect(health.data.ledger_seq).toBe(3 + backupEvents(home))
 })
 
 test('runHub：停机超过一个 TTL 后重启，活动租约获得宽限，不会被立即判为 node_lost', async () => {

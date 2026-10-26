@@ -120,12 +120,11 @@ export const QUEUE_DROP_REASONS = [
   'no_role',
   'role_invalid',
   'no_repo',
-  'upgrade',
 ] as const
 export type QueueDropReason = (typeof QUEUE_DROP_REASONS)[number]
 export const queueDropReason = z.enum(QUEUE_DROP_REASONS).meta({
   description:
-    'unknown_workspace / global / disabled / no_role / role_invalid / no_repo：当时不可唤醒；upgrade：首次启用唤醒调度时清理旧积压',
+    'global / disabled / no_repo：稳定地不可唤醒，立即丢弃；unknown_workspace / no_role / role_invalid：暂时不可唤醒持续超过 24 小时，丢弃早于宽限期的事件',
 })
 
 /** 任务提案 id：`tp-<随机串>`。 */
@@ -467,10 +466,21 @@ export const eventPayloads = {
   /** 用户手动放行一条普通唤醒队列（`flow supervisor wake <ws> --release <queue>`，D3）。 */
   'supervisor.release': z.strictObject({ queue: supervisorQueue }),
   /**
-   * 中枢丢弃一条普通唤醒队列中的积压（G10 审查）：该 workspace 当时不可唤醒（未启用、global、没有或
-   * 不合格的 supervisor 角色、没有登记仓库），或首次启用唤醒调度时清理此前的旧事件（`upgrade`）。
+   * 中枢丢弃一条普通唤醒队列中的积压（G10 审查）：该 workspace 稳定地不可唤醒（未启用、global、
+   * 没有登记仓库），或暂时不可唤醒（没有或不合格的 supervisor 角色、workspace 未定义）持续超过 24 小时。
    * 投影据此清掉该队列中 seq 不大于 `up_to_seq` 的事件，重放结果确定；之后启用不会带出旧事件。
    */
+  /**
+   * 唤醒调度器首次启动的初始化标记（G10 审查）：只写一次。调度器只处理 seq 大于 `up_to_seq` 的
+   * 普通队列事件，之前写下的旧事件（例如调度器上线前的 user.instruction）不回放。
+   */
+  'supervisor.scheduler_initialized': z.strictObject({
+    up_to_seq: z
+      .number()
+      .int()
+      .min(0)
+      .meta({ description: '初始化时账本的最新 seq（空账本为 0）' }),
+  }),
   'supervisor.queue_dropped': z.strictObject({
     queue: supervisorQueue,
     up_to_seq: z.number().int().min(1).meta({ description: '清掉该队列中 seq 不大于它的事件' }),
@@ -565,6 +575,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'supervisor.answered': 'workspace',
   'supervisor.release': 'workspace',
   'supervisor.queue_dropped': 'workspace',
+  'supervisor.scheduler_initialized': 'none',
   'task_proposal.created': 'workspace',
   'task_proposal.accepted': 'workspace',
   'task_proposal.rejected': 'workspace',
@@ -670,6 +681,7 @@ export const TASK_EVENT_RULES: Readonly<
       | 'supervisor.answered'
       | 'supervisor.release'
       | 'supervisor.queue_dropped'
+      | 'supervisor.scheduler_initialized'
       | 'schedule.fired'
     >,
     TransitionRule

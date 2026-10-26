@@ -457,6 +457,7 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'user.instruction': ['user'],
   'supervisor.release': ['user'],
   'supervisor.queue_dropped': ['hub'],
+  'supervisor.scheduler_initialized': ['hub'],
   'schedule.fired': ['hub'],
   'task_proposal.accepted': ['user'],
   'task_proposal.rejected': ['user'],
@@ -882,6 +883,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'supervisor.scheduler_initialized':
+        // 只写一次：重复写入会让"初始化之前的事件"边界后移，丢掉真实指令。
+        // 重建时重放的事件自身已在表中：只看更早的。
+        return get(
+          `SELECT 1 FROM events WHERE type = 'supervisor.scheduler_initialized' AND seq < ? LIMIT 1`,
+          (draft as { seq?: number }).seq ?? Number.MAX_SAFE_INTEGER,
+        )
+          ? fail('failure', 'duplicate_event', '唤醒调度器已初始化')
+          : ok(null)
       case 'schedule.fired': {
         const dup = get(
           'SELECT 1 FROM schedule_fires WHERE rule_id = ? AND planned_at = ?',

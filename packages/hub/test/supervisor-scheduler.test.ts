@@ -428,15 +428,20 @@ describe('队列、合并与串行（3.2）', () => {
     const g = await setup()
     const r = await g.scheduler.instruct('ws/global', '看看', 'telegram')
     expect(r).toMatchObject({ ok: false, error: { code: 'supervisor_disabled' } })
-    expect(g.store.seq()).toBe(0)
+    // 只有初始化标记，没有指令
+    expect(g.store.eventsAfter(0, {}, 100).map((e) => e.type)).toEqual([
+      'supervisor.scheduler_initialized',
+    ])
   })
 
   test('中枢重启：待处理事件只创建一次唤醒，之后重启不重复', async () => {
     const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
     const l = await tempLedger({ now: clock.now })
     cleanups.push(l.cleanup)
-    const first = await setup({ store: l.store, clock })
+    // 之前运行过一次（写下初始化标记）；停机期间到达一条指令，然后启动
+    ;(await setup({ store: l.store, clock })).scheduler.stop()
     const seq = instruction(l.store)
+    const first = await setup({ store: l.store, clock })
     await first.settle()
     expect(first.wakes()).toEqual([expect.objectContaining({ events: [seq], generation: 1 })])
     first.scheduler.stop()
@@ -729,6 +734,7 @@ describe('用户接口（3.4）', () => {
   test('AI 与 supervisor 身份调用指令、放行、状态接口返回 403 user_only，不写任何事件', async () => {
     for (const actor of ['reviewer', 'supervisor', 'hub']) {
       const env = await setup()
+      const before = env.store.seq()
       const a = app(env.scheduler, actor)
       const r = await post(a, { workspace: WS, text: '越权' })
       expect(r.status).toBe(403)
@@ -737,7 +743,7 @@ describe('用户接口（3.4）', () => {
       expect(rel.status).toBe(403)
       const st = await a.request('/v1/supervisor/status')
       expect(st.status).toBe(403)
-      expect(env.store.seq()).toBe(0)
+      expect(env.store.seq()).toBe(before)
     }
   })
 
@@ -763,27 +769,65 @@ const drops = (store: LedgerStore) =>
     .map((e) => ({ actor: e.actor, ...(e.payload as { reason: string }) }))
 
 describe('积压丢弃与合并上限（G10 审查）', () => {
-  test('升级：首次启动时库里已有旧指令，按 upgrade 丢弃、不唤醒；之后的新指令只带新事件', async () => {
+  test('升级：首次启动写初始化标记，库里已有的旧指令不唤醒；之后的新指令照常；标记只写一次', async () => {
     const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
     const l = await tempLedger({ now: clock.now })
     cleanups.push(l.cleanup)
-    const old = instruction(l.store, 'G10 之前写下的旧指令')
-    patrol(l.store)
+    instruction(l.store, '调度器上线前写下的旧指令')
+    const upTo = patrol(l.store)
     const env = await setup({ store: l.store, clock })
     await env.settle()
     expect(env.wakes()).toEqual([])
-    expect(drops(l.store)).toEqual([
-      { actor: 'hub', queue: 'instruction', up_to_seq: old, reason: 'upgrade' },
-      expect.objectContaining({ queue: 'autonomous', reason: 'upgrade' }),
+    const marks = () =>
+      l.store
+        .eventsAfter(0, {}, 10_000)
+        .filter((e) => e.type === 'supervisor.scheduler_initialized')
+    expect(marks()).toEqual([
+      expect.objectContaining({ actor: 'hub', payload: { up_to_seq: upTo } }),
     ])
+    expect(drops(l.store)).toEqual([])
     const fresh = instruction(l.store, '新指令')
     await env.settle()
     expect(env.wakes()).toEqual([expect.objectContaining({ events: [fresh] })])
-    // 已有历史后重启不再写 upgrade
     env.scheduler.stop()
     const again = await setup({ store: l.store, clock })
     await again.settle()
-    expect(drops(l.store)).toHaveLength(2)
+    expect(marks()).toHaveLength(1)
+    // store 兜底：只接受 hub、只写一次
+    expect(
+      l.store.append(
+        { type: 'supervisor.scheduler_initialized', payload: { up_to_seq: 0 } },
+        { actor: 'user' },
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'actor_mismatch' } })
+    expect(
+      l.store.append(
+        { type: 'supervisor.scheduler_initialized', payload: { up_to_seq: 0 } },
+        { actor: 'hub' },
+      ),
+    ).toMatchObject({ ok: false })
+  })
+
+  test('探针 A：全新安装、首次创建唤醒失败后重启，第一条指令不丢', async () => {
+    const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
+    const l = await tempLedger({ now: clock.now })
+    cleanups.push(l.cleanup)
+    const first = await setup({
+      store: l.store,
+      clock,
+      wrapTasks: (t) => ({
+        ...t,
+        createTask: async () => fail('failure', 'internal_error', '失败'),
+      }),
+    })
+    const seq = instruction(l.store, '首条真实指令')
+    await first.settle()
+    expect(first.wakes()).toEqual([])
+    first.scheduler.stop()
+    const second = await setup({ store: l.store, clock })
+    await second.settle()
+    expect(second.wakes()).toEqual([expect.objectContaining({ events: [seq] })])
+    expect(drops(l.store)).toEqual([])
   })
 
   test('禁用期间的事件被丢弃（重放确定），再启用不会带出旧事件', async () => {
@@ -820,12 +864,14 @@ describe('积压丢弃与合并上限（G10 审查）', () => {
     expect(w?.events).toEqual(seqs.slice(-200))
     const events = env.store.getTask(w?.task_id ?? '')?.contract.inputs?.wake?.events ?? []
     expect(events).toHaveLength(200)
+    // 逐级降级：最旧的只带引用，最新的指令保留原文
     expect(events[0]).toEqual({
       seq: seqs[30] as number,
       type: 'user.instruction',
       ts: expect.any(String),
     })
-    expect(events.some((e) => e.summary !== undefined)).toBe(false)
+    expect(events.at(-1)?.summary).toContain('第 229 条')
+    expect(JSON.stringify(events).length).toBeLessThanOrEqual(16_000)
   })
 
   test('放行只作用于当时已有的事件；空队列放行不留通行证', async () => {
@@ -999,5 +1045,138 @@ describe('经 hubAuth 的身份检查', () => {
       headers: { Authorization: `Bearer ${testToken}` },
     })
     expect(user.status).toBe(200)
+  })
+})
+
+describe('第二轮审查', () => {
+  test('探针 B：放行后同一巡检规则再次触发，放行前的事件仍被放行处理，队列不会卡住', async () => {
+    const env = await setup({
+      supervisor: { limits: { ...defaultSupervisorConfig().limits, autonomous_wakes_per_day: 0 } },
+    })
+    instruction(env.store)
+    await env.settle()
+    const p1 = patrol(env.store, '2026-10-26T09:00:00.000Z')
+    must(await env.scheduler.release(WS, 'autonomous'))
+    const p2 = patrol(env.store, '2026-10-26T10:00:00.000Z')
+    await env.settle()
+    finish(env.store, env.wakes()[0]?.task_id ?? '')
+    await env.settle()
+    expect(env.wakes()[1]).toMatchObject({ origin: 'autonomous', events: [p1] })
+    const q = env.scheduler.projection().workspace(WS).queues.autonomous
+    expect(q.releasePending).toBe(false)
+    expect(
+      env.scheduler
+        .projection()
+        .pending(WS, 'autonomous')
+        .map((e) => e.seq),
+    ).toEqual([p2])
+  })
+
+  test('失败唤醒退回的巡检事件也去重：已有更新的同一规则触发时不再退回', async () => {
+    const env = await setup()
+    const p1 = patrol(env.store, '2026-10-26T09:00:00.000Z')
+    await env.settle()
+    expect(env.wakes()[0]).toMatchObject({ events: [p1] })
+    const p2 = patrol(env.store, '2026-10-26T10:00:00.000Z')
+    failTask(env.store, env.wakes()[0]?.task_id ?? '')
+    await env.settle()
+    // 重试只带最新的一次触发
+    expect(env.wakes()[1]).toMatchObject({ origin: 'autonomous', events: [p2] })
+  })
+
+  test('探针 C：超出预算时仍保留最新指令的原文', async () => {
+    const env = await setup()
+    instruction(env.store)
+    await env.settle()
+    const seqs: number[] = []
+    for (let i = 0; i < 5; i++) seqs.push(instruction(env.store, `需求${i} ${'a'.repeat(3900)}`))
+    finish(env.store, env.wakes()[0]?.task_id ?? '')
+    await env.settle()
+    const events =
+      env.store.getTask(env.wakes()[1]?.task_id ?? '')?.contract.inputs?.wake?.events ?? []
+    expect(events).toHaveLength(5)
+    const withText = events.filter((e) => e.summary !== undefined)
+    expect(withText.length).toBeGreaterThanOrEqual(3)
+    expect(events.at(-1)?.summary).toContain('需求4')
+    expect(events[0]?.summary).toBeUndefined()
+    expect(JSON.stringify(events).length).toBeLessThanOrEqual(16_000)
+  })
+
+  test('暂时不可唤醒（角色有错）：保留队列按退避重查，恢复后照常唤醒；超过 24 小时才丢弃并写 Interrupt', async () => {
+    let role: Result<Role | null> = fail(
+      'failure',
+      'multiple_supervisor_roles',
+      '有两个 supervisor 角色',
+    )
+    const env = await setup({ role: async () => role })
+    const keep = instruction(env.store, '角色修好前的指令')
+    await env.settle()
+    expect(drops(env.store)).toEqual([])
+    expect(
+      env.scheduler
+        .projection()
+        .pending(WS, 'instruction')
+        .map((e) => e.seq),
+    ).toEqual([keep])
+    role = ok(SUPERVISOR)
+    await env.clock.advance(60_000)
+    await env.settle()
+    expect(env.wakes()).toEqual([expect.objectContaining({ events: [keep] })])
+    finish(env.store, env.wakes()[0]?.task_id ?? '')
+
+    role = ok(null)
+    const old = instruction(env.store, '一直没有角色')
+    await env.clock.advance(23 * HOUR)
+    await env.settle()
+    expect(drops(env.store)).toEqual([])
+    const late = instruction(env.store, '宽限期内的新指令')
+    await env.clock.advance(2 * HOUR)
+    await env.settle()
+    expect(drops(env.store)).toEqual([
+      expect.objectContaining({ queue: 'instruction', up_to_seq: old, reason: 'no_role' }),
+    ])
+    expect(
+      env.scheduler
+        .projection()
+        .pending(WS, 'instruction')
+        .map((e) => e.seq),
+    ).toEqual([late])
+    expect(
+      env.store
+        .listInboxItems({ source: 'supervisor' })
+        .filter((i) => i.id.startsWith('wake.unavail.')),
+    ).toHaveLength(1)
+  })
+
+  test('稳定不可唤醒（没有仓库）立即丢弃', async () => {
+    const env = await setup()
+    ;(env.workspaces[WS] as WorkspaceInfo).repos = []
+    const seq = instruction(env.store)
+    await env.settle()
+    expect(drops(env.store)).toEqual([
+      expect.objectContaining({ queue: 'instruction', up_to_seq: seq, reason: 'no_repo' }),
+    ])
+  })
+
+  test('blocked(node_lost) 的唤醒自动转为失败，由调度器重试一次', async () => {
+    const env = await setup()
+    const seq = instruction(env.store)
+    await env.settle()
+    const w = env.wakes()[0]?.task_id ?? ''
+    start(env.store, w)
+    must(
+      env.store.append(
+        {
+          type: 'task.blocked',
+          task_id: w,
+          workspace: WS,
+          payload: { reason: 'node_lost', message: '节点掉线' },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    await env.settle()
+    expect(env.store.getTask(w)?.status).toBe('failed')
+    expect(env.wakes()[1]).toMatchObject({ origin: 'instruction', events: [seq] })
   })
 })

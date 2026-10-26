@@ -415,6 +415,7 @@ export function createApplier(db: Database): Applier {
       case 'supervisor.answered':
       case 'supervisor.release':
       case 'supervisor.queue_dropped':
+      case 'supervisor.scheduler_initialized':
       case 'task_proposal.created':
       case 'task_proposal.accepted':
       case 'task_proposal.rejected':

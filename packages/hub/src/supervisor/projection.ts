@@ -86,11 +86,43 @@ export interface ProjectionLookups {
   /**
    * 收件箱条目的来源信息（条目创建后不变）：提问条目的 source_ref 为提问所在的唤醒任务 id（D11）。
    */
-  item(itemId: string): { source: string; source_ref: string; workspace: string | null } | null
+  item(itemId: string): {
+    source: string
+    source_ref: string
+    workspace: string | null
+    actions: readonly string[]
+  } | null
 }
 
 /** 本组自己写的收件箱条目（上限、失败）的 id 前缀：它们关闭时不唤醒。 */
 export const WAKE_ITEM_PREFIX = 'wake.'
+
+/** 放行范围内（seq 小于放行事件）的事件都已不在队列中时，放行作废（不留通行证）。 */
+function settleRelease(q: QueueState) {
+  if (!q.releasePending || q.releaseSeq === null) return
+  const seq = q.releaseSeq
+  if (![...q.pending.keys()].some((s) => s < seq)) {
+    q.releasePending = false
+    q.releaseSeq = null
+  }
+}
+
+/**
+ * 入队：同一 key（同一条巡检规则）只保留最新一条。新事件到达、失败唤醒退回事件都走这里：
+ * - 已有更新的同 key 事件时，较旧的不再入队；
+ * - 放行范围内（seq 小于放行事件）的旧事件不被去重删除，保证放行能落到它们身上。
+ */
+function enqueue(q: QueueState, ev: QueuedEvent) {
+  if (ev.key !== undefined) {
+    for (const [seq, other] of q.pending) {
+      if (other.key !== ev.key) continue
+      if (seq > ev.seq) return
+      const protectedByRelease = q.releasePending && q.releaseSeq !== null && seq < q.releaseSeq
+      if (!protectedByRelease) q.pending.delete(seq)
+    }
+  }
+  q.pending.set(ev.seq, ev)
+}
 
 const newQueue = (): QueueState => ({
   pending: new Map(),
@@ -112,8 +144,8 @@ export class WakeProjection {
   /** 普通唤醒合并的原始事件（出队时记下，失败放回队列时用）。 */
   private readonly originals = new Map<string, QueuedEvent[]>()
   private last = 0
-  /** 是否已有过唤醒或丢弃记录（没有时是首次启用调度，旧积压按 upgrade 丢弃）。 */
-  private history = false
+  /** 是否已写过 `supervisor.scheduler_initialized`（只看这条标记）。 */
+  private initialized = false
 
   constructor(private readonly lookups: ProjectionLookups) {}
 
@@ -140,9 +172,9 @@ export class WakeProjection {
     return [...this.ws.keys()]
   }
 
-  /** 账本里是否已有 `supervisor.wake_started` 或 `supervisor.queue_dropped`。 */
-  hasHistory(): boolean {
-    return this.history
+  /** 账本里是否已有初始化标记 `supervisor.scheduler_initialized`。 */
+  isInitialized(): boolean {
+    return this.initialized
   }
 
   wake(taskId: string): WakeState | null {
@@ -161,7 +193,10 @@ export class WakeProjection {
       if ((e.payload.reason as string) !== 'expired') return null
       if (e.payload.item_id.startsWith(WAKE_ITEM_PREFIX)) return null
       const item = this.lookups.item(e.payload.item_id)
-      if (item?.source !== 'supervisor' || !item.workspace) return null
+      // 只限提问条目：source 为 supervisor 且可以回复（ask_user，D11）。
+      if (item?.source !== 'supervisor' || !item.workspace || !item.actions.includes('reply')) {
+        return null
+      }
       return { workspace: item.workspace, queue: this.normalOriginOf(item.source_ref) }
     }
     if (e.workspace === undefined) return null
@@ -240,17 +275,27 @@ export class WakeProjection {
         return e.workspace
       }
       case 'supervisor.queue_dropped': {
-        this.history = true
         if (e.workspace === undefined) return null
         const q = this.workspace(e.workspace).queues[e.payload.queue]
         for (const seq of [...q.pending.keys()]) {
           if (seq <= e.payload.up_to_seq) q.pending.delete(seq)
         }
-        if (q.pending.size === 0) {
-          q.releasePending = false
-          q.releaseSeq = null
-        }
+        settleRelease(q)
         return e.workspace
+      }
+      case 'supervisor.scheduler_initialized': {
+        // 首次启动之前写下的普通队列事件不回放（reply 委托另按 activeDelegation 判定）。
+        this.initialized = true
+        for (const w of this.ws.values()) {
+          for (const queue of NORMAL_QUEUES) {
+            const q = w.queues[queue]
+            for (const seq of [...q.pending.keys()]) {
+              if (seq <= e.payload.up_to_seq) q.pending.delete(seq)
+            }
+            settleRelease(q)
+          }
+        }
+        return null
       }
       default:
         break
@@ -270,12 +315,8 @@ export class WakeProjection {
     if (e.task_id !== undefined && e.workspace !== undefined) this.purgeReplies(e)
     const hit = this.classifyIn(e)
     if (hit !== null) {
-      const pending = this.workspace(hit.workspace).queues[hit.queue].pending
       const key = e.type === 'schedule.fired' ? `schedule:${e.payload.rule_id}` : undefined
-      if (key !== undefined) {
-        for (const [seq, ev] of pending) if (ev.key === key) pending.delete(seq)
-      }
-      pending.set(e.seq, {
+      enqueue(this.workspace(hit.workspace).queues[hit.queue], {
         seq: e.seq,
         type: e.type,
         ts: e.ts,
@@ -308,7 +349,6 @@ export class WakeProjection {
     const p = e.payload
     const w = this.workspace(p.workspace)
     const q = w.queues[p.origin]
-    this.history = true
     const retry = p.origin !== 'reply' && q.failures === 1 && !q.releasePending
     const bypass = p.origin !== 'reply' && (q.releasePending || retry)
     q.releasePending = false
@@ -352,7 +392,7 @@ export class WakeProjection {
       q.lastFailTs = ts
       q.lastFailedWake = wake.task_id
       // 唤醒没能处理这些事件：放回队列，供重试、自动恢复或放行时一并处理。
-      for (const ev of this.originals.get(wake.task_id) ?? []) q.pending.set(ev.seq, ev)
+      for (const ev of this.originals.get(wake.task_id) ?? []) enqueue(q, ev)
     } else {
       q.failures = 0
     }
