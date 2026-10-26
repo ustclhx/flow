@@ -27,3 +27,14 @@ supervisor SHALL 能用 `ask_user` 创建 `source: supervisor` 的条目（默�
 #### Scenario: 批准合并
 - **WHEN** 用户对 `merge_request` 条目点"批准合并"
 - **THEN** 中枢创建 merger 任务，条目关闭
+
+### Requirement: 委托给 supervisor 的条目
+任务卡住被委托给 supervisor 时，收件箱条目 SHALL 照常生成并标明"supervisor 处理中"，MUST NOT 推送到通知渠道；用户仍可在 Web、CLI 或 Telegram 上直接处理。supervisor 回复后条目关闭为 `answered` 并记录回复者；转交用户时条目 MUST 按原级别推送。
+
+#### Scenario: 委托期间不打扰
+- **WHEN** 一个 `awaiting_approval` 条目被委托给 supervisor
+- **THEN** Telegram 不发消息，Web 收件箱显示该条目与"supervisor 处理中"
+
+#### Scenario: 转交后推送
+- **WHEN** supervisor 对该条目 `escalate`
+- **THEN** Telegram 按条目级别推送，条目注明 supervisor 给出的理由

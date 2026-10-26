@@ -12,3 +12,10 @@
 #### Scenario: 旧节点
 - **WHEN** 不带 `slots` 字段的节点领取任务
 - **THEN** 中枢按原有并发语义分配，不报错
+
+### Requirement: 卡住时附带改动摘要
+执行器上报 `blocked` 时 SHALL 在工作目录是 git 仓库的情况下附带 `diff_stat`（相对任务基点的 `git diff --stat` 与未提交改动，最多 2000 字符，超出截断并注明）；取不到时省略，不影响上报。
+
+#### Scenario: Codex 卡住
+- **WHEN** codex-orca 任务在改了 README 后请求授权
+- **THEN** `blocked.diff_stat` 列出 `README.md | 2 ++`

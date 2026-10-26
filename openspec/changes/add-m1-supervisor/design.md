@@ -14,13 +14,14 @@
 - `decision` 条目类型已存在（status、expected_outcome、metric、review_date），AI 不能写。
 - 节点按 `concurrency` 限制租约；`acquireLeaseRequest` 是严格对象，没有槽位字段；卡住的任务一直占着槽位。
 - 默认 reviewer 模板有 `writable_paths` 和 `Bash(gh pr comment/review:*)`，不是只读角色。
+- 策略档位为 `auto`、`auto-report`、`draft-approve`、`notify`（判定结果另有 `user`），合并次序 `notify > user > draft-approve > auto-report > auto`；没有命中 auto 的审批请求和所有 `question` 卡住都直接进用户收件箱并推送。
 - Agent SDK 0.3.310 支持 `outputFormat: {type: 'json_schema'}`，结果带 `structured_output`，失败时 subtype 为 `error_max_structured_output_retries`。
 
 ## Goals / Non-Goals
 
 **Goals**
 
-- 跑通 PRD §19 的 M1 验收场景：用户在手机上下指令、回答一次卡住；`auto_merge` 关闭时多一次合并批准。
+- 跑通 PRD §19 的 M1 验收场景：用户在手机上下指令；中途的卡住由 supervisor 在委托范围内代为回复（D15），只有转交给用户的才需要用户处理；`auto_merge` 关闭时多一次合并批准。
 - supervisor 只能经过内核提供的工具行动，所有动作落账、可审计；**凡是决定权限的事实（来源、身份、workspace、PR 归属、审查结论）都由中枢或确定性代码记录和核对**，不取自 supervisor 或模型可控的字段。
 - 每次唤醒都是新会话，靠简报恢复记忆。
 - 合并这一类不可逆外部动作由确定性代码执行。
@@ -77,7 +78,7 @@ origin 只有两类：
 
 ### D3. 唤醒调度：按 workspace × origin 分队列，串行、合并、限流
 
-调度器订阅账本，识别上表中的唤醒事件。"派生任务状态变化"指 origin 不为空的任务进入 `done`、`failed`、`cancelled`，或进入 `blocked` 且原因是 `crashed`、`node_lost`、`no_progress`、`other`（同一任务同一原因只唤醒一次；`awaiting_approval`、`question` 已经直接进用户收件箱，不唤醒）。唤醒任务自身的状态变化不触发唤醒。
+调度器订阅账本，识别上表中的唤醒事件。"派生任务状态变化"指 origin 不为空的任务进入 `done`、`failed`、`cancelled`，或进入 `blocked` 且原因是 `crashed`、`node_lost`、`no_progress`、`other`（同一任务同一原因只唤醒一次）。`awaiting_approval`、`question` 不走这条规则：委托给 supervisor 的卡住按 D15 唤醒（范围是本 workspace 全部任务，不限于有 origin 的任务），未委托的直接进用户收件箱，不唤醒。唤醒任务自身的状态变化不触发唤醒。
 
 - 每个 workspace 有两条队列：instruction、autonomous。同一 workspace 同时最多一个未结束（含 `blocked`）的唤醒任务；空闲时**先处理 instruction 队列**。一次唤醒只合并同一条队列里的事件，所以每次唤醒恰好有一个 origin。
 - 队列与代数（generation，每创建一次唤醒加一）由账本投影，中枢重启后恢复。唤醒任务的幂等键为 `supervisor:<ws>:<generation>`；`supervisor:` 前缀保留给 `hub`，其他身份使用返回 `reserved_idempotency_key`。
@@ -133,9 +134,10 @@ claude-sdk 为 `kind: supervisor` 的任务注入 `flow mcp --actor supervisor -
 | `ask_user` | supervisor | 中枢 | 发一条提问，可带 2–4 个选项 |
 | `pr_merge_request` | supervisor | 中枢 | 请求合并（D10） |
 | `decision_review` | supervisor | 中枢 | 为本次回看唤醒关联的决策追加结论 |
+| `task_respond` | supervisor | 中枢 | 回复委托给它的一次卡住：批准、拒绝、回答或转交用户（D15） |
 | `flow ask` / `flow supervisor wake\|status` | user | 中枢 | 下指令、手动唤醒、查看状态 |
 
-MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`decision_review`（只产生等待用户处理的内容或写 supervisor 自己的笔记）。`task_create`、`pr_merge_request` 走策略。supervisor 不能 `task_reply`、`inbox_act`（除忽略自己的条目）、接受或驳回任何提案：替用户审批不在它的权限内。
+MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`decision_review`（只产生等待用户处理的内容或写 supervisor 自己的笔记），以及 `task_respond`（权限由中枢按 D15 核对，不再经策略审批，否则会自我阻塞）。`task_create`、`pr_merge_request` 走策略。除 `task_respond` 外，supervisor 不能 `task_reply`、`inbox_act`（除忽略自己的条目）、接受或驳回任何提案、批准合并：委托范围以外替用户决定不在它的权限内。
 
 ### D8. 简报笔记
 
@@ -213,9 +215,45 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 ### D14. supervisor 角色模板
 
-`supervisor.yaml`：`kind: supervisor`、`executor: claude-sdk`、Opus、`permissionMode: default`、`setting_sources: []`、`allowedTools` 只有 Read、Grep、Glob 与 Flow MCP，`disallowedTools` 列出 Bash、Edit、Write、NotebookEdit、WebFetch、WebSearch，`read_scope: cwd`，不设 `writable_paths`。`supervisor.md` 规定：先 `ws_brief`；按 `inputs.wake` 处理；拆任务时写清目标、范围、完成条件和验收命令；不替用户做决定；结束前 `brief_update` 并写 journal；最终回复列出本次动作。
+`supervisor.yaml`：`kind: supervisor`、`executor: claude-sdk`、Opus、`permissionMode: default`、`setting_sources: []`、`allowedTools` 只有 Read、Grep、Glob 与 Flow MCP，`disallowedTools` 列出 Bash、Edit、Write、NotebookEdit、WebFetch、WebSearch，`read_scope: cwd`，不设 `writable_paths`。`supervisor.md` 规定：先 `ws_brief`；按 `inputs.wake` 处理；拆任务时写清目标、范围、完成条件和验收命令；只在委托范围内代回复卡住（D15），拿不准就转交用户；不接受或驳回提案、不批准合并；结束前 `brief_update` 并写 journal；最终回复列出本次动作。
 
 `flow init` 同时生成 `pr-reviewer`、`merger` 模板，`dev` 模板 `creatable_by` 加上 `supervisor`；不覆盖已有文件，doctor 对缺项给出片段。
+
+### D15. 卡住时由 supervisor 代用户回复
+
+目标：执行器卡住时的简单批准和方案选择不再打扰用户。
+
+**范围**：workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 `true`）。开启后，本 workspace **所有任务**的 `blocked(question)` 与 `blocked(awaiting_approval)` 都先考虑委托给 supervisor，包括用户手动建、没有 origin 的任务。例外：唤醒任务自身、有效类别为 `merge` 的任务，一律直接交给用户。
+
+**委托判定**（中枢，确定性）：
+
+- `question`：满足范围即委托。
+- `awaiting_approval`：策略引擎新增档位 `supervisor`，合并次序为 `notify > user > draft-approve > supervisor > auto-report > auto`。判定结果为 `supervisor` 才委托，其余照旧（auto 直接放行，user / draft-approve / notify 交给用户）。
+  - 受保护的动作（`shell.opaque`、`pr.merge`、`deploy`、`secrets`、`policy.edit`、`config.edit`、`flow.admin`，以及 flow 中会扩大权限的操作）MUST NOT 判为 `supervisor`，命中 `supervisor` 规则时提升为 `draft-approve`。
+  - 受保护的工具（`tool:CodexCommand`、`tool:mcp__*`、外发工具、派生子 agent）只有具体 scope 加精确 action 的规则才能判为 `supervisor`，通配规则最多 `draft-approve`。
+  - `git.push` 新增条件 `when.push_to: task_branch`：节点确定性地解析推送命令，目标 ref 是该任务自己的分支（codex-orca 为 worktree 分支，其余为合同中登记的分支）、不是仓库默认分支、没有强推（`-f`、`--force`、`--force-with-lease`、`+refspec`）、没有删除（`--delete`、`:ref`），才算满足；解析不确定按不满足处理。
+  - `flow init` 在 `policies.yaml` 中生成一组**注释掉的**白名单模板（按 workspace 启用）：`tool:CodexCommand` 与 `tool:Bash` 下的 `pnpm check`、`pnpm test`、`pnpm lint` 前缀；只读的 `gh pr view`、`gh pr diff`；`pr.create`；带 `push_to: task_branch` 的 `git.push`。
+- 委托时中枢写 `task.reply_delegated{task_id, block_seq, kind, deadline}`，生成的收件箱条目处于"supervisor 处理中"状态，**不推送**；事件进入该任务 origin 对应的队列，没有 origin 的任务进 instruction 队列（用户自己建的任务等同用户决定）。
+
+**上下文**：唤醒 `inputs.wake` 带上卡住说明、终端末尾、请求的命令与理由、任务目标与角色。执行器卡住时 SHALL 附上工作区的 `git diff --stat`（`blocked.diff_stat`，最多 2000 字符）：dev 的 worktree 不在 supervisor 的 `read_scope` 内，它靠这份摘要判断改动范围。
+
+**回复**：新操作 `task_respond{task_id, block_seq, decision, text?, reason}`，只允许 supervisor，由中枢执行。中枢核对：任务与绑定 workspace 一致；任务当前处于 `blocked` 且序号等于 `block_seq`；该次卡住已委托给 supervisor 且未转交、未过期；`approve` / `deny` 只用于 `awaiting_approval`，`answer` 只用于 `question`（`text` 必填，≤2000 字符）；`escalate` 两者都可。否则返回 `not_delegated`、`stale_block` 或 `invalid_arguments`。
+
+- 通过后写 `task.replied`（actor supervisor，带 `reason`），回复按现有路径送达节点；条目关闭，关闭原因记为 `answered`。当天的每日摘要列出 supervisor 代回复的内容。
+- `escalate` 写 `task.reply_escalated{reason: supervisor}`，条目变为普通条目并按级别推送给用户。
+- 提示词边界：只在任务目标的范围内选方案；需要扩大范围、改变完成条件、涉及不可逆动作、或拿不准时一律 `escalate`。这一条只能靠提示词，中枢无法确定性强制；回答本身不扩大任何权限，worker 仍受沙箱与策略约束。
+
+**兜底**（中枢写 `task.reply_escalated{reason}` 并按原级别推送给用户）：
+
+- 超过 `supervisor.reply_timeout_s`（默认 600）仍未回复（`timeout`）；
+- 唤醒无法开始：未启用、没有 `kind: supervisor` 角色、队列暂停、已达每日上限（`wake_unavailable`）；
+- 携带该事件的唤醒任务失败或结束时仍未回复（`wake_failed`、`wake_ended`）。
+
+用户在任何时候都可以直接回复该条目，用户的回复优先；之后 supervisor 的 `task_respond` 得到 `stale_block`。
+
+**计数**：代回复事件计入每日唤醒上限；一次唤醒可以处理多个委托。
+
+备选：用确定性规则直接 `auto` 放行这些命令。保留为用户自己的选项（策略本来就支持），但它无法处理 `question`，也无法结合任务目标判断"这个请求是否合理"。
 
 ## Risks / Trade-offs
 
@@ -224,13 +262,14 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 - **唤醒风暴** → 串行合并、D4 上限、唤醒任务不自激、`blocked` 只唤醒一次。
 - **费用** → 合并事件、巡检默认关闭、每日唤醒上限；结果记录花费，日报汇总。
 - **hub.token 可读** → 见 D2 的已接受风险。
+- **代回复被诱导**（worker 的提问或请求理由里夹带指令）→ 授权请求先由确定性白名单限定，受保护动作永远不委托，推送只能到任务自己的分支；回答只能靠提示词约束，是残余风险。**已接受的风险**：批准在沙箱外运行 `pnpm check` 等于在沙箱外执行 worker 写的代码，与用户直接点批准的风险相同，写入文档。
 - **决策回看例外** → 只追加、只改 status 与 last_verified、只限关联决策、由中枢代写。
 - **单机假设**：中枢和节点读同一份 roles；⑤ 远程节点前需要重新评估。
 
 ## Migration Plan
 
 1. 先归档 ②、③（③ 已归档）。
-2. 合并代码后：`flow init` 补 `supervisor`、`pr-reviewer`、`merger` 角色；用户手动在 `dev.yaml` 加 `creatable_by: [supervisor]`；在 `policies.yaml` 启用 supervisor 建任务的 `auto` 规则；按需在 workspace 配置里启用 `supervisor`、`auto_merge` 和巡检规则。
+2. 合并代码后：`flow init` 补 `supervisor`、`pr-reviewer`、`merger` 角色；用户手动在 `dev.yaml` 加 `creatable_by: [supervisor]`；在 `policies.yaml` 启用 supervisor 建任务的 `auto` 规则，并按需启用代回复的白名单模板（D15）；按需在 workspace 配置里启用 `supervisor`、`auto_merge` 和巡检规则。
 3. 重启中枢和节点（新旧节点协议兼容，D12）；`flow doctor` 检查。
 4. 回滚：`supervisor.enabled: false` 即停止唤醒；已建任务不受影响。
 

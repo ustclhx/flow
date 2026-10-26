@@ -18,15 +18,15 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 该任务不被视为唤醒任务，不能作为 supervisor 建任务的 `parent`
 
 ### Requirement: 唤醒来源
-中枢 SHALL 在以下事件发生时为对应 workspace 安排唤醒：actor 为 user 的 `user.instruction`；`payload.kind = supervisor_patrol` 的定时触发；`decision.review_due`；属于 supervisor 链的任务进入 `done`、`failed`、`cancelled`，或进入原因为 `crashed`、`node_lost`、`no_progress`、`other` 的 `blocked`（同一任务同一原因只一次）；用户回答提问；任务提案被接受或驳回。唤醒任务自身的状态变化 MUST NOT 触发唤醒。
+中枢 SHALL 在以下事件发生时为对应 workspace 安排唤醒：actor 为 user 的 `user.instruction`；`payload.kind = supervisor_patrol` 的定时触发；`decision.review_due`；属于 supervisor 链的任务进入 `done`、`failed`、`cancelled`，或进入原因为 `crashed`、`node_lost`、`no_progress`、`other` 的 `blocked`（同一任务同一原因只一次）；用户回答提问；任务提案被接受或驳回；卡住被委托给 supervisor（见"卡住时代用户回复"）。唤醒任务自身的状态变化 MUST NOT 触发唤醒。
 
 #### Scenario: 用户指令唤醒
 - **WHEN** 用户在 Telegram 发送 `/ask product-res 把 README 的项目定位补上`
 - **THEN** 中枢为 `ws/product-res` 创建唤醒任务，origin 为 `instruction`
 
-#### Scenario: 等审批不唤醒
-- **WHEN** supervisor 链上的 dev 任务进入 `blocked(awaiting_approval)`
-- **THEN** 不唤醒 supervisor（条目已直接进入用户收件箱）
+#### Scenario: 未委托的审批不唤醒
+- **WHEN** 一个 dev 任务进入 `blocked(awaiting_approval)`，策略判定为 `user`
+- **THEN** 不唤醒 supervisor，条目直接进入用户收件箱并推送
 
 #### Scenario: 唤醒任务自身结束不自激
 - **WHEN** 唤醒任务变为 `done`，且两条队列都为空
@@ -129,12 +129,43 @@ supervisor SHALL 能用 `ws_brief` 读取简报（supervisor 笔记、进行中�
 - **WHEN** `base_hash` 与当前文件不一致
 - **THEN** 返回 `conflict`，文件不变
 
-### Requirement: supervisor 不能替用户决定
-supervisor 身份 MUST NOT 能回复任务、批准或驳回审批、接受或驳回任何提案、批准合并；这些请求 MUST 由中枢按身份拒绝（`user_only`）。
+### Requirement: supervisor 只能回复委托给它的卡住
+除 `task_respond` 外，supervisor 身份 MUST NOT 能回复任务、批准或驳回审批、接受或驳回任何提案、批准合并；这些请求 MUST 由中枢按身份拒绝（`user_only`）。`task_respond` MUST 只作用于当前委托给 supervisor、尚未转交或过期的那一次卡住。
 
-#### Scenario: 尝试批准
+#### Scenario: 用通用接口批准
 - **WHEN** supervisor 调用 `task_reply --approve`
 - **THEN** 返回 403 `user_only`
+
+#### Scenario: 回复未委托的卡住
+- **WHEN** supervisor 对一个策略判定为 `user` 的授权请求调用 `task_respond approve`
+- **THEN** 返回 `not_delegated`，任务保持 `blocked`
+
+### Requirement: 卡住时代用户回复
+workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 true）开启时，中枢 SHALL 把本 workspace 任务（唤醒任务自身与有效类别为 merge 的任务除外，包括没有 origin 的任务）的以下卡住委托给 supervisor：所有 `blocked(question)`；策略判定为 `supervisor` 档位的 `blocked(awaiting_approval)`。委托时 MUST 写 `task.reply_delegated{task_id, block_seq, kind, deadline}` 并安排唤醒（没有 origin 的任务进 instruction 队列），对应收件箱条目 MUST NOT 推送。
+
+supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回复，`decision` 为 `approve`、`deny`（仅授权请求）、`answer`（仅提问，`text` 必填且不超过 2000 字符）或 `escalate`。中枢 MUST 核对 workspace、当前卡住序号与委托状态，通过后写 `task.replied`（actor supervisor）并关闭条目；`escalate` 写 `task.reply_escalated{reason: supervisor}` 并把条目推送给用户。
+
+以下情况中枢 MUST 自动转交用户（`task.reply_escalated{reason}`，按条目原级别推送）：超过 `supervisor.reply_timeout_s`（默认 600）未回复；唤醒无法开始（未启用、没有 supervisor 角色、队列暂停、已达每日上限）；携带该事件的唤醒失败或结束时仍未回复。用户在任何时候直接回复都 MUST 生效，之后 supervisor 的回复返回 `stale_block`。supervisor 代回复的内容 SHALL 出现在当天的每日摘要中。
+
+#### Scenario: 代为选择方案
+- **WHEN** 用户手动建的 dev 任务进入 `blocked(question)`，问"A 记录既有失败后开 PR，还是 B 扩大范围修复"，且任务目标只限 README
+- **THEN** supervisor 被唤醒，以 `answer` 选择 A，任务继续运行，用户没有收到推送
+
+#### Scenario: 白名单内的授权
+- **WHEN** Codex 请求在沙箱外运行 `pnpm check`，策略判定为 `supervisor`
+- **THEN** supervisor 被唤醒，`approve` 后命令执行；当天摘要中出现这次代批准
+
+#### Scenario: 超时转交
+- **WHEN** 委托后 600 秒内 supervisor 没有回复
+- **THEN** 条目推送给用户，之后 supervisor 的 `task_respond` 返回 `stale_block`
+
+#### Scenario: 用户抢先回复
+- **WHEN** 委托期间用户在 Web 上直接批准
+- **THEN** 任务按用户的回复继续，supervisor 随后的 `task_respond` 返回 `stale_block`
+
+#### Scenario: 合并任务不委托
+- **WHEN** merger 任务进入 `blocked`
+- **THEN** 不委托给 supervisor，条目直接推送给用户
 
 ### Requirement: 用户指令入口
 用户 SHALL 能通过 Telegram `/ask <ws> <内容>` 和 CLI `flow ask <ws> <内容>` 下达指令；两者都只接受 user 身份，写入 `user.instruction`，并返回唤醒任务编号或排队说明。
