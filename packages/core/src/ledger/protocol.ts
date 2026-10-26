@@ -20,6 +20,7 @@ import {
   taskResume,
   taskStatus,
   taskView,
+  type WakeOrigin,
 } from './task.ts'
 
 /**
@@ -518,10 +519,49 @@ export const listNodesData = z.object({ nodes: z.array(nodeView) }).meta({ title
 // leases
 // ---------------------------------------------------------------------------
 
+/** 执行槽类别（add-m1-supervisor D12）。 */
+export const LEASE_SLOT_KINDS = ['general', 'supervisor', 'reply'] as const
+export type LeaseSlotKind = (typeof LEASE_SLOT_KINDS)[number]
+
+const slotCount = (description: string) =>
+  z.number().int().min(0).max(64).default(0).meta({ description })
+
+/**
+ * 领取请求携带的空闲执行槽（D12）：普通任务只用 general；普通唤醒（origin 为 instruction /
+ * autonomous）可用 supervisor 或 general；reply 唤醒可用 reply 或 general。
+ * 唤醒身份以账本 `supervisor.wake_started` 为准。
+ */
+export const leaseSlots = z
+  .strictObject({
+    general: slotCount('普通空位数'),
+    supervisor: slotCount('只给普通唤醒的空位数'),
+    reply: slotCount('只给 reply 唤醒的空位数'),
+  })
+  .meta({ title: 'Lease slots', description: '本次领取时节点各类别的空闲执行槽数' })
+export type LeaseSlots = z.infer<typeof leaseSlots>
+
+/**
+ * 某任务可以占用的执行槽（纯函数，D12）。`wake` 是该任务 `supervisor.wake_started` 的 origin，
+ * 不是唤醒任务时为 null。唤醒优先占用对应的预留槽，把普通空位留给其他任务；
+ * `slots` 缺省（旧节点）时视为只有普通空位、数量不限，保持原有语义。没有可用空位时返回 null。
+ */
+export function leaseSlotFor(
+  slots: LeaseSlots | undefined,
+  wake: WakeOrigin | null,
+): LeaseSlotKind | null {
+  if (!slots) return 'general'
+  if (wake === 'reply' && slots.reply > 0) return 'reply'
+  if ((wake === 'instruction' || wake === 'autonomous') && slots.supervisor > 0) return 'supervisor'
+  return slots.general > 0 ? 'general' : null
+}
+
 export const acquireLeaseRequest = z
   .strictObject({
     node_id: nodeId,
     capabilities: z.array(capability),
+    slots: leaseSlots.optional().meta({
+      description: '各类别的空闲执行槽（D12）；不带时视为只有普通空位（旧节点兼容）',
+    }),
     wait_s: z
       .number()
       .int()

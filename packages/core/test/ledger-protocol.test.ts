@@ -14,6 +14,7 @@ import {
   fail,
   healthData,
   jsonSchemas,
+  leaseSlotFor,
   listTasksQuery,
   loadHubConfig,
   loadNodeConfig,
@@ -90,6 +91,24 @@ describe('请求体', () => {
       true,
     ],
     [
+      'leases acquire：带 slots（D12）',
+      acquireLeaseRequest,
+      { node_id: 'n1', capabilities: [], slots: { general: 0, supervisor: 1, reply: 1 } },
+      true,
+    ],
+    [
+      'leases acquire：slots 为负数',
+      acquireLeaseRequest,
+      { node_id: 'n1', capabilities: [], slots: { general: -1 } },
+      false,
+    ],
+    [
+      'leases acquire：slots 未知类别',
+      acquireLeaseRequest,
+      { node_id: 'n1', capabilities: [], slots: { merge: 1 } },
+      false,
+    ],
+    [
       'leases acquire：wait_s 过大',
       acquireLeaseRequest,
       { node_id: 'n1', capabilities: [], wait_s: 3600 },
@@ -140,6 +159,35 @@ describe('请求体', () => {
 
   test('acquire 的 wait_s 默认 30', () => {
     expect(acquireLeaseRequest.parse({ node_id: 'n1', capabilities: [] }).wait_s).toBe(30)
+  })
+
+  test('acquire 的 slots 可选，缺省类别为 0', () => {
+    expect(acquireLeaseRequest.parse({ node_id: 'n1', capabilities: [] }).slots).toBeUndefined()
+    expect(
+      acquireLeaseRequest.parse({ node_id: 'n1', capabilities: [], slots: { reply: 1 } }).slots,
+    ).toEqual({ general: 0, supervisor: 0, reply: 1 })
+  })
+
+  test('leaseSlotFor：按唤醒 origin 选择执行槽（D12）', () => {
+    const s = (general: number, supervisor: number, reply: number) => ({
+      general,
+      supervisor,
+      reply,
+    })
+    // 旧节点：只有普通空位，任何任务都可以
+    expect(leaseSlotFor(undefined, null)).toBe('general')
+    expect(leaseSlotFor(undefined, 'reply')).toBe('general')
+    // 普通任务只用普通空位
+    expect(leaseSlotFor(s(0, 1, 1), null)).toBeNull()
+    expect(leaseSlotFor(s(1, 1, 1), null)).toBe('general')
+    // 普通唤醒优先占 supervisor 槽，其次普通空位；不用 reply 槽
+    expect(leaseSlotFor(s(1, 1, 1), 'instruction')).toBe('supervisor')
+    expect(leaseSlotFor(s(1, 0, 1), 'autonomous')).toBe('general')
+    expect(leaseSlotFor(s(0, 0, 1), 'instruction')).toBeNull()
+    // reply 唤醒优先占 reply 槽，其次普通空位；不用 supervisor 槽
+    expect(leaseSlotFor(s(1, 1, 1), 'reply')).toBe('reply')
+    expect(leaseSlotFor(s(1, 1, 0), 'reply')).toBe('general')
+    expect(leaseSlotFor(s(0, 1, 0), 'reply')).toBeNull()
   })
 })
 

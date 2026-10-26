@@ -31,6 +31,7 @@ import {
   type TaskResume,
   type TaskStatus,
   type TaskView,
+  type WakeOrigin,
 } from '@flow/core'
 import type { z } from 'zod'
 import { redactDeep } from '../secrets/redactor.ts'
@@ -143,6 +144,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
    * （包括进入新的卡住）时隐式失效。调度与 task_respond 统一用它判断。
    */
   activeDelegation(taskId: string): ActiveDelegation | null
+  /** 该任务 `supervisor.wake_started` 的 origin；不是唤醒任务时为 null（D1、D12）。 */
+  wakeOrigin(taskId: string): WakeOrigin | null
   getNode(nodeId: string): NodeView | null
   listNodes(): NodeView[]
   getLease(leaseId: string): LeaseRecord | null
@@ -1080,6 +1083,14 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     },
     activeDelegation(taskId) {
       return currentDelegation(taskId)
+    },
+    wakeOrigin(taskId) {
+      const row = get<{ origin: WakeOrigin | null }>(
+        `SELECT json_extract(payload_json, '$.origin') AS origin FROM events
+         WHERE type = 'supervisor.wake_started' AND task_id = ? LIMIT 1`,
+        taskId,
+      )
+      return row?.origin ?? null
     },
     getNode(nodeId) {
       const r = get<NodeRow>(`${NODE_SELECT} WHERE n.node_id = ?`, nodeId)

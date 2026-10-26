@@ -11,7 +11,9 @@ import {
   completeLeaseRequest,
   fail,
   type LeaseGrant,
+  type LeaseSlots,
   type LedgerEvent,
+  leaseSlotFor,
   type NodeView,
   ok,
   type RenewLeaseData,
@@ -37,6 +39,9 @@ import { type HubClock, systemClock } from '../server/clock.ts'
  *   JS 单线程、SQLite 同步 API，选择与写入之间没有 await，两个请求不会交错；即便交错，
  *   store 的校验（task.started 只接受 queued、lease.granted 拒绝第二个活动租约）也会让后者失败，
  *   这里遇到 invalid_transition 时换下一个任务重试。
+ * - 执行槽（add-m1-supervisor D12）：请求带 `slots` 时只分配有可用空位的任务——普通任务只用
+ *   general，普通唤醒可用 supervisor 或 general，reply 唤醒可用 reply 或 general；
+ *   唤醒身份以账本 `supervisor.wake_started` 为准（`leaseSlotFor`）。不带 `slots` 的旧节点按原语义。
  * - 无可领取任务时挂入内存等待队列（不进投影），`task.created` / `task.requeued` 到来时唤醒。
  * - 续约 / 提交校验租约令牌（账本只存 SHA-256）；租约已不是 active（过期或已被处理）时返回
  *   `lease_expired`。
@@ -315,6 +320,7 @@ export function expiryDrafts(
 interface Waiter {
   nodeId: string
   capabilities: string[]
+  slots: LeaseSlots | undefined
   resolve(grant: LeaseGrant | null): void
 }
 
@@ -329,9 +335,14 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   let closed = false
 
   /** 选出并分配第一个满足能力的 queued 任务；没有时返回 null。全程同步。 */
-  function tryGrant(nodeId: string, capabilities: readonly string[]): LeaseGrant | null {
+  function tryGrant(
+    nodeId: string,
+    capabilities: readonly string[],
+    slots?: LeaseSlots,
+  ): LeaseGrant | null {
     for (const task of ledger.queuedTasks()) {
       if (!capabilitiesSatisfy(capabilities, task.contract)) continue
+      if (slots && leaseSlotFor(slots, ledger.wakeOrigin(task.id)) === null) continue
       // resume 只交给紧接着的这一次执行：task.started 会在投影里清空它（PR #16 审查第 1 条）。
       const resume = ledger.taskResume(task.id)
       const leaseId = newLeaseId()
@@ -387,7 +398,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       draining = false
       if (closed) return
       for (const w of [...waiters]) {
-        const grant = tryGrant(w.nodeId, w.capabilities)
+        const grant = tryGrant(w.nodeId, w.capabilities, w.slots)
         if (grant) w.resolve(grant)
       }
     })
@@ -444,9 +455,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     async acquire(body, opts = {}) {
       const req = parse(acquireLeaseRequest, body, '领取请求')
       if (!req.ok) return req
-      const { node_id: nodeId, capabilities } = req.data
+      const { node_id: nodeId, capabilities, slots } = req.data
       if (!ledger.touchNode(nodeId)) return notRegistered(nodeId)
-      const grant = tryGrant(nodeId, capabilities)
+      const grant = tryGrant(nodeId, capabilities, slots)
       const waitMs = Math.min(req.data.wait_s, o.leaseWaitMaxS) * 1000
       if (grant || waitMs === 0 || closed || opts.signal?.aborted) return ok({ lease: grant })
 
@@ -455,6 +466,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         const waiter: Waiter = {
           nodeId,
           capabilities,
+          slots,
           resolve: (g) => {
             const i = waiters.indexOf(waiter)
             if (i >= 0) waiters.splice(i, 1)
