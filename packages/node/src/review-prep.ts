@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { join } from 'node:path'
 import { fail, flowPaths, gitSha, ok, type Result, type TaskContract } from '@flow/core'
 import {
+  type GitConfigPair,
   type GitHubCli,
   type GitOptions,
   git,
@@ -10,6 +11,8 @@ import {
   type PrRef,
   parsePrUrl,
   sameRepo,
+  UNTRUSTED_CHECKOUT_ENV,
+  untrustedCheckoutConfig,
 } from './github.ts'
 
 /**
@@ -19,9 +22,10 @@ import {
  * 1. PR 链接的仓库必须与登记仓库 `remote.origin.url` 的仓库一致，否则 `repo_not_in_workspace`；
  * 2. `gh pr view` 读 PR，核对编号，记录当前 `headRefOid`；
  * 3. `gh pr diff` 写入任务私有目录；
- * 4. `git fetch origin pull/<n>/head`，确认取到的提交就是记录的 head（否则 `head_moved`），
- *    再 `git worktree add --detach` 检出到任务私有目录下的临时 worktree，作为会话 cwd；
- * 5. 任务结束后移除 worktree 与私有目录；节点启动时清理本节点残留的私有目录并 `git worktree prune`。
+ * 4. `git fetch origin +pull/<n>/head:refs/flow/review/<task>`（任务专用 ref，不依赖 FETCH_HEAD），确认它就是记录的 head
+ *    （否则 `head_moved`），再 `git worktree add --detach` 检出到任务私有目录下的临时 worktree，作为会话 cwd；
+ *    检出时中和 hook、fsmonitor 与全部已配置的 filter driver（`untrustedCheckoutConfig`），并设 `GIT_LFS_SKIP_SMUDGE=1`；
+ * 5. 任务结束后移除 worktree、任务专用 ref 与私有目录；节点启动时清理本节点残留的私有目录并 `git worktree prune`。
  *
  * 私有目录：`<flow-home>/state/review/<node-id>/<task-id>/`，内含 `worktree/`、`pr.diff` 与 `meta.json`（登记仓库路径，
  * 供启动清理使用）。git 一律带 `-c core.hooksPath=/dev/null`，不运行仓库 hook。
@@ -44,6 +48,8 @@ export interface PreparedReview {
   privateDir: string
   /** diff 文件（私有目录内）。 */
   diffPath: string
+  /** 检出时使用的 git 配置覆盖；审查会话的环境经 GIT_CONFIG_* 注入同样的覆盖。 */
+  gitConfig: GitConfigPair[]
   /** 移除 worktree 与私有目录；可重复调用，不抛出。 */
   cleanup(): Promise<void>
 }
@@ -58,6 +64,10 @@ export interface PrepareReviewInput {
   gh: GitHubCli
   git?: GitOptions
 }
+
+/** 审查任务专用 ref 的命名空间（fetch 的目标，清理时删除）。 */
+export const REVIEW_REF_PREFIX = 'refs/flow/review/'
+export const reviewRef = (taskId: string) => `${REVIEW_REF_PREFIX}${taskId}`
 
 const safeName = (s: string) => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(s)
 
@@ -80,6 +90,8 @@ export async function prepareReview(input: PrepareReviewInput): Promise<Result<P
   if (!view.ok) return fail('failure', 'review_prep_failed', `读取 PR 失败：${view.error.message}`)
   if (view.data.number !== pr.number)
     return fail('failure', 'review_prep_failed', `gh 返回的 PR 编号 ${view.data.number} 与链接不符`)
+  if (view.data.url.toLowerCase() !== pr.url.toLowerCase())
+    return fail('failure', 'review_prep_failed', `gh 返回的 PR 链接 ${view.data.url} 与合同不符`)
   const head = view.data.headRefOid
   if (!gitSha.safeParse(head).success)
     return fail('failure', 'review_prep_failed', `gh 返回的 head 不是提交 sha：${head}`)
@@ -94,9 +106,15 @@ export async function prepareReview(input: PrepareReviewInput): Promise<Result<P
     await cleanup()
     return r
   }
-  await writeFile(join(dir, META_FILE), `${JSON.stringify({ repo: input.repo })}\n`, {
+  const ref = reviewRef(input.taskId)
+  await writeFile(join(dir, META_FILE), `${JSON.stringify({ repo: input.repo, ref })}\n`, {
     mode: 0o600,
   })
+  const config = await untrustedCheckoutConfig(input.repo, input.git)
+  if (!config.ok)
+    return bail(
+      fail('failure', 'review_prep_failed', `读取仓库 git 配置失败：${config.error.message}`),
+    )
 
   const diff = await input.gh.prDiff(pr.url)
   if (!diff.ok)
@@ -106,14 +124,22 @@ export async function prepareReview(input: PrepareReviewInput): Promise<Result<P
 
   const fetched = await git(
     input.repo,
-    ['fetch', '--no-tags', '--no-recurse-submodules', 'origin', `pull/${pr.number}/head`],
+    [
+      'fetch',
+      '--no-tags',
+      '--no-recurse-submodules',
+      '--no-write-fetch-head',
+      'origin',
+      `+pull/${pr.number}/head:${ref}`,
+    ],
     input.git,
+    config.data,
   )
   if (!fetched.ok)
     return bail(
       fail('failure', 'review_prep_failed', `获取 PR head 失败：${fetched.error.message}`),
     )
-  const got = await git(input.repo, ['rev-parse', '--verify', 'FETCH_HEAD^{commit}'], input.git)
+  const got = await git(input.repo, ['rev-parse', '--verify', `${ref}^{commit}`], input.git)
   if (!got.ok) return bail(fail('failure', 'review_prep_failed', got.error.message))
   if (got.data.trim() !== head) {
     return bail(
@@ -125,7 +151,13 @@ export async function prepareReview(input: PrepareReviewInput): Promise<Result<P
     )
   }
   const wt = join(dir, WORKTREE_DIR)
-  const added = await git(input.repo, ['worktree', 'add', '--detach', wt, head], input.git)
+  const added = await git(
+    input.repo,
+    ['worktree', 'add', '--detach', wt, head],
+    input.git,
+    config.data,
+    UNTRUSTED_CHECKOUT_ENV,
+  )
   if (!added.ok)
     return bail(
       fail('failure', 'review_prep_failed', `检出审查 worktree 失败：${added.error.message}`),
@@ -144,6 +176,7 @@ export async function prepareReview(input: PrepareReviewInput): Promise<Result<P
     worktree,
     privateDir,
     diffPath: join(privateDir, REVIEW_DIFF_FILE),
+    gitConfig: config.data,
     cleanup,
   })
 }
@@ -152,9 +185,15 @@ export async function prepareReview(input: PrepareReviewInput): Promise<Result<P
 async function removeReviewDir(dir: string, gitOptions?: GitOptions): Promise<void> {
   if (!existsSync(dir)) return
   let repo: string | undefined
+  let ref: string | undefined
   try {
-    const meta = JSON.parse(await readFile(join(dir, META_FILE), 'utf8')) as { repo?: unknown }
+    const meta = JSON.parse(await readFile(join(dir, META_FILE), 'utf8')) as {
+      repo?: unknown
+      ref?: unknown
+    }
     if (typeof meta.repo === 'string') repo = meta.repo
+    // 只删除本模块命名空间下的 ref。
+    if (typeof meta.ref === 'string' && meta.ref.startsWith(REVIEW_REF_PREFIX)) ref = meta.ref
   } catch {
     repo = undefined
   }
@@ -165,7 +204,10 @@ async function removeReviewDir(dir: string, gitOptions?: GitOptions): Promise<vo
   } catch {
     // 删除失败留给下次启动清理。
   }
-  if (repo && existsSync(repo)) await git(repo, ['worktree', 'prune'], gitOptions)
+  if (repo && existsSync(repo)) {
+    await git(repo, ['worktree', 'prune'], gitOptions)
+    if (ref) await git(repo, ['update-ref', '-d', ref], gitOptions)
+  }
 }
 
 /** 节点启动时清理本节点残留的审查私有目录（上一次运行崩溃或被杀时留下的）。 */

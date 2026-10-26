@@ -228,6 +228,20 @@ describe('flow doctor', () => {
     expect(none.checks.some((c) => c.id === 'role.dev.supervisor')).toBe(false)
   })
 
+  test('reviewer_roles 中的角色不是只读配置：doctor 报 error；默认 pr-reviewer 通过', async () => {
+    const home = tempHome('flow-doctor-reviewers-')
+    await initFlowHome(home)
+    writeText(
+      join(home, 'config/workspaces/demo.yaml'),
+      'id: demo\nname: Demo\ndescription: 测试\nkind: product\nrepos: []\nsupervisor:\n  reviewer_roles: [pr-reviewer, reviewer]\n',
+    )
+    const report = reportOf(await runDoctor(home, 'FLOW_HOME'))
+    const errors = report.checks.filter((c) => c.id.endsWith('.review_role_not_read'))
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatchObject({ ok: false, severity: 'error' })
+    expect(errors[0]?.message).toContain('审查角色 reviewer')
+  })
+
   test('已安装 plist 的 bun 或入口失效时报错并提示重新安装；有效路径通过', async () => {
     const home = tempHome('flow-doctor-')
     await initFlowHome(home)

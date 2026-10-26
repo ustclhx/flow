@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fail, ok, type Result } from '@flow/core'
-import type { GhCheck, GhPrView, GhRun, GitHubCli, RepoRef } from '../src/index.ts'
+import type { GhCheck, GhPrView, GhRun, GitHubCli, PrSnapshot, RepoRef } from '../src/index.ts'
 
 /**
  * 审查准备与 pr-merge 测试共用：本地临时仓库（绝不访问真实远端）与注入的假 gh（绝不调用真实 gh）。
@@ -95,12 +95,25 @@ export function tempRepo(workspaceExtra = ''): TempRepo {
 export interface FakeGhState {
   pr: GhPrView
   diff: string
+  /** 快照中 head 提交的检查；'error' 让快照读取失败。检查按提交区分：只有 checksOid 的提交有这些检查。 */
   checks: GhCheck[] | 'none' | 'error'
+  /** 检查所属的提交；缺省为快照时的 head。 */
+  checksOid?: string
+  checksTruncated: boolean
   defaultBranch: string
   nameWithOwner: string
-  /** 合并的行为：merge 成功并给出合并提交；auto 只打开自动合并；error 报错且不合并。 */
+  mergeQueue: boolean
+  /** 依次返回的 mergeable（超过时用 pr.mergeable）。 */
+  mergeableSeq: string[]
+  /** 读完快照后 PR head 变成这个提交（模拟检查与合并之间的推送）。 */
+  headAfterSnapshot?: string
+  /** 合并的行为：merge 成功并给出合并提交；auto 打开自动合并但不合并；error 报错且不合并。 */
   mergeBehavior: 'merge' | 'auto' | 'error' | 'error_but_merged'
   mergeCommit: string
+  /** 合并后读状态时依次失败的次数（Infinity 表示一直失败）。 */
+  mergeStateFailures: number
+  /** 合并前就已存在的自动合并请求（别人设置的）。 */
+  autoBefore: boolean
   /** 第 n 次 run list 返回的结果（超过时重复最后一项）。 */
   runs: Array<GhRun[] | 'error'>
   calls: string[]
@@ -121,10 +134,15 @@ export function fakeGh(over: Partial<FakeGhState> = {}): { gh: GitHubCli; state:
     },
     diff: 'diff --git a/feature.ts b/feature.ts\n+export const x = 1\n',
     checks: [{ name: 'ci', state: 'SUCCESS', bucket: 'pass', link: 'https://ci/1' }],
+    checksTruncated: false,
     defaultBranch: 'main',
     nameWithOwner: 'acme/demo',
+    mergeQueue: false,
+    mergeableSeq: [],
     mergeBehavior: 'merge',
     mergeCommit: 'c'.repeat(40),
+    mergeStateFailures: 0,
+    autoBefore: false,
     runs: [[]],
     calls: [],
     merged: false,
@@ -132,17 +150,56 @@ export function fakeGh(over: Partial<FakeGhState> = {}): { gh: GitHubCli; state:
     ...over,
   }
   let runCalls = 0
+  let snapshots = 0
+  let mergeStateCalls = 0
   const gh: GitHubCli = {
     async prView(pr) {
       state.calls.push(`pr view ${pr}`)
       return ok({ ...state.pr, state: state.merged ? 'MERGED' : state.pr.state })
     },
+    async prSnapshot(pr): Promise<Result<PrSnapshot>> {
+      state.calls.push(`pr snapshot ${pr.url}`)
+      if (state.checks === 'error') return fail('failure', 'gh_failed', 'graphql 失败')
+      const head = state.pr.headRefOid
+      const mergeable = state.mergeableSeq[snapshots++] ?? state.pr.mergeable
+      const checksOid = state.checksOid ?? head
+      const snap: PrSnapshot = {
+        ...state.pr,
+        state: state.merged ? 'MERGED' : state.pr.state,
+        mergeable,
+        mergeStateStatus: 'CLEAN',
+        mergeQueue: state.mergeQueue,
+        inMergeQueue: false,
+        autoMerge: state.autoBefore,
+        nameWithOwner: state.nameWithOwner,
+        defaultBranch: state.defaultBranch,
+        checksOid,
+        // 检查跟着提交走：快照的 head 不是检查所属提交时没有检查。
+        checks: state.checks === 'none' || checksOid !== head ? [] : state.checks,
+        checksTruncated: state.checksTruncated,
+      }
+      if (state.headAfterSnapshot) state.pr = { ...state.pr, headRefOid: state.headAfterSnapshot }
+      return ok(snap)
+    },
     async prMergeState(pr) {
       state.calls.push(`pr view state ${pr}`)
+      if (mergeStateCalls++ < state.mergeStateFailures)
+        return fail('failure', 'gh_failed', 'pr view 失败')
+      const auto = state.autoEnabled || state.autoBefore ? { enabledAt: 'x' } : null
       return ok(
         state.merged
-          ? { state: 'MERGED', mergeCommit: { oid: state.mergeCommit } }
-          : { state: state.pr.state, mergeCommit: null },
+          ? {
+              state: 'MERGED',
+              headRefOid: state.pr.headRefOid,
+              mergeCommit: { oid: state.mergeCommit },
+              autoMergeRequest: null,
+            }
+          : {
+              state: state.pr.state,
+              headRefOid: state.pr.headRefOid,
+              mergeCommit: null,
+              autoMergeRequest: auto,
+            },
       )
     },
     async prDiff(pr) {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   Options,
@@ -191,6 +192,7 @@ async function preToolUse(
   cwd: string,
   tool_name: string,
   tool_input: Record<string, unknown>,
+  mcp_server?: { name: string; source: string },
 ): Promise<string> {
   const hook = options.hooks?.PreToolUse?.[0]?.hooks[0]
   if (!hook) throw new Error('缺少 PreToolUse 钩子')
@@ -203,6 +205,7 @@ async function preToolUse(
       tool_name,
       tool_input,
       tool_use_id: 'tu',
+      ...(mcp_server ? { mcp_server } : {}),
     },
     'tu',
     { signal: new AbortController().signal },
@@ -272,6 +275,14 @@ describe('审查准备', () => {
     // 结束后移除 worktree 与私有目录，登记仓库里不留 worktree 记录。
     expect(existsSync(reviewDir(r))).toBe(false)
     expect(sh(r.repo, 'worktree', 'list')).not.toContain('worktree')
+    // 任务专用 ref 已删除；会话不加载任何设置来源，只用 Flow MCP，git 覆盖经环境注入。
+    expect(sh(r.repo, 'for-each-ref', 'refs/flow/')).toBe('')
+    expect(o?.settingSources).toEqual([])
+    expect(o?.strictMcpConfig).toBe(true)
+    expect(o?.env?.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
+    expect(o?.env?.GIT_LFS_SKIP_SMUDGE).toBe('1')
+    expect(o?.env?.GIT_CONFIG_KEY_0).toBe('core.hooksPath')
+    expect(o?.env?.GIT_CONFIG_KEY_1).toBe('core.fsmonitor')
   })
 
   test('changes_requested：blocking 写入结果；没有文字时摘要由结论生成', async () => {
@@ -442,6 +453,141 @@ describe('审查准备', () => {
   })
 })
 
+describe('审查角色必须是只读配置（fail-closed）', () => {
+  test('write 类角色、setting_sources 含 project、没有 read_scope：failed(review_role_not_read)，不检出、不启动会话', async () => {
+    const r = setup()
+    const base = prReviewer()
+    const perms = base.permissions as Record<string, unknown>
+    for (const role of [
+      // 默认 reviewer 那样能写文档、能用 Bash 的角色。
+      prReviewer({
+        kind: undefined,
+        permissions: {
+          ...perms,
+          allowedTools: ['Read', 'Bash(gh pr review:*)'],
+          disallowedTools: [],
+        },
+      }),
+      prReviewer({ permissions: { ...perms, setting_sources: ['project'] } }),
+      prReviewer({ permissions: { ...perms, read_scope: undefined } }),
+    ]) {
+      const { gh, state } = fakeGh()
+      const { outcome, calls } = await runOnce(
+        r,
+        async function* () {
+          yield resultMsg()
+        },
+        { gh, resolveRole: roleResolver(role) },
+      )
+      expect(reasonOf(outcome)).toBe('review_role_not_read')
+      expect(calls).toHaveLength(0)
+      expect(state.calls).toEqual([])
+      expect(existsSync(reviewDir(r))).toBe(false)
+    }
+  })
+
+  test('节点上没有该 workspace：failed(review_prep_failed)，不当作普通任务运行', async () => {
+    const r = setup()
+    const { outcome, calls } = await runOnce(
+      r,
+      async function* () {
+        yield resultMsg()
+      },
+      {},
+      contract(r, { workspace: 'ws/missing' }),
+    )
+    expect(reasonOf(outcome)).toBe('review_prep_failed')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('gh 返回的 PR 链接与合同不符：failed(review_prep_failed)', async () => {
+    const r = setup()
+    const { gh } = fakeGh({
+      pr: { ...fakeGh().state.pr, headRefOid: r.head, url: 'https://github.com/acme/demo/pull/77' },
+    })
+    const { outcome } = await runOnce(
+      r,
+      async function* () {
+        yield resultMsg()
+      },
+      { gh },
+    )
+    expect(reasonOf(outcome)).toBe('review_prep_failed')
+  })
+})
+
+describe('检出与会话中不运行由配置驱动的程序', () => {
+  test('fsmonitor 与 filter driver（含 PR 的 .gitattributes 引用）在检出和会话的 git 中都不执行', async () => {
+    const r = setup()
+    const marker = join(r.root, 'markers')
+    mkdirSync(marker)
+    const fsmon = join(r.root, 'fsmonitor.sh')
+    writeFileSync(fsmon, `#!/bin/sh\ntouch ${join(marker, 'fsmonitor')}\nexit 1\n`, { mode: 0o755 })
+    const filter = join(r.root, 'filter.sh')
+    writeFileSync(filter, `#!/bin/sh\ntouch ${join(marker, 'filter')}\ncat\n`, { mode: 0o755 })
+    sh(r.repo, 'config', 'core.fsmonitor', fsmon)
+    sh(r.repo, 'config', 'filter.mark.smudge', filter)
+    sh(r.repo, 'config', 'filter.mark.clean', filter)
+    sh(r.repo, 'config', 'filter.mark.required', 'true')
+    // PR 内容引用该 driver。
+    sh(r.repo, 'checkout', '-q', 'feature')
+    writeFileSync(join(r.repo, '.gitattributes'), '*.ts filter=mark\n')
+    writeFileSync(join(r.repo, 'other.ts'), 'export const y = 1\n')
+    sh(
+      r.repo,
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'filter.mark.clean=',
+      '-c',
+      'filter.mark.required=false',
+      'add',
+      '.',
+    )
+    sh(
+      r.repo,
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '-q',
+      '-m',
+      'attrs',
+    )
+    const head = sh(r.repo, 'rev-parse', 'HEAD')
+    sh(r.repo, 'push', '-q', '-f', 'origin', 'HEAD:refs/pull/7/head')
+    sh(r.repo, '-c', 'core.fsmonitor=false', 'checkout', '-q', 'main')
+    rmSync(marker, { recursive: true, force: true })
+    mkdirSync(marker)
+    let sessionMarkers: string[] = []
+    const { outcome, calls } = await runOnce(
+      r,
+      async function* (io) {
+        // 会话中 Claude Code 自己运行的 git：用会话环境在 worktree 里跑 status（会触发 fsmonitor）。
+        const env = { ...gitEnv, ...(io.options.env as Record<string, string>) }
+        execFileSync('git', ['status', '--porcelain'], { cwd: io.options.cwd, env, stdio: 'pipe' })
+        execFileSync('git', ['checkout', '--', 'other.ts'], {
+          cwd: io.options.cwd,
+          env,
+          stdio: 'pipe',
+        })
+        sessionMarkers = readdirSync(marker)
+        yield resultMsg({ structured_output: { verdict: 'approve' } })
+      },
+      { gh: fakeGh({ pr: { ...fakeGh().state.pr, headRefOid: head } }).gh },
+    )
+    expect(outcome.outcome).toBe('done')
+    expect(calls[0]?.env?.GIT_CONFIG_COUNT).toBeDefined()
+    expect(sessionMarkers).toEqual([])
+    expect(readdirSync(marker)).toEqual([])
+    // 对照：不加覆盖时同样的操作确实会运行它们（证明测试有效）。
+    sh(r.repo, 'worktree', 'add', '-q', '--detach', join(r.root, 'control'), head)
+    sh(join(r.root, 'control'), 'status', '--porcelain')
+    expect(readdirSync(marker).sort()).toEqual(['filter', 'fsmonitor'])
+  })
+})
+
 describe('只读角色由执行器强制（5.7）', () => {
   test('有效类别 read：SDK tools 只给白名单；canUseTool 对非只读工具直接拒绝、不预检不审批', async () => {
     const r = setup()
@@ -477,6 +623,58 @@ describe('只读角色由执行器强制（5.7）', () => {
     expect(calls[0]?.tools).toEqual([...READ_ROLE_TOOLS])
     for (const tool of Object.keys(decisions)) expect(decisions[tool]).toBe('deny')
     expect(prechecks).toEqual([])
+  })
+
+  test('allowedTools 含 MCP 写工具或 Bash：从 allowedTools 中滤掉，PreToolUse 钩子按 readRoleMayUse 拒绝（没有 read_scope 也安装）', async () => {
+    const r = setup()
+    const triage: Role = {
+      name: 'triage-claude',
+      kind: 'read',
+      executor: 'claude-sdk',
+      prompt: '只读',
+      permissions: {
+        setting_sources: [],
+        allowedTools: ['Read', 'Grep(src/**)', 'mcp__flow__task_create', 'mcp__other__write'],
+        disallowedTools: ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
+      },
+    }
+    const decisions: Record<string, string> = {}
+    const { calls } = await runOnce(
+      r,
+      async function* (io) {
+        for (const [tool, mcp] of [
+          ['mcp__flow__task_create', { name: 'flow', source: 'dynamic' }],
+          ['mcp__other__write', { name: 'other', source: 'project' }],
+          ['mcp__flow__kb_search', { name: 'flow', source: 'dynamic' }],
+          ['Bash', undefined],
+          ['Read', undefined],
+        ] as const)
+          decisions[tool] = await preToolUse(
+            io.options,
+            r.repo,
+            tool,
+            { file_path: 'README.md' },
+            mcp,
+          )
+        yield resultMsg()
+      },
+      { resolveRole: roleResolver(triage) },
+      contract(r, { role: 'triage-claude', inputs: {} }),
+    )
+    const o = calls[0]
+    expect(o?.allowedTools).toContain('Read')
+    expect(o?.allowedTools).toContain('Grep(src/**)')
+    expect(o?.allowedTools).not.toContain('mcp__flow__task_create')
+    expect(o?.allowedTools).not.toContain('mcp__other__write')
+    expect(o?.strictMcpConfig).toBe(true)
+    expect(o?.env?.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
+    expect(decisions).toEqual({
+      mcp__flow__task_create: 'deny',
+      mcp__other__write: 'deny',
+      mcp__flow__kb_search: 'pass',
+      Bash: 'deny',
+      Read: 'pass',
+    })
   })
 
   test('有效类别 write 的角色不设 tools，非只读工具照常走预检', async () => {

@@ -84,23 +84,34 @@ export interface GitOptions {
   timeoutMs?: number
 }
 
+/** 一条 `-c key=value` 形式的 git 配置覆盖。 */
+export type GitConfigPair = readonly [key: string, value: string]
+
 /**
  * 运行 git（不经 shell）。始终带 `-c core.hooksPath=/dev/null`：检出 PR 内容时不运行仓库里的 hook
- * （post-checkout 等会在沙箱外执行）。
+ * （post-checkout 等会在沙箱外执行）；`config` 中的覆盖依次追加为 `-c key=value`。
  */
 export async function git(
   cwd: string,
   args: readonly string[],
   options: GitOptions = {},
+  config: readonly GitConfigPair[] = [],
+  extraEnv: Record<string, string> = {},
 ): Promise<Result<string>> {
   const run = options.run ?? execRunner
+  const env = { ...(options.env ?? process.env), ...extraEnv }
   let out: CommandOutput
   try {
-    out = await run('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
-      cwd,
-      timeoutMs: options.timeoutMs ?? 120_000,
-      ...(options.env ? { env: options.env } : {}),
-    })
+    out = await run(
+      'git',
+      [
+        '-c',
+        'core.hooksPath=/dev/null',
+        ...config.flatMap(([k, v]) => ['-c', `${k}=${v}`]),
+        ...args,
+      ],
+      { cwd, timeoutMs: options.timeoutMs ?? 120_000, env },
+    )
   } catch (err) {
     return fail('failure', 'git_failed', `git ${args[0] ?? ''} 无法执行：${(err as Error).message}`)
   }
@@ -110,9 +121,74 @@ export async function git(
       'failure',
       'git_failed',
       `git ${args.join(' ')} 失败（退出码 ${out.code}）：${detail}`,
+      { exitCode: out.code, stdout: out.stdout },
     )
   }
   return ok(out.stdout)
+}
+
+/** 检出不可信内容时额外注入的环境：git-lfs 不在检出时下载、不运行 smudge。 */
+export const UNTRUSTED_CHECKOUT_ENV = { GIT_LFS_SKIP_SMUDGE: '1' } as const
+
+/**
+ * 检出与浏览 PR 内容时，中和由配置驱动、会在沙箱外运行的程序（add-m1-supervisor D10）：
+ * - `core.hooksPath=/dev/null`：不运行 hook；`core.fsmonitor=false`：不运行 fsmonitor 钩子；
+ * - 仓库与用户配置中已登记的每个 filter driver（`git config --get-regexp '^filter\.'`）把 smudge、clean、process
+ *   置空并设 `required=false`：PR 的 `.gitattributes` 引用它们时按原样检出，不执行任何命令。
+ * 读取配置失败时返回失败（调用方不检出）。
+ */
+export async function untrustedCheckoutConfig(
+  repo: string,
+  options: GitOptions = {},
+): Promise<Result<GitConfigPair[]>> {
+  const pairs: GitConfigPair[] = [
+    ['core.hooksPath', '/dev/null'],
+    ['core.fsmonitor', 'false'],
+  ]
+  const listed = await git(repo, ['config', '--null', '--get-regexp', '^filter\\.'], options)
+  let text = ''
+  if (listed.ok) text = listed.data
+  else {
+    // 没有任何匹配时 git config 以 1 退出且没有输出。
+    const d = listed.error.details as { exitCode?: unknown; stdout?: unknown } | undefined
+    if (d?.exitCode !== 1 || d.stdout !== '') return listed
+  }
+  const drivers = new Set<string>()
+  // --null：每项为 "key\nvalue\0"。
+  for (const item of text.split('\0')) {
+    const key = item.split('\n', 1)[0] ?? ''
+    if (!key.startsWith('filter.')) continue
+    const last = key.lastIndexOf('.')
+    const driver = key.slice('filter.'.length, last)
+    if (last > 'filter.'.length && driver !== '') drivers.add(driver)
+  }
+  for (const d of [...drivers].sort()) {
+    pairs.push(
+      [`filter.${d}.smudge`, ''],
+      [`filter.${d}.clean`, ''],
+      [`filter.${d}.process`, ''],
+      [`filter.${d}.required`, 'false'],
+    )
+  }
+  return ok(pairs)
+}
+
+/**
+ * 把配置覆盖写成 `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` 环境变量（接在已有的条目之后），
+ * 供审查会话中 Claude Code 自己运行的 git 使用。
+ */
+export function gitConfigEnv(
+  pairs: readonly GitConfigPair[],
+  base: NodeJS.ProcessEnv = {},
+): Record<string, string> {
+  const existing = Number.parseInt(base.GIT_CONFIG_COUNT ?? '0', 10)
+  const start = Number.isSafeInteger(existing) && existing > 0 ? existing : 0
+  const env: Record<string, string> = { GIT_CONFIG_COUNT: String(start + pairs.length) }
+  pairs.forEach(([k, v], i) => {
+    env[`GIT_CONFIG_KEY_${start + i}`] = k
+    env[`GIT_CONFIG_VALUE_${start + i}`] = v
+  })
+  return env
 }
 
 /**
@@ -153,11 +229,157 @@ export type GhPrView = z.infer<typeof ghPrView>
 
 export const ghPrMergeState = z.looseObject({
   state: z.string(),
+  headRefOid: z.string().min(1),
   mergeCommit: z
     .looseObject({ oid: z.string().min(1) })
     .nullable()
     .optional(),
+  autoMergeRequest: z.unknown().nullable().optional(),
 })
+export type GhPrMergeState = z.infer<typeof ghPrMergeState>
+
+/** 一次 GraphQL 查询中检查项上限；超过（或还有下一页）时无法确认全部检查，调用方判失败。 */
+export const SNAPSHOT_CHECKS_MAX = 100
+
+const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    nameWithOwner
+    defaultBranchRef { name }
+    pullRequest(number: $number) {
+      number url state isDraft baseRefName headRefOid mergeable mergeStateStatus
+      isMergeQueueEnabled isInMergeQueue
+      autoMergeRequest { enabledAt }
+      commits(last: 1) {
+        nodes {
+          commit {
+            oid
+            statusCheckRollup {
+              contexts(first: ${SNAPSHOT_CHECKS_MAX}) {
+                totalCount
+                pageInfo { hasNextPage }
+                nodes {
+                  __typename
+                  ... on CheckRun { name status conclusion detailsUrl }
+                  ... on StatusContext { context state targetUrl }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+const snapshotContext = z.union([
+  z.looseObject({
+    __typename: z.literal('CheckRun'),
+    name: z.string(),
+    status: z.string(),
+    conclusion: z.string().nullable(),
+    detailsUrl: z.string().nullable().optional(),
+  }),
+  z.looseObject({
+    __typename: z.literal('StatusContext'),
+    context: z.string(),
+    state: z.string(),
+    targetUrl: z.string().nullable().optional(),
+  }),
+])
+
+const snapshotResponse = z.looseObject({
+  data: z.looseObject({
+    repository: z.looseObject({
+      nameWithOwner: z.string().min(1),
+      defaultBranchRef: z.looseObject({ name: z.string().min(1) }),
+      pullRequest: z.looseObject({
+        number: z.number().int(),
+        url: z.string(),
+        state: z.string(),
+        isDraft: z.boolean(),
+        baseRefName: z.string().min(1),
+        headRefOid: z.string().min(1),
+        mergeable: z.string(),
+        mergeStateStatus: z.string(),
+        isMergeQueueEnabled: z.boolean(),
+        isInMergeQueue: z.boolean(),
+        autoMergeRequest: z.unknown().nullable(),
+        commits: z.looseObject({
+          nodes: z.array(
+            z.looseObject({
+              commit: z.looseObject({
+                oid: z.string().min(1),
+                statusCheckRollup: z
+                  .looseObject({
+                    contexts: z.looseObject({
+                      totalCount: z.number().int(),
+                      pageInfo: z.looseObject({ hasNextPage: z.boolean() }),
+                      nodes: z.array(snapshotContext),
+                    }),
+                  })
+                  .nullable(),
+              }),
+            }),
+          ),
+        }),
+      }),
+    }),
+  }),
+})
+
+/**
+ * PR 在同一时刻的状态（一次 GraphQL 查询）：head、可合并性、合并队列、自动合并，以及**该 head 提交**的全部检查。
+ * 检查与 head 来自同一次读取，不会出现"读检查之后 head 变了"的错位。
+ */
+export interface PrSnapshot {
+  number: number
+  url: string
+  state: string
+  isDraft: boolean
+  baseRefName: string
+  headRefOid: string
+  mergeable: string
+  mergeStateStatus: string
+  mergeQueue: boolean
+  inMergeQueue: boolean
+  autoMerge: boolean
+  nameWithOwner: string
+  defaultBranch: string
+  /** 检查所属提交（最新提交）；没有提交时为 undefined。 */
+  checksOid: string | undefined
+  checks: GhCheck[]
+  /** 检查总数超过一次查询的上限或还有下一页：无法确认全部检查。 */
+  checksTruncated: boolean
+}
+
+/** CheckRun / StatusContext 归到与 `gh pr checks` 相同的 bucket。 */
+function bucketOf(c: z.infer<typeof snapshotContext>): GhCheck {
+  if (c.__typename === 'CheckRun') {
+    const bucket =
+      c.status !== 'COMPLETED'
+        ? 'pending'
+        : c.conclusion === 'SUCCESS'
+          ? 'pass'
+          : c.conclusion === 'SKIPPED' || c.conclusion === 'NEUTRAL'
+            ? 'skipping'
+            : c.conclusion === 'CANCELLED'
+              ? 'cancel'
+              : 'fail'
+    return {
+      name: c.name,
+      state: c.status === 'COMPLETED' ? (c.conclusion ?? 'UNKNOWN') : c.status,
+      bucket,
+      ...(c.detailsUrl ? { link: c.detailsUrl } : {}),
+    }
+  }
+  const bucket =
+    c.state === 'SUCCESS'
+      ? 'pass'
+      : c.state === 'PENDING' || c.state === 'EXPECTED'
+        ? 'pending'
+        : 'fail'
+  return { name: c.context, state: c.state, bucket, ...(c.targetUrl ? { link: c.targetUrl } : {}) }
+}
 
 export const ghRepoView = z.looseObject({
   nameWithOwner: z.string().min(1),
@@ -195,7 +417,9 @@ export interface GitHubCliOptions {
 /** 审查准备与 pr-merge 用到的 gh 命令。每个方法都显式指定 PR 链接或仓库。 */
 export interface GitHubCli {
   prView(pr: string): Promise<Result<GhPrView>>
-  prMergeState(pr: string): Promise<Result<z.infer<typeof ghPrMergeState>>>
+  prMergeState(pr: string): Promise<Result<GhPrMergeState>>
+  /** 同一时刻的 PR 状态与 head 的全部检查（GraphQL）。 */
+  prSnapshot(pr: PrRef): Promise<Result<PrSnapshot>>
   prDiff(pr: string): Promise<Result<string>>
   /** PR 的全部检查；`gh` 报告"没有检查"时返回空数组。 */
   prChecks(pr: string): Promise<Result<GhCheck[]>>
@@ -256,7 +480,58 @@ export function createGitHubCli(options: GitHubCliOptions = {}): GitHubCli {
         'pr view',
       ),
     prMergeState: (pr) =>
-      json(['pr', 'view', pr, '--json', 'state,mergeCommit'], ghPrMergeState, 'pr view'),
+      json(
+        ['pr', 'view', pr, '--json', 'state,headRefOid,mergeCommit,autoMergeRequest'],
+        ghPrMergeState,
+        'pr view',
+      ),
+    async prSnapshot(pr) {
+      const r = await json(
+        [
+          'api',
+          'graphql',
+          '--hostname',
+          pr.host,
+          '-f',
+          `query=${SNAPSHOT_QUERY}`,
+          '-f',
+          `owner=${pr.owner}`,
+          '-f',
+          `name=${pr.repo}`,
+          '-F',
+          `number=${pr.number}`,
+        ],
+        snapshotResponse,
+        'api graphql（PR 状态）',
+      )
+      if (!r.ok) return r
+      const repo = r.data.data.repository
+      const p = repo.pullRequest
+      const commit = p.commits.nodes.at(-1)?.commit
+      const contexts = commit?.statusCheckRollup?.contexts
+      return ok({
+        number: p.number,
+        url: p.url,
+        state: p.state,
+        isDraft: p.isDraft,
+        baseRefName: p.baseRefName,
+        headRefOid: p.headRefOid,
+        mergeable: p.mergeable,
+        mergeStateStatus: p.mergeStateStatus,
+        mergeQueue: p.isMergeQueueEnabled,
+        inMergeQueue: p.isInMergeQueue,
+        autoMerge: p.autoMergeRequest !== null && p.autoMergeRequest !== undefined,
+        nameWithOwner: repo.nameWithOwner,
+        defaultBranch: repo.defaultBranchRef.name,
+        checksOid: commit?.oid,
+        checks: (contexts?.nodes ?? []).map(bucketOf),
+        checksTruncated:
+          contexts !== undefined &&
+          (contexts.pageInfo.hasNextPage ||
+            contexts.totalCount > contexts.nodes.length ||
+            contexts.totalCount > SNAPSHOT_CHECKS_MAX),
+      })
+    },
     async prDiff(pr) {
       const out = await exec(['pr', 'diff', pr], 'pr diff')
       if (!out.ok) return out

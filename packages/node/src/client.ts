@@ -17,7 +17,9 @@ import {
   HEADERS,
   HUB_TOKEN_ENV,
   HUB_UNAVAILABLE,
+  type ListTasksData,
   listNodesData,
+  listTasksData,
   loadHubConfig,
   loadNodeConfig,
   type NodeView,
@@ -86,6 +88,8 @@ export interface NodeHubClient {
    * 自己持有租约的任务，读不到审查任务时调用方按核对失败处理。
    */
   showTask(id: string): Promise<Result<ShowTaskData>>
+  /** 任务列表（按创建时间倒序）；pr-merge 用它核对"最新一次可信审查"。 */
+  listTasks(query: { workspace?: string; limit?: number }): Promise<Result<ListTasksData>>
 }
 
 /** 注册请求（调用方形态：带默认值的字段可省略）。 */
@@ -184,5 +188,12 @@ export function createNodeHubClient(o: NodeHubClientOptions): NodeHubClient {
     policyCheck: (req, opts = {}) =>
       call('POST', ENDPOINTS['policy-check'].path, policyCheckData, req, opts),
     showTask: (id) => call('GET', leasePath(ENDPOINTS['tasks-show'].path, id), showTaskData),
+    listTasks: (query) => {
+      const params = new URLSearchParams()
+      if (query.workspace) params.set('workspace', query.workspace)
+      if (query.limit) params.set('limit', String(query.limit))
+      const qs = params.toString()
+      return call('GET', `${ENDPOINTS['tasks-list'].path}${qs ? `?${qs}` : ''}`, listTasksData)
+    },
   }
 }

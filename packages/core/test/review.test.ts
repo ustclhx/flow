@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
   defaultSupervisorConfig,
+  latestTrustedReview,
   mayCarryReview,
   reviewApproves,
+  reviewerRoleIssues,
+  reviewerRoleProblem,
   stripUntrustedReview,
   type TaskView,
   taskContract,
@@ -87,5 +90,81 @@ describe('审查结论的采信', () => {
       expect(stripped).not.toHaveProperty('review')
       expect(stripped.summary).toBe(result.summary)
     }
+  })
+})
+
+describe('最新一次可信审查', () => {
+  const at = (id: string, finished: string, over: Record<string, unknown> = {}) => ({
+    ...reviewTask(over),
+    id,
+    created_at: '2026-10-26T08:00:00.000Z',
+    finished_at: finished,
+  })
+  test('按结束时间取最新；不可信与其他 PR 的审查不计', () => {
+    const tasks = [
+      at('t-1', '2026-10-26T08:10:00.000Z'),
+      at('t-2', '2026-10-26T08:20:00.000Z'),
+      at('t-3', '2026-10-26T08:30:00.000Z', { role: 'reviewer' }),
+      at('t-4', '2026-10-26T08:40:00.000Z', {
+        inputs: { review: { pr: 'https://github.com/acme/demo/pull/8' } },
+      }),
+    ]
+    expect(latestTrustedReview(tasks, { workspace: 'ws/demo', pr: PR }, sup)?.id).toBe('t-2')
+    expect(latestTrustedReview([], { workspace: 'ws/demo', pr: PR }, sup)).toBeUndefined()
+  })
+})
+
+describe('审查角色必须是只读配置', () => {
+  const role = (
+    over: Record<string, unknown> = {},
+    perms: Record<string, unknown> = {},
+  ): Parameters<typeof reviewerRoleProblem>[0] =>
+    ({
+      executor: 'claude-sdk',
+      kind: 'read' as const,
+      permissions: {
+        setting_sources: [],
+        read_scope: 'cwd',
+        allowedTools: ['Read', 'Grep', 'Glob'],
+        disallowedTools: ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
+        ...perms,
+      },
+      ...over,
+    }) as Parameters<typeof reviewerRoleProblem>[0]
+  test('reviewerRoleProblem', () => {
+    expect(reviewerRoleProblem(role())).toBeUndefined()
+    expect(reviewerRoleProblem(role({ executor: 'codex-exec' }))).toContain('claude-sdk')
+    expect(reviewerRoleProblem(role({}, { setting_sources: ['project'] }))).toContain('read')
+    expect(reviewerRoleProblem(role({}, { read_scope: undefined }))).toContain('read_scope')
+    expect(reviewerRoleProblem(role({}, { allowedTools: ['Bash(gh pr review:*)'] }))).toContain(
+      'read',
+    )
+  })
+
+  test('reviewerRoleIssues：只报已存在且不是只读配置的审查角色', () => {
+    const ws = {
+      id: 'demo',
+      ref: 'ws/demo',
+      kind: 'product' as const,
+      name: 'Demo',
+      description: '',
+      repos: [],
+      file: 'config/workspaces/demo.yaml',
+      supervisor: { ...sup, reviewer_roles: ['pr-reviewer', 'reviewer', 'missing'] },
+    }
+    const issues = reviewerRoleIssues([ws], [
+      { name: 'pr-reviewer', prompt: 'x', ...role() },
+      {
+        name: 'reviewer',
+        prompt: 'x',
+        ...role({ kind: undefined }, { setting_sources: ['project'] }),
+      },
+    ] as never)
+    expect(issues).toHaveLength(1)
+    expect(issues[0]).toMatchObject({
+      code: 'review_role_not_read',
+      field: 'supervisor.reviewer_roles',
+    })
+    expect(issues[0]?.message).toContain('reviewer')
   })
 })

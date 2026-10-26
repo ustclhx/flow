@@ -30,6 +30,7 @@ import {
   readScope,
   redactLines,
   redactSecrets,
+  reviewerRoleProblem,
   reviewOutput,
   type SupervisorConfig,
   type TaskContract,
@@ -60,7 +61,14 @@ import {
   type StuckSnapshot,
   type StuckVerdict,
 } from './executor.ts'
-import { createGitHubCli, type GitHubCli, type GitOptions } from './github.ts'
+import {
+  createGitHubCli,
+  type GitConfigPair,
+  type GitHubCli,
+  type GitOptions,
+  gitConfigEnv,
+  UNTRUSTED_CHECKOUT_ENV,
+} from './github.ts'
 import { autoApprovedText, needsUserText, type PrecheckRequest } from './precheck.ts'
 import {
   cleanupStaleReviews,
@@ -830,7 +838,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
        * 校验登记仓库与 PR 归属、记录 head、写 diff、检出临时 worktree，并把会话上下文换成它。
        * 不是审查角色时原样运行（其结果中的 review 不会被采信）。
        */
-      const prepareReviewSession = async (roleName: string): Promise<Result<void>> => {
+      const prepareReviewSession = async (reviewRole: Role): Promise<Result<void>> => {
         const target = contract.inputs?.review
         if (!target) return ok(undefined)
         const sup = await resolveSupervisor(contract.workspace)
@@ -840,7 +848,22 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
             'review_prep_failed',
             `无法读取 workspace 配置：${sup.error.message}`,
           )
-        if (!sup.data?.reviewer_roles.includes(roleName)) return ok(undefined)
+        // 节点上找不到该 workspace：无法判断是不是审查角色，按失败处理（不当作普通任务运行）。
+        if (!sup.data)
+          return fail(
+            'failure',
+            'review_prep_failed',
+            `节点上没有 workspace ${contract.workspace}，无法核对 reviewer_roles`,
+          )
+        if (!sup.data.reviewer_roles.includes(reviewRole.name)) return ok(undefined)
+        // 审查角色必须是只读配置（fail-closed）：有效类别 read、setting_sources 为 []、read_scope 为 cwd。
+        const problem = reviewerRoleProblem(reviewRole)
+        if (problem)
+          return fail(
+            'failure',
+            'review_role_not_read',
+            `审查角色 ${reviewRole.name} 不是只读配置：${problem}；不检出 PR`,
+          )
         const repo = await resolveContractCwd(options.home, contract, true)
         if (!repo.ok) return repo
         if (finished) return ok(undefined)
@@ -921,7 +944,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         }
         const kind = effectiveRoleKind(role.data)
         // ---- 审查准备（D10）：只对带 inputs.review 且角色在 reviewer_roles 中的任务。 ----
-        const prepared = await prepareReviewSession(role.data.name)
+        const prepared = await prepareReviewSession(role.data)
         if (finished) {
           await cleanupReview()
           return
@@ -953,7 +976,10 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           home: options.home,
           flowCommand,
           ...(review
-            ? { outputFormat: { type: 'json_schema', schema: reviewOutputJsonSchema() } }
+            ? {
+                outputFormat: { type: 'json_schema', schema: reviewOutputJsonSchema() },
+                reviewGitConfig: review.gitConfig,
+              }
             : {}),
           canUseTool: makeCanUseTool(perms.data, kind),
           abortController,
@@ -1100,6 +1126,8 @@ interface BuildOptionsInput {
   kind?: RoleKind
   /** 审查任务的结构化输出。 */
   outputFormat?: Options['outputFormat']
+  /** 审查会话：检出时用的 git 配置覆盖，经 GIT_CONFIG_* 注入会话环境（D10）。 */
+  reviewGitConfig?: readonly GitConfigPair[]
   ctx: ExecutorContext
   home: string
   flowCommand: readonly string[]
@@ -1121,10 +1149,21 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     args: [...prefix, 'mcp', '--actor', i.role.name],
     env: { FLOW_HOME: i.home },
   }
+  const kind = i.kind ?? effectiveRoleKind(i.role)
+  const readOnly = kind === 'read'
+  const review = i.reviewGitConfig !== undefined
+  const structured = i.outputFormat !== undefined
+  // 有效类别为 read：allowedTools 只保留 readRoleMayUse 为真的条目（规则取括号前的工具名），
+  // 写工具或 MCP 写操作不能借 allowedTools 跳过拦截。
+  const roleAllowed = readOnly
+    ? i.perms.allowedTools.filter((rule) =>
+        readRoleMayUse(rule.split('(', 1)[0]?.trim() ?? '', structured),
+      )
+    : i.perms.allowedTools
   // 只放行清单中的 flow 工具（见 FLOW_MCP_AUTO_ALLOWED），其余 flow 工具走 canUseTool 审批。
   const allowedTools = [
     ...new Set([
-      ...i.perms.allowedTools,
+      ...roleAllowed,
       ...FLOW_MCP_AUTO_ALLOWED.map((name) => `${FLOW_MCP_TOOL_PREFIX}${name}`),
       // 结构化输出（审查任务）只产生结论，不经审批。
       ...(i.outputFormat ? [STRUCTURED_OUTPUT_TOOL] : []),
@@ -1137,26 +1176,39 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     cwd: i.ctx.cwd,
     // SDK 默认把 process.env 整个传给 Claude Code 子进程；改用去掉中枢凭证的 env（design D9）。
     // read_scope 下 Glob 不加 --hidden / --no-ignore（CLI 2.1.310 的 CLAUDE_CODE_GLOB_* 变量）。
-    env: i.perms.read_scope ? { ...i.env, ...READ_SCOPE_ENV } : i.env,
+    env: {
+      ...i.env,
+      ...(i.perms.read_scope ? READ_SCOPE_ENV : {}),
+      // 只读角色与审查会话不加载 claude.ai connector（CLI 2.1.310 的 ENABLE_CLAUDEAI_MCP_SERVERS）。
+      ...(readOnly || review ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
+      // 审查会话中 Claude Code 自己运行的 git 同样不运行 hook、fsmonitor 与 filter driver。
+      ...(i.reviewGitConfig
+        ? { ...gitConfigEnv(i.reviewGitConfig, i.env), ...UNTRUSTED_CHECKOUT_ENV }
+        : {}),
+    },
     model: i.role.model ?? DEFAULT_CLAUDE_MODEL,
     ...(i.role.effort ? { effort: i.role.effort as EffortLevel } : {}),
     systemPrompt: { type: 'preset', preset: 'claude_code', append },
-    settingSources: [...i.perms.setting_sources],
+    // 审查会话无条件不加载任何设置来源（角色配置已核对，这里再兜底）。
+    settingSources: review ? [] : [...i.perms.setting_sources],
     mcpServers: { flow: flowMcp },
+    // 只读角色与审查会话只用注入的 Flow MCP：忽略 .mcp.json、用户设置、插件中的 MCP 服务器。
+    ...(readOnly || review ? { strictMcpConfig: true } : {}),
     // 角色显式写 auto / bypassPermissions 时照原样传递；缺省为 default（见 claudeSdkPermissions）。
     permissionMode: i.perms.permissionMode,
     ...(i.perms.permissionMode === 'bypassPermissions'
       ? { allowDangerouslySkipPermissions: true }
       : {}),
     // 有效类别为 read：可用的内置工具只有白名单（Flow MCP 不受 tools 影响）。
-    ...((i.kind ?? effectiveRoleKind(i.role)) === 'read' ? { tools: [...READ_ROLE_TOOLS] } : {}),
+    ...(readOnly ? { tools: [...READ_ROLE_TOOLS] } : {}),
     ...(i.outputFormat ? { outputFormat: i.outputFormat } : {}),
     allowedTools,
     disallowedTools: i.perms.disallowedTools,
     ...(i.perms.maxTurns ? { maxTurns: i.perms.maxTurns } : {}),
     canUseTool: i.canUseTool,
     // canUseTool 可能被 SDK 权限模式、允许规则或会话批准跳过；每次文件调用仍要经过本地边界。
-    ...(i.perms.writable_paths !== undefined || i.perms.read_scope !== undefined
+    // 只读角色始终安装：allowedTools 或权限模式放行的调用也要经过 readRoleMayUse。
+    ...(readOnly || i.perms.writable_paths !== undefined || i.perms.read_scope !== undefined
       ? {
           hooks: {
             PreToolUse: [
@@ -1166,6 +1218,22 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
                 hooks: [
                   async (input) => {
                     if (input.hook_event_name !== 'PreToolUse') return {}
+                    if (
+                      readOnly &&
+                      !readRoleMayUse(
+                        input.tool_name,
+                        i.ctx.readScope?.structuredOutput === true,
+                        input.mcp_server,
+                      )
+                    ) {
+                      return {
+                        hookSpecificOutput: {
+                          hookEventName: 'PreToolUse',
+                          permissionDecision: 'deny',
+                          permissionDecisionReason: `只读角色不能使用 ${input.tool_name}`,
+                        },
+                      }
+                    }
                     const guard = await guardTool(
                       i.perms,
                       i.ctx,

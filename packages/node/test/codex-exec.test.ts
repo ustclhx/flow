@@ -8,6 +8,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -468,11 +469,34 @@ describe('只读角色由执行器强制只读（add-m1-supervisor 5.7）', () =
     const isolated = readCodexHome(s.home)
     mkdirSync(isolated, { recursive: true })
     writeFileSync(join(isolated, 'config.toml'), 'notify = ["/bin/sh", "-c", "x"]\n')
-    writeFileSync(join(isolated, 'auth.json'), 'stale')
+    // 指向别处的旧链接被原子替换为正确的链接。
+    const src = join(s.dir, 'codex-src')
+    mkdirSync(src)
+    writeFileSync(join(src, 'auth.json'), '{}')
+    symlinkSync(join(s.dir, 'elsewhere.json'), join(isolated, 'auth.json'))
     await collect(s.run())
     expect(readFileSync(join(isolated, 'config.toml'), 'utf8')).not.toContain('notify =')
+    expect(readlinkSync(join(isolated, 'auth.json'))).toBe(join(src, 'auth.json'))
+    expect(await prepareReadCodexHome(s.home, join(s.dir, 'missing'))).toEqual({
+      ok: true,
+      data: isolated,
+    })
     expect(existsSync(join(isolated, 'auth.json'))).toBe(false)
-    expect(await prepareReadCodexHome(s.home, join(s.dir, 'missing'))).toBe(isolated)
+  })
+
+  test('auth.json 是普通文件时不删除，failed(codex_home_failed)；CODEX_HOME 指向隔离目录时拒绝', async () => {
+    const s = setup()
+    const isolated = readCodexHome(s.home)
+    mkdirSync(isolated, { recursive: true })
+    writeFileSync(join(isolated, 'auth.json'), 'refreshed')
+    const { outcome } = await collect(s.run())
+    expect(outcome).toMatchObject({ outcome: 'failed', result: { reason: 'codex_home_failed' } })
+    expect(readFileSync(join(isolated, 'auth.json'), 'utf8')).toBe('refreshed')
+    expect(s.launched()).toBe(false)
+    expect(await prepareReadCodexHome(s.home, isolated)).toMatchObject({
+      ok: false,
+      error: { code: 'codex_home_failed' },
+    })
   })
 
   test('有效类别 write（sandbox 不是 read-only，或 config 含白名单外的键）：不改 CODEX_HOME', async () => {

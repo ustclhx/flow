@@ -3,12 +3,14 @@ import { rmSync } from 'node:fs'
 import {
   fail,
   ok,
+  type Result,
   type ShowTaskData,
   type TaskContract,
   type TaskView,
   taskContract,
   taskResult,
 } from '@flow/core'
+import { DEFAULT_ROLE_FILES } from '../../core/src/role-templates.ts'
 import {
   createPrMergeExecutor,
   type ExecutorContext,
@@ -27,6 +29,8 @@ import {
   type TempRepo,
   tempRepo,
 } from './github-helpers.ts'
+import { bench } from './harness.ts'
+import { waitFor } from './wait.ts'
 
 /**
  * pr-merge 执行器（add-m1-supervisor 5.4；pr-acceptance "合并前的条件核对" "合并后确认发布流水线"）。
@@ -93,6 +97,8 @@ interface Setup {
   review: TaskView
   hubCalls: string[]
   hubDown: boolean
+  /** 列表中额外出现的任务（例如同一 PR 更新的审查）。 */
+  others: TaskView[]
 }
 
 function setup(
@@ -140,24 +146,24 @@ function setup(
     }),
     hubCalls: [],
     hubDown: false,
+    others: [],
   }
 }
 
 async function execute(s: Setup, over: Partial<PrMergeOptions> = {}, signal?: AbortSignal) {
+  const { done, texts, clock } = await executeRaw(s, over, signal)
+  if (!done.ok) throw new Error(JSON.stringify(done.error))
+  return { outcome: done.data, texts, clock }
+}
+
+async function executeRaw(s: Setup, over: Partial<PrMergeOptions> = {}, signal?: AbortSignal) {
   const clock = instantClock()
   const ex = createPrMergeExecutor({
     home: s.r.home,
     clock,
     gh: s.gh.gh,
     git: { env: gitEnv },
-    hub: {
-      async showTask(id): Promise<ReturnType<typeof ok<ShowTaskData>> | ReturnType<typeof fail>> {
-        s.hubCalls.push(id)
-        if (s.hubDown) return fail('retryable', 'hub_unavailable', '中枢不可用')
-        const task = id === s.self.id ? s.self : id === s.review.id ? s.review : undefined
-        return task ? ok({ task, events: [], replies: [] }) : fail('failure', 'not_found', id)
-      },
-    },
+    hub: fakeHub(s),
     ...over,
   })
   const context: ExecutorContext = {
@@ -170,9 +176,23 @@ async function execute(s: Setup, over: Partial<PrMergeOptions> = {}, signal?: Ab
   const run = ex.run(s.contract, context)
   const texts: string[] = []
   for await (const a of run.activity) texts.push(a.text ?? '')
-  const done = await run.done
-  if (!done.ok) throw new Error(JSON.stringify(done.error))
-  return { outcome: done.data, texts, clock }
+  return { done: await run.done, texts, clock }
+}
+
+function fakeHub(s: Setup) {
+  return {
+    async showTask(id: string): Promise<Result<ShowTaskData>> {
+      s.hubCalls.push(id)
+      if (s.hubDown) return fail('retryable', 'hub_unavailable', '中枢不可用')
+      const task = id === s.self.id ? s.self : id === s.review.id ? s.review : undefined
+      return task ? ok({ task, events: [], replies: [] }) : fail('failure', 'not_found', id)
+    },
+    async listTasks(): Promise<Result<{ tasks: TaskView[] }>> {
+      s.hubCalls.push('list')
+      if (s.hubDown) return fail('retryable', 'hub_unavailable', '中枢不可用')
+      return ok({ tasks: [...s.others, s.review, s.self] })
+    },
+  }
 }
 
 const reason = (o: ExecutorOutcome) =>
@@ -220,10 +240,11 @@ describe('合并前的条件核对', () => {
     // 核对在合并之前，流水线查询在合并之后，且查询的是默认分支上的合并提交。
     const calls = s.gh.state.calls
     const merged = calls.findIndex((c) => c.startsWith('pr merge'))
-    expect(calls.findIndex((c) => c.startsWith('pr checks'))).toBeLessThan(merged)
+    // 快照（head 与检查同一时刻）→ 合并前再读 head → 合并 → 流水线。
+    expect(calls.slice(0, merged)).toEqual([`pr snapshot ${PR_URL}`, `pr view ${PR_URL}`])
     expect(calls.findIndex((c) => c.startsWith('run list'))).toBeGreaterThan(merged)
     expect(calls).toContain(`run list acme/demo ${MERGE_SHA} main`)
-    expect(s.hubCalls).toEqual(['t-merge', 't-review'])
+    expect(s.hubCalls).toEqual(['t-merge', 't-review', 'list'])
   })
 
   test('merge_method 取 workspace 配置', async () => {
@@ -262,7 +283,6 @@ describe('合并前的条件核对', () => {
       [{ name: 'ci', state: 'CANCELLED', bucket: 'cancel' }],
       [{ name: 'ci', state: 'SKIPPED', bucket: 'skipping' }],
       [{ name: 'ci', state: 'WEIRD', bucket: 'unknown' }],
-      'error' as const,
     ]) {
       const s = setup({ gh: { checks } })
       expect(reason((await execute(s)).outcome)).toBe('checks_not_green')
@@ -354,9 +374,69 @@ describe('合并前的条件核对', () => {
       expect(mergeCalls(s)).toEqual([])
       expect(s.gh.state.calls.some((x) => x.startsWith('pr view'))).toBe(false)
     }
+  })
+
+  test('中枢不可达：以可重试的 merge_unverifiable 结束（任务进入 blocked，可重试），不合并', async () => {
     const down = setup()
     down.hubDown = true
-    expect(reason((await execute(down)).outcome)).toBe('merge_not_eligible')
+    const { done, texts } = await executeRaw(down)
+    expect(done).toMatchObject({
+      ok: false,
+      error: { kind: 'retryable', code: 'merge_unverifiable' },
+    })
+    expect(texts.some((t) => t.includes('未合并'))).toBe(true)
+    expect(down.gh.state.calls).toEqual([])
+  })
+
+  test('审查任务不是该 PR 最新一次可信审查：failed(review_not_approved)', async () => {
+    const s = setup()
+    // 同一 PR 后来又有一次可信审查（不论结论）。
+    s.others = [
+      {
+        ...s.review,
+        id: 't-review-2',
+        finished_at: '2026-10-26T09:00:00.000Z',
+        result: taskResult.parse({
+          ...s.review.result,
+          review: { verdict: 'changes_requested', blocking: ['x'], reviewed_sha: s.r.head },
+        }),
+      },
+    ]
+    const { outcome } = await execute(s)
+    expect(reason(outcome)).toBe('review_not_approved')
+    if (outcome.outcome === 'failed') expect(outcome.result.summary).toContain('t-review-2')
+    expect(mergeCalls(s)).toEqual([])
+    // 不可信的"审查"（其他角色）不影响判断。
+    const ok2 = setup()
+    ok2.others = [
+      {
+        ...ok2.review,
+        id: 't-fake',
+        finished_at: '2026-10-26T09:00:00.000Z',
+        contract: { ...ok2.review.contract, role: 'reviewer' },
+      },
+    ]
+    expect((await execute(ok2)).outcome.outcome).toBe('done')
+  })
+
+  test('审查任务读不到（非可重试错误）：failed(review_not_approved)', async () => {
+    const s = setup()
+    s.review = { ...s.review, id: 't-other' }
+    expect(reason((await execute(s)).outcome)).toBe('review_not_approved')
+  })
+
+  test('resolveSupervisor 失败或没有该 workspace：failed(merge_not_eligible)', async () => {
+    const s = setup()
+    expect(
+      reason(
+        (await execute(s, { resolveSupervisor: async () => fail('failure', 'x', '读取失败') }))
+          .outcome,
+      ),
+    ).toBe('merge_not_eligible')
+    expect(
+      reason((await execute(s, { resolveSupervisor: async () => ok(undefined) })).outcome),
+    ).toBe('merge_not_eligible')
+    expect(mergeCalls(s)).toEqual([])
   })
 
   test('本任务不是由 hub / user 建、origin 不是 instruction、parent 不是审查任务：failed(merge_not_eligible)', async () => {
@@ -398,13 +478,83 @@ describe('合并前的条件核对', () => {
   })
 })
 
+describe('同一时刻的状态与竞态', () => {
+  test('读完检查后 head 变了：合并前重读发现，failed(head_moved)，不合并', async () => {
+    const s = setup()
+    s.gh.state.headAfterSnapshot = 'e'.repeat(40)
+    const { outcome } = await execute(s)
+    expect(reason(outcome)).toBe('head_moved')
+    expect(mergeCalls(s)).toEqual([])
+  })
+
+  test('检查属于另一个提交（快照中的检查不是 reviewed_sha 的）：failed(head_moved)', async () => {
+    const s = setup({ gh: { checksOid: 'f'.repeat(40) } })
+    expect(reason((await execute(s)).outcome)).toBe('head_moved')
+    expect(mergeCalls(s)).toEqual([])
+  })
+
+  test('检查超过一次查询的上限：failed(checks_not_green)', async () => {
+    const s = setup({ gh: { checksTruncated: true } })
+    expect(reason((await execute(s)).outcome)).toBe('checks_not_green')
+    expect(mergeCalls(s)).toEqual([])
+  })
+
+  test('启用合并队列：failed(merge_queue_unsupported)，不发起合并', async () => {
+    const s = setup({ gh: { mergeQueue: true } })
+    expect(reason((await execute(s)).outcome)).toBe('merge_queue_unsupported')
+    expect(mergeCalls(s)).toEqual([])
+  })
+
+  test('mergeable 为 UNKNOWN 时短暂重试：之后可合并则继续，一直 UNKNOWN 则 not_mergeable', async () => {
+    const s = setup({ gh: { mergeableSeq: ['UNKNOWN', 'UNKNOWN', 'MERGEABLE'] } })
+    expect((await execute(s)).outcome.outcome).toBe('done')
+    expect(s.gh.state.calls.filter((c) => c.startsWith('pr snapshot'))).toHaveLength(3)
+    const stuck = setup({ gh: { mergeableSeq: ['UNKNOWN', 'UNKNOWN', 'UNKNOWN', 'UNKNOWN'] } })
+    expect(reason((await execute(stuck)).outcome)).toBe('not_mergeable')
+    expect(stuck.gh.state.calls.filter((c) => c.startsWith('pr snapshot'))).toHaveLength(4)
+    expect(mergeCalls(stuck)).toEqual([])
+  })
+
+  test('pr_unverifiable：读取失败、编号不符、链接不符（大小写不敏感）', async () => {
+    const err = setup({ gh: { checks: 'error' } })
+    expect(reason((await execute(err)).outcome)).toBe('pr_unverifiable')
+    const num = setup()
+    num.gh.state.pr.number = 8
+    expect(reason((await execute(num)).outcome)).toBe('pr_unverifiable')
+    const url = setup()
+    url.gh.state.pr.url = 'https://github.com/acme/demo/pull/77'
+    expect(reason((await execute(url)).outcome)).toBe('pr_unverifiable')
+    for (const x of [err, num, url]) expect(mergeCalls(x)).toEqual([])
+    const upper = setup()
+    upper.gh.state.pr.url = 'https://github.com/ACME/Demo/pull/7'
+    expect((await execute(upper)).outcome.outcome).toBe('done')
+  })
+})
+
 describe('合并结果', () => {
-  test('gh 只打开了自动合并（PR 仍为 OPEN）：关闭自动合并并 failed(merge_failed)', async () => {
+  test('合并后出现本次触发的自动合并（PR 仍为 OPEN）：关闭它并 failed(merge_failed)', async () => {
     const s = setup({ gh: { mergeBehavior: 'auto' } })
     expect(reason((await execute(s)).outcome)).toBe('merge_failed')
     expect(s.gh.state.calls).toContain(`pr disable-auto ${PR_URL}`)
     expect(s.gh.state.autoEnabled).toBe(false)
     expect(s.gh.state.calls.some((c) => c.startsWith('run list'))).toBe(false)
+  })
+
+  test('自动合并在本次之前就存在（别人设置的）：不去关闭它', async () => {
+    const s = setup({ gh: { mergeBehavior: 'error', autoBefore: true } })
+    expect(reason((await execute(s)).outcome)).toBe('merge_failed')
+    expect(s.gh.state.calls).not.toContain(`pr disable-auto ${PR_URL}`)
+  })
+
+  test('合并后一直读不回状态：failed(merge_unverified)，摘要写明 PR 可能已合并', async () => {
+    const s = setup({ gh: { mergeStateFailures: Number.POSITIVE_INFINITY } })
+    const { outcome } = await execute(s)
+    expect(reason(outcome)).toBe('merge_unverified')
+    if (outcome.outcome === 'failed') expect(outcome.result.summary).toContain('PR 可能已合并')
+    expect(s.gh.state.calls.filter((c) => c.startsWith('pr view state'))).toHaveLength(4)
+    // 短暂失败后读到：照常继续。
+    const flaky = setup({ gh: { mergeStateFailures: 2, runs: [[ghRun()]] } })
+    expect((await execute(flaky)).outcome.outcome).toBe('done')
   })
 
   test('gh pr merge 报错：PR 未合并时 failed(merge_failed)；实际已合并时照常确认流水线', async () => {
@@ -473,6 +623,52 @@ describe('合并后确认发布流水线', () => {
   })
 })
 
+describe('流水线的事件、取消与心跳', () => {
+  test('只计 push 与 workflow_run 事件的 run', async () => {
+    const s = setup({ gh: { runs: [[ghRun({ event: 'pull_request', conclusion: 'failure' })]] } })
+    const { outcome } = await execute(s, { discoveryMs: 60_000 })
+    expect(outcome.outcome).toBe('done')
+    if (outcome.outcome === 'done') expect(outcome.result.summary).toContain('未发现发布流水线')
+    const wr = setup({ gh: { runs: [[ghRun({ event: 'workflow_run', conclusion: 'failure' })]] } })
+    expect(reason((await execute(wr)).outcome)).toBe('pipeline_failed')
+  })
+
+  test('cancelled 的 run：failed(pipeline_failed) 并注明可能被更新的提交取代', async () => {
+    const s = setup({ gh: { runs: [[ghRun({ conclusion: 'cancelled' })]] } })
+    const { outcome } = await execute(s)
+    expect(reason(outcome)).toBe('pipeline_failed')
+    if (outcome.outcome === 'failed')
+      expect(outcome.result.summary).toContain('被同一并发组中更新的提交取代')
+  })
+
+  test('每次轮询都上报心跳', async () => {
+    const s = setup({ gh: { runs: [[ghRun({ status: 'in_progress', conclusion: '' })]] } })
+    const { texts } = await execute(s, { pipelineTimeoutMs: 10 * 60_000 })
+    const beats = texts.filter((t) => t.startsWith('等待流水线'))
+    // 15 秒一次，10 分钟约 40 次。
+    expect(beats.length).toBeGreaterThanOrEqual(40)
+  })
+
+  test('合并后被取消：cancelled 的结果带合并提交与 artifacts', async () => {
+    const s = setup({ gh: { runs: [[ghRun({ status: 'in_progress', conclusion: '' })]] } })
+    const abort = new AbortController()
+    const origList = s.gh.gh.runList
+    s.gh.gh.runList = async (...args) => {
+      abort.abort()
+      return origList(...args)
+    }
+    const { outcome } = await execute(s, {}, abort.signal)
+    expect(outcome.outcome).toBe('cancelled')
+    if (outcome.outcome !== 'cancelled') return
+    expect(outcome.message).toContain(MERGE_SHA)
+    expect(outcome.result?.artifacts).toContainEqual({
+      kind: 'commit',
+      ref: MERGE_SHA,
+      note: '合并到 main',
+    })
+  })
+})
+
 describe('判定函数', () => {
   test('evaluateChecks', () => {
     const c = (bucket: string) => ({ name: bucket, state: bucket, bucket })
@@ -494,5 +690,54 @@ describe('判定函数', () => {
       'startup_failure',
     ])
       expect(evaluateRuns([ghRun({ conclusion })])).toBe('failed')
+  })
+})
+
+describe('经节点运行：等待流水线期间不被判为无进展', () => {
+  test('默认 15 分钟无进展阈值下等待 20 分钟仍为 running，最终 failed(pipeline_timeout)；merger 模板 no_progress_minutes ≥ 35', async () => {
+    const minutes = /^no_progress_minutes:\s*(\d+)$/m.exec(DEFAULT_ROLE_FILES['merger.yaml'] ?? '')
+    expect(Number(minutes?.[1])).toBeGreaterThanOrEqual(35)
+
+    const s = setup({ gh: { runs: [[ghRun({ status: 'in_progress', conclusion: '' })]] } })
+    let polling = false
+    const list = s.gh.gh.runList
+    s.gh.gh.runList = async (...args) => {
+      polling = true
+      return list(...args)
+    }
+    let target: NodeClock = instantClock()
+    const clock: NodeClock = {
+      now: () => target.now(),
+      setTimeout: (cb, ms) => target.setTimeout(cb, ms),
+    }
+    const hub = fakeHub(s)
+    const executor = createPrMergeExecutor({
+      home: s.r.home,
+      clock,
+      gh: s.gh.gh,
+      git: { env: gitEnv },
+      hub: {
+        listTasks: hub.listTasks,
+        // 节点分配的任务 id 不是 t-merge：除审查任务外都返回本任务。
+        showTask: (id) => hub.showTask(id === s.review.id ? id : s.self.id),
+      },
+    })
+    const b = await bench({ executors: [executor] })
+    target = b.clock
+    try {
+      const id = await b.create({ ...s.contract, cwd: s.r.repo })
+      await waitFor(() => polling, '开始等待流水线')
+      for (let i = 0; i < 20; i++) await b.clock.advance(60_000)
+      const t = b.task(id)
+      expect(t.status).toBe('running')
+      expect(b.types(id)).not.toContain('task.blocked')
+      const beats = b.ledger.taskActivity(id).filter((a) => a.text?.startsWith('等待流水线'))
+      expect(beats.length).toBeGreaterThan(20)
+      const end = await b.until(id, (x) => x.status === 'failed', 20 * 60_000)
+      expect(end.result?.reason).toBe('pipeline_timeout')
+      expect(b.types(id)).not.toContain('task.blocked')
+    } finally {
+      await b.close()
+    }
   })
 })

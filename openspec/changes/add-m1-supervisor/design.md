@@ -197,12 +197,12 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 3. `changes_requested` → supervisor 被唤醒，可以建修改任务（同一分支），受 D4 轮数上限。
 4. `approve` → supervisor 调用 `pr_merge_request{pr, review_task}`。中枢核对：
    - 该 PR 是本 workspace 内某个 origin 为 instruction 的 write 任务的 `kind: pr` 产物；
-   - `review_task` 属于同一 workspace、角色在 `reviewer_roles` 中、`inputs.review.pr` 等于该 PR、`verdict = approve`；
+   - `review_task` 属于同一 workspace、角色在 `reviewer_roles` 中、`inputs.review.pr` 等于该 PR、`verdict = approve`，且是该 PR 最新一次可信审查（core `latestTrustedReview`）；
    - 否则 `merge_not_eligible`。
 
    通过后：`supervisor.auto_merge: true` → 中枢以 `hub` 身份建 merger 任务；否则生成 `source: merge_request` 的收件箱条目（Decide，动作"批准合并""驳回"），用户批准后中枢同样以 `hub` 身份建 merger 任务，批准者记录在 `merge_request.approved` 事件中；驳回则唤醒 supervisor。merger 任务的 `parent` 是审查任务，origin 由中枢直接取自开出该 PR 的 dev 任务（资格要求它是 instruction），不继承审查任务；它结束时进入 instruction 队列唤醒 supervisor。
 5. **pr-merge 执行器**（节点上，不调用模型；`gh` 可注入）在本 workspace 登记仓库中执行：
-   - 读 PR：open、base 为默认分支、仓库与登记仓库一致、`headRefOid == reviewed_sha`、可合并；
+   - 读 PR（一次 GraphQL 读取同一时刻的 head、可合并性、合并队列与 head 提交的检查）：open、base 为默认分支、仓库与登记仓库一致、`headRefOid == reviewed_sha`、可合并、未启用合并队列（否则 `merge_queue_unsupported`）；合并前再读一次 head；
    - 检查：至少有一项检查且全部成功、没有进行中的检查（workspace 配置 `supervisor.allow_no_checks: true` 时允许没有检查）；
    - 再次核对审查任务（同第 4 步）；
    - 任一不满足 → `failed`，原因码如 `pr_not_open`、`head_moved`、`checks_not_green`、`review_not_approved`，**不合并**；

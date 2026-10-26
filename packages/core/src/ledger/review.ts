@@ -19,14 +19,16 @@ export function mayCarryReview(contract: TaskView['contract']): boolean {
 
 /**
  * 节点提交的结果中，不可能是审查结论的 `review` 一律丢弃（中枢入账前调用）：
- * 合同没有 `inputs.review` 或执行器不是 claude-sdk 时，`result.review` 不入账。
+ * 结果不是 done、合同没有 `inputs.review` 或执行器不是 claude-sdk 时，`result.review` 不入账。
  * 角色是否属于 `reviewer_roles` 取决于 workspace 配置（可能之后才改），在采信时再判断。
  */
 export function stripUntrustedReview<T extends Pick<TaskResult, 'review'>>(
   contract: TaskView['contract'],
   result: T,
+  outcome: 'done' | 'failed' | 'cancelled' = 'done',
 ): T {
-  if (result.review === undefined || mayCarryReview(contract)) return result
+  // 只有 done 的审查任务才可能产出结论：failed / cancelled 一律不入账 review。
+  if (result.review === undefined || (outcome === 'done' && mayCarryReview(contract))) return result
   const { review: _dropped, ...rest } = result
   return rest as T
 }
@@ -51,6 +53,30 @@ export function trustedReview(
   const parsed = reviewResult.safeParse(task.result?.review)
   if (!parsed.success) return { ok: false, reason: '审查任务没有合法的 result.review' }
   return { ok: true, review: parsed.data, pr }
+}
+
+/**
+ * 该 PR 在 workspace 中最新一次可信审查（D10：合并请求与 pr-merge 都要求它就是给出 approve 的那次审查）。
+ * 在 `tasks` 中挑出 `trustedReview` 采信、审查同一 PR 的任务，按结束时间（其次创建时间、id）取最新；没有时返回 undefined。
+ */
+export function latestTrustedReview<
+  T extends Pick<
+    TaskView,
+    'id' | 'status' | 'contract' | 'result' | 'workspace' | 'finished_at' | 'created_at'
+  >,
+>(
+  tasks: readonly T[],
+  expected: { workspace: string; pr: string },
+  supervisor: Pick<SupervisorConfig, 'reviewer_roles'>,
+): T | undefined {
+  const key = (t: T) => [t.finished_at ?? '', t.created_at, t.id].join('\u0000')
+  return tasks
+    .filter((t) => t.workspace === expected.workspace)
+    .filter((t) => {
+      const r = trustedReview(t, supervisor)
+      return r.ok && r.pr === expected.pr
+    })
+    .sort((a, b) => (key(a) < key(b) ? 1 : key(a) > key(b) ? -1 : 0))[0]
 }
 
 /**

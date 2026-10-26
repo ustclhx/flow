@@ -169,6 +169,8 @@ name: merger
 kind: merge
 executor: pr-merge
 prompt: merger.md
+# 等待流水线最长 30 分钟；执行器每次轮询都上报活动，这里再留余量，避免被判为无进展。
+no_progress_minutes: 35
 `,
   'merger.md': `核对 PR 仍为 open、head 等于审查时的提交、检查全部通过且审查结论为 approve 后再合并；任一条件不满足就不合并并说明原因。
 合并方式取 workspace 配置 supervisor.merge_method。

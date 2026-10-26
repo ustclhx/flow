@@ -96,7 +96,8 @@ export type ExecutorOutcome =
       /** 会话 id：回复后下一次执行据此恢复（无头执行器，D6）。 */
       session?: string
     }
-  | { outcome: 'cancelled'; message?: string }
+  /** `result`：取消前已产生的结果（例如 pr-merge 已合并后被取消），随 cancelled 一起提交。 */
+  | { outcome: 'cancelled'; message?: string; result?: TaskResult }
   /** worker 进程意外退出：节点上报 blocked(crashed)，附退出码与末尾输出。 */
   | { outcome: 'exited'; exit_code: number | null; signal?: string; message?: string }
 

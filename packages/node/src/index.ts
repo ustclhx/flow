@@ -118,19 +118,25 @@ export { classifyFake, createFakeExecutor, type FakeExecutorOptions } from './fa
 export {
   createGitHubCli,
   type GhCheck,
+  type GhPrMergeState,
   type GhPrView,
   type GhRun,
+  type GitConfigPair,
   type GitHubCli,
   type GitHubCliOptions,
   type GitOptions,
   git,
+  gitConfigEnv,
   originRepo,
   type PrRef,
+  type PrSnapshot,
   parsePrUrl,
   parseRemoteUrl,
   type RepoRef,
   repoSpec,
   sameRepo,
+  UNTRUSTED_CHECKOUT_ENV,
+  untrustedCheckoutConfig,
 } from './github.ts'
 export {
   DELIVER_GIVE_UP_MS,
@@ -154,6 +160,9 @@ export {
   DEFAULT_RUN_DISCOVERY_MS,
   evaluateChecks,
   evaluateRuns,
+  MERGEABLE_RETRIES,
+  MERGEABLE_RETRY_MS,
+  PIPELINE_EVENTS,
   PR_MERGE_EXECUTOR,
   type PrMergeOptions,
 } from './pr-merge.ts'
@@ -175,5 +184,7 @@ export {
   type PreparedReview,
   prepareReview,
   REVIEW_DIFF_FILE,
+  REVIEW_REF_PREFIX,
+  reviewRef,
   reviewRoot,
 } from './review-prep.ts'

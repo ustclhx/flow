@@ -183,7 +183,7 @@ export function completionDrafts(
         {
           ...base,
           type: 'task.done',
-          payload: { result: stripUntrustedReview(task.contract, req.result) },
+          payload: { result: stripUntrustedReview(task.contract, req.result, 'done') },
         },
       ]
     case 'failed':
@@ -191,7 +191,7 @@ export function completionDrafts(
         {
           ...base,
           type: 'task.failed',
-          payload: { result: stripUntrustedReview(task.contract, req.result) },
+          payload: { result: stripUntrustedReview(task.contract, req.result, 'failed') },
         },
       ]
     case 'blocked': {
@@ -241,7 +241,9 @@ export function completionDrafts(
           type: 'task.cancelled',
           payload: {
             ...(req.message ? { reason: req.message } : {}),
-            ...(req.result ? { result: stripUntrustedReview(task.contract, req.result) } : {}),
+            ...(req.result
+              ? { result: stripUntrustedReview(task.contract, req.result, 'cancelled') }
+              : {}),
             node_id: lease.node_id,
           },
         },

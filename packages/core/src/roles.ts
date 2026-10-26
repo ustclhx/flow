@@ -349,3 +349,21 @@ export function findSupervisorRole(roles: readonly Role[]): Result<Role | null> 
   }
   return ok(role ?? null)
 }
+
+/**
+ * 审查角色（workspace `supervisor.reviewer_roles`）必须是只读配置（add-m1-supervisor D10，fail-closed）：
+ * 执行器为 claude-sdk、有效类别为 read、`setting_sources` 显式为 `[]`、`read_scope` 为 `cwd`。
+ * 返回第一条不满足的原因；满足时返回 undefined。执行器据此拒绝检出（`review_role_not_read`），doctor 报 error。
+ */
+export function reviewerRoleProblem(
+  role: Pick<Role, 'executor' | 'permissions' | 'kind'>,
+): string | undefined {
+  if (role.executor !== 'claude-sdk') return `执行器为 ${role.executor}，审查角色只能用 claude-sdk`
+  const kind = effectiveRoleKind(role)
+  if (kind !== 'read') return `有效类别为 ${kind}，审查角色必须是 read`
+  const p = role.permissions ?? {}
+  const sources = stringList(p.setting_sources)
+  if (!sources || sources.length > 0) return 'permissions.setting_sources 必须显式写成 []'
+  if (p.read_scope !== 'cwd') return 'permissions.read_scope 必须是 cwd'
+  return undefined
+}

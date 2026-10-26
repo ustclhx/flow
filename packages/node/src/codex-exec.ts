@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import {
   clipTail,
@@ -124,8 +124,17 @@ const READ_HOME_CONFIG = `# 由 Flow 生成，每次运行只读 codex-exec 角�
  * （Codex 原地改写 auth.json 时会写回用户的文件）；用户的 CODEX_HOME 没有 auth.json（例如凭证存在钥匙串）时不创建链接，
  * Codex 会因未登录而失败（不会回退到用户配置）。
  */
-export async function prepareReadCodexHome(home: string, authSource: string): Promise<string> {
+export async function prepareReadCodexHome(
+  home: string,
+  authSource: string,
+): Promise<Result<string>> {
   const dir = readCodexHome(home)
+  const bad = (message: string) => fail('failure', 'codex_home_failed', message)
+  // 用户的 CODEX_HOME 本身就指向隔离目录：链接会指向自己，凭证来源不明，拒绝。
+  if (resolve(authSource) === resolve(dir) || (await sameRealPath(authSource, dir)))
+    return bad(
+      `CODEX_HOME（${authSource}）指向只读角色的隔离目录 ${dir}，请改回用户自己的 Codex 目录`,
+    )
   await mkdir(dir, { recursive: true, mode: 0o700 })
   await writeFile(join(dir, 'config.toml'), READ_HOME_CONFIG, { mode: 0o600 })
   const link = join(dir, 'auth.json')
@@ -133,15 +142,39 @@ export async function prepareReadCodexHome(home: string, authSource: string): Pr
   let current: string | undefined
   try {
     const st = await lstat(link)
-    current = st.isSymbolicLink() ? await readlink(link) : '\0not-a-link'
-  } catch {
+    if (!st.isSymbolicLink())
+      // 普通文件：可能是 Codex 替换写入的新凭证，不删除，交给用户处理。
+      return bad(
+        `${link} 是普通文件而不是指向 ${target} 的符号链接（可能是 Codex 刷新凭证时写入的）。请确认后把它合并回 ${target} 再删除，或直接删除后重新运行`,
+      )
+    current = await readlink(link)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return bad(String((err as Error).message))
     current = undefined
   }
-  if (current !== target) {
+  if (current === target) return ok(dir)
+  if (!existsSync(target)) {
     if (current !== undefined) await rm(link, { force: true })
-    if (existsSync(target)) await symlink(target, link)
+    return ok(dir)
   }
-  return dir
+  // 先建临时链接再 rename：替换是原子的，不会出现没有 auth.json 的瞬间。
+  const tmp = `${link}.${process.pid}.${Date.now()}.tmp`
+  await symlink(target, tmp)
+  try {
+    await rename(tmp, link)
+  } catch (err) {
+    await rm(tmp, { force: true })
+    return bad(`无法创建 ${link}：${(err as Error).message}`)
+  }
+  return ok(dir)
+}
+
+async function sameRealPath(a: string, b: string): Promise<boolean> {
+  try {
+    return (await realpath(a)) === (await realpath(b))
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -292,23 +325,20 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
             env.data.CODEX_HOME ??
             process.env.CODEX_HOME ??
             join(homedir(), '.codex')
-          let isolated: string
-          try {
-            isolated = await prepareReadCodexHome(options.home, source)
-          } catch (err) {
+          const isolated = await prepareReadCodexHome(options.home, source).catch((err: unknown) =>
+            fail('failure', 'codex_home_failed', `无法准备只读角色的 CODEX_HOME：${String(err)}`),
+          )
+          if (!isolated.ok) {
             finish(
               ok({
                 outcome: 'failed',
-                result: result(
-                  `无法准备只读角色的 CODEX_HOME：${(err as Error).message}`,
-                  'codex_home_failed',
-                ),
+                result: result(isolated.error.message, isolated.error.code),
               }),
             )
             return
           }
           if (finished) return
-          childEnv = { ...env.data, CODEX_HOME: isolated }
+          childEnv = { ...env.data, CODEX_HOME: isolated.data }
         }
         const prompt = ctx.resume?.session
           ? replyPrompt(ctx.resume)

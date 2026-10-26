@@ -769,7 +769,12 @@ class LeaseRunner {
       }
       case 'cancelled':
         if (this.cancelRequested) {
-          return { ...token, outcome: 'cancelled', ...(o.message ? { message: o.message } : {}) }
+          return {
+            ...token,
+            outcome: 'cancelled',
+            ...(o.message ? { message: o.message } : {}),
+            ...(o.result ? { result: o.result } : {}),
+          }
         }
         return {
           ...token,
