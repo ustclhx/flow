@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { flowPaths } from './home.ts'
 import { executorType } from './ledger/common.ts'
 import { isDeclarableActor } from './ledger/protocol.ts'
+import type { TaskContract } from './ledger/task.ts'
 import { fail, ok, type Result } from './result.ts'
 import { formatZodIssues, type ValidationIssue } from './validation-issue.ts'
 import { isValidActor, USER_ACTOR } from './write/policy.ts'
@@ -389,4 +390,47 @@ export function reviewerRoleProblem(
   if (!sources || sources.length > 0) return 'permissions.setting_sources 必须显式写成 []'
   if (p.read_scope !== 'cwd') return 'permissions.read_scope 必须是 cwd'
   return undefined
+}
+
+/** 任务有效类别比较用的次序（merge 与 supervisor 同级，与角色加载时的次序不同）。 */
+const TASK_KIND_RANK: Record<RoleKind, number> = { read: 0, write: 1, merge: 2, supervisor: 2 }
+const stricter = (a: RoleKind, b: RoleKind): RoleKind =>
+  TASK_KIND_RANK[b] > TASK_KIND_RANK[a] ? b : a
+
+/** 角色查找结果中参与类别判定的字段（测试注入的查找可以只给 name 与 creatable_by）。 */
+export type RoleForKind = Pick<Role, 'name'> &
+  Partial<Pick<Role, 'executor' | 'permissions' | 'kind'>>
+
+/**
+ * 新任务的有效类别（D9）。节点按**合同**的 `executor` 运行、按角色取权限，所以取两者中更严格者：
+ * 角色自身的有效类别，与"用角色权限跑合同执行器"推断出的类别。角色未定义（只有 user 会走到这里）时
+ * 只按合同执行器推断。比如 `role: triage`（read）配 `executor: codex-orca` 时为 write。
+ *
+ * 合同 `verify` 由节点在沙箱外直接执行，所以**非 user 身份**建的任务只要带 verify，至少按 write 计
+ * （`opts.actor` 缺省时按非 user 处理）。
+ */
+export function taskKind(
+  role: RoleForKind | null,
+  contract: Pick<TaskContract, 'executor'> & Partial<Pick<TaskContract, 'verify'>>,
+  opts: { actor?: string } = {},
+): RoleKind {
+  const viaContract = inferRoleKind({
+    executor: contract.executor,
+    ...(role?.permissions === undefined ? {} : { permissions: role.permissions }),
+  })
+  let kind: RoleKind
+  if (!role || role.executor === undefined) {
+    kind = role?.kind ? stricter(role.kind, viaContract) : viaContract
+  } else {
+    const own = effectiveRoleKind({
+      executor: role.executor,
+      ...(role.permissions === undefined ? {} : { permissions: role.permissions }),
+      ...(role.kind === undefined ? {} : { kind: role.kind }),
+    })
+    kind = stricter(own, viaContract)
+  }
+  if (opts.actor !== USER_ACTOR && (contract.verify?.length ?? 0) > 0) {
+    kind = stricter(kind, 'write')
+  }
+  return kind
 }

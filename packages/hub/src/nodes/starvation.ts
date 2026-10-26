@@ -24,7 +24,7 @@ export interface StarvationMonitor {
   tick(): void
   /** 采样重新开始（定时器启动时）：之前的空档不算卡住。 */
   reset(): void
-  /** 最近一个窗口内累计的卡住时长，含正在进行中的（采样定时器已经逾期）。 */
+  /** 最近一个窗口内累计的卡住时长，含正在进行中的（采样定时器已经逾期）；不超过一个窗口。 */
   starvedMs(): number
 }
 
@@ -54,7 +54,8 @@ export function createStarvationMonitor(o: StarvationMonitorOptions): Starvation
     starvedMs() {
       const now = o.monotonic()
       prune(now)
-      return stalls.reduce((sum, s) => sum + s.ms, 0) + overdue(now)
+      // 上限一个窗口（一个 TTL）：持续卡顿时宽限也不会无限累积，真正掉线的节点最迟多等一个 TTL。
+      return Math.min(o.windowMs, stalls.reduce((sum, s) => sum + s.ms, 0) + overdue(now))
     },
   }
 }

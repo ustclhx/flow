@@ -50,4 +50,23 @@ describe('createStarvationMonitor', () => {
     m.reset()
     expect(m.starvedMs()).toBe(0)
   })
+
+  test('持续轻度卡顿：每次逾期都计入，但宽限不超过一个窗口', () => {
+    let t = 0
+    const m = createStarvationMonitor({ monotonic: () => t, intervalMs: 1000, windowMs: 5000 })
+    // 每次采样都晚 400 毫秒（高于抖动阈值）：窗口内累计，随窗口滑动而稳定。
+    for (let i = 1; i <= 20; i++) {
+      t = i * 1400
+      m.tick()
+    }
+    expect(m.starvedMs()).toBe(1600)
+    // 更重的持续卡顿：累计超过窗口时封顶。
+    for (let i = 1; i <= 10; i++) {
+      t += 4000
+      m.tick()
+    }
+    expect(m.starvedMs()).toBe(5000)
+    t += 20_000
+    expect(m.starvedMs()).toBe(5000)
+  })
 })

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { rmSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   fail,
   ok,
@@ -109,6 +110,11 @@ function setup(
 ): Setup {
   const r = tempRepo(opts.workspaceExtra ?? '')
   repos.push(r)
+  // 角色模板：pr-merge 按当前角色配置核对开出 PR 的任务的有效类别。
+  mkdirSync(join(r.home, 'config', 'roles'), { recursive: true })
+  for (const [name, text] of Object.entries(DEFAULT_ROLE_FILES)) {
+    writeFileSync(join(r.home, 'config', 'roles', name), text)
+  }
   const contract = taskContract.parse({
     goal: '合并已审查的 PR',
     workspace: 'ws/demo',
@@ -400,6 +406,20 @@ describe('合并前的条件核对', () => {
       },
       (s) => {
         s.dev = { ...s.dev, repo_snapshot: null }
+      },
+      // 候选与中枢一致：origin 不是 instruction、有效类别不是 write 的不算开出 PR 的任务。
+      (s) => {
+        s.dev = { ...s.dev, origin: 'autonomous' }
+      },
+      (s) => {
+        s.dev = {
+          ...s.dev,
+          contract: { ...s.dev.contract, role: 'pr-reviewer', executor: 'claude-sdk' },
+        }
+      },
+      // 多个候选时每一个都要有匹配的快照。
+      (s) => {
+        s.others.push({ ...s.dev, id: 't-dev-2', repo_snapshot: null })
       },
       (s) => {
         // worker 启动前登记仓库指向别的仓库（之后被改成与 PR 一致也不行）。

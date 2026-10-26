@@ -154,7 +154,7 @@ async function findDevTask(
   deps: SupervisorToolsDeps,
   candidates: readonly TaskView[],
   pr: string,
-): Promise<{ ok: true; task: TaskView } | { ok: false; reasons: string[] }> {
+): Promise<{ ok: true; task: TaskView; all: TaskView[] } | { ok: false; reasons: string[] }> {
   const reasons: string[] = []
   const hits: TaskView[] = []
   for (const t of candidates) {
@@ -183,7 +183,21 @@ async function findDevTask(
   const first = [...hits].sort((a, b) =>
     a.created_at === b.created_at ? (a.id < b.id ? -1 : 1) : a.created_at < b.created_at ? -1 : 1,
   )[0] as TaskView
-  return { ok: true, task: first }
+  return { ok: true, task: first, all: hits }
+}
+
+/** 开出 PR 的任务（全部候选）的仓库快照核对；不满足时返回原因。 */
+function devSnapshotsProblem(devs: readonly TaskView[], prRepo: RepoRef): string | null {
+  for (const t of devs) {
+    const snap = t.repo_snapshot ? parseRemoteUrl(t.repo_snapshot.remote_url) : undefined
+    if (!snap) {
+      return `开出 PR 的任务 ${t.id} 没有可识别的登记仓库快照（repo_snapshot），无法确认 PR 属于登记仓库`
+    }
+    if (!sameRepo(snap, prRepo)) {
+      return `PR 不属于开出它的任务 ${t.id} 启动前的登记仓库 ${snap.host}/${snap.owner}/${snap.repo}`
+    }
+  }
+  return null
 }
 
 /** 某个产出了该 PR 的任务不能作为"开出 PR 的 dev 任务"的原因；可以时返回 null。 */
@@ -330,18 +344,10 @@ export async function checkMergeEligibility(
     const r = await mergerRepo(deps, ws, dev.task)
     // 纵深核对：PR 必须属于开出它的任务在 worker 启动前采集的仓库快照（`repo_snapshot.remote_url`）。
     // worker 在沙箱外运行，可能改写登记仓库的 remote（worktree 与主仓库共用配置），只认快照。
-    const snapshot = dev.task.repo_snapshot
-      ? parseRemoteUrl(dev.task.repo_snapshot.remote_url)
-      : undefined
-    if (!snapshot) {
-      reasons.push(
-        `开出 PR 的任务 ${dev.task.id} 没有可识别的登记仓库快照（repo_snapshot），无法确认 PR 属于登记仓库`,
-      )
-    } else if (!sameRepo(snapshot, prRepo)) {
-      reasons.push(
-        `PR 不属于开出它的任务启动前的登记仓库 ${snapshot.host}/${snapshot.owner}/${snapshot.repo}`,
-      )
-    }
+    // 候选与 pr-merge 执行器一致：所有产出该 PR、分支相同、origin 为 instruction、有效类别为 write 的 done 任务，
+    // 每一个都必须带指向该 PR 仓库的快照。
+    const snapshotProblem = devSnapshotsProblem(dev.all, prRepo)
+    if (snapshotProblem) reasons.push(snapshotProblem)
     if (!r.ok) reasons.push(r.reason)
     else {
       // 当前的 origin 也必须仍是同一仓库（merger 在登记仓库里调用 gh；pr-merge 执行器合并前还会再核对一次）。
@@ -351,7 +357,7 @@ export async function checkMergeEligibility(
         reasons.push(
           `PR 不属于登记仓库 ${origin.data.host}/${origin.data.owner}/${origin.data.repo}`,
         )
-      } else if (snapshot && sameRepo(snapshot, prRepo)) repo = r.repo
+      } else if (!snapshotProblem) repo = r.repo
     }
   }
 

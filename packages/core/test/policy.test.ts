@@ -281,6 +281,11 @@ describe('动作识别', () => {
     'git rebase --onto main x',
     'git clone https://example.com/x.git',
     'git clone --depth 1 https://example.com/x.git',
+    // 带值的短选项之后是值，不是选项字母。
+    'git clone -bfeature/cool https://example.com/x.git',
+    'git clone -oupstream https://example.com/x.git',
+    'git rebase -Xours main',
+    'git rebase -Sexample main',
   ])('普通命令不因间接执行器规则变为不透明：%s', (command) => {
     expect(classifyAction({ tool: 'Bash', command })).not.toContain('shell.opaque')
   })

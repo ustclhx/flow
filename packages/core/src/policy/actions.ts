@@ -482,9 +482,21 @@ function isLongOption(word: string, ...full: readonly string[]): boolean {
   return name.length > 0 && full.some((f) => f.startsWith(name))
 }
 
-/** 短选项簇（`-qu`、`-u/bin/x`）中是否含某个短选项字母。参数可能直接接在后面，保守地按含有处理。 */
-const hasShortOption = (word: string, letter: string): boolean =>
-  /^-[^-]/.test(word) && word.slice(1).includes(letter)
+/**
+ * 带值的短选项（`-X<策略参数>`、`-s<策略>`、`-S<密钥>`、`-b<分支>`、`-o<remote 名>`）：簇中遇到它们时，
+ * 其后的字符都是它的值，不再当作选项字母（`-bfeature/cool` 不含 `-c`）。
+ */
+const VALUED_SHORT_OPTIONS = new Set(['X', 's', 'S', 'b', 'o'])
+
+/** 短选项簇（`-qu`、`-u/bin/x`）中是否含某个短选项字母；带值的选项之后的字符不算。 */
+function hasShortOption(word: string, letter: string): boolean {
+  if (!/^-[^-]/.test(word)) return false
+  for (const ch of word.slice(1)) {
+    if (ch === letter) return true
+    if (VALUED_SHORT_OPTIONS.has(ch)) return false
+  }
+  return false
+}
 
 /** git 子命令中执行任意命令的写法（`git rebase -x/--exec`、`bisect run`、`submodule foreach`……）。 */
 function gitRunsCommands(words: readonly string[]): boolean {

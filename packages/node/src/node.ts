@@ -52,7 +52,12 @@ import {
 import { createFakeExecutor } from './fake.ts'
 import { acquireNodeLock } from './node-lock.ts'
 import { createPolicyPrecheck, type Precheck, type PrecheckRequest } from './precheck.ts'
-import { computeDiffStat, type NodeEnvReport, nodeEnvReport, snapshotRepo } from './push-env.ts'
+import {
+  computeDiffStat,
+  type NodeEnvReport,
+  nodeEnvReport,
+  snapshotRepoResult,
+} from './push-env.ts'
 import { verifyTask } from './verify.ts'
 import { cleanWakeTokenDir, removeWakeTokenFile, writeWakeTokenFile } from './wake-token.ts'
 import { resolveContractCwd, workspaceRepos } from './workdir.ts'
@@ -809,14 +814,22 @@ class LeaseRunner {
       }
       let collected: RepoSnapshot | undefined
       if (!this.snapshot && report.repo) {
+        let why: string
         try {
-          collected = await snapshotRepo(report.repo, {
+          const r = await snapshotRepoResult(report.repo, {
             registeredRepos: this.repos,
             ...(this.env.envRunner ? { run: this.env.envRunner } : {}),
             env: this.env.envVars ?? executorEnv(),
           })
-        } catch {
+          collected = r.ok ? r.snapshot : undefined
+          why = r.ok ? '' : r.reason
+        } catch (err) {
           collected = undefined
+          why = String(err)
+        }
+        // 没有快照的任务之后不能走合并流程（中枢与 pr-merge 都只认快照），记下原因便于排查。
+        if (!collected) {
+          this.env.logger.warn(`登记仓库 ${report.repo} 的快照没有采到（${why}），任务分支照常上报`)
         }
       }
       if (this.released) return

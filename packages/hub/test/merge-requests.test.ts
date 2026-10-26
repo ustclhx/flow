@@ -600,7 +600,7 @@ describe('PR 归属（fork、任务分支、登记仓库 origin）', () => {
     const rv = s.review()
     const w = await s.wake('instruction')
     expect(reasonsOf(await s.request(w.token, rv)).join()).toContain(
-      'PR 不属于开出它的任务启动前的登记仓库 github.com/someone/demo',
+      '启动前的登记仓库 github.com/someone/demo',
     )
 
     const s2 = await setup()
@@ -610,6 +610,14 @@ describe('PR 归属（fork、任务分支、登记仓库 origin）', () => {
     const r2 = await s2.request(w2.token, rv2)
     expect(code(r2)).toBe('merge_not_eligible')
     expect(reasonsOf(r2).join()).toContain('没有可识别的登记仓库快照')
+
+    // 多个候选（分支相同）时每一个都要有匹配的快照。
+    const s4 = await setup()
+    s4.dev()
+    s4.dev({ remoteUrl: null })
+    const rv4 = s4.review()
+    const w4 = await s4.wake('instruction')
+    expect(reasonsOf(await s4.request(w4.token, rv4)).join()).toContain('没有可识别的登记仓库快照')
 
     // 快照写法不同（SSH、大小写）但指向同一仓库：照常通过。
     const s3 = await setup()

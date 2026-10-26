@@ -282,17 +282,22 @@ export function expiryDrafts(
       attempt: lease.attempt,
     },
   }
-  if (task.status === 'blocked') {
-    if (task.cancel_requested) {
-      return [
-        expired,
-        {
-          ...base,
-          type: 'task.cancelled',
-          payload: { reason: `已请求取消，节点 ${lease.node_id} 的租约在卡住期间过期` },
+  // 已请求取消：无论 running / verifying / blocked，租约过期一律取消，不重新排队、不转 node_lost
+  // （与 completionDrafts、ackReply 中"不让重新排队覆盖取消"一致）。节点没有确认，worker 可能仍在运行。
+  if (task.cancel_requested) {
+    return [
+      expired,
+      {
+        ...base,
+        type: 'task.cancelled',
+        payload: {
+          reason: `已请求取消；节点 ${lease.node_id} 的租约过期，未确认 worker 已停止`,
+          node_id: lease.node_id,
         },
-      ]
-    }
+      },
+    ]
+  }
+  if (task.status === 'blocked') {
     if (pendingReply) {
       const session = task.blocked?.session
       return [

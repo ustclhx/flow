@@ -24,6 +24,7 @@ import {
   parseScopedConfig,
   type RepoEnvOptions,
   snapshotRepo,
+  snapshotRepoResult,
 } from '../src/push-env.ts'
 import { neutralizeDrivers } from '../src/safe-git.ts'
 import { type GitFixture, gitFixture, ORIGIN_URL, TASK_BRANCH } from './git-fixture.ts'
@@ -547,5 +548,21 @@ describe('不执行 worker 控制的程序（审查第 1 条）', () => {
     writeFileSync(join(g.worktree, 'README.md'), '# demo\n改了\n')
     expect(await computeDiffStat(g.worktree, opts(g))).toBeUndefined()
     expect(existsSync(m.path)).toBe(false)
+  })
+
+  test('snapshotRepoResult 给出没有快照的原因', async () => {
+    const g = fixture()
+    const why = async (dir: string, o = opts(g)) => {
+      const r = await snapshotRepoResult(dir, o)
+      return r.ok ? 'ok' : r.reason
+    }
+    expect(await why(g.repo)).toBe('ok')
+    expect(await why(g.worktree)).toBe('not_repo_root')
+    expect(await why(g.repo, opts(g, { registeredRepos: [] }))).not.toBe('ok')
+    g.git(['config', '--add', 'remote.origin.url', 'https://github.com/evil/demo.git'])
+    expect(await why(g.repo)).toBe('origin_url_not_single')
+    g.git(['config', '--unset-all', 'remote.origin.url'])
+    g.git(['config', 'remote.origin.url', 'https://gitlab.example.com/acme/demo.git'])
+    expect(await why(g.repo)).toBe('origin_not_github')
   })
 })
