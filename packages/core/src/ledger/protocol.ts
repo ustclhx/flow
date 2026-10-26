@@ -8,10 +8,10 @@ import { executorInfo, ledgerEvent } from './events.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import {
   activity,
-  blockedDelegationShape,
   blockedReason,
   deliveredReply,
   policyDecisionId,
+  protocolBlockedDelegationShape,
   replyId,
   replyKind,
   replyView,
@@ -380,11 +380,16 @@ export const policyCheckRequest = z
   })
   .meta({ title: 'POST /v1/policy/check' })
 export type PolicyCheckRequest = z.infer<typeof policyCheckRequest>
-export const policyCheckData = policyDecisionSchema
-  .extend({
+/**
+ * 非 strict：以后可以加字段。注意旧节点用 strict 的旧版 schema 解析响应，
+ * 因此新字段只能出现在旧节点不会遇到的情况下（`decision_id` 只随 supervisor 档位返回）。
+ */
+export const policyCheckData = z
+  .object({
+    ...policyDecisionSchema.shape,
     decision_id: policyDecisionId.optional().meta({
       description:
-        '本次判定的 id（对应 policy.decided 的 seq）；节点上报 supervisor 档位的卡住时带上。dry_run 不入账，没有该字段',
+        '只在判定为 supervisor 档位时返回：本次判定的 id（对应 policy.decided 的 seq），节点上报卡住时带上。其他档位与 dry_run 没有该字段',
     }),
   })
   .meta({ title: 'POST /v1/policy/check 响应' })
@@ -569,7 +574,7 @@ export const renewLeaseRequest = z
           .max(512)
           .optional()
           .meta({ description: '执行器会话 id；重新排队时随 resume 带给下一次执行' }),
-        ...blockedDelegationShape,
+        ...protocolBlockedDelegationShape,
       })
       .optional()
       .meta({
@@ -620,7 +625,7 @@ export const completeLeaseRequest = z
         .max(512)
         .optional()
         .meta({ description: '执行器会话 id，回复后下一次执行据此恢复' }),
-      ...blockedDelegationShape,
+      ...protocolBlockedDelegationShape,
     }),
     z.strictObject({
       ...token,

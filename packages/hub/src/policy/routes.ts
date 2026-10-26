@@ -8,6 +8,8 @@ import {
   isNodeActor,
   loadHubConfig,
   loadPoliciesConfig,
+  type PolicyCheckData,
+  type PolicyDecision,
   policyCheckData,
   policyCheckRequest,
   redactSecrets,
@@ -19,6 +21,17 @@ import { scrubPayload } from '../ledger/scrub.ts'
 import type { LedgerStore } from '../ledger/store.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { checkTaskScope, type HubAuthOptions } from '../server/auth.ts'
+
+/**
+ * 已入账判定的响应体。`decision_id`（policy.decided 的 seq，D15）**只在 supervisor 档位时返回**：
+ * 旧节点用 strict 的旧版 schema 解析响应，多出的字段会让预检失败，而旧节点不会遇到 supervisor 档位。
+ */
+export function policyCheckResponse(decision: PolicyDecision, seq: number): PolicyCheckData {
+  const { level, matched_rules, actions } = decision
+  // supervisor 档位由策略引擎（G2）加入；这里按字符串比较，不依赖档位枚举是否已包含它。
+  const supervisor = (level as string) === 'supervisor'
+  return { level, matched_rules, actions, ...(supervisor ? { decision_id: seq } : {}) }
+}
 
 /** 只做预检与审计；执行器放行、blocked 和收件箱由后续节点与反应器接入。 */
 export function createPolicyRoutes(deps: {
@@ -111,13 +124,11 @@ export function createPolicyRoutes(deps: {
     )
     if (!recorded.ok) return respond(c, recorded, policyCheckData)
     // 返回已入账的规则内容，避免原始规则条件中的密钥从响应绕过脱敏。
-    const { level, matched_rules, actions: details } = recorded.data.payload as typeof decision
     return respond(
       c,
-      // decision_id 即 policy.decided 的 seq：节点上报 supervisor 档位的卡住时带上（D15）。
       {
         ok: true,
-        data: { level, matched_rules, actions: details, decision_id: recorded.data.seq },
+        data: policyCheckResponse(recorded.data.payload as PolicyDecision, recorded.data.seq),
       },
       policyCheckData,
     )

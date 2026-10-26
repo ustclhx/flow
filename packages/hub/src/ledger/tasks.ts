@@ -142,6 +142,9 @@ export function fieldIssues(issues: Parameters<typeof formatZodIssues>[0], data:
   return formatZodIssues(issues, data, { file: '' }).map(({ file: _file, ...rest }) => rest)
 }
 
+/** 中枢内部身份（D1：唤醒任务等由它创建）。 */
+const HUB_ACTOR = 'hub'
+
 const invalidArguments = (
   what: string,
   issues: Parameters<typeof formatZodIssues>[0],
@@ -179,6 +182,12 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       ) {
         return fail('usage', 'invalid_arguments', '幂等键与合同中的 idempotency_key 不一致', [
           { field: 'idempotency_key', code: 'invalid_field', message: '幂等键不一致' },
+        ])
+      }
+      // inputs.wake 只由中枢的唤醒调度写入（D1）；其他身份携带即拒绝，避免伪造唤醒上下文。
+      if (contract.inputs?.wake !== undefined && opts.actor !== HUB_ACTOR) {
+        return fail('usage', 'invalid_arguments', 'inputs.wake 只能由中枢创建唤醒任务时写入', [
+          { field: 'inputs.wake', code: 'invalid_field', message: 'inputs.wake 只能由中枢写入' },
         ])
       }
       const key = opts.idempotency_key ?? contract.idempotency_key

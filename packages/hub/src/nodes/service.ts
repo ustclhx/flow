@@ -7,6 +7,7 @@ import {
   type CompleteLeaseData,
   type CompleteLeaseRequest,
   capabilitiesSatisfy,
+  clipDiffStat,
   completeLeaseRequest,
   fail,
   type LeaseGrant,
@@ -137,7 +138,8 @@ function delegationFields(b: {
 }) {
   return {
     ...(b.decision_id !== undefined ? { decision_id: b.decision_id } : {}),
-    ...(b.diff_stat !== undefined ? { diff_stat: b.diff_stat } : {}),
+    // 协议允许 8192 字符，入账前截到 2000（clipDiffStat，与 scrub 的 clipText 同一截断标记）。
+    ...(b.diff_stat !== undefined ? { diff_stat: clipDiffStat(b.diff_stat) } : {}),
     ...(b.no_delegate !== undefined ? { no_delegate: b.no_delegate } : {}),
   }
 }

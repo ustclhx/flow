@@ -1924,15 +1924,15 @@
               "minimum": 1,
               "maximum": 9007199254740991
             },
+            "no_delegate": {
+              "description": "true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）",
+              "type": "boolean"
+            },
             "diff_stat": {
               "type": "string",
               "minLength": 1,
               "maxLength": 2000,
-              "description": "相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并注明）"
-            },
-            "no_delegate": {
-              "description": "true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）",
-              "type": "boolean"
+              "description": "相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并以 … 结尾）"
             }
           },
           "required": [
@@ -2799,10 +2799,10 @@
               "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；superseded 任务进入新的卡住；user_dismissed 用户忽略；user_replied 用户已回复"
             },
             "block_seq": {
-              "description": "被结束的委托对应的 task.blocked seq",
               "type": "integer",
               "minimum": 1,
-              "maximum": 9007199254740991
+              "maximum": 9007199254740991,
+              "description": "被结束的委托对应的 task.blocked seq（必须是当前这次卡住）"
             },
             "note": {
               "description": "说明，例如 supervisor 转交的理由",
@@ -2811,7 +2811,8 @@
             }
           },
           "required": [
-            "reason"
+            "reason",
+            "block_seq"
           ],
           "additionalProperties": false
         }

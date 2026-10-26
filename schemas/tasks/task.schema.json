@@ -882,15 +882,15 @@
               "minimum": 1,
               "maximum": 9007199254740991
             },
+            "no_delegate": {
+              "description": "true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）",
+              "type": "boolean"
+            },
             "diff_stat": {
               "type": "string",
               "minLength": 1,
               "maxLength": 2000,
-              "description": "相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并注明）"
-            },
-            "no_delegate": {
-              "description": "true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）",
-              "type": "boolean"
+              "description": "相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并以 … 结尾）"
             },
             "lease_held": {
               "type": "boolean",

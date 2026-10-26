@@ -49,7 +49,9 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task.blocked': [['message'], ['tail', '*'], ['diff_stat']],
   'task.reply_escalated': [['note']],
   'supervisor.answered': [['text']],
-  'task_proposal.created': [['reason']],
+  // 提案的目标会展示在收件箱条目与渠道消息中（D11），按自由文本处理。
+  'task_proposal.created': [['reason'], ['draft', 'goal']],
+  'task_proposal.accepted': [['goal']],
   'task_proposal.rejected': [['note']],
   'task.unblocked': [['note']],
   'task.replied': [['text']],

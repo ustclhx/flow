@@ -52,10 +52,10 @@
           "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；superseded 任务进入新的卡住；user_dismissed 用户忽略；user_replied 用户已回复"
         },
         "block_seq": {
-          "description": "被结束的委托对应的 task.blocked seq",
           "type": "integer",
           "minimum": 1,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "description": "被结束的委托对应的 task.blocked seq（必须是当前这次卡住）"
         },
         "note": {
           "description": "说明，例如 supervisor 转交的理由",
@@ -64,7 +64,8 @@
         }
       },
       "required": [
-        "reason"
+        "reason",
+        "block_seq"
       ],
       "additionalProperties": false
     }

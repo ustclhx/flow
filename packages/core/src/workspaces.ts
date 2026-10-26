@@ -4,7 +4,11 @@ import { join, relative } from 'node:path'
 import { parse } from 'yaml'
 import { flowPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
-import { defaultSupervisorConfig, type SupervisorConfig } from './schema/supervisor.ts'
+import {
+  disabledSupervisorConfig,
+  globalSupervisorConfig,
+  type SupervisorConfig,
+} from './schema/supervisor.ts'
 import { workspaceSchema } from './schema/workspace.ts'
 import { formatZodIssues, type ValidationIssue } from './validation-issue.ts'
 
@@ -40,7 +44,8 @@ export const GLOBAL_WORKSPACE: Workspace = {
   description: '隐式存在的全局 workspace，不需要定义文件',
   repos: [],
   file: null,
-  supervisor: defaultSupervisorConfig(),
+  // ws/global 固定不启用 supervisor：不唤醒、不代回复（design D3）。
+  supervisor: globalSupervisorConfig(),
 }
 
 /**
@@ -70,7 +75,23 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
       issues.push(issue('invalid_yaml', `不是合法的 YAML：${(err as Error).message}`))
       continue
     }
-    const parsed = workspaceSchema.safeParse(data)
+    let parsed = workspaceSchema.safeParse(data)
+    // 只有 supervisor 段有问题时不丢弃整个 workspace：supervisor 视为未启用，问题照常报告。
+    let supervisorInvalid = false
+    if (
+      !parsed.success &&
+      parsed.error.issues.every((i) => i.path[0] === 'supervisor') &&
+      data !== null &&
+      typeof data === 'object'
+    ) {
+      const { supervisor: _bad, ...rest } = data as Record<string, unknown>
+      const retry = workspaceSchema.safeParse(rest)
+      if (retry.success) {
+        issues.push(...formatZodIssues(parsed.error.issues, data, { file }))
+        supervisorInvalid = true
+        parsed = retry
+      }
+    }
     if (!parsed.success) {
       issues.push(...formatZodIssues(parsed.error.issues, data, { file }))
       continue
@@ -92,7 +113,7 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
       description: ws.description,
       repos: ws.repos ?? [],
       file,
-      supervisor: ws.supervisor,
+      supervisor: supervisorInvalid ? disabledSupervisorConfig() : ws.supervisor,
     })
   }
   return ok({ workspaces: [GLOBAL_WORKSPACE, ...workspaces], issues })

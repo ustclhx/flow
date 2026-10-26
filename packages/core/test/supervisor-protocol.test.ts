@@ -7,6 +7,7 @@ import {
   createTaskRequest,
   DIFF_STAT_MAX,
   defaultSupervisorConfig,
+  delegationEnabled,
   describeSupervisorConfig,
   ledgerEvent,
   loadWorkspaces,
@@ -128,7 +129,7 @@ describe('账本事件与协议字段（1.1、1.6）', () => {
     expect(clipDiffStat('a | 1 +')).toBe('a | 1 +')
     const clipped = clipDiffStat('x'.repeat(5000))
     expect(clipped.length).toBe(DIFF_STAT_MAX)
-    expect(clipped.endsWith('（已截断）')).toBe(true)
+    expect(clipped.endsWith('…')).toBe(true)
   })
 
   test('task.replied 的 via 可以是 supervisor；收件箱关闭的 via 不行', () => {
@@ -159,6 +160,9 @@ describe('账本事件与协议字段（1.1、1.6）', () => {
   })
 
   test('task.reply_escalated 的原因枚举（D15）', () => {
+    expect(event('task.reply_escalated', { ...task, payload: { reason: 'timeout' } }).success).toBe(
+      false,
+    )
     for (const reason of [
       'supervisor',
       'timeout',
@@ -169,7 +173,9 @@ describe('账本事件与协议字段（1.1、1.6）', () => {
       'user_dismissed',
       'user_replied',
     ]) {
-      expect(event('task.reply_escalated', { ...task, payload: { reason } }).success).toBe(true)
+      expect(
+        event('task.reply_escalated', { ...task, payload: { reason, block_seq: 3 } }).success,
+      ).toBe(true)
     }
   })
 
@@ -212,8 +218,12 @@ describe('账本事件与协议字段（1.1、1.6）', () => {
     }
     expect(completeLeaseRequest.safeParse(complete).success).toBe(true)
     expect(completeLeaseRequest.safeParse({ ...complete, ...extra }).success).toBe(true)
+    // 协议上限 8192（中枢入账前截到 2000）
     expect(
-      completeLeaseRequest.safeParse({ ...complete, diff_stat: 'x'.repeat(2001) }).success,
+      completeLeaseRequest.safeParse({ ...complete, diff_stat: 'x'.repeat(8192) }).success,
+    ).toBe(true)
+    expect(
+      completeLeaseRequest.safeParse({ ...complete, diff_stat: 'x'.repeat(8193) }).success,
     ).toBe(false)
   })
 
@@ -282,7 +292,7 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
     }
   })
 
-  test('loadWorkspaces 补默认值；非法 supervisor 设置报告字段且不加载该文件', async () => {
+  test('loadWorkspaces 补默认值；supervisor 段非法时仍加载 workspace、supervisor 视为未启用；global 不启用', async () => {
     const home = tempHome('flow-ws-supervisor-')
     const base = 'kind: product\nname: 测试\ndescription: 测试\nrepos: []\n'
     writeText(join(home, 'config/workspaces/plain.yaml'), `id: plain\n${base}`)
@@ -305,7 +315,12 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
       merge_method: 'rebase',
       limits: { review_rounds: 1, tasks_per_wake: 5 },
     })
-    expect(byId.has('broken')).toBe(false)
+    expect(byId.get('broken')?.supervisor.enabled).toBe(false)
+    expect(byId.get('broken')?.repos).toEqual([])
+    expect(byId.get('global')?.supervisor.enabled).toBe(false)
+    expect(delegationEnabled(byId.get('plain') as never)).toBe(true)
+    expect(delegationEnabled(byId.get('broken') as never)).toBe(false)
+    expect(delegationEnabled(byId.get('global') as never)).toBe(false)
     expect(r.data.issues).toEqual([
       expect.objectContaining({
         file: 'config/workspaces/broken.yaml',
@@ -337,6 +352,16 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
     expect(
       find('workspaces.config.config/workspaces/bad.yaml.supervisor.limits.chain_depth'),
     ).toMatchObject({ ok: false, severity: 'error' })
+    // supervisor 段非法：workspace 照常加载，supervisor 显示为未启用
+    expect(find('workspace.bad.supervisor')?.message).toBe('ws/bad supervisor：未启用')
+    expect(find('workspace.global.supervisor')?.message).toContain('global 不启用 supervisor')
+  })
+
+  test('delegationEnabled = enabled && delegate_replies', () => {
+    const c = defaultSupervisorConfig()
+    expect(delegationEnabled({ supervisor: c })).toBe(true)
+    expect(delegationEnabled({ supervisor: { ...c, delegate_replies: false } })).toBe(false)
+    expect(delegationEnabled({ supervisor: { ...c, enabled: false } })).toBe(false)
   })
 
   test('describeSupervisorConfig 列出代回复与上限', () => {

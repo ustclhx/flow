@@ -115,3 +115,19 @@ export type SupervisorLimits = z.infer<typeof supervisorLimitsSchema>
 
 /** 全部取默认值的 supervisor 配置（workspace 文件没有写 `supervisor` 时使用）。 */
 export const defaultSupervisorConfig = (): SupervisorConfig => supervisorConfigSchema.parse({})
+
+/** `ws/global` 的 supervisor 设置：固定不启用（不唤醒、不代回复）。 */
+export const globalSupervisorConfig = (): SupervisorConfig => ({
+  ...defaultSupervisorConfig(),
+  enabled: false,
+})
+
+/** workspace 文件的 supervisor 段校验失败时使用：视为未启用（问题另报 issue）。 */
+export const disabledSupervisorConfig = globalSupervisorConfig
+
+/**
+ * 本 workspace 的卡住是否委托给 supervisor 代回复（D15）：`enabled && delegate_replies`。
+ * 后续组统一调用它，不要各自组合两个开关；是否存在 `kind: supervisor` 角色另行判断。
+ */
+export const delegationEnabled = (workspace: { supervisor: SupervisorConfig }): boolean =>
+  workspace.supervisor.enabled && workspace.supervisor.delegate_replies

@@ -9,6 +9,7 @@ import {
   taskId,
   timestamp,
 } from './common.ts'
+import { clipText } from './redact.ts'
 
 /**
  * 任务合同、任务结果、状态与状态机（task-ledger spec）。
@@ -413,18 +414,21 @@ export const reviewResult = z
   .meta({ title: 'Review result', description: '审查任务结果的 result.review' })
 export type ReviewResult = z.infer<typeof reviewResult>
 
-/** 卡住时附带的改动摘要上限（node-protocol "卡住时附带改动摘要"）。 */
+/** 卡住时附带的改动摘要入账上限（node-protocol "卡住时附带改动摘要"）。 */
 export const DIFF_STAT_MAX = 2000
-const DIFF_STAT_TRUNCATED = '\n…（已截断）'
+/** 协议中改动摘要的上限：节点可多报，中枢入账前截到 `DIFF_STAT_MAX`。 */
+export const PROTOCOL_DIFF_STAT_MAX = 8192
 
-/** 把 `git diff --stat` 摘要截断到 2000 字符以内，超出时在末尾注明。 */
-export function clipDiffStat(text: string): string {
-  if (text.length <= DIFF_STAT_MAX) return text
-  return text.slice(0, DIFF_STAT_MAX - DIFF_STAT_TRUNCATED.length) + DIFF_STAT_TRUNCATED
-}
+/** 把 `git diff --stat` 摘要截断到 2000 字符以内；截断标记与 scrub 的 `clipText` 一致（末尾 `…`）。 */
+export const clipDiffStat = (text: string): string => clipText(text, DIFF_STAT_MAX)
 
 export const diffStat = z.string().min(1).max(DIFF_STAT_MAX).meta({
-  description: '相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并注明）',
+  description: '相对任务基点的 git diff --stat 与未提交改动（最多 2000 字符，超出截断并以 … 结尾）',
+})
+
+/** 协议请求中的改动摘要：最多 8192 字符，中枢入账前截到 2000。 */
+export const protocolDiffStat = z.string().min(1).max(PROTOCOL_DIFF_STAT_MAX).meta({
+  description: '相对任务基点的 git diff --stat 与未提交改动；最多 8192 字符，中枢入账时截到 2000',
 })
 
 /** 本次卡住对应的策略判定（`policy.decided` 的 seq，D15）。 */
@@ -434,17 +438,24 @@ export const policyDecisionId = z
   .min(1)
   .meta({ description: '策略判定 id，即对应 policy.decided 事件的 seq' })
 
-/**
- * 卡住上报（续约 / 提交 / 事件）共用的代回复相关字段（D15）。旧节点不带时保持原有行为。
- */
-export const blockedDelegationShape = {
+const delegationCommon = {
   decision_id: policyDecisionId.optional().meta({
     description: '策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq',
   }),
-  diff_stat: diffStat.optional(),
   no_delegate: z.boolean().optional().meta({
     description: 'true：这次卡住不得委托给 supervisor（例如 supervisor 的批准因请求已变而被丢弃）',
   }),
+}
+
+/**
+ * 卡住上报共用的代回复相关字段（D15）。旧节点不带时保持原有行为。
+ * 账本 `task.blocked` 与任务视图：diff_stat 最多 2000。
+ */
+export const blockedDelegationShape = { ...delegationCommon, diff_stat: diffStat.optional() }
+/** 续约 / 提交请求：diff_stat 最多 8192，中枢入账前截断。 */
+export const protocolBlockedDelegationShape = {
+  ...delegationCommon,
+  diff_stat: protocolDiffStat.optional(),
 }
 
 /**

@@ -82,11 +82,15 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 收件箱先出现 Interrupt 条目；放行后创建一个 origin 为 autonomous 的唤醒，包含该队列中的事件
 
 ### Requirement: 启用开关
-workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 `kind: supervisor` 角色时生效）。未启用时 MUST NOT 唤醒，`/ask`、`flow ask` 回复该 workspace 未启用 supervisor。
+workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 `kind: supervisor` 角色时生效）。未启用时 MUST NOT 唤醒，`/ask`、`flow ask` 回复该 workspace 未启用 supervisor。 `ws/global` 的 supervisor MUST 固定不启用：不唤醒，也不代回复其中任务的卡住。
 
 #### Scenario: 关闭后不唤醒
 - **WHEN** `ws/xuanxue-saas` 配置 `supervisor.enabled: false`，用户发送 `/ask xuanxue-saas 看看支付`
 - **THEN** 不创建唤醒任务，用户收到"该 workspace 未启用 supervisor"
+
+#### Scenario: global 不启用
+- **WHEN** 用户发送 `/ask global 看看`，或 `ws/global` 中的任务进入 `blocked(question)`
+- **THEN** 不创建唤醒任务、不写 `task.reply_delegated`，卡住按普通条目推送给用户；doctor 显示"global 不启用 supervisor"
 
 ### Requirement: supervisor 建任务的约束
 中枢对 supervisor 身份的建任务请求 SHALL 依次检查：`parent` 是本 workspace 未结束的唤醒任务（否则 `parent_required`）；目标角色有效类别为 write 且唤醒 origin 为 autonomous 时拒绝（403 `proposal_required`）；目标类别为 merge 或 supervisor 时拒绝（403 `role_not_allowed`）；`cwd` 与 `inputs.repo` 位于本 workspace 登记仓库内（否则 `repo_not_in_workspace`）。
@@ -141,7 +145,7 @@ supervisor SHALL 能用 `ws_brief` 读取简报（supervisor 笔记、进行中�
 - **THEN** 返回 `not_delegated`，任务保持 `blocked`
 
 ### Requirement: 卡住时代用户回复
-workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 true）开启时，中枢 SHALL 把本 workspace 任务（包括没有 origin 的任务）的以下卡住委托给 supervisor：所有 `blocked(question)`；节点持有活动租约、策略判定为 `supervisor` 档位、且该判定（`decision_id`）属于本任务、写于上一次离开 `blocked` 之后、请求与上报一致的 `blocked(awaiting_approval)`。唤醒任务自身、有效类别为 merge 的任务、`reviewer_roles` 中的审查任务、`node_lost` 后保留 `prior_reason` 的卡住 MUST NOT 委托。委托时 MUST 写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`（`block_seq` 为该次 `task.blocked` 的账本 seq），对应收件箱条目 MUST NOT 推送。
+workspace 配置 `supervisor.delegate_replies`（启用 supervisor 时默认 true）开启时（统一按 `delegationEnabled(workspace)` = `enabled && delegate_replies` 判断，`ws/global` 恒为否），中枢 SHALL 把本 workspace 任务（包括没有 origin 的任务）的以下卡住委托给 supervisor：所有 `blocked(question)`；节点持有活动租约、策略判定为 `supervisor` 档位、且该判定（`decision_id`）属于本任务、写于上一次离开 `blocked` 之后、请求与上报一致的 `blocked(awaiting_approval)`。唤醒任务自身、有效类别为 merge 的任务、`reviewer_roles` 中的审查任务、`node_lost` 后保留 `prior_reason` 的卡住 MUST NOT 委托。委托时 MUST 写 `task.reply_delegated{task_id, block_seq, kind, decision_id?, deadline}`（`block_seq` 为该次 `task.blocked` 的账本 seq），对应收件箱条目 MUST NOT 推送。
 
 委托事件 SHALL 进入独立的 reply 队列，不与其他队列合并；reply 唤醒可以与一个普通唤醒并行。reply 唤醒 MUST 只能调用 `task_respond` 与只读操作，其余（包括 `brief_update`、`kb_journal`）返回 `reply_only_wake`；中枢 MUST 按唤醒绑定 token 识别调用方，不信任调用方声明的任务 id 或 actor。代回复记录 SHALL 由中枢根据账本生成，作为 `ws_brief` 中标明"不是指令"的独立一节。reply 唤醒按 `supervisor.limits.reply_wakes_per_day`（默认 48）单独计数。
 

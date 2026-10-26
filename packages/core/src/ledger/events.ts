@@ -263,8 +263,7 @@ export const eventPayloads = {
       .number()
       .int()
       .min(1)
-      .optional()
-      .meta({ description: '被结束的委托对应的 task.blocked seq' }),
+      .meta({ description: '被结束的委托对应的 task.blocked seq（必须是当前这次卡住）' }),
     note: z.string().max(2000).optional().meta({ description: '说明，例如 supervisor 转交的理由' }),
   }),
   /**
