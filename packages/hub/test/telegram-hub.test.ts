@@ -51,9 +51,12 @@ async function makeHome(o: { bound?: boolean; channels?: string } = {}) {
   cleanups.push(() => rmSync(join(h, '..'), { recursive: true, force: true }))
   must(await initFlowHome(h))
   mkdirSync(join(h, 'config', 'workspaces'), { recursive: true })
+  // supervisor 唤醒需要登记仓库作为工作目录（/ask 会真正创建唤醒任务）。
+  const repo = join(h, '..', 'repo')
+  mkdirSync(repo, { recursive: true })
   writeFileSync(
     join(h, 'config', 'workspaces', 'demo.yaml'),
-    'id: demo\nkind: product\nname: Demo\ndescription: 测试\nrepos: []\n',
+    `id: demo\nkind: product\nname: Demo\ndescription: 测试\nrepos: [${JSON.stringify(repo)}]\n`,
   )
   writeFileSync(join(h, 'config', 'inbox.yaml'), 'quiet_hours: false\n')
   // 密钥由测试注入（secrets.load）；存在加密文件时中枢才会调用它。
@@ -335,7 +338,7 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
     await expectNoToken(h, fake.token, [logs, fake.sent])
   })
 
-  test('/capture 写入 raw/inbox（来源 telegram）；/inbox、/status（含 24 小时自动放行次数）；/ask 写入 user.instruction', async () => {
+  test('/capture 写入 raw/inbox（来源 telegram）；/inbox、/status（含 24 小时自动放行次数）；/ask 写入 user.instruction 并唤醒 supervisor', async () => {
     const { fake, h, logs } = await seeded()
     fake.say('/capture 东方站可以加日语')
     await until(() => fake.to(USER_ID).some((m) => m.text.startsWith('已记下')), '随手记确认')
@@ -360,14 +363,25 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
 
     fake.say('/ask demo 看看昨天的部署')
     await until(
-      () => fake.to(USER_ID).some((m) => m.text === '已记录，supervisor 尚未启用'),
+      () => fake.to(USER_ID).some((m) => m.text.startsWith('已唤醒 supervisor，任务 t-')),
       '/ask',
     )
+    const askReply = fake.to(USER_ID).find((m) => m.text.startsWith('已唤醒 supervisor'))?.text
+    const wakeId = askReply?.slice('已唤醒 supervisor，任务 '.length)
     await hub?.stop()
     hub = undefined
     const ledger = await openLedger(flowPaths(h).ledgerDb)
-    const asks = ledger.eventsAfter(0, {}, 10_000).filter((e) => e.type === 'user.instruction')
+    const all = ledger.eventsAfter(0, {}, 10_000)
+    const asks = all.filter((e) => e.type === 'user.instruction')
+    const wakes = all.filter((e) => e.type === 'supervisor.wake_started')
     ledger.close()
+    expect(wakes).toEqual([
+      expect.objectContaining({
+        task_id: wakeId,
+        actor: 'hub',
+        payload: expect.objectContaining({ origin: 'instruction', events: [asks[0]?.seq] }),
+      }),
+    ])
     expect(asks).toEqual([
       expect.objectContaining({
         workspace: WS,

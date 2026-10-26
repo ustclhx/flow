@@ -1,0 +1,214 @@
+{
+  "$id": "https://flow.local/schemas/protocol/supervisor-wake.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "started",
+            "queued",
+            "empty"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "busy",
+            "daily_limit",
+            "paused",
+            "unavailable"
+          ]
+        },
+        "instruction_seq": {
+          "description": "写入的 user.instruction 的 seq",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "release_seq": {
+          "description": "写入的 supervisor.release 的 seq",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "wake": {
+          "description": "state=started 时新建的唤醒",
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "任务 id，由中枢在创建时分配"
+            },
+            "origin": {
+              "type": "string",
+              "enum": [
+                "instruction",
+                "autonomous",
+                "reply"
+              ],
+              "description": "唤醒来源：instruction、autonomous，或只能代回复卡住的 reply"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "唤醒代数，从 1 开始"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "verifying",
+                "done",
+                "failed",
+                "blocked",
+                "cancelled"
+              ],
+              "description": "任务状态"
+            },
+            "events": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "task_id",
+            "origin",
+            "generation",
+            "status",
+            "events",
+            "started_at",
+            "finished_at"
+          ],
+          "additionalProperties": false,
+          "title": "Wake summary"
+        },
+        "running": {
+          "description": "reason=busy 时正在进行的唤醒",
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "description": "任务 id，由中枢在创建时分配"
+            },
+            "origin": {
+              "type": "string",
+              "enum": [
+                "instruction",
+                "autonomous",
+                "reply"
+              ],
+              "description": "唤醒来源：instruction、autonomous，或只能代回复卡住的 reply"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "唤醒代数，从 1 开始"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "verifying",
+                "done",
+                "failed",
+                "blocked",
+                "cancelled"
+              ],
+              "description": "任务状态"
+            },
+            "events": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "task_id",
+            "origin",
+            "generation",
+            "status",
+            "events",
+            "started_at",
+            "finished_at"
+          ],
+          "additionalProperties": false,
+          "title": "Wake summary"
+        },
+        "message": {
+          "type": "string",
+          "description": "给人看的说明"
+        }
+      },
+      "required": [
+        "workspace",
+        "state",
+        "message"
+      ],
+      "additionalProperties": false,
+      "title": "POST /v1/supervisor/wake 响应"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}
