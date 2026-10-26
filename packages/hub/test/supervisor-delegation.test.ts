@@ -124,13 +124,14 @@ async function setup(o: SetupOptions = {}) {
   })
   let released = 0
   let r = 0
+  const warns: string[] = []
   const delegation = createDelegationService({
     ledger: store,
     clock,
     workspaces: lookup,
     roles,
     supervisorRole: o.supervisorRole ?? (async () => ok(SUPERVISOR)),
-    logger: { warn() {} },
+    logger: { warn: (m: string) => void warns.push(m) },
     newReplyId: () => `r-${String(++r).padStart(4, '0')}`,
     onRelease: () => {
       released++
@@ -187,6 +188,8 @@ async function setup(o: SetupOptions = {}) {
     wakeTokens,
     workspaces,
     released: () => released,
+    /** 委托服务记下的 warn。 */
+    warns,
     settle,
   }
 }

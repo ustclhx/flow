@@ -676,7 +676,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         p.block_seq,
       )
     ) {
-      return invalidEvent(`策略判定 ${p.decision_id} 之后、卡住之前还有别的策略判定`)
+      // 正常的时序（worker 连续发出多个请求），不是数据错误：按不可委托处理，调用方不必告警。
+      return notDelegable(`策略判定 ${p.decision_id} 之后、卡住之前还有别的策略判定`)
     }
     const level = (JSON.parse(decision.payload_json) as { level?: string }).level
     if (level !== 'supervisor') {

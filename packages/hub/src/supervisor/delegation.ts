@@ -115,7 +115,9 @@ const staleBlock = (message: string) => fail('failure', 'stale_block', message)
 const invalidArguments = (message: string, field: string) =>
   fail('usage', 'invalid_arguments', message, [{ field, code: 'invalid_field', message }])
 
-type Verdict = { delegate: true; timeoutS: number } | { delegate: false; why: string }
+type Verdict =
+  | { delegate: true; timeoutS: number }
+  | { delegate: false; why: string /** 判定本身超时（不是判为不委托）。 */; timedOut?: true }
 const no = (why: string): Verdict => ({ delegate: false, why })
 
 export function createDelegationService(o: DelegationServiceOptions): DelegationService {
@@ -238,6 +240,15 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
       }
       if (decision.payload.level !== 'supervisor') return no('策略判定不是 supervisor 档位')
       if (decision.seq >= e.seq) return no('策略判定晚于卡住')
+      // 判定之后、卡住之前本任务又有别的策略判定：卡住的可能是后一个请求（store 同样拒绝，这里先排除，
+      // 不去尝试写入）。
+      if (
+        ledger
+          .taskEvents(taskId)
+          .some((x) => x.type === 'policy.decided' && x.seq > decision.seq && x.seq < e.seq)
+      ) {
+        return no('策略判定之后、卡住之前还有别的策略判定')
+      }
       if (!delegationRequestMatches(p.request, decision.payload.request)) {
         return no('卡住上报的请求与策略判定的请求不一致（或没有命令）')
       }
@@ -290,14 +301,19 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
       try {
         const timedOut = new Promise<Verdict>((resolve) => {
           cancelTimer = clock.setTimeout(
-            () => resolve(no(`委托判定超过 ${decisionTimeoutMs} 毫秒`)),
+            () =>
+              resolve({
+                delegate: false,
+                why: `委托判定超过 ${decisionTimeoutMs} 毫秒`,
+                timedOut: true,
+              }),
             decisionTimeoutMs,
           )
         })
         // 超时之后到达的判定结果被丢弃（race 只取先到的一个）。
         const verdict = await Promise.race([evaluate(e), timedOut])
         if (!verdict.delegate) {
-          if (verdict.why.startsWith('委托判定超过')) {
+          if (verdict.timedOut) {
             warn('代回复：委托判定超时，交给用户', { task_id: e.task_id, block_seq: e.seq })
           }
         } else delegated = delegateNow(e, verdict.timeoutS)
