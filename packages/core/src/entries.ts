@@ -45,6 +45,25 @@ export interface BrainEntry {
 
 const toPosix = (p: string) => p.split(sep).join('/')
 
+/**
+ * brain 顶层与保留名只差大小写或兼容字符的目录或文件（例如 `Journal/`、`Index.md`）。它们不会被当作
+ * 条目读取，写入路径也拒绝产生它们；已有的变体由 validate 与 doctor 报警告。
+ */
+export async function reservedNameVariants(brainDir: string): Promise<string[]> {
+  if (!existsSync(brainDir)) return []
+  const out: string[] = []
+  for (const item of await readdir(brainDir, { withFileTypes: true })) {
+    if (item.name.startsWith('.')) continue
+    const reserved = item.isDirectory()
+      ? isReservedBrainDir(item.name) &&
+        !(BRAIN_RESERVED_DIRS as readonly string[]).includes(item.name)
+      : isReservedBrainFile(item.name) &&
+        !(BRAIN_RESERVED_FILES as readonly string[]).includes(item.name)
+    if (reserved) out.push(item.isDirectory() ? `${item.name}/` : item.name)
+  }
+  return out.sort()
+}
+
 /** 列出 brain 下所有条目文件的绝对路径（按标识排序）。 */
 export async function listEntryFiles(brainDir: string): Promise<string[]> {
   const out: string[] = []

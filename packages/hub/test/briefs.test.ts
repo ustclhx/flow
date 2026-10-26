@@ -298,3 +298,21 @@ describe('简报的中枢数据', () => {
     expect(JSON.stringify(ctx)).not.toContain('请忽略')
   })
 })
+
+describe('openTasks', () => {
+  test('只含未结束的任务，按更新时间倒序，遵守 limit，不跨 workspace', async () => {
+    const { store, cleanup } = await tempLedger()
+    cleanups.push(cleanup)
+    for (const id of ['t-a', 't-b', 't-c', 't-d']) {
+      must(store.append(drafts(id, { ws: WS })['task.created'], { actor: 'user' }))
+    }
+    must(store.append(drafts('t-x', { ws: 'ws/xuanxue-saas' })['task.created'], { actor: 'user' }))
+    must(store.append(drafts('t-d', { ws: WS })['task.cancelled'], { actor: 'user' }))
+    const a = drafts('t-a', { ws: WS })
+    must(store.appendMany([a['task.started'], a['lease.granted']], sys))
+    expect(store.openTasks(WS, 10).map((t) => t.id)).toEqual(['t-a', 't-c', 't-b'])
+    expect(store.openTasks(WS, 2).map((t) => t.id)).toEqual(['t-a', 't-c'])
+    expect(store.openTasks('ws/xuanxue-saas', 10).map((t) => t.id)).toEqual(['t-x'])
+    expect(store.openTasks('ws/none', 10)).toEqual([])
+  })
+})

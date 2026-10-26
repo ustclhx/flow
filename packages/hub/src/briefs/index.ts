@@ -35,6 +35,15 @@ export interface SupervisorBinding {
   origin: string
 }
 
+/**
+ * 由鉴权中间件的认定结果取唤醒绑定（中枢 run.ts 使用）：只有唤醒绑定 token 认证的请求有绑定，
+ * 其他认证方式一律返回 null（supervisor 的写请求因此失败即拒绝）。
+ */
+export function wakeBinding(c: Context): SupervisorBinding | null {
+  const auth = c.get('auth')
+  return auth?.kind === 'wake' ? { workspace: auth.wake.workspace, origin: auth.wake.origin } : null
+}
+
 export interface BriefRoutesDeps {
   ledger: Pick<LedgerStore, 'openTasks' | 'listInboxItems' | 'recentEvents'>
   home: string
@@ -168,11 +177,23 @@ export function createBriefRoutes(deps: BriefRoutesDeps): Hono {
     if (denied) return respond(c, denied, briefUpdateData)
     return respond(c, await writeBrief(deps.home, parsed.data, { actor }), briefUpdateData)
   })
-  // TODO(G5)：接入唤醒绑定后，对绑定的 supervisor 只返回其绑定 workspace 的数据（其余 workspace 403）。
   app.get(ENDPOINTS['briefs-context'].path, (c) => {
     const parsed = briefContextQuery.safeParse(c.req.query())
     if (!parsed.success) {
       return respond(c, fail('usage', 'invalid_arguments', '简报查询参数不合法'), briefContextData)
+    }
+    // 已绑定唤醒的 supervisor 只能读绑定 workspace 的中枢数据。
+    const binding = deps.binding(c)
+    if (binding && binding.workspace !== parsed.data.workspace) {
+      return respond(
+        c,
+        fail(
+          'failure',
+          'workspace_mismatch',
+          `本次唤醒绑定 ${binding.workspace}，不能读取 ${parsed.data.workspace} 的简报数据`,
+        ),
+        briefContextData,
+      )
     }
     return respond(c, ok(briefContext(deps.ledger, parsed.data.workspace)), briefContextData)
   })
