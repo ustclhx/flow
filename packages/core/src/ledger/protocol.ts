@@ -82,6 +82,20 @@ export const PROTOCOL_ERRORS = {
   scope_denied: { status: 403, kind: 'failure' },
   role_not_allowed: { status: 403, kind: 'failure' },
   secret_suspected: { status: 400, kind: 'usage' },
+  // add-m1-supervisor：任务创建的校验（D2、D4、D5）与唤醒、委托（G1 的账本校验也对外暴露）
+  parent_not_found: { status: 422, kind: 'failure' },
+  workspace_mismatch: { status: 403, kind: 'failure' },
+  reserved_idempotency_key: { status: 403, kind: 'failure' },
+  parent_required: { status: 403, kind: 'failure' },
+  proposal_required: { status: 403, kind: 'failure' },
+  reply_only_wake: { status: 403, kind: 'failure' },
+  repo_not_in_workspace: { status: 403, kind: 'failure' },
+  limit_exceeded: { status: 429, kind: 'failure' },
+  review_rounds_exceeded: { status: 429, kind: 'failure' },
+  duplicate_wake: { status: 409, kind: 'failure' },
+  not_delegable: { status: 409, kind: 'failure' },
+  duplicate_delegation: { status: 409, kind: 'failure' },
+  not_delegated: { status: 409, kind: 'failure' },
   hub_busy: { status: 503, kind: 'retryable' },
   /** base_hash 与当前内容不一致（brief_update）。 */
   conflict: { status: 409, kind: 'failure' },
@@ -227,6 +241,18 @@ export const isNodeActor = (a: string) => a.toLowerCase().startsWith('node:')
 export const isDeclarableActor = (a: string) =>
   a === 'user' || (!isReservedName(a) && !isNodeActor(a))
 
+/**
+ * 只由中枢按租约签发唤醒绑定 token 认定的身份（add-m1-supervisor D6）：`supervisor`（不区分大小写）。
+ * 它仍是合法的角色名与 `flow mcp --actor`（本机第一道防线不变），但在中枢 HTTP 鉴权中
+ * user token 不能用 `X-Flow-Actor` 降级声明它，也不能签发为绑定 token。
+ */
+export const HUB_ISSUED_ACTORS = ['supervisor'] as const
+export const isHubIssuedActor = (a: string) =>
+  (HUB_ISSUED_ACTORS as readonly string[]).includes(a.toLowerCase())
+
+/** 中枢 HTTP 上 user token 可以用 `X-Flow-Actor` 声明的身份：可声明、且不是中枢签发的身份。 */
+export const isHttpDeclarableActor = (a: string) => isDeclarableActor(a) && !isHubIssuedActor(a)
+
 export const hubTokenId = z
   .string()
   .regex(/^tok_[0-9a-f]{12}$/, 'token id 格式为 tok_ 加 12 位十六进制')
@@ -238,6 +264,9 @@ const NODE_ACTOR_RE = /^node:[A-Za-z0-9][A-Za-z0-9._-]{0,57}$/
 export const boundActor = actor
   .refine((a) => !isReservedName(a), {
     message: `绑定 token 的身份不能是 ${RESERVED_ACTORS.join('、')}（不区分大小写）`,
+  })
+  .refine((a) => !isHubIssuedActor(a), {
+    message: `${HUB_ISSUED_ACTORS.join('、')} 只由中枢按唤醒租约签发，不能签发为绑定 token`,
   })
   .refine((a) => !isNodeActor(a) || NODE_ACTOR_RE.test(a), {
     message: '节点身份应为 node:<节点 id>（小写 node:）',
@@ -600,6 +629,10 @@ export const leaseGrant = z
     resume: taskResume
       .optional()
       .meta({ description: '任务带着回复重新排队时，本次执行要带上的回复与会话 id' }),
+    wake_token: z.string().min(16).optional().meta({
+      description:
+        '唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略',
+    }),
   })
   .meta({ title: 'Lease grant' })
 export type LeaseGrant = z.infer<typeof leaseGrant>

@@ -3,7 +3,12 @@ import type { LedgerStore } from '../ledger/store.ts'
 import { type HubClock, systemClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
 import { createNodeRoutes } from './routes.ts'
-import { createNodeService, type NodeProtocolConfig, type NodeService } from './service.ts'
+import {
+  createNodeService,
+  type NodeProtocolConfig,
+  type NodeService,
+  type NodeServiceOptions,
+} from './service.ts'
 import { createSleepDetector, type SleepDetector } from './sleep.ts'
 
 /**
@@ -15,7 +20,9 @@ import { createSleepDetector, type SleepDetector } from './sleep.ts'
 export const EXPIRY_SWEEP_MS = 5_000
 export const SLEEP_CHECK_MS = 1_000
 
-export interface NodeProtocolOptions extends NodeProtocolConfig {
+export interface NodeProtocolOptions
+  extends NodeProtocolConfig,
+    Pick<NodeServiceOptions, 'issueWakeToken'> {
   ledger: LedgerStore
   clock?: HubClock
   logger?: Pick<HubLogger, 'warn'>

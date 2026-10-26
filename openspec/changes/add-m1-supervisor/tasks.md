@@ -13,13 +13,13 @@
 
 ## 2. 中枢：任务创建的校验
 
-- [ ] 2.1 所有身份的 `parent` 校验（存在、同 workspace）；`supervisor:` 幂等键前缀只允许 hub
-- [ ] 2.2 `hub` 身份跳过 `creatable_by` 的显式分支，并测试 `hub` 不能由请求头或 MCP 声明；`kind: supervisor` 只能由 hub 建，`kind: merge` 只能由 hub 与 user 建；唤醒绑定 token（领租约时签发、绑定 workspace 与唤醒 task_id、租约结束失效），中枢据此识别 supervisor 调用方，`X-Flow-Actor: supervisor` 降级与 `flow hub token issue supervisor` 均被拒；`docs/hub-auth.md` 补签发规则
-- [ ] 2.3 origin 计算与固化（D2）：只有挂在唤醒链上或经接受提案建的任务有 origin；`user.instruction`、`supervisor.release` 只接受 user 身份；reviewer_roles 任务的目标由中枢模板重写
-- [ ] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（realpath）；第 0 步 reply 唤醒 → `reply_only_wake`
-- [ ] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数；超限错误码
-- [ ] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（G2 已完成模板部分；端到端测试未做）
-- [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试
+- [x] 2.1 所有身份的 `parent` 校验（存在、同 workspace）；`supervisor:` 幂等键前缀只允许 hub
+- [x] 2.2 `hub` 身份跳过 `creatable_by` 的显式分支，并测试 `hub` 不能由请求头或 MCP 声明；`kind: supervisor` 只能由 hub 建，`kind: merge` 只能由 hub 与 user 建；唤醒绑定 token（领租约时签发、绑定 workspace 与唤醒 task_id、租约结束失效），中枢据此识别 supervisor 调用方，`X-Flow-Actor: supervisor` 降级与 `flow hub token issue supervisor` 均被拒；`docs/hub-auth.md` 补签发规则
+- [x] 2.3 origin 计算与固化（D2）：只有挂在唤醒链上或经接受提案建的任务有 origin；`user.instruction`、`supervisor.release` 只接受 user 身份；reviewer_roles 任务的目标由中枢模板重写
+- [x] 2.4 supervisor 建任务的检查（D5）：唤醒 parent、autonomous 下禁止 write、禁止 merge/supervisor、cwd 与 repo 必须在本 workspace 仓库内（realpath）；第 0 步 reply 唤醒 → `reply_only_wake`
+- [x] 2.5 硬性上限（D4）：每次唤醒建任务数、链深度、同一 PR 修改轮数；超限错误码
+- [x] 2.6 `policies.yaml` 模板加入注释掉的 supervisor `task.create` auto 规则；未启用时建任务走审批的端到端测试（fake 执行器）。（G2 已完成模板部分；端到端测试未做）
+- [ ] 2.7 supervisor 不能 `task_reply`、接受或驳回提案、批准合并的测试（已完成：唤醒绑定 token 调用 `task_reply` 与收件箱 accept/reject/approve/deny/reply 均 403 `user_only` 的测试；`merge_request` 条目与合并批准路由由 4.5、4.8 实现后补对应测试）
 
 ## 3. 中枢：唤醒调度器
 

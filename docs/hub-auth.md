@@ -8,6 +8,7 @@
 |---|---|---|
 | user token | `state/hub.token`（0600，首次启动生成） | `user`；可用 `X-Flow-Actor` 降级为 AI 身份 |
 | 绑定 token | `flow hub token issue <actor>` 签发，`fht_` 前缀 | 固定为签发时绑定的 actor |
+| 唤醒绑定 token | 中枢在节点领到 supervisor 唤醒任务时签发，`fwk_` 前缀（见下文"唤醒绑定 token"） | 固定为 `supervisor`，绑定该次唤醒 |
 
 绑定 token 的记录保存在 `state/hub-tokens.json`（0600），每条只有：
 `id`（`tok_` + 12 位十六进制）、`actor`、`sha256`（token 的摘要）、`issued_at`、`note`（可选）、
@@ -26,7 +27,9 @@
   上一律返回 403 `remote_not_allowed`**，只能用于以后的远程端口。
 
 保留身份不能签发，比较时不区分大小写：`user`、`hub`、`scheduler`、`policy`、`unknown`（`User`、`HUB`
-等变体同样拒绝）；`node:` 前缀必须小写并后接合法的节点 id。
+等变体同样拒绝）；`node:` 前缀必须小写并后接合法的节点 id。`supervisor` 只由中枢按唤醒租约签发，
+`flow hub token issue supervisor`（带不带 `--remote`、大小写变体）一律拒绝；`state/hub-tokens.json`
+中即使有这样的记录，鉴权时也返回 403 `reserved_actor`。
 
 ## 保留身份
 
@@ -36,9 +39,11 @@
 | `hub`、`scheduler`、`policy` | 只由中枢内部写事件时使用 |
 | `unknown` | 历史占位，任何人都不能声明 |
 | `node:*` | 中枢在节点注册与租约流程中按 `node_id` 设置，或签发给 `node:<id>` 的绑定 token |
+| `supervisor` | 只由唤醒绑定 token 认定（add-m1-supervisor D6）；它也是 `kind: supervisor` 角色的保留名 |
 
-user token 降级时不能声明上述任何一个（不区分大小写，包括 `node:*`），否则 403 `reserved_actor`。
-`flow mcp --actor` 也拒绝这些名字。
+user token 降级时不能声明上述任何一个（不区分大小写，包括 `node:*` 与 `supervisor`），否则 403 `reserved_actor`。
+`flow mcp --actor` 拒绝 `supervisor` 之外的这些名字；`flow mcp --actor supervisor` 仍可启动（claude-sdk 为唤醒任务注入），
+但它只有带上唤醒绑定 token（`FLOW_HUB_TOKEN`）时才能访问中枢，用 `state/hub.token` 声明 supervisor 会被拒绝。
 
 ## 鉴权判定
 
@@ -52,6 +57,10 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | 绑定 token | 与绑定身份不一致（包括 `user`） | 403 `actor_mismatch` |
 | 绑定 token（remote） | 不带或一致 | 403 `remote_not_allowed` |
 | 绑定 token（`node:<id>`） | 不带或一致 | `node:<id>`，限节点权限范围 |
+| 绑定 token（身份为 `supervisor`） | 任意 | 403 `reserved_actor` |
+| 唤醒绑定 token（有效） | 不带或 `supervisor` | `supervisor`，绑定该次唤醒 |
+| 唤醒绑定 token（有效） | 其他（包括 `user`） | 403 `actor_mismatch` |
+| 唤醒绑定 token（租约或任务已结束、中枢已重启） | 任意 | 401 `unauthorized` |
 
 摘要比较为常数时间：user token 与每一条绑定记录都比较，不提前退出。
 
@@ -83,6 +92,52 @@ CLI 固定传 cli。读取密钥等只有用户能做的接口使用 `userOnly`�
 传 true 返回 400 `invalid_arguments`，不产生事件。CLI 默认 dry run，只有 `--record` 才入账。
 所有权限拒绝均不产生事件。任务不存在时，策略检查返回 404 `not_found`。
 MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有读取密钥的工具）保留，作为第一道防线。
+
+## 唤醒绑定 token（add-m1-supervisor D6）
+
+supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任** `flow mcp --task`、`FLOW_TASK_ID` 或 `X-Flow-Actor`。
+
+- **签发**：节点领取租约时，如果任务是唤醒任务（以账本中的 `supervisor.wake_started` 为准，不看角色名或 `inputs`），
+  中枢签发一个 `fwk_` 开头的 token，随租约响应的可选字段 `lease.wake_token` 下发一次；其他任务不下发，旧节点忽略该字段。
+  节点把它作为 `FLOW_HUB_TOKEN` 注入该唤醒的 MCP 环境（tasks 5.3）。
+- **绑定**：身份固定为 `supervisor`，绑定唤醒任务 id、workspace 与这次租约；中枢据此得知调用方是哪个唤醒、origin 是什么
+  （instruction、autonomous 或只能回复的 reply）。
+- **失效**：每次请求都对照账本重新核对——租约仍是 active 且未过期、属于该唤醒任务，任务未结束（done、failed、cancelled）。
+  租约结束（完成、过期、重新排队）或任务结束即失效，得到 401 `unauthorized`。明文不入账本、不落盘，中枢内存中只按 sha256
+  保存，**中枢重启后已签发的全部失效**（方向安全：该唤醒之后的 MCP 调用失败，唤醒按普通任务结束或失败）。
+- **范围**：与其他 AI 身份相同的接口（建任务、读任务、读收件箱等）；回复任务、处理收件箱条目（接受或驳回提案、批准）、
+  重建、签发 token 等 user-only 接口一律 403 `user_only`，策略检查 403 `scope_denied`。
+- 日志与账本的脱敏规则识别 `fwk_` 前缀的 token。
+
+## 建任务的中枢校验（add-m1-supervisor D1、D2、D4、D5、D10）
+
+除下文的 `creatable_by` 外，中枢对所有建任务请求还做以下检查（全部在幂等键查找之前，拒绝时不产生事件）：
+
+- **parent**：合同带 `parent` 时，任务必须存在（否则 422 `parent_not_found`）且与新任务同一 workspace（否则 403 `workspace_mismatch`），
+  所有身份（包括 user 与 hub）都检查。
+- **保留幂等键**：`supervisor:` 前缀（不分大小写）只允许 hub（唤醒任务），其他身份 403 `reserved_idempotency_key`。
+- **hub**：显式跳过 `creatable_by`（角色仍须已定义）。
+- **角色有效类别**（D9，按角色配置与合同 `executor` 取更严格者，例如只读角色配 `pr-merge` 执行器按 merge 算）：
+  `kind: supervisor`（以及名为 supervisor 的角色，不论能否加载）只能由 hub 创建，user 得到 403 `role_not_allowed` 并提示改用
+  `flow supervisor wake`；`kind: merge` 只能由 hub 与 user 创建。
+- **origin**（D2）：由中枢计算并写入 `task.created`，之后不变——中枢内部调用方显式给出（接受提案）时用它；`parent` 是唤醒任务时取该唤醒的
+  origin（reply 唤醒不传）；`parent` 有 origin 时继承；其他没有 origin。不取自合同或请求中的任何字段。
+- **审查目标**（D10）：角色在 workspace `supervisor.reviewer_roles` 中且带 `inputs.review` 的任务，调用方写的 `goal` 被丢弃，
+  改为中枢固定模板加 `focus`（模板写明 focus 不改变判定标准）。
+- **supervisor 身份**（由唤醒绑定 token 认定）依次检查：
+  0. 调用方是 reply 唤醒 → 403 `reply_only_wake`；
+  1. 合同 workspace 必须是绑定的 workspace（否则 `workspace_mismatch`）；`parent` 必须就是本次未结束的普通唤醒（否则 403 `parent_required`）；
+  2. 目标类别为 write 且唤醒 origin 为 autonomous → 403 `proposal_required`；
+  3. 目标类别为 merge 或 supervisor → 403 `role_not_allowed`；
+  4. `cwd` 与 `inputs.repo` 必须是绝对路径（或 `~/`），realpath 落在本 workspace 登记仓库内（允许子目录，符号链接按真实路径），
+     两者都没写时 workspace 必须恰好登记一个仓库；验收步骤的 `cwd` 只能是不含 `..` 的相对路径；否则 403 `repo_not_in_workspace`；
+  5. 上限（`supervisor.limits`）：本次唤醒已建任务数达到 `tasks_per_wake` → 429 `limit_exceeded`；新的写类任务合同中出现的 PR 链接
+     已有 `review_rounds` 次 `changes_requested`（只统计 `reviewer_roles` 中 claude-sdk 审查任务的 `result.review.verdict`，链接不分大小写）
+     → 429 `review_rounds_exceeded`。修改任务没有专门的 PR 字段，只能按合同全文中出现的链接关联，不写链接时无法计数（残余风险）。
+- **链深度**：user、hub 之外的身份建任务时，新任务的 `parent` 链深度超过 `supervisor.limits.chain_depth`（默认 8）→ 429 `limit_exceeded`。
+
+**已接受的风险**：能读到 `state/hub.token` 的进程就是 user，它把任务挂到唤醒任务或 instruction 链上时，新任务会继承 instruction origin
+（与下文"信任边界"一致）。唤醒绑定 token 不由 `hub.token` 派生，读到 `hub.token` 也不能伪造 supervisor 身份。
 
 ## 角色创建权限（`creatable_by`）
 

@@ -858,6 +858,11 @@
                   ],
                   "additionalProperties": false,
                   "title": "Task resume"
+                },
+                "wake_token": {
+                  "description": "唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略",
+                  "type": "string",
+                  "minLength": 16
                 }
               },
               "required": [

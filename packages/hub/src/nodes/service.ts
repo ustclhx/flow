@@ -71,6 +71,11 @@ export interface NodeServiceOptions extends NodeProtocolConfig {
   clock?: HubClock
   newLeaseId?: () => string
   newLeaseToken?: () => string
+  /**
+   * 唤醒绑定 token 的签发（add-m1-supervisor D6）：领到 supervisor 唤醒任务时调用，返回值随租约下发
+   * （`wake_token`）；不是唤醒任务时返回 undefined。缺省不签发。
+   */
+  issueWakeToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
 }
 
 export interface AcquireOptions {
@@ -371,6 +376,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     // 被其他请求抢先（理论上不会发生，见文件头）。
     if (!written.ok) return null
     ledger.touchNode(nodeId)
+    const wakeToken = o.issueWakeToken?.({ lease_id: leaseId, task_id: task.id })
     return {
       lease_id: leaseId,
       lease_token: token,
@@ -381,6 +387,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       ttl_s: ttl,
       expires_at: expiresAt,
       ...(resume ? { resume } : {}),
+      ...(wakeToken === undefined ? {} : { wake_token: wakeToken }),
     }
   }
 

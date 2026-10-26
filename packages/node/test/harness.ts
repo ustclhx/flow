@@ -92,18 +92,21 @@ export async function bench(
     readRoles?: boolean
     /** 写入 `config/policies.yaml` 的规则；提供时挂载真实的 `POST /v1/policy/check`。 */
     policies?: unknown[]
+    /** 原样写入 `config/policies.yaml` 的文本（例如 flow init 的模板）；与 policies 二选一。 */
+    policiesYaml?: string
     /** 绑定 token 的存储（测试节点身份的鉴权）。 */
     tokens?: HubTokenStore
   } = {},
   leaseTtlS = 60,
   intercept?: Intercept,
 ): Promise<Bench> {
-  const { readRoles, policies, tokens, ...startOptions } = nodeOptions
+  const { readRoles, policies: rules, policiesYaml, tokens, ...startOptions } = nodeOptions
+  const policies = rules ?? (policiesYaml === undefined ? undefined : [])
   const clock = new ManualClock()
   const home = join(mkdtempSync(join(tmpdir(), 'flow-node-bench-')), 'flow-home')
   if (policies) {
     mkdirSync(join(home, 'config'), { recursive: true })
-    writeFileSync(join(home, 'config', 'policies.yaml'), JSON.stringify(policies))
+    writeFileSync(join(home, 'config', 'policies.yaml'), policiesYaml ?? JSON.stringify(policies))
   }
   const ledger = await openLedger(':memory:', { now: clock.now })
   const tasks = createTaskService({

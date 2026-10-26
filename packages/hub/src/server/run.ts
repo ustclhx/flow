@@ -38,7 +38,12 @@ import {
 } from '../inbox/index.ts'
 import { createTaskRoutes } from '../ledger/routes.ts'
 import { type LedgerStore, openLedger } from '../ledger/store.ts'
-import { createTaskService, roleLookupFromHome, workspaceCheckFromHome } from '../ledger/tasks.ts'
+import {
+  createTaskService,
+  roleLookupFromHome,
+  workspaceCheckFromHome,
+  workspaceLookupFromHome,
+} from '../ledger/tasks.ts'
 import { createNodeProtocol, type NodeProtocol } from '../nodes/protocol.ts'
 import { createPolicyRoutes } from '../policy/routes.ts'
 import { createScheduler, type Scheduler } from '../scheduler/index.ts'
@@ -52,6 +57,7 @@ import { systemClock } from './clock.ts'
 import { consoleLogger } from './maintenance.ts'
 import { type RunningHub, type StartHubOptions, startHub } from './start.ts'
 import { ensureHubToken } from './token.ts'
+import { createWakeTokenAuthority } from './wake-tokens.ts'
 
 export interface RunHubOptions
   extends Omit<StartHubOptions, 'ledger' | 'openLedger' | 'routes' | 'onStop' | 'leaseHolders'> {
@@ -128,9 +134,12 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     const lease = ledger?.activeLease(taskId)
     return lease && Date.parse(lease.expires_at) > clock.now() ? [lease.node_id] : []
   }
+  // 唤醒绑定 token（add-m1-supervisor D6）：领租约时签发，鉴权时按账本核对租约与唤醒。
+  const wakeTokens = createWakeTokenAuthority({ ledger: () => ledger, now: () => clock.now() })
   const started = await startHub({
     ...options,
     leaseHolders,
+    wakeTokens,
     openLedger: async () => {
       // startHub 在打开账本之前已校验过 hub.yaml，这里再读一次取租约参数。
       const loaded = await loadHubConfig(options.home)
@@ -156,6 +165,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       const tasks = createTaskService({
         ledger,
         workspaceExists: workspaceCheckFromHome(options.home),
+        workspaces: workspaceLookupFromHome(options.home),
         roles: roleLookupFromHome(options.home),
         now: () => clock.now(),
       })
@@ -164,6 +174,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         clock,
         leaseTtlS: config.lease_ttl_s,
         leaseWaitMaxS: config.lease_wait_max_s,
+        issueWakeToken: (grant) => wakeTokens.issue(grant),
         onResume: () => scheduler?.resume(),
         ...(options.logger ? { logger: options.logger } : {}),
       })

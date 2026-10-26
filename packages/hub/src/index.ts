@@ -40,5 +40,12 @@ export {
   openTokenStore,
   sha256Hex,
 } from './server/tokens.ts'
+export {
+  createWakeTokenAuthority,
+  WAKE_TOKEN_PREFIX,
+  type WakeCaller,
+  type WakeTokenAuthority,
+  type WakeTokenOptions,
+} from './server/wake-tokens.ts'
 export * from './ui/app.tsx'
 export * from './ui/sessions.ts'

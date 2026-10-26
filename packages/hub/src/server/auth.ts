@@ -4,18 +4,21 @@ import {
   ENDPOINTS,
   type EndpointName,
   HEADERS,
-  isDeclarableActor,
+  isHttpDeclarableActor,
+  isHubIssuedActor,
   isNodeActor,
   USER_ACTOR,
 } from '@flow/core'
 import type { Context, MiddlewareHandler } from 'hono'
 import { errorResponse } from '../app.ts'
 import type { BoundTokenLookup } from './tokens.ts'
+import type { WakeCaller, WakeTokenAuthority } from './wake-tokens.ts'
 
-/** 请求的认证方式：user token（`state/hub.token`）或绑定 token。 */
+/** 请求的认证方式：user token（`state/hub.token`）、绑定 token 或唤醒绑定 token（D6）。 */
 export type AuthInfo =
   | { kind: 'user' }
   | { kind: 'bound'; token_id: string; remote: boolean }
+  | { kind: 'wake'; wake: WakeCaller }
   | { kind: 'none' }
 
 // 子应用无需额外的 Hono 泛型即可读取已校验的审计身份。
@@ -32,6 +35,8 @@ export interface HubAuthOptions {
   /** user token（`state/hub.token`）。 */
   token?: string
   tokens?: BoundTokenLookup
+  /** 唤醒绑定 token（D6）：只有它能认定 `supervisor` 身份。 */
+  wakeTokens?: Pick<WakeTokenAuthority, 'authenticate'>
   /** 某任务未过期的活动租约所属节点 id；用于任务详情与策略检查的 scope 校验。 */
   leaseHolders?: (taskId: string) => readonly string[]
 }
@@ -114,11 +119,15 @@ async function checkNodeScope(
  * | 绑定 token             | 与绑定身份不一致（含 user）       | 403 actor_mismatch      |
  * | 绑定 token（remote）    | 缺省或一致                       | 403 remote_not_allowed  |
  * | 绑定 token（node:<id>） | 缺省或一致                       | node:<id>，限节点协议    |
+ * | 唤醒绑定 token          | 缺省或 supervisor                | supervisor（绑定该唤醒）  |
+ * | 唤醒绑定 token          | 其他                             | 403 actor_mismatch      |
  *
+ * `supervisor` 只能由唤醒绑定 token 认定（D6）：user token 声明它（不分大小写）返回 403 `reserved_actor`，
+ * 绑定 token 的身份是它时同样拒绝。
  * 摘要用常数时间比较；错误响应不包含凭证或账本信息。健康检查不鉴权，身份记为 `unknown`。
  */
 export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
-  const { token, tokens, leaseHolders } = options
+  const { token, tokens, wakeTokens, leaseHolders } = options
   const expected = digest(token ?? '')
   return async (c, next) => {
     if (c.req.method === ENDPOINTS.health.method && c.req.path === ENDPOINTS.health.path) {
@@ -132,9 +141,10 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
     if (!presented) return errorResponse(c, 'unauthorized', '未授权')
     const isUser =
       timingSafeEqual(digest(presented), expected) && token !== undefined && token !== ''
-    // 两种 token 都检查，避免按 token 种类出现时间差。
+    // 各种 token 都检查，避免按 token 种类出现时间差。
     const bound = tokens?.authenticate(presented) ?? null
-    if (!isUser && !bound) return errorResponse(c, 'unauthorized', '未授权')
+    const wake = wakeTokens?.authenticate(presented) ?? null
+    if (!isUser && !bound && !wake) return errorResponse(c, 'unauthorized', '未授权')
 
     const declared = c.req.header(HEADERS.actor)?.trim() ?? ''
     if (declared !== '' && !ACTOR_RE.test(declared)) {
@@ -142,16 +152,20 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
     }
     let actor: string
     if (isUser) {
-      if (declared !== '' && !isDeclarableActor(declared)) {
+      if (declared !== '' && !isHttpDeclarableActor(declared)) {
         return errorResponse(
           c,
           'reserved_actor',
-          `不能声明保留身份 ${declared}（user 之外的保留身份与 node:* 由中枢设置）`,
+          `不能声明保留身份 ${declared}（user 之外的保留身份、node:* 与 supervisor 由中枢设置）`,
         )
       }
       actor = declared === '' ? USER_ACTOR : declared
       c.set('auth', { kind: 'user' })
     } else if (bound) {
+      // supervisor 只能由唤醒绑定 token 认定；即使旧文件中有这样的记录也不接受。
+      if (isHubIssuedActor(bound.actor)) {
+        return errorResponse(c, 'reserved_actor', `绑定 token 不能代表 ${bound.actor}`)
+      }
       if (declared !== '' && declared !== bound.actor) {
         return errorResponse(
           c,
@@ -168,6 +182,16 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
       }
       actor = bound.actor
       c.set('auth', { kind: 'bound', token_id: bound.id, remote: bound.remote })
+    } else if (wake) {
+      if (declared !== '' && declared !== wake.actor) {
+        return errorResponse(
+          c,
+          'actor_mismatch',
+          `该 token 绑定的身份为 ${wake.actor}，不能声明为 ${declared}`,
+        )
+      }
+      actor = wake.actor
+      c.set('auth', { kind: 'wake', wake })
     } else return errorResponse(c, 'unauthorized', '未授权')
     c.set('actor', actor)
     if (policyCheck(c) && actor !== USER_ACTOR && !isNodeActor(actor)) {
