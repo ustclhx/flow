@@ -43,7 +43,7 @@
 
 ## 5. 执行器与节点
 
-- [ ] 5.1 claude-sdk `read_scope: cwd`：PreToolUse 钩子覆盖全部工具，与 `writable_paths` 共用路径判定，覆盖 Glob `pattern`、Grep `glob`；单元测试（cwd 内外、隐藏段、`..`、绝对模式、符号链接、hub.token、未知路径字段）
+- [x] 5.1 claude-sdk `read_scope: cwd`：PreToolUse 钩子覆盖全部工具，与 `writable_paths` 共用路径判定，覆盖 Glob `pattern`、Grep `glob`；单元测试（cwd 内外、隐藏段、`..`、绝对模式、符号链接、hub.token、未知路径字段）
 - [ ] 5.2 claude-sdk 审查准备：`gh` 读 PR、仓库归属校验、记录 head、fetch `pull/<n>/head` 后检出到私有临时 worktree（允许读 `.github/`）、结束后移除、节点启动时 prune 残留、diff 写入任务私有目录；结构化输出（`outputFormat: json_schema`），`reviewed_sha` 由执行器填入；`error_max_structured_output_retries` 等映射为 `review_output_invalid`；只有 `reviewer_roles` 的结果被中枢采信
 - [ ] 5.3 supervisor 会话注入 `--workspace`、`--task` 与 `FLOW_WORKSPACE`、`FLOW_TASK_ID`；注入唤醒绑定 token
 - [ ] 5.4 pr-merge 执行器：条件核对（D10 第 5 步，含至少一项检查）、合并、等待 workflow runs（成功/失败/超时/无 run）；`gh` 可注入，测试不调用真实 gh
@@ -52,7 +52,7 @@
 
 ## 6. 文档
 
-- [ ] 6.1 `docs/supervisor.md`：唤醒来源、origin 与权限、上限、简报、提问、提案与决策、PR 验收链、自动合并的风险与开关、代回复的范围与白名单及其已接受风险（含沙箱外运行 worker 代码与 git hook）；`docs/hub-auth.md` 身份表加保留 actor `supervisor` 与 `task_respond`；policy README 更新合并次序、`push_to`、`gh_scope`、巡检配置、费用说明、已接受风险（hub.token 可读）；`docs/executors.md` 增加 pr-reviewer、pr-merge、`read_scope`；升级步骤（改 `dev.yaml`、启用策略规则与巡检）
+- [ ] 6.1 `docs/supervisor.md`：唤醒来源、origin 与权限、上限、简报、提问、提案与决策、PR 验收链、自动合并的风险与开关、代回复的范围与白名单及其已接受风险（含沙箱外运行 worker 代码与 git hook）；`docs/hub-auth.md` 身份表加保留 actor `supervisor` 与 `task_respond`；policy README 更新合并次序、`push_to`、`gh_scope`、巡检配置、费用说明、已接受风险（hub.token 可读）；`docs/executors.md` 增加 pr-reviewer、pr-merge、`read_scope`；升级步骤（改 `dev.yaml`、启用策略规则与巡检）（已完成：`docs/executors.md` 的 `read_scope` 一节）
 
 ## 7. 真实环境验收
 

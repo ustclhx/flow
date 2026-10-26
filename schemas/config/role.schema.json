@@ -37,6 +37,13 @@
             "minLength": 1
           },
           "description": "仅 claude-sdk 可配置，其他执行器报配置错误；cwd 相对路径 glob（*、**、?，不支持花括号）；原路径与真实路径都须匹配，硬性禁止 ..、越界、隐藏路径、代理指令文件及 NotebookEdit，禁写名称按 NFKC 和 Unicode 大小写折叠比较；[] 禁止全部，缺省沿用原有审批"
+        },
+        "read_scope": {
+          "type": "string",
+          "enum": [
+            "cwd"
+          ],
+          "description": "仅 claude-sdk 可配置，其他执行器报配置错误；cwd：所有工具的路径类参数只能落在合同 cwd 与任务私有目录内，拒绝 ~、..、隐藏路径段、绝对 glob 与符号链接越界，只允许白名单内置工具与字段（Bash、WebFetch、非 Flow 的 MCP 等一律拒绝）；Flow MCP 不受影响"
         }
       },
       "additionalProperties": {}

@@ -29,6 +29,7 @@ import {
 /** permissions.config 与 codex-orca 使用相同的标量约定。 */
 const permissionsSchema = z.strictObject({
   writable_paths: z.never({ error: 'writable_paths 仅适用于 claude-sdk 执行器' }).optional(),
+  read_scope: z.never({ error: 'read_scope 仅适用于 claude-sdk 执行器' }).optional(),
   sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('read-only'),
   config: z.record(z.string().min(1), z.union([z.string(), z.number(), z.boolean()])).default({}),
 })
