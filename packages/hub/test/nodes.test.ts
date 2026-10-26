@@ -18,6 +18,10 @@ class SleepyClock extends FakeClock {
     this.time += ms
     this.slept += ms
   }
+  /** 事件循环被卡住：墙钟与单调时钟一起前进，但期间没有任何定时器触发。 */
+  stall(ms: number) {
+    this.time += ms
+  }
 }
 
 const T0 = Date.parse('2026-10-24T08:00:00.000Z')
@@ -429,6 +433,49 @@ describe('租约过期', () => {
     ])
     await ctx.clock.advance(TTL * 1000 + 1)
     ctx.protocol.sweep()
+    expect(ctx.ledger.getTask(id)?.blocked?.reason).toBe('node_lost')
+  })
+})
+
+describe('中枢被卡住（事件循环得不到调度）', () => {
+  test('卡住结束时先跑的过期扫描不判掉线，排在后面的续约照常生效；之后不续约照常过期', async () => {
+    const ctx = await setup()
+    ctx.register('n1')
+    const id = await ctx.create()
+    const lease = await grant(ctx)
+    ctx.protocol.start()
+    await ctx.clock.advance(10_000)
+    // 卡住超过一个 TTL：租约按墙钟早已到期，但这段时间节点的续约根本没有机会被处理。
+    ctx.clock.stall(TTL * 1000)
+    expect(ctx.protocol.sweep()).toBe(0)
+    expect(ctx.ledger.getTask(id)?.status).toBe('running')
+    expect(ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token }).ok).toBe(
+      true,
+    )
+    // 续约之后不再续：一个 TTL 之后照常过期。
+    await ctx.clock.advance(TTL * 1000 * 3)
+    expect(ctx.ledger.getTask(id)?.blocked?.reason).toBe('node_lost')
+  })
+
+  test('没有续约：卡住的宽限只推迟到卡住结束之后，正常运行一个窗口后照常过期', async () => {
+    const ctx = await setup()
+    ctx.register('n1')
+    const id = await ctx.create()
+    await grant(ctx)
+    ctx.protocol.start()
+    ctx.clock.stall(TTL * 1000 + 1)
+    expect(ctx.protocol.sweep()).toBe(0)
+    await ctx.clock.advance(TTL * 1000 * 3)
+    expect(ctx.ledger.getTask(id)?.blocked?.reason).toBe('node_lost')
+  })
+
+  test('协议未启动（没有采样）时不给宽限', async () => {
+    const ctx = await setup()
+    ctx.register('n1')
+    const id = await ctx.create()
+    await grant(ctx)
+    ctx.clock.stall(TTL * 1000 + 1)
+    expect(ctx.protocol.sweep()).toBe(1)
     expect(ctx.ledger.getTask(id)?.blocked?.reason).toBe('node_lost')
   })
 })

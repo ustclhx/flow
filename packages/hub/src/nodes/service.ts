@@ -102,8 +102,11 @@ export interface NodeService {
   renew(leaseId: string, body: unknown): Result<RenewLeaseData>
   complete(leaseId: string, body: unknown): Result<CompleteLeaseData>
   ackReply(leaseId: string, body: unknown): Result<AckReplyData>
-  /** 处理全部已到期的活动租约，返回处理的数量。 */
-  expireDue(): number
+  /**
+   * 处理全部已到期的活动租约，返回处理的数量。`graceMs`：中枢自身最近被卡住（事件循环得不到调度）的
+   * 时长，到期不足这么久的租约这一轮先不处理——卡住期间节点的续约可能正排在后面等待处理。
+   */
+  expireDue(opts?: { graceMs?: number }): number
   /** 当前挂起的 long-poll 数（测试与诊断）。 */
   waiting(): number
   /** 结束全部等待（返回空结果）并取消订阅。 */
@@ -716,8 +719,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       return after ? ok({ task: after }) : fail('failure', 'internal_error', '任务不可见')
     },
 
-    expireDue() {
-      const now = clock.now()
+    expireDue(opts = {}) {
+      const now = clock.now() - Math.max(0, opts.graceMs ?? 0)
       let handled = 0
       for (const lease of ledger.activeLeases()) {
         // activeLeases 按 expires_at 升序。

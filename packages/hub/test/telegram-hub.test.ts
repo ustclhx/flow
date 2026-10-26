@@ -418,7 +418,23 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
 describe('改绑与解除绑定（PR #34 审查）', () => {
   const OTHER_ID = 7002
 
-  test('已绑定时不加 --rebind 拒绝发码；改绑先通知原 chat，记 channel.rebound，状态显示改绑时间；unlink 后原 chat 被忽略', async () => {
+  /** 中枢停止后账本里的改绑 / 解绑事件（只含 chat 摘要）。 */
+  async function channelEvents(h: string) {
+    await hub?.stop()
+    hub = undefined
+    const ledger = await openLedger(flowPaths(h).ledgerDb)
+    const events = ledger
+      .eventsAfter(0, {}, 10_000)
+      .filter((e) => e.type === 'channel.rebound' || e.type === 'channel.unlinked')
+    ledger.close()
+    expect(JSON.stringify(events)).not.toContain(String(USER_ID))
+    expect(JSON.stringify(events)).not.toContain(String(OTHER_ID))
+    return events.map((e) => [e.type, e.actor])
+  }
+
+  // 改绑与解绑各自一个场景：每个场景只做一次经 gitleaks 钩子的 config 提交（CI 上整条子进程链
+  // 曾逼近 bun 的 5 秒单测时限，unlink 的提交还在运行时被判超时）。
+  test('已绑定时不加 --rebind 拒绝发码；改绑先通知原 chat，记 channel.rebound，状态显示改绑时间', async () => {
     const fake = await new FakeTelegram().start()
     cleanups.push(() => fake.close())
     const h = await makeHome({ bound: true })
@@ -454,8 +470,23 @@ describe('改绑与解除绑定（PR #34 审查）', () => {
     expect(readFileSync(flowPaths(h).channelsConfig, 'utf8')).toContain(`chat_id: ${OTHER_ID}`)
     const status = await api('/v1/hub/status')
     expect(status.body.data.channels[0]?.last_rebound_at).not.toBeNull()
+    // 原 chat 之后被忽略。
+    const before = fake.to(USER_ID).length
+    const u = fake.say('/inbox')
+    await until(() => fake.offsets.some((x) => x > u), '处理原 chat 的消息')
+    expect(fake.to(USER_ID)).toHaveLength(before)
 
-    // 解除绑定：立即生效
+    expect(await channelEvents(h)).toEqual([['channel.rebound', 'user']])
+    await expectNoToken(h, fake.token, [logs, fake.sent])
+  })
+
+  test('unlink：立即生效并提交，之后原 chat 被忽略；重复 unlink 返回 false；记 channel.unlinked', async () => {
+    const fake = await new FakeTelegram().start()
+    cleanups.push(() => fake.close())
+    const h = await makeHome({ bound: true })
+    const { logs, api } = await startHub(h, fake)
+    await until(() => fake.offsets.length > 0, '开始长轮询')
+
     const unlinked = await api('/v1/telegram/unlink', { method: 'POST', body: '{}' })
     expect(unlinked.body.data.unlinked).toBe(true)
     const yaml = readFileSync(flowPaths(h).channelsConfig, 'utf8')
@@ -465,26 +496,14 @@ describe('改绑与解除绑定（PR #34 审查）', () => {
         .toString()
         .trim(),
     ).toBe('channels: 解除 Telegram 绑定')
-    const before = fake.to(OTHER_ID).length
-    const u = fake.say('/inbox', { chat: OTHER_ID })
+    const before = fake.to(USER_ID).length
+    const u = fake.say('/inbox')
     await until(() => fake.offsets.some((x) => x > u), '处理解绑后的消息')
-    expect(fake.to(OTHER_ID)).toHaveLength(before)
+    expect(fake.to(USER_ID)).toHaveLength(before)
     const again = await api('/v1/telegram/unlink', { method: 'POST', body: '{}' })
     expect(again.body.data.unlinked).toBe(false)
 
-    await hub?.stop()
-    hub = undefined
-    const ledger = await openLedger(flowPaths(h).ledgerDb)
-    const events = ledger
-      .eventsAfter(0, {}, 10_000)
-      .filter((e) => e.type === 'channel.rebound' || e.type === 'channel.unlinked')
-    ledger.close()
-    expect(events.map((e) => [e.type, e.actor])).toEqual([
-      ['channel.rebound', 'user'],
-      ['channel.unlinked', 'user'],
-    ])
-    expect(JSON.stringify(events)).not.toContain(String(USER_ID))
-    expect(JSON.stringify(events)).not.toContain(String(OTHER_ID))
+    expect(await channelEvents(h)).toEqual([['channel.unlinked', 'user']])
     await expectNoToken(h, fake.token, [logs, fake.sent])
   })
 
