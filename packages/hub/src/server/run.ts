@@ -46,6 +46,7 @@ import {
 } from '../ledger/tasks.ts'
 import { createNodeProtocol, type NodeProtocol } from '../nodes/protocol.ts'
 import { createPolicyRoutes } from '../policy/routes.ts'
+import { verifyPolicyFromHome } from '../policy/verify.ts'
 import { createScheduler, type Scheduler } from '../scheduler/index.ts'
 import { redactingLogger } from '../secrets/logger.ts'
 import { SecretRedactor } from '../secrets/redactor.ts'
@@ -166,6 +167,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         ledger,
         workspaceExists: workspaceCheckFromHome(options.home),
         workspaces: workspaceLookupFromHome(options.home),
+        verifyPolicy: verifyPolicyFromHome(options.home),
         roles: roleLookupFromHome(options.home),
         now: () => clock.now(),
       })

@@ -557,6 +557,10 @@ export const taskContract = z
           description: 'supervisor 唤醒任务的唤醒原因与事件（只供提示词，不作为权限依据）',
         }),
         review: reviewInputs.optional().meta({ description: '审查任务要审查的 PR 与补充关注点' }),
+        pr: prUrl.optional().meta({
+          description:
+            '写类任务针对的 PR（例如按审查意见修改）；中枢据此统计同一 PR 的修改轮数（D4）',
+        }),
       })
       .optional()
       .meta({

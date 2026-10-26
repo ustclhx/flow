@@ -777,6 +777,12 @@
                           ],
                           "additionalProperties": false,
                           "title": "Review inputs"
+                        },
+                        "pr": {
+                          "description": "写类任务针对的 PR（例如按审查意见修改）；中枢据此统计同一 PR 的修改轮数（D4）",
+                          "type": "string",
+                          "maxLength": 512,
+                          "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$"
                         }
                       },
                       "additionalProperties": {}

@@ -90,6 +90,7 @@ export const PROTOCOL_ERRORS = {
   proposal_required: { status: 403, kind: 'failure' },
   reply_only_wake: { status: 403, kind: 'failure' },
   repo_not_in_workspace: { status: 403, kind: 'failure' },
+  verify_not_allowed: { status: 403, kind: 'failure' },
   limit_exceeded: { status: 429, kind: 'failure' },
   review_rounds_exceeded: { status: 429, kind: 'failure' },
   duplicate_wake: { status: 409, kind: 'failure' },

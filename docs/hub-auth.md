@@ -105,8 +105,16 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 - **失效**：每次请求都对照账本重新核对——租约仍是 active 且未过期、属于该唤醒任务，任务未结束（done、failed、cancelled）。
   租约结束（完成、过期、重新排队）或任务结束即失效，得到 401 `unauthorized`。明文不入账本、不落盘，中枢内存中只按 sha256
   保存，**中枢重启后已签发的全部失效**（方向安全：该唤醒之后的 MCP 调用失败，唤醒按普通任务结束或失败）。
-- **范围**：与其他 AI 身份相同的接口（建任务、读任务、读收件箱等）；回复任务、处理收件箱条目（接受或驳回提案、批准）、
-  重建、签发 token 等 user-only 接口一律 403 `user_only`，策略检查 403 `scope_denied`。
+- **范围**：只能作用于绑定的 workspace。
+  - 建任务：见下文 D5 检查；
+  - 取消任务：只能取消本次唤醒自己建的任务（`parent` 为该唤醒且 `created_by = supervisor`），其他 workspace 的任务
+    403 `workspace_mismatch`，其余 403 `scope_denied`；
+  - 收件箱：只能忽略本 workspace 中自己发起的条目，其他 workspace 403 `workspace_mismatch`；
+  - 节点协议接口（注册节点、领取、续约、提交、ack-reply）与策略检查一律 403 `scope_denied`；
+  - 回复任务、处理收件箱条目（接受或驳回提案、批准）、重建、签发 token 等 user-only 接口一律 403 `user_only`；
+  - 读接口（任务、事件、收件箱列表等）与其他 AI 身份相同。
+- **节点身份被信任**：领到唤醒租约的节点拿到这次唤醒的 token，也就获得了 supervisor 身份。这与节点本来就能以
+  `node:*` 身份执行任意任务的信任边界一致（节点属于可信计算基）。
 - 日志与账本的脱敏规则识别 `fwk_` 前缀的 token。
 
 ## 建任务的中枢校验（add-m1-supervisor D1、D2、D4、D5、D10）
@@ -116,12 +124,16 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 - **parent**：合同带 `parent` 时，任务必须存在（否则 422 `parent_not_found`）且与新任务同一 workspace（否则 403 `workspace_mismatch`），
   所有身份（包括 user 与 hub）都检查。
 - **保留幂等键**：`supervisor:` 前缀（不分大小写）只允许 hub（唤醒任务），其他身份 403 `reserved_idempotency_key`。
+- **保留能力**：非 hub 身份不能在 `requires` 中声明 `wake`（不分大小写），否则 400 `invalid_arguments`。
+- **唤醒任务作为 parent**：只有 hub、user，以及绑定该唤醒的 supervisor 可以；其他身份 403 `parent_required`。
 - **hub**：显式跳过 `creatable_by`（角色仍须已定义）。
-- **角色有效类别**（D9，按角色配置与合同 `executor` 取更严格者，例如只读角色配 `pr-merge` 执行器按 merge 算）：
+- **角色有效类别**（D9，按角色配置与合同 `executor` 取更严格者，例如只读角色配 `pr-merge` 执行器按 merge 算；
+  非 user 身份建的任务只要带 `verify` 至少按 write 算）：
   `kind: supervisor`（以及名为 supervisor 的角色，不论能否加载）只能由 hub 创建，user 得到 403 `role_not_allowed` 并提示改用
   `flow supervisor wake`；`kind: merge` 只能由 hub 与 user 创建。
 - **origin**（D2）：由中枢计算并写入 `task.created`，之后不变——中枢内部调用方显式给出（接受提案）时用它；`parent` 是唤醒任务时取该唤醒的
-  origin（reply 唤醒不传）；`parent` 有 origin 时继承；其他没有 origin。不取自合同或请求中的任何字段。
+  origin（reply 唤醒不传）；`parent` 有 origin 时继承，但 hub、user、supervisor 之外的 AI 身份只在 parent 未结束时继承；
+  其他没有 origin。不取自合同或请求中的任何字段。
 - **审查目标**（D10）：角色在 workspace `supervisor.reviewer_roles` 中且带 `inputs.review` 的任务，调用方写的 `goal` 被丢弃，
   改为中枢固定模板加 `focus`（模板写明 focus 不改变判定标准）。
 - **supervisor 身份**（由唤醒绑定 token 认定）依次检查：
@@ -129,15 +141,25 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
   1. 合同 workspace 必须是绑定的 workspace（否则 `workspace_mismatch`）；`parent` 必须就是本次未结束的普通唤醒（否则 403 `parent_required`）；
   2. 目标类别为 write 且唤醒 origin 为 autonomous → 403 `proposal_required`；
   3. 目标类别为 merge 或 supervisor → 403 `role_not_allowed`；
-  4. `cwd` 与 `inputs.repo` 必须是绝对路径（或 `~/`），realpath 落在本 workspace 登记仓库内（允许子目录，符号链接按真实路径），
-     两者都没写时 workspace 必须恰好登记一个仓库；验收步骤的 `cwd` 只能是不含 `..` 的相对路径；否则 403 `repo_not_in_workspace`；
-  5. 上限（`supervisor.limits`）：本次唤醒已建任务数达到 `tasks_per_wake` → 429 `limit_exceeded`；新的写类任务合同中出现的 PR 链接
-     已有 `review_rounds` 次 `changes_requested`（只统计 `reviewer_roles` 中 claude-sdk 审查任务的 `result.review.verdict`，链接不分大小写）
-     → 429 `review_rounds_exceeded`。修改任务没有专门的 PR 字段，只能按合同全文中出现的链接关联，不写链接时无法计数（残余风险）。
+  4. `cwd` 与 `inputs.repo` 必须是绝对路径（或 `~/`）；先像节点一样词法 `resolve`，再 realpath，落在本 workspace 登记仓库内
+     （允许子目录）；通过后把规范化路径（登记仓库写法加 realpath 中仓库以下部分）写回合同。两者都没写时 workspace 必须恰好登记一个仓库；
+     验收步骤的 `cwd` 只能是不含 `..` 的相对路径；否则 403 `repo_not_in_workspace`。节点执行前还须再核对一次（tasks 5.6）；
+  5. 上限（`supervisor.limits`）：本次唤醒已建任务数达到 `tasks_per_wake` → 429 `limit_exceeded`；新的写类任务关联的 PR 已有
+     `review_rounds` 次 `changes_requested`（只统计 `reviewer_roles` 中 claude-sdk 审查任务的 `result.review.verdict`，链接不分大小写）
+     → 429 `review_rounds_exceeded`。关联的 PR 由中枢推出：本次唤醒事件引用的任务涉及的 PR（审查的 `inputs.review.pr`、
+     `inputs.pr`、`kind: pr` 产物），加上新合同的 `inputs.pr`。数量、轮数与链深度在写入前的同步段再检查一次，并发请求不能绕过。
+- **验收命令**（D5）：非 user 身份（包括 supervisor、user token 降级的 AI 身份）建任务时，合同 `verify` 的每条命令在创建时经策略判定：
+  动作为 `tool:Verify` 加命令识别出的动作，scope 为新任务的 workspace 与角色，前缀严格匹配。只有 `auto` / `auto-report` 放行，
+  否则 403 `verify_not_allowed`，错误中列出未通过的命令。`tool:Verify` 是受保护的工具，`* * auto` 这类通配规则不能放行。
+  `policies.yaml` 模板中有注释掉的 `tool:Verify` 白名单；不启用时，supervisor 建的任务不能带 verify。
 - **链深度**：user、hub 之外的身份建任务时，新任务的 `parent` 链深度超过 `supervisor.limits.chain_depth`（默认 8）→ 429 `limit_exceeded`。
 
-**已接受的风险**：能读到 `state/hub.token` 的进程就是 user，它把任务挂到唤醒任务或 instruction 链上时，新任务会继承 instruction origin
-（与下文"信任边界"一致）。唤醒绑定 token 不由 `hub.token` 派生，读到 `hub.token` 也不能伪造 supervisor 身份。
+**已接受的风险**：
+
+- 能读到 `state/hub.token` 的进程就是 user，它把任务挂到唤醒任务或 instruction 链上时，新任务会继承 instruction origin
+  （与下文"信任边界"一致）。唤醒绑定 token 不由 `hub.token` 派生，读到 `hub.token` 也不能伪造 supervisor 身份。
+- 持有 user token 降级或绑定 token 的 AI 身份，可以把任务挂到**未结束**的 instruction 任务下并继承 instruction origin
+  （挂到唤醒任务下、或挂到已结束的任务下都不行）。
 
 ## 角色创建权限（`creatable_by`）
 

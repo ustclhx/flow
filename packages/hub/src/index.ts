@@ -4,6 +4,7 @@ export * from './channels/index.ts'
 export * from './inbox/index.ts'
 export * from './ledger/index.ts'
 export * from './nodes/index.ts'
+export { verifyPolicyFromHome } from './policy/verify.ts'
 export * from './scheduler/index.ts'
 export * from './secrets/index.ts'
 export {

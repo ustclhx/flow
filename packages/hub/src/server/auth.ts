@@ -201,6 +201,10 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
       const denied = await checkNodeScope(c, actor, leaseHolders)
       if (denied) return denied
     }
+    // 唤醒身份（D6）不能走节点协议：不能注册节点、领取或操作租约（否则可借领取拿到其他任务）。
+    if (c.get('auth').kind === 'wake' && nodeMatchers.some((m) => m.match(c))) {
+      return errorResponse(c, 'scope_denied', 'supervisor 唤醒身份不能访问节点协议接口')
+    }
     await next()
   }
 }

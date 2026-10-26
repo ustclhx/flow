@@ -26,9 +26,11 @@ export {
   checkRepoInWorkspace,
   computeOrigin,
   isReservedIdempotencyKey,
-  prUrlsIn,
+  prsForNewTask,
+  RESERVED_CAPABILITIES,
   type RepoCheckOptions,
   taskKind,
+  wakePrs,
 } from './supervisor-checks.ts'
 export {
   acceptedReplyKinds,
@@ -43,6 +45,7 @@ export {
   roleLookupFromHome,
   type TaskService,
   type TaskServiceOptions,
+  type VerifyPolicyCheck,
   type WorkspaceCheck,
   type WorkspaceInfo,
   type WorkspaceLookup,

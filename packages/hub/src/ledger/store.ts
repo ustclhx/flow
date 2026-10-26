@@ -124,6 +124,8 @@ export interface WakeRecord {
   generation: number
   /** `supervisor.wake_started` 事件的 seq。 */
   seq: number
+  /** 这次唤醒合并的账本事件 seq（`supervisor.wake_started.events`，中枢写入）。 */
+  events: number[]
 }
 
 /** 每张投影表按主键排序后的行（JSON 字段保持原文）。 */
@@ -157,6 +159,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
    * 是则返回该事件记录的 origin、代数与 seq。
    */
   wakeOf(taskId: string): WakeRecord | null
+  /** 这些 seq 的事件所属的任务 id（去重）。 */
+  eventTaskIds(seqs: readonly number[]): string[]
   /** 以某任务为 parent、由某身份创建的任务数（D4 每次唤醒建任务数）。 */
   countChildren(parentId: string, createdBy: string): number
   /**
@@ -1131,14 +1135,28 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         taskId,
       )
       if (!r) return null
-      const p = JSON.parse(r.payload_json) as { origin: WakeOrigin; generation: number }
+      const p = JSON.parse(r.payload_json) as {
+        origin: WakeOrigin
+        generation: number
+        events?: number[]
+      }
       return {
         task_id: taskId,
         workspace: r.workspace,
         origin: p.origin,
         generation: p.generation,
         seq: r.seq,
+        events: p.events ?? [],
       }
+    },
+    eventTaskIds(seqs) {
+      if (seqs.length === 0) return []
+      const rows = all<{ task_id: string }>(
+        `SELECT DISTINCT task_id FROM events
+         WHERE task_id IS NOT NULL AND seq IN (${seqs.map(() => '?').join(', ')})`,
+        ...seqs,
+      )
+      return rows.map((r) => r.task_id)
     },
     countChildren(parentId, createdBy) {
       return (

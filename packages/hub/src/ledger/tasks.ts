@@ -5,6 +5,7 @@ import {
   canCreateRole,
   checkContractSecrets,
   createTaskRequest,
+  decideVerifySteps,
   defaultSupervisorConfig,
   fail,
   formatZodIssues,
@@ -25,6 +26,8 @@ import {
   type TaskOrigin,
   type TaskView,
   USER_ACTOR,
+  type VerifyStep,
+  type VerifyVerdict,
   type Workspace,
 } from '@flow/core'
 import type { EventInput, LedgerStore } from './store.ts'
@@ -36,10 +39,12 @@ import {
   isReservedIdempotencyKey,
   isReviewTask,
   isTerminal,
-  prUrlsIn,
+  prsForNewTask,
   type RepoCheckOptions,
   type RoleForKind,
+  reservedCapabilitiesIn,
   taskKind,
+  wakePrs,
 } from './supervisor-checks.ts'
 
 /**
@@ -130,6 +135,15 @@ export function acceptedReplyKinds(
   return effective === 'awaiting_approval' ? ['approve', 'deny', 'text'] : ['text']
 }
 
+/**
+ * 验收命令的建任务时策略判定（D5）：返回每条命令的判定。中枢里用 `verifyPolicyFromHome`
+ * （读取 policies.yaml）；缺省时没有任何规则，非 user 身份带 verify 的建任务一律被拒。
+ */
+export type VerifyPolicyCheck = (
+  scope: { workspace: string; role: string },
+  steps: readonly VerifyStep[],
+) => Promise<Result<VerifyVerdict[]>>
+
 export interface TaskServiceOptions {
   ledger: LedgerStore
   workspaceExists: WorkspaceCheck
@@ -142,6 +156,8 @@ export interface TaskServiceOptions {
   workspaces?: WorkspaceLookup
   /** 仓库检查的选项（测试注入家目录）。 */
   repoCheck?: RepoCheckOptions
+  /** 验收命令的策略判定；缺省为没有规则（全部拒绝）。 */
+  verifyPolicy?: VerifyPolicyCheck
   now?: () => number
   /** 生成任务 id，默认 `generateTaskId`。 */
   newTaskId?: (nowMs: number) => string
@@ -174,6 +190,8 @@ export interface CreateTaskOptions {
 
 export interface CancelTaskOptions {
   actor: string
+  /** 调用方所在的唤醒（D6，只由路由按唤醒绑定 token 填入）：只能取消本次唤醒建的任务。 */
+  wake?: { task_id: string; workspace: string }
   reason?: string
 }
 
@@ -222,6 +240,8 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       (await o.workspaceExists(ref))
         ? { ref, repos: [], supervisor: defaultSupervisorConfig() }
         : null)
+  const verifyPolicy: VerifyPolicyCheck =
+    o.verifyPolicy ?? (async (scope, steps) => ok(decideVerifySteps([], scope, steps)))
 
   return {
     async createTask(contractInput, opts) {
@@ -264,6 +284,16 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           { field: 'idempotency_key' },
         )
       }
+      // 唤醒调度用的保留能力只有 hub 能声明。
+      const reservedCaps = isHub ? [] : reservedCapabilitiesIn(contract.requires)
+      if (reservedCaps.length > 0) {
+        return fail(
+          'usage',
+          'invalid_arguments',
+          `requires 不能声明保留能力 ${reservedCaps.join('、')}（只供中枢创建唤醒任务）`,
+          [{ field: 'requires', code: 'invalid_field', message: '保留能力只供中枢使用' }],
+        )
+      }
       // D6：supervisor 身份只由唤醒绑定 token 认定；调用方唤醒只能随该身份出现。
       if (isSupervisor && opts.wake === undefined) {
         return fail('failure', 'scope_denied', 'supervisor 身份只能经唤醒绑定 token 创建任务')
@@ -301,8 +331,8 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         }
       }
       // 有效类别（D9）：supervisor 类只能由 hub 建（名为 supervisor 的角色同样按保留名处理，
-      // 角色文件有错时也不放过）；merge 类只能由 hub 与 user 建（D10）。
-      const kind = taskKind(role, contract)
+      // 角色文件有错时也不放过）；merge 类只能由 hub 与 user 建（D10）。非 user 身份带 verify 至少是 write。
+      const kind = taskKind(role, contract, { actor: opts.actor })
       if (!isHub && (kind === 'supervisor' || contract.role.toLowerCase() === SUPERVISOR_ACTOR)) {
         return fail(
           'failure',
@@ -355,12 +385,32 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         }
       }
       const parentWake = parent ? ledger.wakeOf(parent.id) : null
+      // D2：直接挂到唤醒任务下（从而取得唤醒的 origin）只允许 hub、user 与绑定该唤醒的 supervisor。
+      if (
+        parent &&
+        parentWake &&
+        !isHub &&
+        !isUser &&
+        !(callerWake && parent.id === callerWake.task_id)
+      ) {
+        return fail(
+          'failure',
+          'parent_required',
+          `只有中枢、用户与绑定该唤醒的 supervisor 能以唤醒任务 ${parent.id} 为 parent`,
+          { field: 'parent', parent: parent.id },
+        )
+      }
 
       let workspace: WorkspaceInfo | null = null
       const loadWorkspace = async () => {
         workspace ??= await lookupWorkspace(contract.workspace)
         return workspace
       }
+      const unknownWorkspace = () =>
+        fail('failure', 'unknown_workspace', `workspace ${contract.workspace} 未定义`, {
+          field: 'workspace',
+          workspace: contract.workspace,
+        })
 
       if (callerWake) {
         // D6：写类操作只能作用于绑定的 workspace。
@@ -387,12 +437,12 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
             { field: 'parent', wake: callerWake.task_id },
           )
         }
-        // D5 第 2 步：autonomous 唤醒不能直接建写类任务，只能提案。
+        // D5 第 2 步：autonomous 唤醒不能直接建写类任务（含带 verify 的任务），只能提案。
         if (kind === 'write' && callerWake.origin === 'autonomous') {
           return fail(
             'failure',
             'proposal_required',
-            `巡检、回看等自发工作不能直接建写类任务（角色 ${contract.role}），请用 task_propose 提交任务提案`,
+            `巡检、回看等自发工作不能直接建写类任务（角色 ${contract.role}${contract.verify?.length ? '，带验收命令' : ''}），请用 task_propose 提交任务提案`,
             { field: 'role', role: contract.role, kind },
           )
         }
@@ -405,70 +455,99 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           })
         }
         const ws = await loadWorkspace()
-        if (!ws) {
-          return fail('failure', 'unknown_workspace', `workspace ${contract.workspace} 未定义`, {
-            field: 'workspace',
-            workspace: contract.workspace,
-          })
-        }
-        // D5 第 4 步：cwd / inputs.repo 必须在本 workspace 登记仓库内。
+        if (!ws) return unknownWorkspace()
+        // D5 第 4 步：cwd / inputs.repo 必须在本 workspace 登记仓库内；通过后写回规范化路径。
         const repo = await checkRepoInWorkspace(contract, ws, o.repoCheck)
         if (!repo.ok) return repo
-        // D5 第 5 步 / D4：每次唤醒建任务数、同一 PR 的修改轮数。
-        const limits = ws.supervisor.limits
-        const made = ledger.countChildren(callerWake.task_id, SUPERVISOR_ACTOR)
-        if (made >= limits.tasks_per_wake) {
-          return fail(
-            'failure',
-            'limit_exceeded',
-            `本次唤醒已创建 ${made} 个任务，达到上限 ${limits.tasks_per_wake}（supervisor.limits.tasks_per_wake）`,
-            { limit: 'tasks_per_wake', max: limits.tasks_per_wake },
-          )
-        }
-        if (kind === 'write') {
-          for (const pr of prUrlsIn(contract)) {
-            const rounds = ledger.countChangesRequested(
-              contract.workspace,
-              pr,
-              ws.supervisor.reviewer_roles,
-            )
-            if (rounds >= limits.review_rounds) {
-              return fail(
-                'failure',
-                'review_rounds_exceeded',
-                `PR ${pr} 已有 ${rounds} 次 changes_requested，达到上限 ${limits.review_rounds}（supervisor.limits.review_rounds）`,
-                { pr, rounds, max: limits.review_rounds },
-              )
-            }
-          }
+        if (repo.data.cwd !== undefined) contract.cwd = repo.data.cwd
+        if (repo.data.repo !== undefined) {
+          contract.inputs = { ...contract.inputs, repo: repo.data.repo }
         }
       }
 
-      // D4：parent 链深度（user 与 hub 不受限）。
-      if (parent && !isUser && !isHub) {
-        const ws = await loadWorkspace()
-        const max = (ws?.supervisor ?? defaultSupervisorConfig()).limits.chain_depth
-        const depth = chainDepth(ledger, parent, max)
-        if (depth > max) {
+      // D5 第 5 步：非 user 身份建任务时，每条验收命令在创建时经策略判定，只有 auto / auto-report 放行。
+      const verify = contract.verify ?? []
+      if (!isUser && verify.length > 0) {
+        const verdicts = await verifyPolicy(
+          { workspace: contract.workspace, role: contract.role },
+          verify,
+        )
+        if (!verdicts.ok) return verdicts
+        const denied = verdicts.data.filter((v) => !v.allowed)
+        if (denied.length > 0) {
           return fail(
             'failure',
-            'limit_exceeded',
-            `parent 链深度 ${depth} 超过上限 ${max}（supervisor.limits.chain_depth）`,
-            { limit: 'chain_depth', max },
+            'verify_not_allowed',
+            `验收命令未获策略自动放行（policies.yaml 中 tool:Verify 的 auto 规则）：${denied
+              .map((v) => `#${v.index} ${v.command}（${v.level}）`)
+              .join('；')}`,
+            {
+              field: 'verify',
+              denied: denied.map((v) => ({ index: v.index, command: v.command, level: v.level })),
+            },
           )
         }
       }
+
+      // D4 上限与 parent 状态：全部是同步的账本查询。先查一次尽早拒绝，写入前（最后一个 await 之后）
+      // 再查一次，避免并发请求各自通过检查后一起写入。
+      const limitWs = callerWake || (parent && !isUser && !isHub) ? await loadWorkspace() : null
+      const limits = (limitWs?.supervisor ?? defaultSupervisorConfig()).limits
+      const reviewerRoles = (limitWs?.supervisor ?? defaultSupervisorConfig()).reviewer_roles
+      const checkLimits = (): Result<null> => {
+        if (callerWake) {
+          const wakeTask = ledger.getTask(callerWake.task_id)
+          if (!wakeTask || isTerminal(wakeTask)) {
+            return fail('failure', 'parent_required', '本次唤醒已结束，不能再建任务', {
+              field: 'parent',
+              wake: callerWake.task_id,
+            })
+          }
+          const made = ledger.countChildren(callerWake.task_id, SUPERVISOR_ACTOR)
+          if (made >= limits.tasks_per_wake) {
+            return fail(
+              'failure',
+              'limit_exceeded',
+              `本次唤醒已创建 ${made} 个任务，达到上限 ${limits.tasks_per_wake}（supervisor.limits.tasks_per_wake）`,
+              { limit: 'tasks_per_wake', max: limits.tasks_per_wake },
+            )
+          }
+          if (kind === 'write') {
+            for (const pr of prsForNewTask(contract, wakePrs(ledger, callerWake))) {
+              const rounds = ledger.countChangesRequested(contract.workspace, pr, reviewerRoles)
+              if (rounds >= limits.review_rounds) {
+                return fail(
+                  'failure',
+                  'review_rounds_exceeded',
+                  `PR ${pr} 已有 ${rounds} 次 changes_requested，达到上限 ${limits.review_rounds}（supervisor.limits.review_rounds）`,
+                  { pr, rounds, max: limits.review_rounds },
+                )
+              }
+            }
+          }
+        }
+        // D4：parent 链深度（user 与 hub 不受限）。
+        if (parent && !isUser && !isHub) {
+          const depth = chainDepth(ledger, parent, limits.chain_depth)
+          if (depth > limits.chain_depth) {
+            return fail(
+              'failure',
+              'limit_exceeded',
+              `parent 链深度 ${depth} 超过上限 ${limits.chain_depth}（supervisor.limits.chain_depth）`,
+              { limit: 'chain_depth', max: limits.chain_depth },
+            )
+          }
+        }
+        return ok(null)
+      }
+      const early = checkLimits()
+      if (!early.ok) return early
 
       const existing = () => (key === undefined ? null : ledger.findTaskByIdempotencyKey(key))
       const hit = existing()
       if (hit) return ok({ task: hit, created: false })
 
-      if (!(await o.workspaceExists(contract.workspace))) {
-        return fail('failure', 'unknown_workspace', `workspace ${contract.workspace} 未定义`, {
-          field: 'workspace',
-          workspace: contract.workspace,
-        })
-      }
+      if (!(await o.workspaceExists(contract.workspace))) return unknownWorkspace()
 
       // D10 第 2 步：reviewer_roles 角色且带 inputs.review 的任务，丢弃调用方的目标，用中枢模板重写。
       const review = contract.inputs?.review
@@ -478,11 +557,18 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           contract.goal = reviewTaskGoal(review)
         }
       }
-      const origin = computeOrigin(opts.origin, parent ? { task: parent, wake: parentWake } : null)
 
-      // await 之后重新检查幂等键：从这里到 append 都是同步代码，不会与其他请求交错。
+      // 从这里到 append 都是同步代码，不会与其他请求交错：重新检查幂等键、上限与 parent 状态。
       const raced = existing()
       if (raced) return ok({ task: raced, created: false })
+      const late = checkLimits()
+      if (!late.ok) return late
+      const parentNow = parent ? ledger.getTask(parent.id) : null
+      const origin = computeOrigin(
+        opts.origin,
+        parentNow ? { task: parentNow, wake: parentWake } : null,
+        opts.actor,
+      )
 
       let id = newTaskId(now())
       for (let i = 0; ledger.getTask(id) !== null; i++) {
@@ -521,6 +607,21 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
     cancelTask(id, opts) {
       const task = ledger.getTask(id)
       if (!task) return notFound(id)
+      // D6：唤醒身份只能作用于绑定的 workspace，且只能取消本次唤醒自己建的任务。
+      if (opts.wake) {
+        if (task.workspace !== opts.wake.workspace) {
+          return fail(
+            'failure',
+            'workspace_mismatch',
+            `本次唤醒绑定 ${opts.wake.workspace}，不能取消 ${task.workspace} 的任务`,
+          )
+        }
+        if (task.contract.parent !== opts.wake.task_id || task.created_by !== SUPERVISOR_ACTOR) {
+          return fail('failure', 'scope_denied', '唤醒只能取消本次唤醒自己创建的任务')
+        }
+      } else if (opts.actor.toLowerCase() === SUPERVISOR_ACTOR) {
+        return fail('failure', 'scope_denied', 'supervisor 身份只能经唤醒绑定 token 取消任务')
+      }
       const reason = opts.reason === undefined ? {} : { reason: opts.reason }
       const base = { task_id: id, workspace: task.workspace }
       // blocked 但节点仍持有租约（D7a）：与 running 一样经续约通知节点停止执行器。

@@ -117,8 +117,12 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
         cancelTaskData,
       )
     }
+    const auth = c.get('auth')
     const r = tasks.cancelTask(c.req.param('id'), {
       actor: actor.data,
+      ...(auth?.kind === 'wake'
+        ? { wake: { task_id: auth.wake.task_id, workspace: auth.wake.workspace } }
+        : {}),
       ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
     })
     return respond(c, r, cancelTaskData)

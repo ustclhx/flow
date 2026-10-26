@@ -126,6 +126,24 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
 #   action: task.create
 #   level: auto
 ##
+## —— 非 user 身份建任务时的验收命令（verify）白名单（add-m1-supervisor D5）——
+## 验收命令由节点在执行器沙箱之外直接运行。supervisor 等 AI 身份建任务时，中枢在创建时逐条判定：
+## 动作为 tool:Verify 加上命令识别出的动作，只有 auto / auto-report 才允许，否则拒绝（verify_not_allowed）。
+## 不启用下面的规则时，supervisor 建的任务不能带 verify。命令前缀同样严格按原始词匹配。
+## 风险：与代回复白名单相同，批准 pnpm test 等于在沙箱外执行仓库中的脚本。
+# - scope: ws/<id>
+#   action: tool:Verify
+#   level: auto
+#   when: {command_prefix: pnpm check}
+# - scope: ws/<id>
+#   action: tool:Verify
+#   level: auto
+#   when: {command_prefix: pnpm test}
+# - scope: ws/<id>
+#   action: tool:Verify
+#   level: auto
+#   when: {command_prefix: pnpm lint}
+##
 ## —— 卡住时代用户回复的白名单（D15）——
 ## level: supervisor 表示委托给本 workspace 的 supervisor 判断，不是直接放行；
 ## supervisor 拿不准时转交用户，超时或无法唤醒时同样转交用户。

