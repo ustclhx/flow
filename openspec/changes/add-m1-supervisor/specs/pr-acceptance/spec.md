@@ -33,7 +33,7 @@ supervisor SHALL 用 `pr_merge_request{pr, review_task}` 请求合并。中枢 M
 - **THEN** 返回 `merge_not_eligible`
 
 ### Requirement: 合并请求按开关分流
-资格通过后，workspace `supervisor.auto_merge` 为 true 时中枢 SHALL 以 hub 身份直接创建 merger 任务；否则（默认）生成 `source: merge_request` 的 Decide 条目，用户批准后中枢以 hub 身份创建 merger 任务并记录批准者，驳回则唤醒 supervisor。merger 任务的 `parent` MUST 是审查任务。`kind: merge` 的任务 MUST 只能由 hub 与 user 创建。
+资格通过后，workspace `supervisor.auto_merge` 为 true 时中枢 SHALL 以 hub 身份直接创建 merger 任务；否则（默认）生成 `source: merge_request` 的 Decide 条目，用户批准后中枢以 hub 身份创建 merger 任务并记录批准者，驳回则唤醒 supervisor。merger 任务的 `parent` MUST 是审查任务，origin MUST 取自开出该 PR 的任务。`kind: merge` 的任务 MUST 只能由 hub 与 user 创建。
 
 #### Scenario: 默认需要批准
 - **WHEN** `auto_merge` 未配置，supervisor 请求合并

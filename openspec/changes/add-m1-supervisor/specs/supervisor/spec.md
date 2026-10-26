@@ -75,7 +75,7 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 重启后为该事件创建且只创建一次唤醒任务
 
 ### Requirement: 唤醒失败与手动控制
-唤醒任务失败 SHALL 按重试设置重试一次；仍失败 MUST 在收件箱生成 Interrupt 条目并保留该队列。用户 SHALL 能用 `flow supervisor wake <ws> <说明>` 下指令（写入 `user.instruction`），用 `flow supervisor wake <ws> --release <instruction|autonomous>` 放行指定队列（写入 `supervisor.release`，唤醒保持该队列的 origin，不计入每日上限），用 `flow supervisor status [<ws>]` 查看当前唤醒、两条队列长度、今日唤醒次数和最近一次结果。一个 workspace 可用的 `kind: supervisor` 角色 MUST 恰好一个，多于一个时 doctor 报错且不唤醒。
+唤醒任务失败 SHALL 按重试设置重试一次；仍失败 MUST 在收件箱生成 Interrupt 条目并暂停该队列：新事件继续排队但不触发唤醒，直到用户放行或退避时间到（首次 1 小时，每次失败翻倍，最长 24 小时）。用户 SHALL 能用 `flow supervisor wake <ws> <说明>` 下指令（写入 `user.instruction`），用 `flow supervisor wake <ws> --release <instruction|autonomous>` 放行指定队列（写入 `supervisor.release`，唤醒保持该队列的 origin，不计入每日上限），用 `flow supervisor status [<ws>]` 查看当前唤醒、两条队列长度、今日唤醒次数和最近一次结果。一个 workspace 可用的 `kind: supervisor` 角色 MUST 恰好一个，多于一个时 doctor 报错且不唤醒。
 
 #### Scenario: 重试用尽后恢复
 - **WHEN** autonomous 唤醒两次都 `failed`，之后用户运行 `flow supervisor wake product-res --release autonomous`

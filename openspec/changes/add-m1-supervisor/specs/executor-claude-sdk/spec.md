@@ -14,7 +14,7 @@ claude-sdk 角色 SHALL 支持权限字段 `read_scope: cwd`。设置后执行�
 - **THEN** 调用被拒绝
 
 ### Requirement: 审查任务的准备与结构化输出
-合同含 `inputs.review` 时，执行器 SHALL 在会话前用 `gh` 读取 PR、确认仓库属于本 workspace、记录 head SHA、把该 head 检出到任务私有目录下的临时 worktree 作为会话工作目录、把 diff 写入任务私有目录，任务结束后移除 worktree；会话 MUST 以符合审查结论 schema 的结构化输出结束，执行器把它与记录的 head SHA 一起写入 `result.review`；结构化输出失败（含重试用尽）时任务 `failed(review_output_invalid)`。
+合同含 `inputs.review` 时，执行器 SHALL 在会话前用 `gh` 读取 PR、确认仓库属于本 workspace、记录 head SHA、获取 PR head（`pull/<n>/head`）并检出到任务私有目录下的临时 worktree 作为会话工作目录（其中 `.github/` 可读）、把 diff 写入任务私有目录，任务结束后移除 worktree，节点启动时清理残留；会话 MUST 以符合审查结论 schema 的结构化输出结束，执行器把它与记录的 head SHA 一起写入 `result.review`；结构化输出失败（含重试用尽）时任务 `failed(review_output_invalid)`。
 
 #### Scenario: 写入结论
 - **WHEN** 审查会话返回合规结论

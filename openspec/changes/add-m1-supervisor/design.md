@@ -82,7 +82,7 @@ origin 只有两类：
 - 每个 workspace 有两条队列：instruction、autonomous。同一 workspace 同时最多一个未结束（含 `blocked`）的唤醒任务；空闲时**先处理 instruction 队列**。一次唤醒只合并同一条队列里的事件，所以每次唤醒恰好有一个 origin。
 - 队列与代数（generation，每创建一次唤醒加一）由账本投影，中枢重启后恢复。唤醒任务的幂等键为 `supervisor:<ws>:<generation>`；`supervisor:` 前缀保留给 `hub`，其他身份使用返回 `reserved_idempotency_key`。
 - 唤醒任务 `blocked` 时新事件继续排队；用户取消它即放行队列。
-- 唤醒任务失败：按重试设置重试一次；仍失败则进收件箱（Interrupt），该队列暂停，之后新到的同类事件或用户放行时恢复。
+- 唤醒任务失败：按重试设置重试一次；仍失败则进收件箱（Interrupt），该队列暂停：新事件继续排队但不触发唤醒，直到用户 `--release`，或暂停满 1 小时后自动恢复一次（再失败则回到暂停，退避时间翻倍，最长 24 小时）。
 - 手动控制（user-only）：`flow supervisor wake <ws> <说明>` 写一条 `user.instruction`；`flow supervisor wake <ws> --release <instruction|autonomous>` 写 `supervisor.release{queue}`，立刻用该队列现有事件创建一次唤醒，origin 保持该队列的类别。手动放行不计入每日上限。
 - 一个 workspace 只能有一个 `kind: supervisor` 角色可用（全局最多一个，doctor 对多个报错）；唤醒任务使用它。
 - workspace 配置 `supervisor.enabled: false` 或没有 `kind: supervisor` 角色时不唤醒，`/ask` 回复未启用。
@@ -163,7 +163,8 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
    - workspace 配置 `supervisor.reviewer_roles`（默认 `[pr-reviewer]`）；中枢只接受这些角色、执行器为 claude-sdk 的任务产出的 `result.review`。
    - 节点在启动会话前用 `gh` 读取 PR：确认 PR 的仓库是本 workspace 登记仓库的 origin，记录当前 `headRefOid`，把 `gh pr diff` 写入任务私有目录，传给会话；会话不需要 Bash。
    - 目标文字由中枢的固定模板生成：中枢创建 `reviewer_roles` 角色且带 `inputs.review` 的任务时，**丢弃调用方写的 goal**，用模板加 `focus` 重写；模板写明 focus 不改变判定标准。
-   - 节点把 PR 的 `headRefOid` 检出到任务私有目录下的临时 worktree（`git worktree add --detach`），会话的 cwd 就是它，`read_scope` 允许；任务结束后移除。
+   - 节点先 `git fetch origin pull/<n>/head`，再把 `headRefOid` 检出到任务私有目录下的临时 worktree（`git worktree add --detach`），会话的 cwd 就是它，`read_scope` 允许；任务结束后移除，节点启动时 `git worktree prune` 并清理残留的私有目录。
+   - 在审查 worktree 内，`read_scope` 额外允许只读访问 `.github/`（CI 配置的改动风险最高）；其他 `.` 开头的路径仍拒绝。
    - SDK 结构化输出（`outputFormat: json_schema`）给出 `verdict`、`blocking`、`notes`；`reviewed_sha` 由执行器填入预先记录的 head，**不取自模型**。结构化输出失败（包括 `error_max_structured_output_retries`）→ `failed(review_output_invalid)`。
    - `pr-reviewer` 模板：claude-sdk，`allowedTools` 只有 Read、Grep、Glob 和 Flow 只读 MCP，`read_scope: cwd`，不设 `writable_paths`，有效类别 read。
 3. `changes_requested` → supervisor 被唤醒，可以建修改任务（同一分支），受 D4 轮数上限。
@@ -172,7 +173,7 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
    - `review_task` 属于同一 workspace、角色在 `reviewer_roles` 中、`inputs.review.pr` 等于该 PR、`verdict = approve`；
    - 否则 `merge_not_eligible`。
 
-   通过后：`supervisor.auto_merge: true` → 中枢以 `hub` 身份建 merger 任务；否则生成 `source: merge_request` 的收件箱条目（Decide，动作"批准合并""驳回"），用户批准后中枢同样以 `hub` 身份建 merger 任务，批准者记录在 `merge_request.approved` 事件中；驳回则唤醒 supervisor。merger 任务的 `parent` 是审查任务，因此继承 instruction origin，它结束时会唤醒 supervisor。
+   通过后：`supervisor.auto_merge: true` → 中枢以 `hub` 身份建 merger 任务；否则生成 `source: merge_request` 的收件箱条目（Decide，动作"批准合并""驳回"），用户批准后中枢同样以 `hub` 身份建 merger 任务，批准者记录在 `merge_request.approved` 事件中；驳回则唤醒 supervisor。merger 任务的 `parent` 是审查任务，origin 由中枢直接取自开出该 PR 的 dev 任务（资格要求它是 instruction），不继承审查任务；它结束时进入 instruction 队列唤醒 supervisor。
 5. **pr-merge 执行器**（节点上，不调用模型；`gh` 可注入）在本 workspace 登记仓库中执行：
    - 读 PR：open、base 为默认分支、仓库与登记仓库一致、`headRefOid == reviewed_sha`、可合并；
    - 检查：至少有一项检查且全部成功、没有进行中的检查（workspace 配置 `supervisor.allow_no_checks: true` 时允许没有检查）；
