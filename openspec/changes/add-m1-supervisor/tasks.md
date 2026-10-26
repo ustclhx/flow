@@ -54,7 +54,7 @@
 
 ## 6. 文档
 
-- [ ] 6.1 `docs/supervisor.md`：唤醒来源、origin 与权限、上限、简报、提问、提案与决策、PR 验收链、自动合并的风险与开关、代回复的范围与白名单及其已接受风险（含沙箱外运行 worker 代码与 git hook）；`docs/hub-auth.md` 身份表加保留 actor `supervisor` 与 `task_respond`；policy README 更新合并次序、`push_to`、`gh_scope`、巡检配置、费用说明、已接受风险（hub.token 可读）；`docs/executors.md` 增加 pr-reviewer、pr-merge、`read_scope`；升级步骤（改 `dev.yaml`、启用策略规则与巡检）（已完成：`docs/executors.md` 的 `read_scope` 一节；G8 补充了 `docs/executors.md` 的 pr-reviewer 审查准备、pr-merge 与只读角色的执行器强制）
+- [x] 6.1 `docs/supervisor.md`：唤醒来源、origin 与权限、上限、简报、提问、提案与决策、PR 验收链、自动合并的风险与开关、代回复的范围与白名单及其已接受风险（含沙箱外运行 worker 代码与 git hook）；`docs/hub-auth.md` 身份表加保留 actor `supervisor` 与 `task_respond`；policy README 更新合并次序、`push_to`、`gh_scope`、巡检配置、费用说明、已接受风险（hub.token 可读）；`docs/executors.md` 增加 pr-reviewer、pr-merge、`read_scope`；升级步骤（改 `dev.yaml`、启用策略规则与巡检）（已完成：`docs/executors.md` 的 `read_scope` 一节；G8 补充了 `docs/executors.md` 的 pr-reviewer 审查准备、pr-merge 与只读角色的执行器强制）（G15 完成：巡检配置与费用说明写在 `docs/supervisor.md`，policy README 只补 hub.token 已接受风险；`flow init` 目前不生成 `schedules.yaml` 示例，文档给出手写示例）
 
 ## 7. 真实环境验收
 
