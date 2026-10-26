@@ -648,7 +648,15 @@ export class TelegramChannel implements ChannelPlugin {
     if (!parsed || !item || !ids.includes(item.id) || !this.onAction) {
       return this.answer(q.id, '按钮已失效')
     }
-    const r = await this.onAction({ item: item.id, action: parsed.action })
+    let r: Awaited<ReturnType<InboundHandler>>
+    if ('option' in parsed) {
+      // 提问的选项按钮：以该选项原文答复（选项取自条目本身，不取自 callback_data）。
+      const text = item.options?.[parsed.option]
+      if (text === undefined || item.state !== 'open') return this.answer(q.id, '按钮已失效')
+      r = await this.onAction({ item: item.id, action: 'reply', text })
+    } else {
+      r = await this.onAction({ item: item.id, action: parsed.action })
+    }
     return this.answer(
       q.id,
       r.ok

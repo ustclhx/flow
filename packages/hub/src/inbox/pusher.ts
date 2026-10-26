@@ -191,6 +191,12 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
       lines.push(`只进摘要的卡住任务 ${quietTasks.length} 个：`)
       lines.push(...listLines(quietTasks, (i) => `- ${i.title}`))
     }
+    // 决策到期回看提醒（add-m1-supervisor D11：无 workspace 或未启用 supervisor 时只生成 Digest 条目）。
+    const reviews = open.filter((i) => i.source === 'decision')
+    if (reviews.length > 0) {
+      lines.push(`到期待回看的决策 ${reviews.length} 条：`)
+      lines.push(...listLines(reviews, (i) => `- ${i.title}`))
+    }
     lines.push(`待处理的 Decide 条目 ${decide} 个。`)
     lines.push(`可能过时的知识条目 ${stale} 个。`)
     const drafts: EventInput[] = []

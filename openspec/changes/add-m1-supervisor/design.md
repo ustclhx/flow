@@ -217,17 +217,19 @@ MCP 自动放行清单加入 `brief_update`、`ask_user`、`task_propose`、`dec
 
 ### D11. 提问、任务提案与决策
 
-**提问**：`ask_user` 创建 `source: supervisor` 条目（默认 Decide，`source_ref` 为唤醒任务 id，动作 `reply`，有选项时附按钮）。用户回复 → 条目关闭为 `answered`，写 `supervisor.answered{item_id, text, via}` → 唤醒。提问不挂起唤醒任务。7 天未回答 → 关闭为 `expired`，唤醒一次。`inbox_act reply` 的路由扩展到 `supervisor` 来源，仍只有 user 能执行。
+**提问**：`ask_user` 创建 `source: supervisor` 条目（默认 Decide，`source_ref` 为唤醒任务 id，动作 `reply`，有选项时附按钮）。用户回复 → 条目关闭为 `answered`，写 `supervisor.answered{item_id, text, via}` → 唤醒。提问不挂起唤醒任务。7 天未回答 → 关闭为 `expired`，唤醒一次：唤醒事件就是这条 `inbox.item_closed{reason: expired}`（`source: supervisor` 的条目，actor hub，每小时由内部规则 `questions:expire` 检查），origin 取条目 `source_ref` 所指唤醒的 origin。`inbox_act reply` 的路由扩展到 `supervisor` 来源，仍只有 user 能执行；Telegram 的选项按钮（`i:<短 id>:o<序号>`）以条目上保存的选项原文答复，不取 callback 中的文字。
 
 **任务提案**：账本事件 `task_proposal.created|accepted|rejected`，收件箱新来源 `task_proposal`（不复用知识提案的 `proposal` 来源，避免动作路由与 `proposal_removed` 自动关闭的冲突）。
 
 - 草稿必须通过 `createTaskRequest` 校验；workspace 必须是绑定的 workspace；目标角色有效类别不能是 merge 或 supervisor；cwd / repo 必须在本 workspace 登记仓库内。
 - 条目展示角色、执行器、仓库与 cwd、验收命令、目标全文；Telegram 消息附 Web 链接，Web 上可以修改目标后再接受。
-- 接受 → 中枢以 user 身份建任务（`parent` 为提案所在唤醒任务，origin instruction）。
+- 接受 → 中枢以 user 身份建任务（`parent` 为提案所在唤醒任务，origin instruction，幂等键 `task-proposal:<id>`，重试安全）。
+- **验收命令不借 user 身份跳过判定**（二选一中选了更简单的一种）：接受时以 `enforceVerify` 建任务，`verify` 按非 user 身份的 D5 第 5 步规则逐条经策略判定，只有 `auto` / `auto-report` 放行，否则接受失败（`verify_not_allowed`），条目保持打开；提交提案时也先按同样规则预判，注定建不出来的提案直接拒绝。没有选"在 Web 上完整展示 verify 让用户确认"：Telegram 上的一键接受无法保证用户看过命令，且两条路径的行为会不一致。
+- 接受时再核对一次角色类别与仓库（配置可能在提交之后改动过）；`merge_request` 的批准 / 驳回经 `MergeRequestHandler` 接口路由（4.8 接入），未接入时返回 `action_not_available`。
 
 **决策**：提案可带 `title`、`expected_outcome`、`metric`、`review_date`（晚于当天，≤180 天）。接受时中枢以 user 身份写 `brain/decisions/<YYYY-MM-DD>-<slug>.md`（`type: decision`、`status: approved`、`workspace`、`sources` 引用任务 id），任务合同 `context` 引用它。
 
-**回看**：中枢注册一条每天 09:00（中枢时区）的内部规则，扫描 `status: approved` 且 `review_date ≤ 今天`、尚未发过的决策，写 `decision.review_due{path}`（同一决策只写一次，以账本去重；停机错过的在下一次扫描补发）。决策没有 workspace 或该 workspace 未启用 supervisor → 只生成一条 Digest 条目提醒用户。supervisor 用 `decision_review` 追加 `## 回看 YYYY-MM-DD` 一节，并把 `status` 改为 `reviewed`、`last_verified` 改为当天；由中枢以 `hub` 身份代写，只允许本次唤醒关联的那条决策，其他字段与其他决策不可改。这是写入层"AI 不能写 decision"的唯一窄例外。
+**回看**：中枢注册一条每天 09:00（中枢时区）的内部规则（`decisions:review`），并在启动时扫描一次，扫描 `status: approved` 且回看日期已到（早于今天，或就是今天且已过 09:00）、尚未发过的决策，写 `decision.review_due{path, review_date}`（同一决策同一回看日期只写一次，以账本去重；停机错过的在启动或下一次扫描补发）。决策没有 workspace 或该 workspace 未启用 supervisor → 不写 `decision.review_due`，只生成一条 Digest 级的 `source: decision` 条目提醒用户（同样只生成一次，每日摘要列出）。`decision_review` 的"关联决策"以本次唤醒 `supervisor.wake_started.events` 中的 `decision.review_due` 为准，否则 `not_review_target`。supervisor 用 `decision_review` 追加 `## 回看 YYYY-MM-DD` 一节，并把 `status` 改为 `reviewed`、`last_verified` 改为当天；由中枢以 `hub` 身份代写，只允许本次唤醒关联的那条决策，其他字段与其他决策不可改。这是写入层"AI 不能写 decision"的唯一窄例外。
 
 ### D12. 节点为 supervisor 预留执行槽
 

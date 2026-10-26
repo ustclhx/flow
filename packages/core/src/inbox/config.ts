@@ -278,8 +278,8 @@ export interface LevelQuery {
 /**
  * 默认级别（inbox spec "默认分级"）：
  * - awaiting_approval、question、crashed、node_lost：Interrupt；
- * - no_progress、other、待确认提案、supervisor 提问：Decide；
- * - auto-report 策略记录、每日完成情况：Digest。
+ * - no_progress、other、待确认提案、supervisor 提问、任务提案、合并请求：Decide；
+ * - auto-report 策略记录、每日完成情况、决策回看提醒：Digest。
  */
 export function defaultInboxLevel(q: LevelQuery): InboxLevel {
   switch (q.source) {
@@ -287,9 +287,12 @@ export function defaultInboxLevel(q: LevelQuery): InboxLevel {
       return q.reason === 'no_progress' || q.reason === 'other' ? 'decide' : 'interrupt'
     case 'proposal':
     case 'supervisor':
+    case 'task_proposal':
+    case 'merge_request':
       return 'decide'
     case 'policy':
     case 'digest':
+    case 'decision':
       return 'digest'
   }
 }

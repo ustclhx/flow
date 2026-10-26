@@ -1,10 +1,23 @@
 import { z } from 'zod'
 import { scheduleErrorSchema } from '../daemon/schedules.ts'
-import { inboxActData, inboxActRequest, inboxListData, inboxListQuery } from '../inbox/schema.ts'
+import {
+  inboxActData,
+  inboxActRequest,
+  inboxItemView,
+  inboxListData,
+  inboxListQuery,
+  inboxOptions,
+} from '../inbox/schema.ts'
 import { policyDecisionSchema } from '../policy/decide.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { actor, capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
-import { executorInfo, ledgerEvent } from './events.ts'
+import {
+  decisionPath,
+  executorInfo,
+  ledgerEvent,
+  taskProposalDecision,
+  taskProposalId,
+} from './events.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import {
   activity,
@@ -103,6 +116,10 @@ export const PROTOCOL_ERRORS = {
   workspace_mismatch: { status: 403, kind: 'failure' },
   /** reply 唤醒只能调用 task_respond 与只读操作（design D15）。 */
   reply_only_wake: { status: 403, kind: 'failure' },
+  /** 同一 workspace 未回答的提问达到上限（`supervisor.limits.open_questions`，D4、D11）。 */
+  too_many_questions: { status: 429, kind: 'failure' },
+  /** decision_review 的目标不是本次回看唤醒关联的决策（D11）。 */
+  not_review_target: { status: 403, kind: 'failure' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
 export type ProtocolErrorCode = keyof typeof PROTOCOL_ERRORS
@@ -834,6 +851,63 @@ export const briefContextData = z
   .meta({ title: 'GET /v1/briefs/context' })
 export type BriefContextData = z.infer<typeof briefContextData>
 
+// ---------------------------------------------------------------------------
+// supervisor 的提问、任务提案与决策回看（design D7、D11）
+// ---------------------------------------------------------------------------
+
+/** 提问正文的上限（字符）。 */
+export const QUESTION_MAX = 2000
+/** 决策回看结论的上限（字符）。 */
+export const DECISION_REVIEW_MAX = 4000
+
+export const askUserRequest = z
+  .strictObject({
+    workspace: workspaceRef,
+    question: z.string().trim().min(1).max(QUESTION_MAX).meta({ description: '提问全文' }),
+    options: inboxOptions.optional(),
+  })
+  .meta({ title: 'POST /v1/supervisor/questions 请求体' })
+export type AskUserRequest = z.infer<typeof askUserRequest>
+export const askUserData = z
+  .object({ item: inboxItemView })
+  .meta({ title: 'POST /v1/supervisor/questions' })
+
+export const taskProposeRequest = z
+  .strictObject({
+    draft: createTaskRequest.meta({ description: '接受后要建的任务合同草稿' }),
+    reason: z.string().trim().min(1).max(2000).optional().meta({ description: '提案理由' }),
+    decision: taskProposalDecision.optional().meta({
+      description: '接受时写入 brain/decisions/ 的决策（标题、预期效果、衡量指标、回看日期）',
+    }),
+  })
+  .meta({ title: 'POST /v1/task-proposals 请求体' })
+export type TaskProposeRequest = z.infer<typeof taskProposeRequest>
+export const taskProposeData = z
+  .object({ proposal_id: taskProposalId, item: inboxItemView })
+  .meta({ title: 'POST /v1/task-proposals' })
+
+export const decisionReviewRequest = z
+  .strictObject({
+    path: decisionPath,
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .max(DECISION_REVIEW_MAX)
+      .meta({ description: '回看结论：追加到决策的“回看”一节' }),
+  })
+  .meta({ title: 'POST /v1/decisions/review 请求体' })
+export type DecisionReviewRequest = z.infer<typeof decisionReviewRequest>
+export const decisionReviewData = z
+  .object({
+    path: decisionPath,
+    status: z.literal('reviewed'),
+    last_verified: z.string().meta({ description: '回看日期（YYYY-MM-DD，中枢时区）' }),
+    sha: z.string().meta({ description: 'brain 提交 sha' }),
+  })
+  .meta({ title: 'POST /v1/decisions/review' })
+export type DecisionReviewData = z.infer<typeof decisionReviewData>
+
 export interface EndpointDef {
   method: 'GET' | 'POST'
   path: string
@@ -987,6 +1061,27 @@ export const ENDPOINTS = {
     auth: true,
     request: briefContextQuery,
     response: briefContextData,
+  },
+  'supervisor-ask': {
+    method: 'POST',
+    path: '/v1/supervisor/questions',
+    auth: true,
+    request: askUserRequest,
+    response: askUserData,
+  },
+  'task-proposals-create': {
+    method: 'POST',
+    path: '/v1/task-proposals',
+    auth: true,
+    request: taskProposeRequest,
+    response: taskProposeData,
+  },
+  'decisions-review': {
+    method: 'POST',
+    path: '/v1/decisions/review',
+    auth: true,
+    request: decisionReviewRequest,
+    response: decisionReviewData,
   },
   'leases-ack-reply': {
     method: 'POST',

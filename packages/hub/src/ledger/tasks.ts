@@ -186,6 +186,11 @@ export interface CreateTaskOptions {
    * actor 为 supervisor 时必须提供，其他身份不得提供。
    */
   wake?: { task_id: string }
+  /**
+   * 只供中枢内部调用方：即使 actor 为 user，也按非 user 身份的规则对 `verify` 逐条做策略判定（D5 第 5 步）。
+   * 接受任务提案（D11）以 user 身份建任务，但验收命令出自 supervisor 的草稿，不能借 user 身份跳过判定。
+   */
+  enforceVerify?: boolean
 }
 
 export interface CancelTaskOptions {
@@ -467,7 +472,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
 
       // D5 第 5 步：非 user 身份建任务时，每条验收命令在创建时经策略判定，只有 auto / auto-report 放行。
       const verify = contract.verify ?? []
-      if (!isUser && verify.length > 0) {
+      if ((!isUser || opts.enforceVerify === true) && verify.length > 0) {
         const verdicts = await verifyPolicy(
           { workspace: contract.workspace, role: contract.role },
           verify,

@@ -384,6 +384,53 @@ describe('条目消息与交互（telegram-channel "条目消息与交互"）', 
     expect(r.fake.answers.slice(-2).map((a) => a.text)).toEqual(['按钮已失效', '按钮已失效'])
   })
 
+  test('supervisor 提问的选项按钮：点选即以该选项原文答复（选项取自条目）', async () => {
+    const r = await rig()
+    must(
+      r.ledger.append(
+        {
+          type: 'inbox.item_created',
+          payload: {
+            item_id: 'ask.q',
+            level: 'decide',
+            source: 'supervisor',
+            source_ref: 't-1',
+            title: '用哪个方案？',
+            actions: ['reply'],
+            options: ['方案 A', '方案 B'],
+          },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    const base = itemMessage(r.ledger, 'ask.q')
+    const view = r.ledger.getInboxItem('ask.q')
+    const message: ChannelMessage =
+      base.kind === 'item'
+        ? { kind: 'item', item: { ...base.item, options: ['方案 A', '方案 B'] } }
+        : base
+    const ref = await r.plugin.send(message, { signal: new AbortController().signal })
+    must(
+      r.ledger.append(
+        { type: 'inbox.pushed', payload: { channel: 'telegram', ref, item_ids: ['ask.q'] } },
+        { actor: 'hub' },
+      ),
+    )
+    const messageId = Number(ref.split(':')[1])
+    const sent = r.fake.sent.at(-1)
+    expect(sent?.reply_markup?.inline_keyboard[0]).toEqual([
+      { text: '方案 A', callback_data: `i:${view?.short_id}:o0` },
+      { text: '方案 B', callback_data: `i:${view?.short_id}:o1` },
+    ])
+    await r.processed(r.fake.press(messageId, `i:${view?.short_id}:o1`))
+    expect(r.actions).toEqual([{ item: 'ask.q', action: 'reply', text: '方案 B' }])
+    expect(r.fake.answers.at(-1)?.text).toBe('已回复')
+    // 不存在的选项序号：按钮失效。
+    await r.processed(r.fake.press(messageId, `i:${view?.short_id}:o3`))
+    expect(r.actions).toHaveLength(1)
+    expect(r.fake.answers.at(-1)?.text).toBe('按钮已失效')
+  })
+
   test('操作失败时应答失败原因；条目已关闭时提示已处理', async () => {
     const r = await rig({
       act: (req) =>

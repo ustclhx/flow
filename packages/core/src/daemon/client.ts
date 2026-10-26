@@ -4,8 +4,10 @@ import { z } from 'zod'
 import { flowPaths } from '../home.ts'
 import type { InboxActRequest, inboxListQuery } from '../inbox/schema.ts'
 import {
+  type AskUserRequest,
   type BriefUpdateRequest,
   type CancelTaskRequest,
+  type DecisionReviewRequest,
   ENDPOINTS,
   type EndpointName,
   errorBody,
@@ -18,6 +20,7 @@ import {
   okBody,
   type PolicyCheckRequest,
   type ReplyTaskRequest,
+  type TaskProposeRequest,
   type TelegramLinkCodeRequest,
 } from '../ledger/protocol.ts'
 import type { TaskContractInput } from '../ledger/task.ts'
@@ -165,6 +168,15 @@ export class HubClient {
   }
   briefContext(workspace: string) {
     return this.request('briefs-context', { workspace })
+  }
+  askUser(input: AskUserRequest) {
+    return this.request('supervisor-ask', input)
+  }
+  proposeTask(input: TaskProposeRequest) {
+    return this.request('task-proposals-create', input)
+  }
+  reviewDecision(input: DecisionReviewRequest) {
+    return this.request('decisions-review', input)
   }
   listInbox(input: z.input<typeof inboxListQuery> = {}) {
     return this.request('inbox-list', input)

@@ -134,6 +134,12 @@
 
   async function act(card, button, action, text) {
     const id = card.dataset.id
+    // 任务提案：接受时若改过目标，带上修改后的目标（D11）。
+    const goalArea = action === 'accept' ? card.querySelector('textarea[data-goal]') : null
+    const goal =
+      goalArea && goalArea.value.trim() !== goalArea.defaultValue.trim()
+        ? goalArea.value.trim()
+        : ''
     setBusy(card, button, true)
     setStatus(card, '正在提交…')
     inflight++
@@ -142,7 +148,7 @@
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(text ? { action, text } : { action }),
+        body: JSON.stringify({ action, ...(text ? { text } : {}), ...(goal ? { goal } : {}) }),
       })
       let doc = null
       try {
@@ -209,6 +215,7 @@
     if (!target || target.disabled) return
     const card = cardOf(target)
     if (!card) return
+    if (target.dataset.option) return void act(card, target, 'reply', target.dataset.option)
     if (target.dataset.act === 'reply') return openReply(card)
     if (target.hasAttribute('data-cancel')) return closeReply(card)
     if (target.hasAttribute('data-send')) return sendReply(card)

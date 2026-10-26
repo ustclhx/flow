@@ -1,6 +1,7 @@
 import {
   appendCapture,
   chatDigest,
+  EMPTY_INBOX_CONFIG,
   fail,
   flowPaths,
   type HubConfig,
@@ -52,6 +53,14 @@ import { redactingLogger } from '../secrets/logger.ts'
 import { SecretRedactor } from '../secrets/redactor.ts'
 import { createHubSecrets, type HubSecretsOptions } from '../secrets/service.ts'
 import { currentRuntime } from '../serve.ts'
+import {
+  acceptTaskProposal,
+  createSupervisorToolRoutes,
+  rejectTaskProposal,
+  type SupervisorToolsDeps,
+  startSupervisorTools,
+  supervisorActiveFromHome,
+} from '../supervisor-tools/index.ts'
 import { createUiApp, createUiLoginCodeRoutes } from '../ui/app.tsx'
 import { createUiSessions } from '../ui/sessions.ts'
 import { systemClock } from './clock.ts'
@@ -122,6 +131,9 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let ledger: LedgerStore | undefined
   let config: HubConfig | undefined
   let protocol: NodeProtocol | undefined
+  /** supervisor 的提问、任务提案与决策回看（add-m1-supervisor 4.4–4.7）。 */
+  let supervisorTools: SupervisorToolsDeps | undefined
+  let stopSupervisorTools: (() => void) | undefined
   // Web 页面（6.1）：会话只在内存中；Host 校验需要实际监听的端口，启动成功后才填入。
   const uiSessions = createUiSessions({ now: () => clock.now() })
   const activeLedgerFor = () => {
@@ -171,6 +183,22 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         roles: roleLookupFromHome(options.home),
         now: () => clock.now(),
       })
+      const tools: SupervisorToolsDeps = {
+        ledger,
+        tasks,
+        home: options.home,
+        workspaces: workspaceLookupFromHome(options.home),
+        roles: roleLookupFromHome(options.home),
+        verifyPolicy: verifyPolicyFromHome(options.home),
+        levels: () => inbox?.config() ?? EMPTY_INBOX_CONFIG,
+        webUrl: (itemId) =>
+          uiPort === undefined
+            ? null
+            : `http://127.0.0.1:${uiPort}/ui#item-${encodeURIComponent(itemId)}`,
+        supervisorActive: supervisorActiveFromHome(options.home),
+        now: () => clock.now(),
+      }
+      supervisorTools = tools
       protocol = createNodeProtocol({
         ledger,
         clock,
@@ -188,6 +216,11 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         scanProposals: async () => {
           await inbox?.proposals.scan()
         },
+        taskProposals: {
+          accept: (item, o) => acceptTaskProposal(tools, item, o),
+          reject: (item, o) => rejectTaskProposal(tools, item, o),
+        },
+        // TODO(4.8)：mergeRequests 由 pr_merge_request 一组接入（建 merger 任务、merge_request.approved）。
       }
       inboxActions = inboxDeps
       const status = new Hono()
@@ -239,6 +272,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
             binding: wakeBinding,
           }),
         },
+        { path: '/', app: createSupervisorToolRoutes(tools) },
         { path: '/', app: createUiLoginCodeRoutes(uiSessions) },
         {
           path: '/',
@@ -269,6 +303,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       ]
     },
     onStop: async () => {
+      stopSupervisorTools?.()
       await inbox?.stop()
       scheduler?.stop()
       protocol?.stop()
@@ -376,6 +411,10 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       ? { proposalIntervalMs: options.inbox.proposalIntervalMs }
       : {}),
   })
+  if (supervisorTools) {
+    const tools = await startSupervisorTools(supervisorTools, { scheduler, logger })
+    stopSupervisorTools = tools.stop
+  }
   protocol?.start()
   if (options.secrets?.watch !== false) stopWatch = secrets.watch()
   return started

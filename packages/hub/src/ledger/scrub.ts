@@ -58,7 +58,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task.requeued': [['note']],
   'task.cancel_requested': [['reason']],
   // 收件箱条目的文字会外发到渠道（notify-channel "外发内容脱敏"），入账前就按自由文本处理。
-  'inbox.item_created': [['title'], ['body']],
+  'inbox.item_created': [['title'], ['body'], ['options', '*']],
   'inbox.item_updated': [['title'], ['body']],
   'inbox.item_closed': [['note']],
   'inbox.pushed': [['reason']],

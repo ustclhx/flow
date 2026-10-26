@@ -146,6 +146,10 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   /** 某 workspace 中给定类型的最近 limit 条事件，按 seq 倒序（简报的代回复记录等）。 */
   recentEvents(workspace: string, types: readonly EventType[], limit: number): LedgerEvent[]
   hasScheduleFire(ruleId: string, plannedAt: string): boolean
+  /**
+   * 某类型中载荷字段 `key`（顶层）等于 `value` 的事件，按 seq 升序（任务提案、决策回看去重等按载荷查找）。
+   */
+  eventsByPayload(type: EventType, key: string, value: string): LedgerEvent[]
 
   getTask(id: string): TaskView | null
   listTasks(filter?: Partial<ListTasksQuery>): TaskView[]
@@ -322,6 +326,7 @@ interface InboxRow {
   title: string
   body: string
   actions_json: string
+  options_json: string | null
   state: 'open' | 'closed'
   created_seq: number
   created_at: string
@@ -351,6 +356,7 @@ function rowToInbox(r: InboxRow): InboxItemView {
     title: r.title,
     body: r.body,
     actions: JSON.parse(r.actions_json),
+    ...(r.options_json ? { options: JSON.parse(r.options_json) } : {}),
     state: r.state,
     created_at: r.created_at,
     created_by: r.created_by,
@@ -1098,6 +1104,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         ruleId,
         plannedAt,
       )
+    },
+    eventsByPayload(type, key, value) {
+      if (!/^[a-z_]+$/.test(key)) return []
+      return all<EventRow>(
+        `SELECT * FROM events WHERE type = ? AND json_extract(payload_json, '$.${key}') = ?
+         ORDER BY seq`,
+        type,
+        value,
+      ).map(rowToEvent)
     },
     subscribe(listener) {
       listeners.add(listener)

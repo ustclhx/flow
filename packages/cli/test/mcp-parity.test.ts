@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { type Operation, operations } from '@flow/core'
 import { toolInputSchema } from '@flow/mcp'
 import { callJson, connect, initTempHome } from '../../mcp/test/helpers.ts'
@@ -32,6 +35,11 @@ const SAMPLE_INPUTS: Record<string, Json> = {
   kb_journal: { text: '一致性测试日志', workspace: 'ws/product-res' },
   // base_hash 是 sha256 十六进制，schema 采样器构造不出；MCP actor 不是 supervisor，两端同为 role_not_allowed。
   brief_update: { workspace: 'product-res', text: '笔记', base_hash: '0'.repeat(64) },
+  // 合同草稿与决策路径带正则，schema 采样器构造不出；MCP actor 不是 supervisor，两端同为 role_not_allowed。
+  task_propose: {
+    draft: { goal: '一致性提案', workspace: 'ws/product-res', role: 'dev', executor: 'fake' },
+  },
+  decision_review: { path: 'decisions/2026-10-26-parity.md', text: '一致性回看' },
   // content 与 file 二选一，schema 采样器无法推断。
   kb_propose: {
     target: 'notes/parity',
@@ -81,6 +89,15 @@ const kebab = (key: string) => key.replace(/[A-Z_]/g, (c) => `-${c === '_' ? '' 
 
 /** 按 CLI 的映射规则（位置参数 + kebab-case 选项）把输入对象还原成 argv。 */
 function toArgv(op: Operation<never, unknown>, input: Json): string[] {
+  // 对象字段（例如 task_propose 的 draft）没有对应的命令行选项：经 --file 传入完整 JSON。
+  if (
+    op.fileInput &&
+    Object.values(input).some((v) => v !== null && typeof v === 'object' && !Array.isArray(v))
+  ) {
+    const file = join(mkdtempSync(join(tmpdir(), 'flow-parity-input-')), 'input.json')
+    writeFileSync(file, JSON.stringify(input))
+    return [...op.cli.split(' '), '--file', file, '--json', '--actor', ACTOR]
+  }
   const positional = op.positional ?? []
   const args: string[] = []
   for (const key of positional) {

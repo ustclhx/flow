@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import {
   BRAIN_BRIEFS_DIR,
   BRAIN_JOURNAL_DIR,
@@ -141,6 +142,58 @@ export interface PolicyOptions {
    * 条目写入、提案合入等其他路径一律拒绝，包括 user 身份。
    */
   briefWrite?: boolean
+  /**
+   * 本次写入来自中枢的决策回看（`reviewDecision`，design D11）。带上时**只**放行
+   * `checkDecisionReview` 认可的修改，其他任何文件操作一律拒绝。
+   */
+  decisionReview?: boolean
+}
+
+/** 决策回看一节的标题：`## 回看 YYYY-MM-DD`。 */
+export const DECISION_REVIEW_HEADING_RE = /^## 回看 (\d{4}-\d{2}-\d{2})$/m
+
+/**
+ * 决策回看的窄例外（design D11）：只允许
+ * - 整体替换 `decisions/` 下一条 `status: approved` 的决策条目；
+ * - frontmatter 只把 `status` 改为 `reviewed`、`last_verified` 改为回看日期，其他字段原样不变；
+ * - 正文只在原正文末尾追加一节，且以 `## 回看 <同一日期>` 开头。
+ * 任一条不满足即拒绝（`decision_review_denied`）。
+ */
+export function checkDecisionReview(
+  change: FileChange,
+  existing: string | null,
+): Result<never> | null {
+  const deny = (why: string) =>
+    fail('failure', 'decision_review_denied', `决策回看只能追加回看一节：${why}（${change.path}）`)
+  if (change.op !== 'replace') return deny('只能整体替换已有的决策')
+  if (!/^decisions\/[^/]+\.md$/.test(change.path)) return deny('只能修改 decisions/ 下的决策')
+  if (existing === null) return deny('决策不存在')
+  const before = parseFrontmatter(existing)
+  const after = parseFrontmatter(change.content)
+  if (!before.ok || !after.ok) return deny('frontmatter 无法解析')
+  const b = before.data.data
+  const a = after.data.data
+  if (b.type !== 'decision' || b.status !== 'approved')
+    return deny('只能回看 status 为 approved 的决策')
+  if (a.status !== 'reviewed') return deny('status 只能改为 reviewed')
+  const date = a.last_verified
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return deny('last_verified 必须是回看日期')
+  }
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const k of keys) {
+    if (k === 'status' || k === 'last_verified') continue
+    if (!isDeepStrictEqual(a[k], b[k])) return deny(`字段 ${k} 不可修改`)
+  }
+  const oldBody = before.data.body.trimEnd()
+  const newBody = after.data.body
+  if (!newBody.startsWith(oldBody)) return deny('原正文不可修改')
+  const added = newBody.slice(oldBody.length).replace(/^\s+/, '')
+  const heading = DECISION_REVIEW_HEADING_RE.exec(added.split('\n')[0] ?? '')
+  if (!heading || added.split('\n')[0] !== `## 回看 ${date}`) {
+    return deny('追加的内容必须以 "## 回看 <回看日期>" 开头')
+  }
+  return null
 }
 
 /**
@@ -157,6 +210,16 @@ export function checkPolicy(
   const bad = checkRepoPath(change.path)
   if (bad) return bad
   const ai = isAiActor(actor)
+  if (options.decisionReview) {
+    if (repo !== 'brain') return fail('failure', 'decision_review_denied', '决策回看只能写 brain')
+    const kind = classifyBrainPath(change.path)
+    if (kind !== 'entry') {
+      return typeof kind === 'string'
+        ? fail('failure', 'decision_review_denied', `决策回看不能写 ${change.path}`)
+        : kind
+    }
+    return checkDecisionReview(change, existing)
+  }
 
   if (repo === 'raw') {
     // raw 只追加：任何人都只能新建文件，已有文件不得修改或删除。

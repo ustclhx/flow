@@ -55,6 +55,7 @@
             "proposal_rejected",
             "proposal_removed",
             "answered",
+            "expired",
             "dismissed",
             "acted",
             "digested"

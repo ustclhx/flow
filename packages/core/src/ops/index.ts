@@ -10,6 +10,7 @@ import {
   kbProposeOp,
 } from './proposals.ts'
 import { kbGetOp, kbQueryOp, kbSearchOp } from './search.ts'
+import { askUserOp, decisionReviewOp, taskProposeOp } from './supervisor.ts'
 import { taskCancelOp, taskCreateOp, taskListOp, taskReplyOp, taskShowOp } from './tasks.ts'
 import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './workspace.ts'
 
@@ -20,6 +21,7 @@ export * from './journal.ts'
 export * from './operation.ts'
 export * from './proposals.ts'
 export * from './search.ts'
+export * from './supervisor.ts'
 export * from './tasks.ts'
 export * from './workspace.ts'
 
@@ -50,4 +52,7 @@ export const operations = [
   resourceTransferOp,
   wsBriefOp,
   briefUpdateOp,
+  askUserOp,
+  taskProposeOp,
+  decisionReviewOp,
 ] as Operation<never, unknown>[]

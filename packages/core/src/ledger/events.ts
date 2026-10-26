@@ -13,6 +13,7 @@ import {
   inboxCloseReason,
   inboxItemId,
   inboxLevel,
+  inboxOptions,
   inboxSource,
   inboxVia,
 } from '../inbox/schema.ts'
@@ -337,6 +338,9 @@ export const eventPayloads = {
     body: z.string().max(INBOX_BODY_MAX).default(''),
     actions: z.array(inboxAction).default([]).meta({
       description: '可用的操作；忽略（dismiss）总是可用，不写在这里',
+    }),
+    options: inboxOptions.optional().meta({
+      description: 'supervisor 提问的候选答复（2–4 个，D11）；只用于 source=supervisor 的条目',
     }),
     source_seq: z.number().int().min(1).optional().meta({
       description: '触发该条目的账本事件 seq（反应器的幂等键）；提案等账本外的来源没有',

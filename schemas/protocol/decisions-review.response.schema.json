@@ -1,0 +1,47 @@
+{
+  "$id": "https://flow.local/schemas/protocol/decisions-review.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^decisions\\/[A-Za-z0-9][A-Za-z0-9._-]*\\.md$",
+          "description": "决策条目路径（相对 brain/）"
+        },
+        "status": {
+          "type": "string",
+          "const": "reviewed"
+        },
+        "last_verified": {
+          "type": "string",
+          "description": "回看日期（YYYY-MM-DD，中枢时区）"
+        },
+        "sha": {
+          "type": "string",
+          "description": "brain 提交 sha"
+        }
+      },
+      "required": [
+        "path",
+        "status",
+        "last_verified",
+        "sha"
+      ],
+      "additionalProperties": false,
+      "title": "POST /v1/decisions/review"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}
