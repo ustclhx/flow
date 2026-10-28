@@ -205,9 +205,14 @@ describe('codex-exec 无头执行器', () => {
       '标题去掉“（Amazon + eBay）”后，你选择哪种表述？\n  A. 跨境电商选品工作台：流程与实施方案\n  B. 跨境电商选品工作台（多平台）：流程与实施方案',
     ],
     [
-      '问句后跟普通正文',
+      '无选择信号的解释列表',
       'done',
-      '你选择哪种表述？\n  A. 方案甲\n  B. 方案乙\n我已采用默认表述并完成修改。',
+      'Why did the test fail?\n1. The fixture was stale.\n2. The timeout was too short.',
+    ],
+    [
+      '基础英文关键词后接陈述',
+      'blocked',
+      'Should I also delete the old API?\nI have not touched it yet.',
     ],
   ] as const)('最终消息：%s → %s', async (_label, expected, text) => {
     const s = setup(`send(${JSON.stringify(say(text))})`)
@@ -215,8 +220,11 @@ describe('codex-exec 无头执行器', () => {
     if (expected === 'blocked') {
       expect(outcome).toMatchObject({ outcome: 'blocked', reason: 'question' })
       if (outcome.outcome !== 'blocked') return
-      expect(outcome.message).toContain('A. 跨境电商选品工作台：流程与实施方案')
-      expect(outcome.message).toContain('B. 跨境电商选品工作台（多平台）：流程与实施方案')
+      expect(outcome.message).toContain(text.split('\n')[0] ?? '')
+      if (text.includes('A. 跨境电商')) {
+        expect(outcome.message).toContain('A. 跨境电商选品工作台：流程与实施方案')
+        expect(outcome.message).toContain('B. 跨境电商选品工作台（多平台）：流程与实施方案')
+      }
     } else {
       expect(outcome).toMatchObject({ outcome: 'done', result: { summary: text } })
     }

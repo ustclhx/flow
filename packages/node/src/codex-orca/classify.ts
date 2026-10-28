@@ -18,8 +18,8 @@ import type { StuckSnapshot, StuckVerdict } from '../executor.ts'
  * 4. 信任提示：末尾 8 行是完整的信任弹窗布局（`Folder access`、`Trust this folder?`、`1. Trust and continue`、
  *    `2. Quit`，最后一行是 `enter continue · esc quit`），并且没有命中任何授权规则。授权判断排在信任提示之前
  *    （PR #24 审查第 1 条：历史输出或 Reason 里的信任文字，不能让执行器在授权弹窗上按回车）；
- * 5. 提问：最后一条消息以问号结尾，或问号后只有 2–8 个同类编号选项（可带缩进续行）；
- *    也识别后续正文或无问号消息中的"请确认""是否""你希望""需要我""which""should I"等关键词；
+ * 5. 提问：保留最后一行以问号结尾或全文命中原有关键词的基础判定；另识别含选择信号的
+ *    问句段落后接 2–8 个同类编号选项（可带缩进续行和一行回复指令）；
  * 6. PR 链接：最后一条消息中出现 GitHub PR 链接。只用于说明，是否 done 只看 `gh pr list`；
  * 7. 其他。
  *
@@ -83,10 +83,13 @@ const COMPOSER_RE = /^›\s+(?!\d+\.)|\? for shortcuts/
 export const PR_URL_RE = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/
 const QUESTION_END_RE = /[?？][\s)）"'”」*`]*$/
 const QUESTION_WORDS_RE =
-  /请确认|是否|要不要|你希望|您希望|需要我|请告诉我|请选择|(?:你|您)(?:要|想|倾向于?)?(?:选择|选)?(?:哪种|哪一个|哪个方案)|which\b|should I\b|shall I\b|do you want|would you (?:like|prefer)|let me know|please confirm|can you confirm/i
+  /请确认|是否|要不要|你希望|您希望|需要我|请告诉我|请选择|which\b|should I\b|shall I\b|do you want|would you (?:like|prefer)|let me know|please confirm|can you confirm/i
+const CHOICE_SIGNAL_RE =
+  /你|您|选择|选哪|哪种|哪一个|哪个|还是|倾向|which|prefer|should I|do you|would you|\bor\b/i
+const REPLY_INSTRUCTION_RE = /^\s*(?:请?回复|Reply\b|Answer with\b)/i
 /** 数字不接受冒号，标记后须有空白或非 ASCII 内容，避免时间、版本号和 e.g.。 */
 const QUESTION_OPTION_RE =
-  /^([ \t]*)(?:([A-H])[.、)）：:]|[1-9][.、)）]|\([1-9]\)|（[1-9]）|[①-⑧])(?=\s|[\u0080-\uffff])\s*\S.*$/
+  /^([ \t]*)([A-H][.、)）：:]|[1-9][.、)）]|\([1-9]\)|（[1-9]）|[①-⑧])(?=\s|[\u0080-\uffff])\s*\S.*$/
 /** 底部装饰行：快捷键提示、Tip、Worked for、中断提示、分隔线。 */
 const CHROME_RE =
   /^\s*(?:\? for shortcuts|└ Tip:|Tip:|Worked for |■ Conversation interrupted|[─━-]{3,}\s*$)/
@@ -112,16 +115,25 @@ function questionParagraph(lines: readonly string[], at: number): string {
     .replace(/^\s*•\s*/, '')
 }
 
+/** 从前面裁掉背景，保留末尾问句；单行过长时也保留末尾。脱敏在截断前执行。 */
+function questionSummary(text: string, max: number): string {
+  const summary = redactSecrets(text.replace(/\s+/g, ' ').trim())
+  return summary.length > max ? `…${summary.slice(1 - max)}` : summary
+}
+
 /** 只接受同类的显式编号；更深的无标记行归入上一选项。 */
 function questionOptions(lines: readonly string[]): string[] | undefined {
+  const body = nonEmpty(lines)
+  if (REPLY_INSTRUCTION_RE.test(body.at(-1) ?? '')) body.pop()
   const options: string[] = []
-  let style: 'letter' | 'number' | undefined
+  let style: string | undefined
   let optionIndent = 0
-  for (const line of nonEmpty(lines)) {
+  for (const line of body) {
     const marker = QUESTION_OPTION_RE.exec(line)
     const indent = line.match(/^[ \t]*/)?.[0].replace(/\t/g, '    ').length ?? 0
     if (marker) {
-      const nextStyle = marker[2] ? 'letter' : 'number'
+      // 保留标点与括号差异，只归一编号本身：1. 与 2）属于不同类型。
+      const nextStyle = marker[2]?.replace(/[A-H]/, 'A').replace(/[1-9]/, '1').replace(/[①-⑧]/, '①')
       if ((style && style !== nextStyle) || options.length === 8) return
       style = nextStyle
       optionIndent = indent
@@ -135,15 +147,16 @@ function questionOptions(lines: readonly string[]): string[] | undefined {
 
 /** 两种 Codex 执行器共用的提问识别；输入为完整的最后一条代理消息。 */
 export function questionMessage(lines: readonly string[]): string | undefined {
-  let lastQuestion = -1
+  const lastLine = nonEmpty(lines).at(-1) ?? ''
+  // 基础判定与 main 完全一致，选项解析失败不能减少原来识别出的提问。
+  const baseQuestion = QUESTION_END_RE.test(lastLine) || QUESTION_WORDS_RE.test(lines.join('\n'))
   for (let at = 0; at < lines.length; at++) {
     if (!QUESTION_END_RE.test(lines[at] ?? '')) continue
-    lastQuestion = at
-    const suffix = lines.slice(at + 1)
-    if (nonEmpty(suffix).length === 0) return oneLine(questionParagraph(lines, at), 600)
-    const options = questionOptions(suffix)
+    const paragraph = questionParagraph(lines, at)
+    if (!CHOICE_SIGNAL_RE.test(paragraph)) continue
+    const options = questionOptions(lines.slice(at + 1))
     if (options) {
-      const question = oneLine(questionParagraph(lines, at))
+      const question = questionSummary(paragraph, 300)
       // 先为每个选项分配预算，避免整体截断吃掉末尾选项；每项最多 120 字符。
       const optionBudget = Math.min(
         120,
@@ -155,12 +168,9 @@ export function questionMessage(lines: readonly string[]): string | undefined {
       )
     }
   }
-  // 结构不符时仍识别后续正文中的追问，不重复使用前面问句里的关键词。
-  const keywordAt = lines.findLastIndex(
-    (line, at) => at > lastQuestion && QUESTION_WORDS_RE.test(line),
-  )
-  if (keywordAt < 0) return
-  return oneLine(questionParagraph(lines, keywordAt), 600)
+  if (!baseQuestion) return
+  const questionAt = lines.findLastIndex((line) => /[?？]/.test(line))
+  return questionSummary(questionAt >= 0 ? questionParagraph(lines, questionAt) : lastLine, 600)
 }
 
 /** 末尾是否有忙碌标记。 */
