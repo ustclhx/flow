@@ -93,9 +93,11 @@ permissions:
 这两个默认值组合会变成 `--dangerously-bypass-approvals-and-sandbox`，沿用用户原来的脚本做法。
 `permissions.config` 是额外的 Codex `-c key=value`，值支持字符串、数字和布尔值。
 它会影响 Codex 的实际权限和行为，应与审批、沙箱字段一起审查。
-显式配置非 `never` 的 `approval` 时，Flow 默认传入 `-c approvals_reviewer=user`，
+`approval` 未设置或不为 `never` 时，Flow 在角色未显式配置 reviewer 的情况下默认传入 `-c approvals_reviewer=user`，
 防止用户级 `auto_review` 自动处理请求，导致审批无法进入 Flow。
+未传 `-a` 时，Codex 仍使用其配置中的审批策略。
 角色的 `permissions.config.approvals_reviewer` 可覆盖这个默认值；Flow 不修改用户的 Codex 配置文件。
+Codex profile（`profile=...` 或 `-p`）中的同名设置可能覆盖顶层 `-c`，该优先级尚未验证。
 
 收紧权限时可以另建临时角色 `dev-approval.yaml`，并复制一份 dev 提示词或继续引用 `dev.md`：
 
@@ -108,9 +110,9 @@ prompt: dev.md
 permissions:
   approval: on-request
   sandbox: workspace-write
-  config:
-    approvals_reviewer: user
 ```
+
+该示例默认即使用 `approvals_reviewer=user`；仅在需要显式覆盖默认值时配置 `permissions.config.approvals_reviewer`。
 
 ### reviewer：claude-sdk
 
@@ -604,10 +606,11 @@ codex-exec 的提问与 resume，均在真实 harness 上走通。挂起中的�
 临时角色 `dev-approval` 在验证后已从 `config/roles/` 删除，未提交到 config 仓库。
 
 本机已知环境：`~/.codex/config.toml` 信任了 home 目录，并启用了 `approvals_reviewer = "auto_review"`。
-因此新 worktree 不一定出现信任提示，`on-request` 角色也不一定出现需要用户答复的授权请求。
-这不能用来证明信任提示处理或审批送达已被覆盖。为 6.2 另建上面的 dev-approval 角色，
-在 `permissions.config` 中显式设 `approvals_reviewer: user`，并选择确实需要越出沙箱的操作，
-再用 task reply 的 approve 走完闭环。不要为此修改个人 Codex 配置或取消现有 home 信任。
+因此新 worktree 不一定出现信任提示；此前 `on-request` 角色也可能由 Codex 自审批准授权请求。
+这不能用来证明信任提示处理或审批送达已被覆盖。6.2 验收时另建了上面的 dev-approval 角色，
+当时在 `permissions.config` 中显式设 `approvals_reviewer: user`；现在 Flow 默认即设为 `user`，显式设置仅用于覆盖默认值。
+验证审批送达时仍需选择确实需要越出沙箱的操作，再用 task reply 的 approve 走完闭环。
+不要为此修改个人 Codex 配置或取消现有 home 信任。
 
 reviewer 的 canUseTool 审批需要选择不在 allowedTools 中、也未被 Flow 策略自动放行的工具请求；
 triage 则需先得到一条真实提问，再用文字回复验证 exec resume。Codex TUI 文本会随版本变化，

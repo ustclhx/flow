@@ -407,8 +407,8 @@ describe('启动 Codex 的命令', () => {
     )
   })
 
-  test.each([{}, { approval: 'never', sandbox: 'workspace-write' }])(
-    '未启用审批时不默认追加 reviewer：%j',
+  test.each([{}, { config: { approval_policy: 'on-request' } }])(
+    '未设置 approval 时仍默认将授权弹窗交给 Flow：%j',
     (permissions) => {
       const r = buildCodexCommand({
         codexBin: 'codex',
@@ -417,9 +417,20 @@ describe('启动 Codex 的命令', () => {
         role: { name: 'dev', permissions },
       })
       expect(r.ok).toBe(true)
-      if (r.ok) expect(r.data).not.toContain('approvals_reviewer=')
+      if (r.ok) expect(r.data).toContain('-c approvals_reviewer=user')
     },
   )
+
+  test('approval=never 时不默认追加 reviewer', () => {
+    const r = buildCodexCommand({
+      codexBin: 'codex',
+      worktreePath: '/wt',
+      specPath: '/s.md',
+      role: { name: 'dev', permissions: { approval: 'never', sandbox: 'workspace-write' } },
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.data).not.toContain('approvals_reviewer=')
+  })
 
   test.each(['user', 'auto_review', 'guardian_subagent'])(
     '角色显式配置 reviewer=%s 时只传角色值',
