@@ -174,10 +174,19 @@ export function readRoleMayUse(
   )
 }
 
-/** 审查结构化输出的 JSON Schema（与 `schemas/tasks/review-output.schema.json` 同源）。 */
+/**
+ * 审查结构化输出的 JSON Schema（与 `schemas/tasks/review-output.schema.json` 同源）。
+ * 去掉 `$schema` 声明：Claude Code 2.1.311 校验 --json-schema 时不认识 draft 2020-12 的元 schema，进程直接退出。
+ */
 let reviewSchemaCache: Record<string, unknown> | undefined
 export function reviewOutputJsonSchema(): Record<string, unknown> {
-  reviewSchemaCache ??= z.toJSONSchema(reviewOutput, { io: 'input' }) as Record<string, unknown>
+  if (!reviewSchemaCache) {
+    const { $schema: _, ...rest } = z.toJSONSchema(reviewOutput, { io: 'input' }) as Record<
+      string,
+      unknown
+    >
+    reviewSchemaCache = rest
+  }
   return reviewSchemaCache
 }
 
