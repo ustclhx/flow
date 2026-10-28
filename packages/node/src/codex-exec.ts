@@ -345,6 +345,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
           ? replyPrompt(ctx.resume)
           : await taskPrompt(options.home, role.data, contract, ctx.resume)
         if (finished) return
+        // exec 无 -a 选项、不走交互审批，无需默认覆盖 reviewer；read 角色另有隔离的 CODEX_HOME。
         const args = [...command.slice(1), 'exec', '--json']
         for (const [key, value] of Object.entries(perms.data.config))
           args.push('-c', `${key}=${value}`)

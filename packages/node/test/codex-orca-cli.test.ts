@@ -395,7 +395,7 @@ describe('启动 Codex 的命令', () => {
     })
   })
 
-  test('on-request 角色：-a 与 -s', () => {
+  test('on-request 角色：-a 与 -s，并默认将授权弹窗交给 Flow', () => {
     const r = buildCodexCommand({
       codexBin: 'codex',
       worktreePath: '/wt',
@@ -403,9 +403,60 @@ describe('启动 Codex 的命令', () => {
       role: { name: 'dev', permissions: { approval: 'on-request', sandbox: 'workspace-write' } },
     })
     expect(r.ok && r.data).toBe(
-      'cd /wt && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev codex -a on-request -s workspace-write "$(cat /s.md)"',
+      'cd /wt && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev codex -c approvals_reviewer=user -a on-request -s workspace-write "$(cat /s.md)"',
     )
   })
+
+  test.each([{}, { config: { approval_policy: 'on-request' } }])(
+    '未设置 approval 时仍默认将授权弹窗交给 Flow：%j',
+    (permissions) => {
+      const r = buildCodexCommand({
+        codexBin: 'codex',
+        worktreePath: '/wt',
+        specPath: '/s.md',
+        role: { name: 'dev', permissions },
+      })
+      expect(r.ok).toBe(true)
+      if (r.ok) expect(r.data).toContain('-c approvals_reviewer=user')
+    },
+  )
+
+  test('approval=never 时不默认追加 reviewer', () => {
+    const r = buildCodexCommand({
+      codexBin: 'codex',
+      worktreePath: '/wt',
+      specPath: '/s.md',
+      role: { name: 'dev', permissions: { approval: 'never', sandbox: 'workspace-write' } },
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.data).not.toContain('approvals_reviewer=')
+  })
+
+  test.each(['user', 'auto_review', 'guardian_subagent'])(
+    '角色显式配置 reviewer=%s 时只传角色值',
+    (reviewer) => {
+      const r = buildCodexCommand({
+        codexBin: 'codex',
+        worktreePath: '/wt',
+        specPath: '/s.md',
+        role: {
+          name: 'dev',
+          permissions: {
+            approval: 'on-request',
+            sandbox: 'workspace-write',
+            config: { approvals_reviewer: reviewer, service_tier: 'priority' },
+          },
+        },
+      })
+      expect(r.ok).toBe(true)
+      if (r.ok) {
+        expect(r.data.match(/-c approvals_reviewer=\S+/g)).toEqual([
+          `-c approvals_reviewer=${reviewer}`,
+        ])
+        expect(r.data).toContain('-c service_tier=priority')
+      }
+    },
+  )
 })
 
 test('Orca 启动命令把角色身份传给实际子进程，并覆盖终端继承值', async () => {
