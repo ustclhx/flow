@@ -301,6 +301,23 @@ describe('analyzeTail', () => {
     ).toBe('other')
   })
 
+  test.each([
+    ['你倾向 v1.2 还是 v2.0？', 'A. v1.2', 'B. v2.0'],
+    ['Keep config.ts or move to env.ts?', '1. config.ts', '2. env.ts'],
+    ['改 classify.ts 还是 exec.ts？', 'A. classify', 'B. exec'],
+  ])('版本号和文件名中的点不切断选择问句：%s', (prompt, first, second) => {
+    const a = analyzeTail([`• ${prompt}`, first, second])
+    expect(a.kind).toBe('question')
+    expect(a.message).toContain(first)
+    expect(a.message).toContain(second)
+  })
+
+  test.each(['？', '?'])('之前问句的 %s 隔开其选择信号', (end) => {
+    expect(
+      analyzeTail([`• 你看过日志吗${end}根因是什么？`, '1. 配置缺失', '2. 缓存未清理']).kind,
+    ).toBe('other')
+  })
+
   test.each(['采用方案甲还是方案乙？', '采用方案甲还是\n方案乙？', 'Keep the cache or\nclear it?'])(
     '选择信号可在问句内部跨行：%s',
     (text) => {

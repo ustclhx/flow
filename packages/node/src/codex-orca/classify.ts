@@ -153,8 +153,12 @@ export function questionMessage(lines: readonly string[]): string | undefined {
   for (let at = 0; at < lines.length; at++) {
     if (!QUESTION_END_RE.test(lines[at] ?? '')) continue
     const paragraph = questionParagraph(lines, at)
-    // 选择信号只属于最近一个句末标点后的问句，换行本身不切断问句。
-    const questionSentence = paragraph.split(/[。！!.]/).at(-1) ?? ''
+    // 先去掉当前问号，再按句末切分；文件名和版本号中的点不算句末，换行可保留在问句中。
+    const questionSentence =
+      paragraph
+        .replace(QUESTION_END_RE, '')
+        .split(/[。！!？?]|\.(?=\s|$)/)
+        .at(-1) ?? ''
     if (!CHOICE_SIGNAL_RE.test(questionSentence)) continue
     const options = questionOptions(lines.slice(at + 1))
     if (options) {
