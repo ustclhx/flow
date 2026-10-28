@@ -282,6 +282,40 @@ describe('analyzeTail', () => {
   })
 
   test.each([
+    ['已按你的要求完成修复。\n根因是什么？\n1. 配置缺失\n2. 缓存未清理', 'other'],
+    ['我比较了哪种方案更快。\n结论是什么？\n1. 甲\n2. 乙', 'other'],
+    [
+      '已按你的要求开 PR https://github.com/u/flow/pull/3 。改了什么？\n1. 加重试\n2. 加测试',
+      'pr_opened',
+    ],
+  ] as const)('背景中的选择信号不影响当前问句：%s', (text, kind) => {
+    expect(
+      analyzeTail(text.split('\n').map((line, i) => (i === 0 ? `• ${line}` : line))).kind,
+    ).toBe(kind)
+  })
+
+  test.each(['。', '！', '!', '.'])('句末 %s 之前的选择信号不属于当前问句', (end) => {
+    expect(
+      analyzeTail([`• 已按你的要求完成修复${end}`, '根因是什么？', '1. 配置缺失', '2. 缓存未清理'])
+        .kind,
+    ).toBe('other')
+  })
+
+  test.each(['采用方案甲还是方案乙？', '采用方案甲还是\n方案乙？', 'Keep the cache or\nclear it?'])(
+    '选择信号可在问句内部跨行：%s',
+    (text) => {
+      const a = analyzeTail([
+        `• ${text.split('\n')[0]}`,
+        ...text.split('\n').slice(1),
+        'A. 方案甲',
+        'B. 方案乙',
+      ])
+      expect(a.kind).toBe('question')
+      expect(a.message).toContain('A. 方案甲 B. 方案乙')
+    },
+  )
+
+  test.each([
     ['单行长背景', [`• ${'背景说明'.repeat(100)}采用方案甲还是方案乙？`], '采用方案甲还是方案乙？'],
     [
       '多行长背景',
@@ -383,7 +417,10 @@ describe('analyzeTail', () => {
 
   test('提问的关键词：没有问号也算', () => {
     expect(analyzeTail(['• 请确认是否删除旧目录']).kind).toBe('question')
-    expect(analyzeTail(['• Let me know which approach you prefer.']).kind).toBe('question')
+    expect(analyzeTail(['• Let me know which approach you prefer.'])).toMatchObject({
+      kind: 'question',
+      message: 'Let me know which approach you prefer.',
+    })
     expect(analyzeTail(['• 已完成全部修改。']).kind).toBe('other')
   })
 

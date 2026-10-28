@@ -19,7 +19,7 @@ import type { StuckSnapshot, StuckVerdict } from '../executor.ts'
  *    `2. Quit`，最后一行是 `enter continue · esc quit`），并且没有命中任何授权规则。授权判断排在信任提示之前
  *    （PR #24 审查第 1 条：历史输出或 Reason 里的信任文字，不能让执行器在授权弹窗上按回车）；
  * 5. 提问：保留最后一行以问号结尾或全文命中原有关键词的基础判定；另识别含选择信号的
- *    问句段落后接 2–8 个同类编号选项（可带缩进续行和一行回复指令）；
+ *    问句后接 2–8 个同类编号选项（可带缩进续行和一行回复指令）；
  * 6. PR 链接：最后一条消息中出现 GitHub PR 链接。只用于说明，是否 done 只看 `gh pr list`；
  * 7. 其他。
  *
@@ -153,7 +153,9 @@ export function questionMessage(lines: readonly string[]): string | undefined {
   for (let at = 0; at < lines.length; at++) {
     if (!QUESTION_END_RE.test(lines[at] ?? '')) continue
     const paragraph = questionParagraph(lines, at)
-    if (!CHOICE_SIGNAL_RE.test(paragraph)) continue
+    // 选择信号只属于最近一个句末标点后的问句，换行本身不切断问句。
+    const questionSentence = paragraph.split(/[。！!.]/).at(-1) ?? ''
+    if (!CHOICE_SIGNAL_RE.test(questionSentence)) continue
     const options = questionOptions(lines.slice(at + 1))
     if (options) {
       const question = questionSummary(paragraph, 300)
@@ -170,7 +172,10 @@ export function questionMessage(lines: readonly string[]): string | undefined {
   }
   if (!baseQuestion) return
   const questionAt = lines.findLastIndex((line) => /[?？]/.test(line))
-  return questionSummary(questionAt >= 0 ? questionParagraph(lines, questionAt) : lastLine, 600)
+  return questionSummary(
+    questionAt >= 0 ? questionParagraph(lines, questionAt) : lastLine.replace(/^•\s*/, ''),
+    600,
+  )
 }
 
 /** 末尾是否有忙碌标记。 */
