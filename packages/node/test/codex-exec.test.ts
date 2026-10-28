@@ -191,6 +191,30 @@ describe('codex-exec 无头执行器', () => {
     expect(args.at(-1)).not.toContain('<untrusted-goal>')
   })
 
+  test.each([
+    [
+      '带选项提问',
+      'blocked',
+      '标题去掉“（Amazon + eBay）”后，你选择哪种表述？\n  A. 跨境电商选品工作台：流程与实施方案\n  B. 跨境电商选品工作台（多平台）：流程与实施方案',
+    ],
+    [
+      '问句后跟普通正文',
+      'done',
+      '你选择哪种表述？\n  A. 方案甲\n  B. 方案乙\n我已采用默认表述并完成修改。',
+    ],
+  ] as const)('最终消息：%s → %s', async (_label, expected, text) => {
+    const s = setup(`send(${JSON.stringify(say(text))})`)
+    const { outcome } = await collect(s.run())
+    if (expected === 'blocked') {
+      expect(outcome).toMatchObject({ outcome: 'blocked', reason: 'question' })
+      if (outcome.outcome !== 'blocked') return
+      expect(outcome.message).toContain('A. 跨境电商选品工作台：流程与实施方案')
+      expect(outcome.message).toContain('B. 跨境电商选品工作台（多平台）：流程与实施方案')
+    } else {
+      expect(outcome).toMatchObject({ outcome: 'done', result: { summary: text } })
+    }
+  })
+
   test('中枢与节点：提问释放租约，回复重新排队并恢复为 running，再完成', async () => {
     const s = setup(
       `if (!args.includes('resume')) send(question); else { send(resumed.split('\\n')[0] + '\\n' + resumed.split('\\n')[1] + '\\n'); const timer = setInterval(() => { if (fs.existsSync('continue')) { clearInterval(timer); send(resumed) } }, 5) }`,

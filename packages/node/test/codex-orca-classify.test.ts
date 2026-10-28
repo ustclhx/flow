@@ -99,6 +99,64 @@ describe('analyzeTail', () => {
     expect(a).toMatchObject({ kind: 'question', message: '下一步你希望我查看什么？' })
   })
 
+  test('真实标题选择提问：保留选项，去掉终端装饰', () => {
+    const a = analyzeTail([
+      '• 标题去掉“（Amazon + eBay）”后，你选择哪种表述？',
+      '  A. 跨境电商选品工作台：流程与实施方案',
+      '  B. 跨境电商选品工作台（多平台）：流程与实施方案',
+      '  Worked for 9s • 18:43',
+      '› Ask Codex to do anything',
+    ])
+    expect(a.kind).toBe('question')
+    expect(a.message).toContain('标题去掉“（Amazon + eBay）”后，你选择哪种表述？')
+    expect(a.message).toContain('A. 跨境电商选品工作台：流程与实施方案')
+    expect(a.message).toContain('B. 跨境电商选品工作台（多平台）：流程与实施方案')
+    expect(a.message).not.toContain('Worked for')
+    expect(a.message).not.toContain('Ask Codex')
+  })
+
+  test.each([
+    ['A.', 'B.'],
+    ['A)', 'B)'],
+    ['A：', 'B：'],
+    ['1.', '2.'],
+    ['1)', '2)'],
+    ['(1)', '(2)'],
+    ['-', '-'],
+    ['*', '*'],
+  ])('选项支持前导空白和 %s / %s 标记', (first, second) => {
+    const a = analyzeTail([
+      '• 采用方案甲还是方案乙？',
+      '',
+      `  ${first} 方案甲`,
+      '   ',
+      `\t${second} 方案乙`,
+    ])
+    expect(a.kind).toBe('question')
+    expect(a.message).toContain(`${first} 方案甲`)
+    expect(a.message).toContain(`${second} 方案乙`)
+  })
+
+  test.each(['采用方案甲还是方案乙？', '你选择哪种表述？'])(
+    '问句后跟普通正文就不阻塞：%s',
+    (prompt) => {
+      expect(
+        analyzeTail([`• ${prompt}`, '  A. 方案甲', '  B. 方案乙', '  我已采用默认表述并完成修改。'])
+          .kind,
+      ).toBe('other')
+    },
+  )
+
+  test.each([
+    [8, 'question'],
+    [9, 'other'],
+  ] as const)('选项上限边界：%i 行选项判为 %s', (count, kind) => {
+    const options = Array.from({ length: count }, (_, i) => `  ${i + 1}. 方案${i + 1}`)
+    const a = analyzeTail(['• 采用哪一项？', ...options])
+    expect(a.kind).toBe(kind)
+    if (kind === 'question') expect(a.message).toContain(`${count}. 方案${count}`)
+  })
+
   test('授权请求：说明中带上命令；"esc to cancel" 不是忙碌标记', () => {
     const t = tuiFixture('approval').tail
     expect(isBusy(t)).toBe(false)
@@ -149,6 +207,13 @@ describe('analyzeTail', () => {
     expect(analyzeTail(['• Let me know which approach you prefer.']).kind).toBe('question')
     expect(analyzeTail(['• 已完成全部修改。']).kind).toBe('other')
   })
+
+  test.each(['你选择哪项', '你选哪项', '你倾向哪种表述', '你要哪一个', '你倾向哪个方案'])(
+    '无问号的选择提问也能识别：%s',
+    (prompt) => {
+      expect(analyzeTail([`• ${prompt}`])).toMatchObject({ kind: 'question', message: prompt })
+    },
+  )
 
   test('说明经过脱敏', () => {
     const token = ['ghp', 'A'.repeat(36)].join('_')
