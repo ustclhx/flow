@@ -96,17 +96,14 @@ describe('analyzeTail', () => {
       '  下一步你希望我查看什么？',
     ])
     const a = analyzeTail(t)
-    expect(a).toMatchObject({ kind: 'question', message: '下一步你希望我查看什么？' })
+    expect(a).toMatchObject({
+      kind: 'question',
+      message: '根目录 package.json 的 name 字段是 flow。未做任何修改。 下一步你希望我查看什么？',
+    })
   })
 
   test('真实标题选择提问：保留选项，去掉终端装饰', () => {
-    const a = analyzeTail([
-      '• 标题去掉“（Amazon + eBay）”后，你选择哪种表述？',
-      '  A. 跨境电商选品工作台：流程与实施方案',
-      '  B. 跨境电商选品工作台（多平台）：流程与实施方案',
-      '  Worked for 9s • 18:43',
-      '› Ask Codex to do anything',
-    ])
+    const a = analyzeTail(tuiFixture('question-options').tail)
     expect(a.kind).toBe('question')
     expect(a.message).toContain('标题去掉“（Amazon + eBay）”后，你选择哪种表述？')
     expect(a.message).toContain('A. 跨境电商选品工作台：流程与实施方案')
@@ -119,11 +116,19 @@ describe('analyzeTail', () => {
     ['A.', 'B.'],
     ['A)', 'B)'],
     ['A：', 'B：'],
+    ['A:', 'B:'],
+    ['A）', 'B）'],
+    ['A、', 'B、'],
+    ['G.', 'H.'],
     ['1.', '2.'],
     ['1)', '2)'],
+    ['1）', '2）'],
+    ['①', '②'],
     ['(1)', '(2)'],
-    ['-', '-'],
-    ['*', '*'],
+    ['（1）', '（2）'],
+    ['8.', '9.'],
+    ['A.', 'B)'],
+    ['1.', '2）'],
   ])('选项支持前导空白和 %s / %s 标记', (first, second) => {
     const a = analyzeTail([
       '• 采用方案甲还是方案乙？',
@@ -150,11 +155,140 @@ describe('analyzeTail', () => {
   test.each([
     [8, 'question'],
     [9, 'other'],
-  ] as const)('选项上限边界：%i 行选项判为 %s', (count, kind) => {
-    const options = Array.from({ length: count }, (_, i) => `  ${i + 1}. 方案${i + 1}`)
+  ] as const)('选项上限边界：%i 项（含续行）判为 %s', (count, kind) => {
+    const options = Array.from({ length: count }, (_, i) => [
+      `  ${i + 1}. 方案${i + 1}`,
+      '    补充说明',
+    ]).flat()
     const a = analyzeTail(['• 采用哪一项？', ...options])
     expect(a.kind).toBe(kind)
     if (kind === 'question') expect(a.message).toContain(`${count}. 方案${count}`)
+  })
+
+  test.each([
+    ['-', '-'],
+    ['*', '*'],
+    ['a.', 'b.'],
+    ['I.', 'J.'],
+    ['0.', '1.'],
+    ['10.', '11.'],
+    ['1:', '2:'],
+    ['1：', '2：'],
+    ['10:30', '11:30'],
+    ['e.g.', 'e.g.'],
+    ['A.foo', 'B.bar'],
+    ['A)foo', 'B)bar'],
+    ['A）foo', 'B）bar'],
+    ['A:foo', 'B:bar'],
+    ['A：foo', 'B：bar'],
+    ['1.foo', '2.bar'],
+    ['1)foo', '2)bar'],
+    ['1）foo', '2）bar'],
+  ])('普通列表或正文标记 %s / %s 不算选择项', (first, second) => {
+    expect(
+      analyzeTail(['• 采用方案甲还是方案乙？', `  ${first} 已完成甲`, `  ${second} 已完成乙`]).kind,
+    ).toBe('other')
+  })
+
+  test.each([
+    'A.方案甲\nB.方案乙',
+    'A)方案甲\nB）方案乙',
+    'A:方案甲\nB：方案乙',
+    '1.方案甲\n2)方案乙',
+  ])('后缀标记可紧贴非 ASCII 选项：%s', (options) => {
+    expect(analyzeTail(['• 采用方案甲还是方案乙？', ...options.split('\n')]).kind).toBe('question')
+  })
+
+  test.each([
+    { label: '单项', options: ['A. 方案甲'] },
+    { label: '混合字母数字', options: ['A. 方案甲', '2. 方案乙'] },
+  ])('不接受 $label 选项', ({ options }) => {
+    expect(analyzeTail(['• 采用方案甲还是方案乙？', ...options]).kind).toBe('other')
+  })
+
+  test('PR 总结中的无问号数字列表不算提问', () => {
+    expect(
+      analyzeTail(['• PR 已完成，验证结果如下：', '  1. bun test 通过', '  2. bun run lint 通过'])
+        .kind,
+    ).toBe('other')
+    expect(analyzeTail(['• 已完成修改，说明了哪种情况下会触发重试。']).kind).toBe('other')
+    expect(
+      analyzeTail([
+        '• 此前是否需要调整方案？',
+        '  已开 PR https://github.com/example-user/flow/pull/20。',
+        '  - 已完成修改。',
+        '  - bun test 通过。',
+      ]).kind,
+    ).toBe('pr_opened')
+  })
+
+  test('更深缩进的非标记行保留为选项续行', () => {
+    const a = analyzeTail([
+      '• 采用方案甲还是方案乙？',
+      '  A. 方案甲',
+      '     优点：保留现有流程',
+      '  B. 方案乙',
+      '    延续方案乙的说明',
+    ])
+    expect(a.kind).toBe('question')
+    expect(a.message).toContain('A. 方案甲 优点：保留现有流程 B. 方案乙 延续方案乙的说明')
+  })
+
+  test.each(['  已完成修改。', ' 已完成修改。'])(
+    '选项后相同或更浅缩进的正文不算续行：%s',
+    (body) => {
+      expect(
+        analyzeTail(['• 采用方案甲还是方案乙？', '  A. 方案甲', '  B. 方案乙', body]).kind,
+      ).toBe('other')
+    },
+  )
+
+  test('折行问句从当前段落开头保留上下文', () => {
+    const prompt = ['  针对跨境电商的多平台标题，', '  你希望采用方案甲还是方案乙？']
+    const a = analyzeTail(['• 前文总结已完成。', '', ...prompt, '  A. 方案甲', '  B. 方案乙'])
+    expect(a.kind).toBe('question')
+    expect(a.message).toBe(
+      '针对跨境电商的多平台标题， 你希望采用方案甲还是方案乙？ A. 方案甲 B. 方案乙',
+    )
+    const b = analyzeTail(['• 历史消息。', '• 针对跨境电商的多平台标题，', prompt[1] ?? ''])
+    expect(b.message).toBe('针对跨境电商的多平台标题， 你希望采用方案甲还是方案乙？')
+  })
+
+  test.each([
+    '这个接口是不是已经废弃了？\n如果是，请确认是否继续删除。',
+    'Should I also update the README?\nLet me know before I push.',
+  ])('问号后继续请求确认时仍然提问：%s', (text) => {
+    expect(
+      analyzeTail(text.split('\n').map((line, index) => (index === 0 ? `• ${line}` : `  ${line}`)))
+        .kind,
+    ).toBe('question')
+  })
+
+  test('八个长选项逐项限长，仍保留全部标记与标识', () => {
+    const options = Array.from(
+      { length: 8 },
+      (_, i) => `  ${i + 1}. 方案标识${i + 1}：${'说明'.repeat(100)}`,
+    )
+    const a = analyzeTail([`• ${'背景说明'.repeat(100)}采用方案甲还是方案乙？`, ...options])
+    expect(a.kind).toBe('question')
+    expect(a.message.length).toBeLessThanOrEqual(1000)
+    for (let i = 1; i <= 8; i++) {
+      expect(a.message).toContain(`${i}. 方案标识${i}：`)
+    }
+    expect(a.message).not.toContain('说明'.repeat(61))
+  })
+
+  test('选项截断前脱敏，不泄漏边界处的令牌片段', () => {
+    const secret = `sk-${'a'.repeat(80)}`
+    const a = analyzeTail([
+      '• 采用方案甲还是方案乙？',
+      `  A. ${'甲'.repeat(105)} ${secret}`,
+      '  B. 方案乙',
+    ])
+    expect(a.kind).toBe('question')
+    expect(a.message).toContain('B. 方案乙')
+    expect(a.message).not.toContain('sk-aaaa')
+    expect(a.message).not.toContain(secret)
   })
 
   test('授权请求：说明中带上命令；"esc to cancel" 不是忙碌标记', () => {
@@ -208,12 +342,16 @@ describe('analyzeTail', () => {
     expect(analyzeTail(['• 已完成全部修改。']).kind).toBe('other')
   })
 
-  test.each(['你选择哪项', '你选哪项', '你倾向哪种表述', '你要哪一个', '你倾向哪个方案'])(
-    '无问号的选择提问也能识别：%s',
-    (prompt) => {
-      expect(analyzeTail([`• ${prompt}`])).toMatchObject({ kind: 'question', message: prompt })
-    },
-  )
+  test.each([
+    '你选择哪种',
+    '你选哪一个',
+    '你倾向哪种表述',
+    '你要哪一个',
+    '你倾向哪个方案',
+    '您想选择哪种表述',
+  ])('无问号的选择提问也能识别：%s', (prompt) => {
+    expect(analyzeTail([`• ${prompt}`])).toMatchObject({ kind: 'question', message: prompt })
+  })
 
   test('说明经过脱敏', () => {
     const token = ['ghp', 'A'.repeat(36)].join('_')
@@ -302,7 +440,7 @@ describe('classifyCodexOrca', () => {
   test('提问 → question', () => {
     expect(classifyCodexOrca(snapshot('question'))).toEqual({
       reason: 'question',
-      message: '下一步你希望我查看什么？',
+      message: '根目录 package.json 的 name 字段是 flow。未做任何修改。 下一步你希望我查看什么？',
     })
   })
 

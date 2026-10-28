@@ -269,7 +269,9 @@ describe('监控循环', () => {
     await ready(s)
     await s.poll(3)
     const [idle] = idles(s)
-    expect(idle?.text).toBe('下一步你希望我查看什么？')
+    expect(idle?.text).toBe(
+      '根目录 package.json 的 name 字段是 flow。未做任何修改。 下一步你希望我查看什么？',
+    )
     const hint = idle?.data?.hint as { kind: string; tail: string[] }
     expect(hint.kind).toBe('question')
     expect(hint.tail.at(-1)).toBe('  ? for shortcuts')
@@ -803,7 +805,7 @@ describe('经节点与中枢的完整流程', () => {
       const blocked = await b.until(id, (t) => t.status === 'blocked', 600_000)
       expect(blocked.blocked).toMatchObject({
         reason: 'question',
-        message: '下一步你希望我查看什么？',
+        message: '根目录 package.json 的 name 字段是 flow。未做任何修改。 下一步你希望我查看什么？',
         lease_held: true,
       })
       expect(blocked.blocked?.tail?.join('\n')).toContain('下一步你希望我查看什么？')

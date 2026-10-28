@@ -155,6 +155,13 @@ describe('codex-exec 无头执行器', () => {
     )
   })
 
+  test.each(['-', '*', '1.'])('完成总结带 %s 列表时仍结束任务', async (marker) => {
+    const text = `${marker === '1.' ? 'PR 已完成，验证结果如下：' : '采用方案甲还是方案乙？'}\n${marker} 已完成实现。\n${marker === '1.' ? '2.' : marker} bun test 通过。`
+    const s = setup(`send(${JSON.stringify(say(text))})`)
+    const { outcome } = await collect(s.run())
+    expect(outcome).toMatchObject({ outcome: 'done', result: { summary: text } })
+  })
+
   test('回复后恢复：提问结束租约并保留会话，下一轮用位置参数恢复', async () => {
     const s = setup('send(args.includes("resume") ? resumed : question)', {
       permissions: { sandbox: 'workspace-write' },
