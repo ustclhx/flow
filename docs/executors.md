@@ -93,6 +93,9 @@ permissions:
 这两个默认值组合会变成 `--dangerously-bypass-approvals-and-sandbox`，沿用用户原来的脚本做法。
 `permissions.config` 是额外的 Codex `-c key=value`，值支持字符串、数字和布尔值。
 它会影响 Codex 的实际权限和行为，应与审批、沙箱字段一起审查。
+显式配置非 `never` 的 `approval` 时，Flow 默认传入 `-c approvals_reviewer=user`，
+防止用户级 `auto_review` 自动处理请求，导致审批无法进入 Flow。
+角色的 `permissions.config.approvals_reviewer` 可覆盖这个默认值；Flow 不修改用户的 Codex 配置文件。
 
 收紧权限时可以另建临时角色 `dev-approval.yaml`，并复制一份 dev 提示词或继续引用 `dev.md`：
 

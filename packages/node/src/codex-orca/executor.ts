@@ -204,6 +204,10 @@ export function buildCodexCommand(input: {
   if (p.approval === 'never' && p.sandbox === 'danger-full-access') {
     argv.push('--dangerously-bypass-approvals-and-sandbox')
   } else {
+    // 避免用户级 auto_review 吞掉授权弹窗；角色显式配置 reviewer 时以角色为准。
+    if (p.approval && p.approval !== 'never' && p.config?.approvals_reviewer === undefined) {
+      argv.push('-c', 'approvals_reviewer=user')
+    }
     if (p.approval) argv.push('-a', p.approval)
     if (p.sandbox) argv.push('-s', p.sandbox)
   }
