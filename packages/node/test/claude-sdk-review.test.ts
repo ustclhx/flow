@@ -270,6 +270,8 @@ describe('审查准备', () => {
     const o = calls[0]
     expect(o?.outputFormat).toMatchObject({ type: 'json_schema' })
     expect(JSON.stringify(o?.outputFormat)).toContain('changes_requested')
+    // Claude Code 不认识 draft 2020-12 的 $schema 声明，传了会直接退出。
+    expect(JSON.stringify(o?.outputFormat)).not.toContain('$schema')
     expect(o?.tools).toEqual([...READ_ROLE_TOOLS])
     expect(o?.allowedTools).toContain('StructuredOutput')
     // 结束后移除 worktree 与私有目录，登记仓库里不留 worktree 记录。
