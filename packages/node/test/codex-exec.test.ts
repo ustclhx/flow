@@ -155,6 +155,13 @@ describe('codex-exec 无头执行器', () => {
     )
   })
 
+  test.each(['-', '*', '1.'])('完成总结带 %s 列表时仍结束任务', async (marker) => {
+    const text = `${marker === '1.' ? 'PR 已完成，验证结果如下：' : '采用方案甲还是方案乙？'}\n${marker} 已完成实现。\n${marker === '1.' ? '2.' : marker} bun test 通过。`
+    const s = setup(`send(${JSON.stringify(say(text))})`)
+    const { outcome } = await collect(s.run())
+    expect(outcome).toMatchObject({ outcome: 'done', result: { summary: text } })
+  })
+
   test('回复后恢复：提问结束租约并保留会话，下一轮用位置参数恢复', async () => {
     const s = setup('send(args.includes("resume") ? resumed : question)', {
       permissions: { sandbox: 'workspace-write' },
@@ -189,6 +196,38 @@ describe('codex-exec 无头执行器', () => {
     ])
     expect(args.at(-1)).toContain('<untrusted-reply>\ntext\n3\n</untrusted-reply>')
     expect(args.at(-1)).not.toContain('<untrusted-goal>')
+  })
+
+  test.each([
+    [
+      '带选项提问',
+      'blocked',
+      '标题去掉“（Amazon + eBay）”后，你选择哪种表述？\n  A. 跨境电商选品工作台：流程与实施方案\n  B. 跨境电商选品工作台（多平台）：流程与实施方案',
+    ],
+    [
+      '无选择信号的解释列表',
+      'done',
+      'Why did the test fail?\n1. The fixture was stale.\n2. The timeout was too short.',
+    ],
+    [
+      '基础英文关键词后接陈述',
+      'blocked',
+      'Should I also delete the old API?\nI have not touched it yet.',
+    ],
+  ] as const)('最终消息：%s → %s', async (_label, expected, text) => {
+    const s = setup(`send(${JSON.stringify(say(text))})`)
+    const { outcome } = await collect(s.run())
+    if (expected === 'blocked') {
+      expect(outcome).toMatchObject({ outcome: 'blocked', reason: 'question' })
+      if (outcome.outcome !== 'blocked') return
+      expect(outcome.message).toContain(text.split('\n')[0] ?? '')
+      if (text.includes('A. 跨境电商')) {
+        expect(outcome.message).toContain('A. 跨境电商选品工作台：流程与实施方案')
+        expect(outcome.message).toContain('B. 跨境电商选品工作台（多平台）：流程与实施方案')
+      }
+    } else {
+      expect(outcome).toMatchObject({ outcome: 'done', result: { summary: text } })
+    }
   })
 
   test('中枢与节点：提问释放租约，回复重新排队并恢复为 running，再完成', async () => {

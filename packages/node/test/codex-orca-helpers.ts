@@ -52,6 +52,7 @@ export const TUI_FIXTURES = [
   'working',
   'streaming',
   'question',
+  'question-options',
   'approval',
   'approval-denied',
   'pr-opened',
