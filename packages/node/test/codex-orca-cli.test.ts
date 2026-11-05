@@ -73,6 +73,7 @@ describe('orca 封装', () => {
     expect(
       buildCodexCommand({
         codexBin: 'codex',
+        codexHome: '/flow/state/codex-work-home',
         worktreePath: '/repo',
         specPath: '/spec.md',
         role: { name: 'dev', permissions: { writable_paths: ['docs/**'] } },
@@ -373,6 +374,7 @@ describe('启动 Codex 的命令', () => {
   test('bypass 角色：与 run-codex.sh 等价，任务说明经文件传入', () => {
     const r = buildCodexCommand({
       codexBin: 'codex',
+      codexHome: '/flow/state/codex-work-home',
       worktreePath: '/wt/t 1',
       specPath: '/home/state/tasks/t-1/spec.md',
       role: {
@@ -389,7 +391,7 @@ describe('启动 Codex 的命令', () => {
     expect(r).toEqual({
       ok: true,
       data:
-        "cd '/wt/t 1' && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev codex -m gpt-6.1-sol -c model_reasoning_effort=high " +
+        "cd '/wt/t 1' && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev CODEX_HOME=/flow/state/codex-work-home codex -m gpt-6.1-sol -c model_reasoning_effort=high " +
         '-c service_tier=priority --dangerously-bypass-approvals-and-sandbox ' +
         '"$(cat /home/state/tasks/t-1/spec.md)"',
     })
@@ -398,12 +400,13 @@ describe('启动 Codex 的命令', () => {
   test('on-request 角色：-a 与 -s，并默认将授权弹窗交给 Flow', () => {
     const r = buildCodexCommand({
       codexBin: 'codex',
+      codexHome: '/flow/state/codex-work-home',
       worktreePath: '/wt',
       specPath: '/s.md',
       role: { name: 'dev', permissions: { approval: 'on-request', sandbox: 'workspace-write' } },
     })
     expect(r.ok && r.data).toBe(
-      'cd /wt && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev codex -c approvals_reviewer=user -a on-request -s workspace-write "$(cat /s.md)"',
+      'cd /wt && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev CODEX_HOME=/flow/state/codex-work-home codex -c approvals_reviewer=user -a on-request -s workspace-write "$(cat /s.md)"',
     )
   })
 
@@ -412,6 +415,7 @@ describe('启动 Codex 的命令', () => {
     (permissions) => {
       const r = buildCodexCommand({
         codexBin: 'codex',
+        codexHome: '/flow/state/codex-work-home',
         worktreePath: '/wt',
         specPath: '/s.md',
         role: { name: 'dev', permissions },
@@ -424,6 +428,7 @@ describe('启动 Codex 的命令', () => {
   test('approval=never 时不默认追加 reviewer', () => {
     const r = buildCodexCommand({
       codexBin: 'codex',
+      codexHome: '/flow/state/codex-work-home',
       worktreePath: '/wt',
       specPath: '/s.md',
       role: { name: 'dev', permissions: { approval: 'never', sandbox: 'workspace-write' } },
@@ -437,6 +442,7 @@ describe('启动 Codex 的命令', () => {
     (reviewer) => {
       const r = buildCodexCommand({
         codexBin: 'codex',
+        codexHome: '/flow/state/codex-work-home',
         worktreePath: '/wt',
         specPath: '/s.md',
         role: {
@@ -464,11 +470,12 @@ test('Orca 启动命令把角色身份传给实际子进程，并覆盖终端继
   roots.push(dir)
   const bin = join(dir, 'fake-codex')
   const specPath = join(dir, 'spec.md')
-  writeFileSync(bin, '#!/bin/sh\nprintf "%s" "$FLOW_ACTOR"\n')
+  writeFileSync(bin, '#!/bin/sh\nprintf "%s\\n%s" "$FLOW_ACTOR" "$CODEX_HOME"\n')
   chmodSync(bin, 0o755)
   writeFileSync(specPath, '临时任务')
   const command = buildCodexCommand({
     codexBin: bin,
+    codexHome: join(dir, 'isolated home'),
     worktreePath: dir,
     specPath,
     role: { name: 'dev' },
@@ -476,14 +483,20 @@ test('Orca 启动命令把角色身份传给实际子进程，并覆盖终端继
   if (!command.ok) throw new Error(command.error.message)
   const out = await execRunner('sh', ['-c', command.data], {
     timeoutMs: 5000,
-    env: { ...process.env, FLOW_ACTOR: 'user' },
+    env: { ...process.env, FLOW_ACTOR: 'user', CODEX_HOME: '/legacy-codex-home' },
   })
   expect(out.code).toBe(0)
-  expect(out.stdout).toBe('dev')
+  expect(out.stdout).toBe(`dev\n${join(dir, 'isolated home')}`)
 })
 
 test('Orca 启动命令移除完整 denylist，并拒绝包含 = 的 codexBin', () => {
-  const base = { codexBin: 'codex', worktreePath: '/wt', specPath: '/s.md', role: { name: 'dev' } }
+  const base = {
+    codexBin: 'codex',
+    codexHome: '/flow/state/codex-work-home',
+    worktreePath: '/wt',
+    specPath: '/s.md',
+    role: { name: 'dev' },
+  }
   const command = buildCodexCommand(base)
   if (!command.ok) throw new Error(command.error.message)
   for (const key of CHILD_ENV_DENYLIST) expect(command.data).toContain(`-u ${key}`)

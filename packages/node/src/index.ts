@@ -52,6 +52,7 @@ export {
   prepareReadCodexHome,
   readCodexHome,
 } from './codex-exec.ts'
+export { prepareCodexHome, workCodexHome } from './codex-home.ts'
 export {
   analyzeTail,
   BUSY_RE,

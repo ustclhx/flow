@@ -59,6 +59,7 @@ async function start(
   prepare?.(orca)
   const plugin = createCodexOrcaExecutor({
     home: h.home,
+    codexAuthSource: join(h.root, 'user-codex'),
     clock,
     orca,
     gh,
@@ -143,7 +144,7 @@ describe('启动', () => {
     }
     expect(created.worktreePath).toBe(h?.worktree ?? '')
     expect(created.command).toContain(
-      'exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev codex',
+      `exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev CODEX_HOME=${join(h?.home ?? '', 'state/codex-work-home')} codex`,
     )
     expect(created.command).toContain('--dangerously-bypass-approvals-and-sandbox')
     expect(created.command).toContain(`"$(cat ${specPath})"`)
@@ -155,6 +156,32 @@ describe('启动', () => {
     )
     const state = JSON.parse(readFileSync(statePath, 'utf8'))
     expect(state).toMatchObject({ branch: 'example-user/t-orca-1', handle: s.orca.handle })
+    await s.run.cancel()
+  })
+
+  test('启动前清理隔离配置和规则，不改用户的 Codex 目录', async () => {
+    const s = await start({}, () => {
+      const dir = join(h?.home ?? '', 'state/codex-work-home')
+      const source = join(h?.root ?? '', 'user-codex')
+      mkdirSync(join(dir, 'rules'), { recursive: true })
+      mkdirSync(source, { recursive: true })
+      const config = 'notify = ["unused"]\n[mcp_servers.unused]\ncommand = "unused"\n'
+      writeFileSync(join(source, 'config.toml'), config)
+      writeFileSync(join(dir, 'config.toml'), config)
+      writeFileSync(
+        join(dir, 'rules/default.rules'),
+        'prefix_rule(pattern=["git", "push"], decision="allow")',
+      )
+    })
+    await ready(s)
+    const dir = join(h?.home ?? '', 'state/codex-work-home')
+    const config = readFileSync(join(dir, 'config.toml'), 'utf8')
+    expect(config.replace(/^#.*$/gm, '').trim()).toBe('')
+    expect(existsSync(join(dir, 'rules'))).toBe(false)
+    expect(readFileSync(join(h?.root ?? '', 'user-codex/config.toml'), 'utf8')).toContain(
+      'mcp_servers',
+    )
+    expect(s.orca.ops('terminalCreate')).toHaveLength(1)
     await s.run.cancel()
   })
 
@@ -400,15 +427,21 @@ describe('监控循环', () => {
     expect(s.outcome()).toMatchObject({ ok: true, data: { outcome: 'exited', exit_code: null } })
   })
 
-  test('handle 失效（stale）不等于终端已死：在本 worktree 找到唯一的 Codex 终端就接上', async () => {
+  test('handle 失效（stale）不等于终端已死：在本 worktree 找到进程身份相同的唯一 Codex 就接上', async () => {
     const replacement = 'term_00000000-0000-4000-8000-0000000000bb'
     const s = await start({}, (o) => {
+      o.identity = { ptyId: 'pty-current' }
       o.reads.push(staleHandle())
       o.show('question')
     })
     await ready(s)
     s.orca.terminals = ok([
-      { handle: replacement, worktreePath: h?.worktree ?? '', agentIdentity: 'codex' },
+      {
+        handle: replacement,
+        worktreePath: h?.worktree ?? '',
+        agentIdentity: 'codex',
+        ptyId: 'pty-current',
+      },
       { handle: 'term_shell', worktreePath: h?.worktree ?? '' },
     ])
     await s.poll(3)
@@ -420,6 +453,22 @@ describe('监控循环', () => {
       readFileSync(join(h?.home ?? '', 'state/tasks/t-orca-1/orca.json'), 'utf8'),
     )
     expect(state.handle).toBe(replacement)
+    await s.run.cancel()
+  })
+
+  test('stale 后缺少原进程身份：即使唯一候选也不接管，避免接入未隔离 Codex', async () => {
+    const s = await start({}, (o) => o.reads.push(staleHandle()))
+    await ready(s)
+    s.orca.terminals = ok([
+      { handle: 'term_legacy', worktreePath: h?.worktree ?? '', agentIdentity: 'codex' },
+    ])
+    await s.poll(2)
+    expect(
+      s.orca
+        .ops('terminalRead')
+        .every((c) => (c.input as { handle: string }).handle === s.orca.handle),
+    ).toBe(true)
+    expect(s.outcome()).toBeUndefined()
     await s.run.cancel()
   })
 
@@ -654,6 +703,7 @@ describe('deliver 与 cancel', () => {
       readFileSync(join(home.home, 'state/tasks/t-orca-1/orca.json'), 'utf8'),
     )
     expect(state.replies['r-1']).toMatchObject({ done: true })
+    expect(state.codex_home).toBe(join(home.home, 'state/codex-work-home'))
 
     const second = await start({}, (o) => o.show('question'), { home, resume: { reply } })
     await until(
@@ -666,6 +716,29 @@ describe('deliver 与 cancel', () => {
     expect(second.orca.ops('terminalCreate')).toEqual([])
     await second.run.cancel()
   })
+
+  test.each([undefined, '/legacy-codex-home'])(
+    '拒绝重挂接未使用当前隔离目录的存活终端：%s',
+    async (codexHome) => {
+      const first = await start({}, (o) => o.show('question'))
+      await ready(first)
+      const home = h
+      if (!home) throw new Error('no home')
+      const statePath = join(home.home, 'state/tasks/t-orca-1/orca.json')
+      const state = JSON.parse(readFileSync(statePath, 'utf8'))
+      state.codex_home = codexHome
+      writeFileSync(statePath, JSON.stringify(state))
+      const second = await start({}, (o) => o.show('question'), { home })
+      await ready(second)
+      expect(second.outcome()).toMatchObject({
+        ok: true,
+        data: { outcome: 'failed', result: { reason: 'codex_home_mismatch' } },
+      })
+      expect(second.orca.ops('terminalCreate')).toEqual([])
+      expect(sends(second)).toEqual([])
+      await first.run.cancel()
+    },
+  )
 
   test('复用记录中的 handle 前确认它属于这个 worktree；不属于时新建终端', async () => {
     const first = await start({}, (o) => o.show('working'))
@@ -789,6 +862,7 @@ describe('经节点与中枢的完整流程', () => {
     const gh = new FakeGh()
     real = createCodexOrcaExecutor({
       home: h.home,
+      codexAuthSource: join(h.root, 'user-codex'),
       clock: b.clock,
       orca,
       gh,

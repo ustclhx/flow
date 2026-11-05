@@ -21,6 +21,7 @@ import {
   type ExecutorRun,
   prepareReadCodexHome,
   readCodexHome,
+  workCodexHome,
 } from '../src/index.ts'
 import { bench } from './harness.ts'
 import { processStopped } from './process.ts'
@@ -85,7 +86,7 @@ ${body}
     home,
     codexCommand: [process.execPath, script],
     resolveRole: async () => ok(resolvedRole),
-    // 只读角色隔离 CODEX_HOME 时链接的凭证来源：临时目录，绝不读取 ~/.codex。
+    // 隔离 CODEX_HOME 时链接的凭证来源：临时目录，绝不读取 ~/.codex。
     codexAuthSource: join(dir, 'codex-src'),
   }
   const run = (context = ctx, opts = options) => {
@@ -175,6 +176,7 @@ describe('codex-exec 无头执行器', () => {
     })
     if (first.outcome.outcome !== 'blocked') return
     expect(first.outcome.tail?.join('\n')).toContain('1 + 1 = 2')
+    const initialHome = s.report().codexHome
     const reply = { reply_id: 'r-answer', kind: 'text' as const, text: '3', by: 'user' }
     const second = await collect(
       s.run({ ...s.ctx, attempt: 2, resume: { session: first.outcome.session, reply } }),
@@ -184,6 +186,8 @@ describe('codex-exec 无头执行器', () => {
       result: { summary: '5', session: SID },
     })
     expect(s.report().actor).toBe('triage')
+    expect(s.report().codexHome).toBe(initialHome)
+    expect(initialHome).toBe(workCodexHome(s.home))
     const args = s.report().args
     expect(args.slice(0, 7)).toEqual([
       'exec',
@@ -462,6 +466,7 @@ describe('codex-exec 无头执行器', () => {
     const opts: CodexExecOptions = {
       home: s.home,
       codexCommand: [process.execPath, join(s.dir, 'codex.cjs')],
+      codexAuthSource: join(s.dir, 'codex-src'),
     }
     expect((await collect(s.run(s.ctx, opts))).outcome.outcome).toBe('done')
     rmSync(join(s.home, 'config', 'roles', 'triage.yaml'))
@@ -538,14 +543,14 @@ describe('只读角色由执行器强制只读（add-m1-supervisor 5.7）', () =
     })
   })
 
-  test('有效类别 write（sandbox 不是 read-only，或 config 含白名单外的键）：不改 CODEX_HOME', async () => {
+  test('有效类别 write（sandbox 不是 read-only，或 config 含白名单外的键）：使用工作隔离目录', async () => {
     for (const permissions of [
       { sandbox: 'workspace-write' },
       { config: { notify: 'x' } },
     ] as const) {
       const s = setup('send(resumed)', { permissions })
       await collect(s.run({ ...s.ctx, env: { ...s.ctx.env, CODEX_HOME: '/codex/user-home' } }))
-      expect(s.report().codexHome).toBe('/codex/user-home')
+      expect(s.report().codexHome).toBe(workCodexHome(s.home))
       expect(existsSync(readCodexHome(s.home))).toBe(false)
     }
   })

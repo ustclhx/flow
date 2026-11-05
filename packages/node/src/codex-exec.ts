@@ -1,16 +1,12 @@
 import { type ChildProcess, spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { lstat, mkdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import {
   clipTail,
   clipText,
   effectiveRoleKind,
   fail,
-  flowPaths,
   loadRoles,
   ok,
   type Result,
@@ -23,6 +19,7 @@ import {
 } from '@flow/core'
 import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
+import { prepareCodexHome, readCodexHome, workCodexHome } from './codex-home.ts'
 import { questionMessage } from './codex-orca/classify.ts'
 import { resolveContext } from './codex-orca/spec.ts'
 import { executorRoleEnv } from './env.ts'
@@ -32,6 +29,8 @@ import {
   type ExecutorPlugin,
   resumedSignal,
 } from './executor.ts'
+
+export { readCodexHome } from './codex-home.ts'
 
 /**
  * codex-exec 角色的 `permissions`（permissions.config 与 codex-orca 使用相同的标量约定）。
@@ -69,7 +68,7 @@ const eventSchema = z.looseObject({
 export interface CodexExecOptions {
   home: string
   /**
-   * 只读角色隔离 CODEX_HOME 时，`auth.json` 链接到这个目录中的同名文件（用户平时的 CODEX_HOME）。
+   * 隔离 CODEX_HOME 时，`auth.json` 链接到这个目录中的同名文件（用户平时的 CODEX_HOME）。
    * 缺省取 worker 环境的 `CODEX_HOME`，再缺省为 `~/.codex`。测试用临时目录。
    */
   codexAuthSource?: string
@@ -108,74 +107,9 @@ async function taskPrompt(home: string, role: Role, contract: TaskContract, resu
   ].join('\n\n')
 }
 
-/** 只读角色专用的 CODEX_HOME（由 Flow 管理，所有只读 codex-exec 任务共用，会话记录也保存在这里以便 resume）。 */
-export const readCodexHome = (home: string) => join(flowPaths(home).state, 'codex-read-home')
-
-const READ_HOME_CONFIG = `# 由 Flow 生成，每次运行只读 codex-exec 角色前覆盖（add-m1-supervisor tasks 5.7）。
-# 不含 mcp_servers、notify 与项目信任：用户级与项目级 .codex/config.toml 都不会生效，
-# 角色需要的设置写在角色的 permissions.config 中（经 -c 传入）。
-`
-
-/**
- * 有效类别为 read 的角色由执行器强制只读（design D9；tasks 5.7）：以隔离的 CODEX_HOME 运行。
- *
- * 实测 Codex 0.164：`-c mcp_servers={}` 与用户级 config.toml 的表是合并而不是替换，用户级的 MCP 服务器照样启动，
- * 因此 `-c` 覆盖不可靠；改用 Flow 管理的 CODEX_HOME：其中的 config.toml 只有注释，没有任何项目信任记录，
- * 项目级 `.codex/config.toml` 也不会加载。凭证：`auth.json` 是指向用户 CODEX_HOME 中同名文件的符号链接
- * （Codex 原地改写 auth.json 时会写回用户的文件）；用户的 CODEX_HOME 没有 auth.json（例如凭证存在钥匙串）时不创建链接，
- * Codex 会因未登录而失败（不会回退到用户配置）。
- */
-export async function prepareReadCodexHome(
-  home: string,
-  authSource: string,
-): Promise<Result<string>> {
-  const dir = readCodexHome(home)
-  const bad = (message: string) => fail('failure', 'codex_home_failed', message)
-  // 用户的 CODEX_HOME 本身就指向隔离目录：链接会指向自己，凭证来源不明，拒绝。
-  if (resolve(authSource) === resolve(dir) || (await sameRealPath(authSource, dir)))
-    return bad(
-      `CODEX_HOME（${authSource}）指向只读角色的隔离目录 ${dir}，请改回用户自己的 Codex 目录`,
-    )
-  await mkdir(dir, { recursive: true, mode: 0o700 })
-  await writeFile(join(dir, 'config.toml'), READ_HOME_CONFIG, { mode: 0o600 })
-  const link = join(dir, 'auth.json')
-  const target = join(authSource, 'auth.json')
-  let current: string | undefined
-  try {
-    const st = await lstat(link)
-    if (!st.isSymbolicLink())
-      // 普通文件：可能是 Codex 替换写入的新凭证，不删除，交给用户处理。
-      return bad(
-        `${link} 是普通文件而不是指向 ${target} 的符号链接（可能是 Codex 刷新凭证时写入的）。请确认后把它合并回 ${target} 再删除，或直接删除后重新运行`,
-      )
-    current = await readlink(link)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return bad(String((err as Error).message))
-    current = undefined
-  }
-  if (current === target) return ok(dir)
-  if (!existsSync(target)) {
-    if (current !== undefined) await rm(link, { force: true })
-    return ok(dir)
-  }
-  // 先建临时链接再 rename：替换是原子的，不会出现没有 auth.json 的瞬间。
-  const tmp = `${link}.${randomBytes(8).toString('hex')}.tmp`
-  await symlink(target, tmp)
-  try {
-    await rename(tmp, link)
-  } catch (err) {
-    await rm(tmp, { force: true })
-    return bad(`无法创建 ${link}：${(err as Error).message}`)
-  }
-  return ok(dir)
-}
-
-async function sameRealPath(a: string, b: string): Promise<boolean> {
-  try {
-    return (await realpath(a)) === (await realpath(b))
-  } catch {
-    return false
-  }
+/** 保留原只读入口，统一委托隔离目录准备逻辑。 */
+export function prepareReadCodexHome(home: string, authSource: string): Promise<Result<string>> {
+  return prepareCodexHome(readCodexHome(home), authSource)
 }
 
 /**
@@ -318,34 +252,33 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
           )
           return
         }
-        // 有效类别为 read：隔离 CODEX_HOME，用户级与项目级配置里的 MCP 服务器、notify 等都不生效（tasks 5.7）。
-        let childEnv = env.data
-        if (effectiveRoleKind(role.data) === 'read') {
-          const source =
-            options.codexAuthSource ??
-            env.data.CODEX_HOME ??
-            process.env.CODEX_HOME ??
-            join(homedir(), '.codex')
-          const isolated = await prepareReadCodexHome(options.home, source).catch((err: unknown) =>
-            fail('failure', 'codex_home_failed', `无法准备只读角色的 CODEX_HOME：${String(err)}`),
+        // 所有角色都隔离 CODEX_HOME；读写仅目录不同，沙箱和显式角色配置仍由 argv 控制。
+        const source =
+          options.codexAuthSource ??
+          env.data.CODEX_HOME ??
+          process.env.CODEX_HOME ??
+          join(homedir(), '.codex')
+        const dir =
+          effectiveRoleKind(role.data) === 'read'
+            ? readCodexHome(options.home)
+            : workCodexHome(options.home)
+        const isolated = await prepareCodexHome(dir, source)
+        if (!isolated.ok) {
+          finish(
+            ok({
+              outcome: 'failed',
+              result: result(isolated.error.message, isolated.error.code),
+            }),
           )
-          if (!isolated.ok) {
-            finish(
-              ok({
-                outcome: 'failed',
-                result: result(isolated.error.message, isolated.error.code),
-              }),
-            )
-            return
-          }
-          if (finished) return
-          childEnv = { ...env.data, CODEX_HOME: isolated.data }
+          return
         }
+        if (finished) return
+        const childEnv = { ...env.data, CODEX_HOME: isolated.data }
         const prompt = ctx.resume?.session
           ? replyPrompt(ctx.resume)
           : await taskPrompt(options.home, role.data, contract, ctx.resume)
         if (finished) return
-        // exec 无 -a 选项、不走交互审批，无需默认覆盖 reviewer；read 角色另有隔离的 CODEX_HOME。
+        // exec 无 -a 选项、不走交互审批，无需默认覆盖 reviewer。
         const args = [...command.slice(1), 'exec', '--json']
         for (const [key, value] of Object.entries(perms.data.config))
           args.push('-c', `${key}=${value}`)

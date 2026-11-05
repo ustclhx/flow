@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   type Activity,
@@ -17,6 +18,7 @@ import {
 } from '@flow/core'
 import { z } from 'zod'
 import { type NodeClock, sleep, systemClock } from '../clock.ts'
+import { prepareCodexHome, workCodexHome } from '../codex-home.ts'
 import { CHILD_ENV_DENYLIST, executorRoleEnv } from '../env.ts'
 import {
   ActivityQueue,
@@ -70,8 +72,8 @@ import { renderTaskSpec, resolveContext, taskStateDir, writeTaskSpec } from './s
  * - Orca 自带的 orca-cli 技能说明里写着："Handles are runtime-scoped: after an Orca restart or a
  *   `terminal_handle_stale` error, re-list and continue with the replacement only"。也就是说 stale 只表示
  *   这个 handle 在当前 runtime 中失效（例如 Orca 重启），终端和 Codex 可能还活着、换了新 handle。
- * 因此 stale 按临时错误处理：用 `terminal list --worktree` 在本 worktree 中找唯一的 Codex 终端接上；
- * 找不到时继续重试，不返回 not_running，也不判为退出（持续找不到由节点的无进展计时兜底）。
+ * 因此 stale 按临时错误处理：用 `terminal list --worktree` 在本 worktree 中找唯一且进程身份匹配的 Codex 终端接上；
+ * 找不到或缺少原进程身份时继续重试，不返回 not_running，也不判为退出（持续找不到由节点的无进展计时兜底）。
  *
  * 策略预检（add-m1-inbox 2.3；design D2）：轮询发现一个新的授权弹窗、且尚未上报停下时，先用
  * `approvalForPrecheck` 严格提取命令（提取不到按需要用户处理），以工具 `CodexCommand` 加命令调用
@@ -101,6 +103,8 @@ export interface CodexOrcaOptions {
   pollMs?: number
   /** Codex 可执行文件，默认 `codex`。 */
   codexBin?: string
+  /** 仅共享此用户 Codex 目录中的 auth.json；测试传临时目录。 */
+  codexAuthSource?: string
   /** 仓库的基准分支，默认取 `origin/HEAD` 指向的分支，取不到时为 `origin/main`。 */
   baseBranch?: (repo: string) => Promise<string>
   /** 等待 worktree 的 setup 完成；默认按 dispatch-codex.sh 的约定检查 node_modules。 */
@@ -150,6 +154,8 @@ const stateSchema = z.object({
   branch: z.string(),
   base_branch: z.string(),
   handle: z.string().optional(),
+  /** 启动终端时使用的隔离目录；旧记录缺失时不接管，避免继续运行未隔离的进程。 */
+  codex_home: z.string().optional(),
   /** 创建终端时 Orca 给出的进程身份；stale 后接管其他 handle 前必须一致（PR #24 复核）。 */
   pty_id: z.string().optional(),
   incarnation_id: z.string().optional(),
@@ -183,6 +189,7 @@ export async function resolveTaskRepo(
 /** 由角色参数拼出启动 Codex 的终端命令（与 run-codex.sh 等价；任务说明经文件传入）。 */
 export function buildCodexCommand(input: {
   codexBin: string
+  codexHome: string
   worktreePath: string
   specPath: string
   role: Pick<Role, 'name' | 'model' | 'effort' | 'permissions'>
@@ -214,7 +221,7 @@ export function buildCodexCommand(input: {
   const cmd = argv.map(quote).join(' ')
   const unset = CHILD_ENV_DENYLIST.flatMap((key) => ['-u', quote(key)]).join(' ')
   return ok(
-    `cd ${quote(input.worktreePath)} && exec env ${unset} ${quote(`FLOW_ACTOR=${env.data.FLOW_ACTOR}`)} ${cmd} "$(cat ${quote(input.specPath)})"`,
+    `cd ${quote(input.worktreePath)} && exec env ${unset} ${quote(`FLOW_ACTOR=${env.data.FLOW_ACTOR}`)} ${quote(`CODEX_HOME=${input.codexHome}`)} ${cmd} "$(cat ${quote(input.specPath)})"`,
   )
 }
 
@@ -444,7 +451,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       }
 
       /**
-       * handle 失效（stale）时在本 worktree 中找替代的终端：只有恰好一个 Codex 终端时才接上。
+       * handle 失效（stale）时在本 worktree 中找替代的终端：只有恰好一个且与已记录进程身份匹配的 Codex 终端时才接上。
        * 返回是否换到了新的 handle。
        */
       const relocate = async (): Promise<boolean> => {
@@ -452,6 +459,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const r = await orca.terminalList({ worktreePath: state.worktree_path })
         if (!r.ok) return false
         const s = state
+        // 缺少原进程身份时，唯一候选也可能是用户另开的未隔离 Codex，不能接管。
+        if (s.pty_id === undefined && s.incarnation_id === undefined) return false
         // 只考虑仍连接、未成为孤儿的 Codex 终端。
         const codex = r.data.filter(
           (t) =>
@@ -746,6 +755,9 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           }
           if (a.kind === 'trust_prompt' && launchedHere && !seenBusy && trustSent < trustRetries) {
             // 新终端启动时的信任提示（仓库已确认属于 workspace）：只发回车确认（发 "1" 会被拒绝）。
+            // Codex 0.166 实测：确认信任会在同一进程加载项目 .codex/config.toml 和 rules，
+            // linked worktree 也可继承主仓库信任。CODEX_HOME 只隔离用户层，不能隔离项目层；
+            // 项目规则仍可绕过 Flow 审批，需后续独立约束，不能把自动确认当作纯 UI 操作。
             trustSent++
             const s = await send({ handle, enter: true })
             // 信任提示只会出现一次：成功确认过一次就关闭自动确认，只有发送失败时才重试。
@@ -874,10 +886,26 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const specPath = await writeTaskSpec(options.home, ctx.taskId, spec)
         if (finished || stopping) return
 
+        const isolated = await prepareCodexHome(
+          workCodexHome(options.home),
+          options.codexAuthSource ??
+            actorEnv.data.CODEX_HOME ??
+            process.env.CODEX_HOME ??
+            join(homedir(), '.codex'),
+        )
+        if (!isolated.ok) return failed(isolated.error.code, isolated.error.message)
+        if (finished || stopping) return
+
         // 上一次执行留下的终端仍在运行且属于这个 worktree：接着用它，把带来的回复送进去。
         if (st.handle) {
           const tail = await reusable(st.handle, st.worktree_path)
           if (tail) {
+            // 无法改变存活进程的 CODEX_HOME；升级前的终端不能通过重挂接绕过隔离。
+            if (st.codex_home !== isolated.data)
+              return failed(
+                'codex_home_mismatch',
+                '已有 Codex 终端未使用当前隔离目录；请先关闭旧终端后重试',
+              )
             handle = st.handle
             prevTail = tail
             status(`接着使用已有的终端 ${handle}`)
@@ -887,6 +915,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (!handle) {
           const cmd = buildCodexCommand({
             codexBin,
+            codexHome: isolated.data,
             worktreePath: st.worktree_path,
             specPath,
             role,
@@ -907,6 +936,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           handle = term.data.handle
           launchedHere = true
           st.handle = handle
+          st.codex_home = isolated.data
           if (term.data.ptyId) st.pty_id = term.data.ptyId
           else delete st.pty_id
           if (term.data.incarnationId) st.incarnation_id = term.data.incarnationId
