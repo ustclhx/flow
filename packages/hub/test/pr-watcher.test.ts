@@ -112,7 +112,8 @@ test('订阅之前的历史内容不送达；之后的 CI、审查、行评论�
   const payloads = s.prEvents().map((e) => e.payload)
   expect(payloads.map((p) => [p.kind, p.actor, p.actor_kind, p.allowed, p.state])).toEqual([
     ['review_comment', 'acme', 'human', true, undefined],
-    ['review', 'acme', 'human', true, 'changes_requested'],
+    // 审查正文与 CI 只作上下文，不算请求。
+    ['review', 'acme', 'human', false, 'changes_requested'],
     ['check_run', 'github-actions[bot]', 'bot', false, 'failure'],
   ])
   expect(payloads[0]?.text).toBe('[src/a.ts] 这里少了判空')
@@ -193,7 +194,9 @@ test('gh 参数只来自登记信息与游标：评论内容永远不进入 gh �
     expect(isSafeApiPath(call)).toBe(true)
     expect(call).not.toContain('rm')
     expect(call).not.toContain('evil')
-    expect(call.startsWith('repos/acme/demo/')).toBe(true)
+    expect(
+      call.startsWith('repos/acme/demo/') || call === 'user' || /^users\/[a-z0-9-]+$/.test(call),
+    ).toBe(true)
   }
   expect(s.prEvents()[0]?.payload.text).toBe(evil)
 })
@@ -281,12 +284,16 @@ test('连续无变化时退避到 10 分钟；读到新内容后回到 2 分钟'
   expect(pulls()).toBe(after + 1)
 })
 
-test('PR 不在登记仓库：取消订阅且不查询 GitHub', async () => {
+test('PR 不在登记仓库：按失败报告、不自动退订、不查询 GitHub', async () => {
   const s = await subscribed({ origin: 'git@github.com:other/repo.git' })
-  await s.watcher.tick()
+  for (let i = 0; i < 3; i++) {
+    await s.watcher.tick()
+    s.clock.time += PR_POLL_BASE_MS
+  }
   expect(s.gh.calls).toEqual([])
-  expect(s.store.prSubscriptions('dev')).toMatchObject([
-    { active: false, reason: 'repo_not_registered' },
+  expect(s.store.activePrSubscriptions()).toHaveLength(1)
+  expect(s.watcher.status().errors).toMatchObject([
+    { failures: 3, message: 'PR 不在本 workspace 登记的仓库中' },
   ])
 })
 

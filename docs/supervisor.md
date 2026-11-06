@@ -504,7 +504,7 @@ github:
 ```
 
 - 中枢用**自己所在机器上的 `gh` 登录**只读查询（`gh api --method GET`），先确认 `gh auth status` 正常；
-- PR 必须位于 workspace 登记仓库（`repos`）的 origin 所在的 github.com 仓库，否则订阅被取消（`repo_not_registered`）；
+- PR 必须位于 workspace 登记仓库（`repos`）的 origin 所在的 github.com 仓库；不在时（或有登记仓库暂时读不出 origin 时）按查询失败报告，不自动退订；
 - `raindown doctor` 显示每个打开了 `github` 段的 workspace 的开关与名单；打开了 `watch` 却没有登记仓库时给出 warning。
 
 ### 订阅
@@ -519,10 +519,37 @@ github:
 ### 采集（pr-watcher）
 
 - 只轮询 `watch: true` 的 workspace 中有有效订阅的 PR：每 2 分钟一次，连续无变化时依次退避到 4、8、10 分钟，读到新内容后回到 2 分钟；
-- 读取 check runs、reviews、PR 评论与代码行评论，写 `pr.event{pr, kind, actor, actor_kind, allowed, text, url, cursor}`。
-  订阅之前的历史内容不送达；每种内容按游标续读，游标随事件落账，中枢重启后不会重复送达；
+- 读取 check runs、reviews、PR 评论与代码行评论，写 `pr.event{pr, kind, actor, actor_id, actor_kind, allowed, not_allowed, pr_state, text, url, cursor}`。
+  订阅之前的历史内容不送达（有效游标不早于最早有效订阅的时间）；每种内容按游标续读、各自提交（一类失败不阻塞其他类），
+  游标随事件落账，中枢重启后不会重复送达；以游标时间往前 1 秒重查并去重，避免同一秒的竞态漏读；
+- 分页达到上限：代码行评论按 updated 升序、只推进到已取到的部分；PR 评论、审查与检查本类本次不入账并按失败报告，游标不越过没读到的内容；
 - `text` 先遮蔽疑似密钥再截断（附原始字符数）；
 - 单个 PR 查询失败只记在该 PR 上，下一轮重试；连续 3 次失败才出现在 `raindown hub status` 的"PR 查询失败"一行并写告警日志。
+
+### 共享 GitHub 身份（当前版本的保守限制）
+
+worker 目前用中枢所在机器的 `gh` 登录在 PR 上发评论与审查——通常就是你本人。这样 worker 发的评论与你的评论无法区分，
+会被当作"名单内的人类请求"：任务可以自我恢复、任务之间来回触发、陌生人的内容经 worker 转述后被洗白，
+或经 PR 评论取得 instruction 唤醒的权限。因此：
+
+- 中枢启动时与每 30 分钟用 `gh api user` 核对自己的登录（按数字 id）。该身份在某个 PR 的有效名单中时视为**共享身份**：
+  该 workspace 的 PR 评论一律只作为不可信上下文送给运行中的订阅任务，`allowed` 为 false（`not_allowed: shared_identity`），
+  **不**恢复已结束任务、**不**交回 supervisor、**不**为无订阅评论唤醒 supervisor；查询失败时同样按共享身份处理（fail closed）；
+- `raindown hub status` 的"PR 共享身份"一行写明原因，`raindown doctor` 对打开了 `watch` 却没有配置 `worker_identity` 的 workspace 给出 warning；
+- 解除方法：为 worker 配置独立的 GitHub bot 账号或 App，在 `github.worker_identity` 写上它的登录名（App 写 `<slug>[bot]`），
+  并让 `allowed_users` 只含你本人。只有 `worker_identity` 已配置、与中枢 gh 登录不同、且不在名单中时才解除限制；
+  它发的内容标为 `actor_kind: agent`，永不算请求。**把 bot 凭证注入 worker 留待后续变更**，本版本只提供配置与显示。
+
+### 什么算"请求"
+
+`allowed` 只有全部满足才为 true：
+
+- 种类是 PR 评论或代码行评论（审查正文、CI 检查一律只作上下文）；
+- 人类账号（不是 bot、不是 `worker_identity`），且账号**数字 id** 在该 PR 的有效名单中（改名冒用的同名账号不算）；
+- 评论没有被编辑过（编辑后再次送达只作上下文，同一条多次编辑只保留最新）；
+- 不处于共享身份。
+
+非请求内容在账本中只存 500 字（完整内容见 `url`），每个 PR 每次轮询最多入账 20 条、每天最多 200 条，超出的丢弃并在 `hub status` 提示。
 
 ### `allowed_users` 的安全含义
 
@@ -530,7 +557,8 @@ github:
 或在没有订阅任务时唤醒 supervisor。名单外用户、机器人（GitHub App、`[bot]` 账号）与 CI 的内容 `allowed` 恒为 false，
 只作为不可信的上下文送达运行中的任务，不恢复任务、不唤醒 supervisor。
 
-- 不写 `allowed_users` 时，名单是登记仓库 origin 的 owner（例如 `git@github.com:ustclhx/raindown.git` → `ustclhx`）；
-  origin 读不出时名单为空——没有人的评论算请求。owner 是组织时，组织账号本身不会评论，请显式列出成员；
+- 不写 `allowed_users` 时，名单只取**该 PR 所属**登记仓库 origin 的 owner（例如 `git@github.com:ustclhx/raindown.git` → `ustclhx`），
+  且只在 owner 是个人账号时；owner 是组织时默认名单为空（`hub status` 提示），请显式列出成员。fork 开出的 PR 不会成为 author 订阅；
+  名单按账号数字 id 比较，同名账号的 id 变化时告警；
 - `allowed: true` 只表示"可以算请求"，**不扩大任务的授权依据或合同范围**：worker 收到超出范围的请求时应交回 supervisor；
 - 名单写错（如拼错用户名）只会让评论被当作不可信上下文，不会放宽任何权限。

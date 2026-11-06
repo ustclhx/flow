@@ -59,16 +59,49 @@ export const prEventCursor = z
   .max(128)
   .regex(/^\d{4}-\d{2}-\d{2}T[0-9:.]+Z\|\d{1,20}$/, '游标形如 <ISO 时间>|<id>')
 
+/** 能作为"请求"的种类：只有 PR 评论与代码行评论；审查正文与 CI 检查一律只作上下文。 */
+export const PR_REQUEST_KINDS: readonly PrEventKind[] = ['issue_comment', 'review_comment']
+
+/** 不算请求的原因（allowed 为 false 时记录）。 */
+export const PR_NOT_ALLOWED_REASONS = [
+  'not_listed',
+  'bot',
+  'agent',
+  'kind',
+  'edited',
+  'shared_identity',
+] as const
+export const prNotAllowedReason = z.enum(PR_NOT_ALLOWED_REASONS).meta({
+  description:
+    'not_listed 不在允许名单；bot 机器人或 CI；agent worker 身份；kind 审查正文或检查结论只作上下文；edited 编辑过的评论；shared_identity 中枢 gh 登录与名单内用户相同或无法确认（worker 可能以该身份发言）',
+})
+export type PrNotAllowedReason = z.infer<typeof prNotAllowedReason>
+
+/** 非请求内容入账的文字上限（更短，完整内容以 url 为读取指针）。 */
+export const PR_EVENT_CONTEXT_TEXT_MAX = 500
+
 export const prEventPayload = z.strictObject({
   pr: prUrl.meta({ description: '规范化的 PR 链接（来自订阅，不来自评论内容）' }),
   kind: prEventKind,
   actor: z.string().min(1).max(64).meta({ description: 'GitHub 用户名或检查所属 App 的 slug' }),
-  actor_kind: z
-    .enum(['human', 'bot'])
-    .meta({ description: 'bot：GitHub App、[bot] 账号或 CI 检查' }),
-  allowed: z.boolean().meta({
-    description: '中枢按 github.allowed_users 计算；bot 恒为 false。只有 allowed 的人类评论算请求',
+  actor_id: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .meta({ description: 'GitHub 账号的数字 id（名单按 id 比较）' }),
+  actor_kind: z.enum(['human', 'bot', 'agent']).meta({
+    description: 'bot：GitHub App、[bot] 账号或 CI 检查；agent：配置的 worker 身份（永不 allowed）',
   }),
+  allowed: z.boolean().meta({
+    description:
+      '中枢计算：只有名单内人类账号的 PR 评论或代码行评论、未编辑、且中枢 gh 登录不与名单共享时为 true',
+  }),
+  not_allowed: prNotAllowedReason.optional(),
+  pr_state: z
+    .enum(['open', 'closed', 'merged'])
+    .optional()
+    .meta({ description: '读取时 PR 的状态' }),
   state: z
     .string()
     .min(1)
@@ -78,9 +111,9 @@ export const prEventPayload = z.strictObject({
     .meta({ description: '审查结论（approved / changes_requested / commented）或检查结论' }),
   text: z.string().max(PR_EVENT_TEXT_MAX).meta({ description: '内容（疑似密钥已遮蔽、超长截断）' }),
   chars: z.number().int().nonnegative().optional().meta({
-    description: '截断前的字符数；只在截断时出现',
+    description: '截断前的字符数；只在截断时出现（完整内容见 url）',
   }),
-  url: githubHtmlUrl.meta({ description: '该条内容在 GitHub 上的链接' }),
+  url: githubHtmlUrl.meta({ description: '该条内容在 GitHub 上的链接（截断时的读取指针）' }),
   cursor: prEventCursor,
 })
 export type PrEventPayload = z.infer<typeof prEventPayload>
@@ -92,6 +125,9 @@ export const prSubscriptionView = z
     pr: prUrl,
     role: prSubscriptionRole,
     subscribed_at: timestamp,
+    subscribed_seq: z.number().int().positive().optional().meta({
+      description: 'pr.subscribed 的 seq；只有之后的 PR 事件送给该订阅',
+    }),
     active: z.boolean(),
     ended_at: timestamp.nullable(),
     reason: prUnsubscribeReason.nullable(),

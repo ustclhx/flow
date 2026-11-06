@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import {
+  allowedLogins,
   createGhApi,
   type ExecFileLike,
-  effectiveAllowedUsers,
   githubPaths,
   isSafeApiPath,
   registeredGithubRepos,
@@ -89,17 +89,32 @@ test('gh 失败或返回无效 JSON 时为可重试错误', async () => {
   expect(await garbage('repos/acme/demo/pulls/1')).toMatchObject({ ok: false })
 })
 
-test('允许名单：缺省为登记仓库 owner，非 github.com 的仓库与解析失败的仓库忽略', async () => {
+test('登记仓库：读不出 origin 的计入 unresolved；名单按 PR 所属仓库的 owner 计算', async () => {
   const origins: Record<string, string | undefined> = {
     '/a': 'git@github.com:Acme/demo.git',
     '/b': 'https://gitlab.com/other/x.git',
     '/c': undefined,
     '/d': 'https://github.com/acme/demo',
   }
-  const repos = await registeredGithubRepos(['/a', '/b', '/c', '/d'], async (p) => origins[p])
-  expect(repos).toEqual([{ host: 'github.com', owner: 'Acme', repo: 'demo' }])
-  expect([...effectiveAllowedUsers({}, repos)]).toEqual(['acme'])
-  expect([...effectiveAllowedUsers({ allowed_users: ['Bob'] }, repos)]).toEqual(['bob'])
-  expect([...effectiveAllowedUsers({ allowed_users: [] }, repos)]).toEqual([])
-  expect([...effectiveAllowedUsers({}, [])]).toEqual([])
+  const r = await registeredGithubRepos(['/a', '/b', '/c', '/d'], async (p) => origins[p])
+  expect(r).toEqual({ repos: [{ host: 'github.com', owner: 'Acme', repo: 'demo' }], unresolved: 1 })
+  expect(allowedLogins({}, 'Acme')).toEqual(['acme'])
+  expect(allowedLogins({ allowed_users: ['Bob'] }, 'Acme')).toEqual(['bob'])
+  expect(allowedLogins({ allowed_users: [] }, 'Acme')).toEqual([])
+  expect(allowedLogins({}, undefined)).toEqual([])
+})
+
+test('身份查询路径也在白名单内，且只接受合法用户名', () => {
+  expect(githubPaths.self()).toBe('user')
+  expect(githubPaths.user('acme')).toBe('users/acme')
+  expect(isSafeApiPath('user')).toBe(true)
+  expect(isSafeApiPath('users/acme')).toBe(true)
+  expect(isSafeApiPath('users/acme/repos')).toBe(false)
+  expect(() => githubPaths.user('a/b')).toThrow()
+  expect(() => githubPaths.user('x[bot]')).toThrow()
+  expect(
+    isSafeApiPath(
+      'repos/acme/demo/pulls/1/comments?per_page=100&page=1&sort=updated&direction=asc&since=2026-10-24T00:00:00.000Z',
+    ),
+  ).toBe(true)
 })

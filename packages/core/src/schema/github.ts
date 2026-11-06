@@ -15,6 +15,11 @@ export const githubLogin = z
   .string()
   .regex(GITHUB_LOGIN_RE, 'GitHub 用户名只能包含字母、数字与连字符（最多 39 个字符）')
 
+/** worker 的 GitHub 身份：用户名，或 GitHub App 的 `<slug>[bot]`。 */
+export const githubActorLogin = z
+  .string()
+  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/, 'GitHub 身份只能是用户名或 <app>[bot]')
+
 export const githubConfigSchema = z
   .strictObject({
     watch: z
@@ -23,7 +28,11 @@ export const githubConfigSchema = z
       .meta({ description: '是否轮询本 workspace 有订阅的 PR（CI、审查与评论）；默认 false' }),
     allowed_users: z.array(githubLogin).max(100).optional().meta({
       description:
-        '其评论算请求的 GitHub 用户（不区分大小写）；缺省为登记仓库 origin 的 owner，无法解析时为空名单。名单外用户与机器人的内容只作为不可信上下文',
+        '其评论算请求的 GitHub 用户（按数字 id 比较）；缺省为该 PR 所属登记仓库 origin 的 owner（仅当 owner 是个人账号），否则为空名单。名单外用户与机器人的内容只作为不可信上下文',
+    }),
+    worker_identity: githubActorLogin.optional().meta({
+      description:
+        'worker 在 GitHub 上使用的独立身份（bot 账号或 App）。只有配置了、与中枢 gh 登录不同、且不在 allowed_users 中时，才解除共享身份限制；它发的内容标为 agent，永不算请求。凭证注入 worker 留待后续变更',
     }),
   })
   .meta({ title: 'Workspace GitHub settings' })

@@ -193,6 +193,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   activePrSubscriptions(workspace?: string): (PrSubscriptionView & { workspace: string })[]
   /** 某 workspace、PR 各种类已入账的最大游标（kind → cursor）。 */
   prCursors(workspace: string, pr: string): Record<string, string>
+  /** 某 workspace、PR、种类中游标不早于 since 的已入账游标（同一秒竞态去重用）。 */
+  prEventCursorsSince(workspace: string, pr: string, kind: string, sinceIso: string): string[]
   prTasksSummary(workspace: string, pr: string): { count: number; chars: number }
   /** 某 workspace 未结束（非 done / failed / cancelled）的任务，按更新时间倒序，最多 limit 条。 */
   openTasks(workspace: string, limit: number): TaskView[]
@@ -427,6 +429,7 @@ const rowToSubscription = (r: PrSubscriptionRow): PrSubscriptionView => ({
   pr: r.pr,
   role: r.role,
   subscribed_at: r.subscribed_at,
+  subscribed_seq: r.subscribed_seq,
   active: r.state === 'active',
   ended_at: r.ended_at,
   reason: r.reason,
@@ -1812,6 +1815,17 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         workspace ?? null,
         workspace ?? null,
       ).map((r) => ({ ...rowToSubscription(r), workspace: r.workspace }))
+    },
+    prEventCursorsSince(workspace, pr, kind, sinceIso) {
+      return all<{ cursor: string }>(
+        `SELECT json_extract(payload_json, '$.cursor') AS cursor FROM events
+         WHERE type = 'pr.event' AND workspace = ? AND json_extract(payload_json, '$.pr') = ?
+           AND json_extract(payload_json, '$.kind') = ? AND json_extract(payload_json, '$.cursor') >= ?`,
+        workspace,
+        pr,
+        kind,
+        sinceIso,
+      ).map((r) => r.cursor)
     },
     prCursors(workspace, pr) {
       return Object.fromEntries(

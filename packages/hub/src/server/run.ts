@@ -321,7 +321,13 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
                 ],
               },
           channels: inbox?.channels.status() ?? [],
-          pr_watch: prWatcher?.status() ?? { watched: 0, errors: [] },
+          pr_watch: prWatcher?.status() ?? {
+            watched: 0,
+            errors: [],
+            identity: null,
+            shared: [],
+            warnings: [],
+          },
         }
         return c.json({ ok: true as const, data })
       })

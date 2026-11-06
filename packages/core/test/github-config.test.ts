@@ -52,3 +52,19 @@ test('游标按 (时间, id) 比较', () => {
   expect(makeCursor('bad', 1)).toBeUndefined()
   expect(makeCursor('2026-10-24T00:00:00Z', '1;x')).toBeUndefined()
 })
+
+test('worker_identity：用户名或 <app>[bot]，doctor 显示', () => {
+  expect(githubConfigSchema.parse({ worker_identity: 'raindown-bot' }).worker_identity).toBe(
+    'raindown-bot',
+  )
+  expect(githubConfigSchema.parse({ worker_identity: 'my-app[bot]' }).worker_identity).toBe(
+    'my-app[bot]',
+  )
+  for (const bad of ['a b', 'x[bot]y', '-x']) {
+    expect(githubConfigSchema.safeParse({ worker_identity: bad }).success).toBe(false)
+  }
+  expect(describeGithubConfig({ watch: true, worker_identity: 'raindown-bot' })).toContain(
+    'worker 身份：raindown-bot',
+  )
+  expect(describeGithubConfig({ watch: true })).toContain('worker 身份：未配置')
+})

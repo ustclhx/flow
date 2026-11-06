@@ -29,12 +29,14 @@ const SEGMENT = /^[A-Za-z0-9_.-]{1,100}$/
 const SHA = /^[0-9a-f]{40}$/
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
 
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
+
 /**
- * 允许交给 gh 的路径：`repos/<owner>/<repo>/(pulls|issues)/<n>[/<资源>]` 或
- * `repos/<owner>/<repo>/commits/<sha>/check-runs`，查询串只含 per_page、page、since。
+ * 允许交给 gh 的路径：`user`（中枢 gh 登录）、`users/<login>`、`repos/<owner>/<repo>/(pulls|issues)/<n>[/<资源>]`
+ * 或 `repos/<owner>/<repo>/commits/<sha>/check-runs`，查询串只含 per_page、page、since 与固定的排序参数。
  */
 const SAFE_PATH =
-  /^repos\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/(?:(?:pulls|issues)\/[1-9]\d{0,9}(?:\/(?:comments|reviews))?|commits\/[0-9a-f]{40}\/check-runs)(?:\?per_page=100&page=[1-9]\d?(?:&since=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?)?$/
+  /^(?:user|users\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})|repos\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/(?:(?:pulls|issues)\/[1-9]\d{0,9}(?:\/(?:comments|reviews))?|commits\/[0-9a-f]{40}\/check-runs)(?:\?per_page=100&page=[1-9]\d?(?:&sort=updated&direction=asc)?(?:&since=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?)?)$/
 
 export const isSafeApiPath = (path: string): boolean => SAFE_PATH.test(path) && !path.includes('..')
 
@@ -52,25 +54,34 @@ function checkNumber(n: number) {
   if (!Number.isSafeInteger(n) || n < 1 || n > 9_999_999_999) throw new Error('PR 编号不合法')
 }
 
-const page = (p: number, since?: string) => {
+const page = (p: number, since?: string, sorted = false) => {
   if (!Number.isInteger(p) || p < 1 || p > 99) throw new Error('页码不合法')
   if (since !== undefined && !ISO.test(since)) throw new Error('since 不合法')
-  return `?per_page=100&page=${p}${since === undefined ? '' : `&since=${since}`}`
+  return `?per_page=100&page=${p}${sorted ? '&sort=updated&direction=asc' : ''}${since === undefined ? '' : `&since=${since}`}`
 }
 
-/** gh api 路径构造（参数全部来自登记信息与中枢游标）。 */
+/** gh api 路径构造（参数全部来自登记信息、中枢配置与中枢游标）。 */
 export const githubPaths = {
+  self() {
+    return 'user'
+  },
+  user(login: string) {
+    if (!LOGIN.test(login)) throw new Error('GitHub 用户名不合法')
+    return `users/${login}`
+  },
   pull(repo: RepoRef, n: number) {
     checkNumber(n)
     return `${repoPrefix(repo)}/pulls/${n}`
   },
+  /** PR 对话评论：该端点只支持 since（按 id 升序），截断时由调用方判失败。 */
   issueComments(repo: RepoRef, n: number, p: number, since?: string) {
     checkNumber(n)
     return `${repoPrefix(repo)}/issues/${n}/comments${page(p, since)}`
   },
+  /** 代码行评论：按 updated 升序，截断时游标只推进到已取到的部分。 */
   reviewComments(repo: RepoRef, n: number, p: number, since?: string) {
     checkNumber(n)
-    return `${repoPrefix(repo)}/pulls/${n}/comments${page(p, since)}`
+    return `${repoPrefix(repo)}/pulls/${n}/comments${page(p, since, true)}`
   },
   reviews(repo: RepoRef, n: number, p: number) {
     checkNumber(n)
@@ -140,15 +151,23 @@ export const gitOriginLookup: RepoOriginLookup = async (repoPath) => {
   return r.code === 0 && url ? url : undefined
 }
 
-/** workspace 登记仓库中 origin 在 github.com 上的仓库（去重）。 */
+/**
+ * workspace 登记仓库中 origin 在 github.com 上的仓库（去重），以及读不出 origin 的仓库数。
+ * 有仓库读不出来时，调用方不能据"没有匹配"断定 PR 不在登记仓库（按可重试失败处理）。
+ */
 export async function registeredGithubRepos(
   repos: readonly string[],
   origin: RepoOriginLookup,
-): Promise<RepoRef[]> {
+): Promise<{ repos: RepoRef[]; unresolved: number }> {
   const out: RepoRef[] = []
+  let unresolved = 0
   for (const path of repos) {
     const url = await origin(path).catch(() => undefined)
-    const ref = url ? parseRemoteUrl(url) : undefined
+    if (!url) {
+      unresolved++
+      continue
+    }
+    const ref = parseRemoteUrl(url)
     if (ref?.host !== 'github.com') continue
     if (
       !out.some(
@@ -159,17 +178,16 @@ export async function registeredGithubRepos(
     )
       out.push(ref)
   }
-  return out
+  return { repos: out, unresolved }
 }
 
 /**
- * 有效的允许名单（小写）：配置了 `allowed_users` 时就是它（可以为空）；否则为登记仓库 origin 的 owner，
- * 解析不出任何 owner 时为空名单（没有人的评论算请求）。
+ * 某个 PR 的有效允许名单（登录名，小写）：配置了 `allowed_users` 时就是它（可以为空）；
+ * 否则只有该 PR 所属登记仓库的 owner，且调用方须确认 owner 是个人账号（组织账号不作默认）。
  */
-export function effectiveAllowedUsers(
+export function allowedLogins(
   github: Pick<GithubConfig, 'allowed_users'>,
-  repos: readonly RepoRef[],
-): Set<string> {
-  const names = github.allowed_users ?? repos.map((r) => r.owner)
-  return new Set(names.map((n) => n.toLowerCase()))
+  owner: string | undefined,
+): string[] {
+  return (github.allowed_users ?? (owner ? [owner] : [])).map((n) => n.toLowerCase())
 }

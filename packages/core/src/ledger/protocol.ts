@@ -300,8 +300,21 @@ export const hubStatusData = healthData
             }),
           )
           .meta({ description: '连续 3 次及以上查询失败的 PR（系统问题）' }),
+        identity: z
+          .object({ ok: z.boolean(), login: z.string().nullable(), message: z.string().optional() })
+          .nullable()
+          .default(null)
+          .meta({ description: '中枢 gh 登录；查询失败（ok=false）时按共享身份处理' }),
+        shared: z
+          .array(z.object({ workspace: workspaceRef, reason: z.string() }))
+          .default([])
+          .meta({
+            description:
+              '共享身份：中枢 gh 登录在允许名单中或无法确认，PR 评论只作上下文；附原因与解除方法',
+          }),
+        warnings: z.array(z.string()).default([]),
       })
-      .default({ watched: 0, errors: [] })
+      .default({ watched: 0, errors: [], identity: null, shared: [], warnings: [] })
       .meta({ description: 'PR 订阅采集（harness-neutral D11）的状态' }),
   })
   .meta({ title: 'GET /v1/hub/status' })

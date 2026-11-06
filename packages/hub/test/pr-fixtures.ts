@@ -24,15 +24,16 @@ export const T0 = Date.parse('2026-10-24T00:00:00Z')
 
 export interface FakeComment {
   id: number
-  user: { login: string; type?: string } | null
+  user: { login: string; type?: string; id?: number } | null
   body: string
+  created_at?: string
   updated_at: string
   html_url?: string
   path?: string
 }
 export interface FakeReview {
   id: number
-  user: { login: string; type?: string } | null
+  user: { login: string; type?: string; id?: number } | null
   body: string
   state: string
   submitted_at: string
@@ -51,6 +52,18 @@ export interface FakeCheck {
 export class FakeGitHub {
   calls: string[] = []
   failing = false
+  /** 失败的资源（路径包含该片段时失败），模拟单类查询失败。 */
+  failingPaths: string[] = []
+  /** 中枢 gh 登录（`gh api user`）；null 表示查询失败。默认与名单内用户不同。 */
+  self: { login: string; id: number } | null = { login: 'hub-runner', id: 999 }
+  /** GitHub 账号：登录名（小写）→ id 与类型。 */
+  accounts: Record<string, { id: number; type: string }> = {
+    acme: { id: 1, type: 'User' },
+    alice: { id: 2, type: 'User' },
+    stranger: { id: 50, type: 'User' },
+    mallory: { id: 51, type: 'User' },
+    'hub-runner': { id: 999, type: 'User' },
+  }
   pull = {
     state: 'open',
     closed_at: null as string | null,
@@ -67,19 +80,42 @@ export class FakeGitHub {
   reviews: FakeReview[] = []
   checks: FakeCheck[] = []
 
+  /** 补上账号 id 与 created_at（未编辑的评论两者相同）。 */
+  private withUser<T extends { user: FakeComment['user'] }>(item: T): T {
+    const u = item.user
+    if (!u) return item
+    return { ...item, user: { ...u, id: u.id ?? this.accounts[u.login.toLowerCase()]?.id } }
+  }
+
   api: GhApi = async (path): Promise<Result<unknown>> => {
     this.calls.push(path)
-    if (this.failing) return fail('retryable', 'gh_query_failed', 'gh api 查询失败')
+    if (this.failing || this.failingPaths.some((p) => path.includes(p)))
+      return fail('retryable', 'gh_query_failed', 'gh api 查询失败')
+    if (path === 'user') {
+      return this.self ? ok(this.self) : fail('retryable', 'gh_query_failed', 'gh api 查询失败')
+    }
+    const userMatch = /^users\/([^/]+)$/.exec(path)
+    if (userMatch) {
+      const login = userMatch[1] as string
+      const a = this.accounts[login.toLowerCase()]
+      return a ? ok({ login, ...a }) : fail('failure', 'not_found', 'Not Found')
+    }
     const url = new URL(`https://api.github.com/${path}`)
     const since = url.searchParams.get('since')
     const page = Number(url.searchParams.get('page') ?? '1')
-    const paged = <T>(items: T[]) => (page === 1 ? items : [])
-    const after = (items: FakeComment[]) =>
-      paged(items.filter((c) => !since || Date.parse(c.updated_at) >= Date.parse(since)))
+    const paged = <T>(items: T[]) => items.slice((page - 1) * 100, page * 100)
+    const after = (items: FakeComment[], sorted = false) => {
+      const list = items
+        .filter((c) => !since || Date.parse(c.updated_at) >= Date.parse(since))
+        .map((c) => this.withUser({ ...c, created_at: c.created_at ?? c.updated_at }))
+      if (sorted) list.sort((a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at))
+      return paged(list)
+    }
     if (/\/pulls\/\d+$/.test(url.pathname)) return ok(this.pull)
     if (/\/issues\/\d+\/comments$/.test(url.pathname)) return ok(after(this.issueComments))
-    if (/\/pulls\/\d+\/comments$/.test(url.pathname)) return ok(after(this.reviewComments))
-    if (/\/pulls\/\d+\/reviews$/.test(url.pathname)) return ok(paged(this.reviews))
+    if (/\/pulls\/\d+\/comments$/.test(url.pathname)) return ok(after(this.reviewComments, true))
+    if (/\/pulls\/\d+\/reviews$/.test(url.pathname))
+      return ok(paged(this.reviews.map((r) => this.withUser(r))))
     if (/\/check-runs$/.test(url.pathname))
       return ok({ total_count: this.checks.length, check_runs: paged(this.checks) })
     return fail('failure', 'not_found', `未知路径 ${path}`)

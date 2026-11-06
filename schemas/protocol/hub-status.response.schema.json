@@ -385,7 +385,10 @@
         "pr_watch": {
           "default": {
             "watched": 0,
-            "errors": []
+            "errors": [],
+            "identity": null,
+            "shared": [],
+            "warnings": []
           },
           "description": "PR 订阅采集（harness-neutral D11）的状态",
           "type": "object",
@@ -437,11 +440,75 @@
                 "additionalProperties": false
               },
               "description": "连续 3 次及以上查询失败的 PR（系统问题）"
+            },
+            "identity": {
+              "default": null,
+              "description": "中枢 gh 登录；查询失败（ok=false）时按共享身份处理",
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "login": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "login"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "shared": {
+              "default": [],
+              "description": "共享身份：中枢 gh 登录在允许名单中或无法确认，PR 评论只作上下文；附原因与解除方法",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "workspace": {
+                    "type": "string",
+                    "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                    "description": "workspace 标识，形如 ws/<id>"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "workspace",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "warnings": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [
             "watched",
-            "errors"
+            "errors",
+            "identity",
+            "shared",
+            "warnings"
           ],
           "additionalProperties": false
         }
