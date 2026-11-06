@@ -6,7 +6,6 @@ import type {
   InboxSource,
   InboxVia,
   Result,
-  TaskStage,
 } from '@raindown/core'
 
 /**
@@ -29,8 +28,6 @@ export interface OutboundItem {
   source: InboxSource
   workspace: string | null
   task_id: string | null
-  /** 发送或更新消息时从账本派生的任务阶段。 */
-  task_stage?: TaskStage | null
   title: string
   /** 正文（任务卡住时是卡住说明，不含终端片段）。 */
   text: string

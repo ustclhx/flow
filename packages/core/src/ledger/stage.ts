@@ -47,18 +47,34 @@ export function taskStage(
 ): TaskStage | null {
   if (isTerminalStatus(task.status)) return null
 
+  const events = (options.events ?? [])
+    .filter((event) => event.task_id === task.id)
+    .sort((a, b) => a.seq - b.seq)
+  const attempts = foldTaskAttempts(task, events)
+  const latestAttempt = attempts.at(-1)
+  const attemptActive = latestAttempt !== undefined && latestAttempt.ended_at === undefined
+  // 用户已要求取消：任务只剩收尾，不再等任何人；不能显示为等人并排到最前。
+  if (task.cancel_requested) return attemptActive ? 'working' : 'queued'
+
   const blocked = task.status === 'blocked'
+  const latestBlock = events.findLast((event) => event.type === 'task.blocked')
+  const afterLatestBlock = (event: LedgerEvent) => event.seq > (latestBlock?.seq ?? 0)
+  // 用户回复已提交（待送达或节点已取走）但尚未解除阻塞：正在送达，不再等人。
+  // 只认用户本人的回复；supervisor 委托下的代回复在解除阻塞前仍是"等 supervisor"。
+  const userReplied = events.some(
+    (event) =>
+      event.type === 'task.replied' &&
+      afterLatestBlock(event) &&
+      event.actor === 'user' &&
+      event.payload.via !== 'supervisor',
+  )
+  if (blocked && userReplied) return attemptActive ? 'working' : 'queued'
   if (blocked && delegation === null) {
     if (task.blocked?.reason === 'awaiting_approval') return 'waiting-human-approval'
     if (task.blocked?.reason === 'question') return 'waiting-human-answer'
   }
   if (blocked && delegation !== null) return 'waiting-supervisor'
 
-  const events = (options.events ?? [])
-    .filter((event) => event.task_id === task.id)
-    .sort((a, b) => a.seq - b.seq)
-  const attempts = foldTaskAttempts(task, events)
-  const latestAttempt = attempts.at(-1)
   const latestStart = events.findLast((event) => event.type === 'task.started')
   const latestRequeue = events.findLast(
     (event) => event.type === 'task.requeued' || event.type === 'task.requeued_with_reply',
@@ -76,16 +92,15 @@ export function taskStage(
     return 'waiting-human-review'
   }
 
-  const latestBlock = events.findLast((event) => event.type === 'task.blocked')
   const replied = events.some(
     (event) =>
       event.type === 'task.replied' &&
-      event.seq > (latestBlock?.seq ?? 0) &&
+      afterLatestBlock(event) &&
       (event.actor === 'user' || event.actor === 'supervisor' || event.payload.via !== undefined),
   )
   if (blocked && !replied) return 'stalled'
   if (task.status === 'queued') return 'queued'
-  if (latestAttempt === undefined || latestAttempt.ended_at !== undefined) {
+  if (!attemptActive) {
     // 排队状态优先；已结束派工且仍订阅事件时才空闲，避免“无派工”吞掉空闲阶段。
     if (latestAttempt?.ended_at !== undefined && options.hasActiveSubscription) return 'idle'
     return 'queued'

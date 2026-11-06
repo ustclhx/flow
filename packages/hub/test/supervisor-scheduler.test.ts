@@ -1771,6 +1771,8 @@ describe('读取指针与关联任务（6.3）', () => {
     }
     expect(pointer.op).toBe('task_list')
     env.store.listTasks = originalList
+    // 读取限制只约束唤醒构造；按指针分页的 task_list 要为未结束任务派生阶段，需读其事件。
+    env.store.taskEvents = originalEvents
     const restored: string[] = []
     for (let offset = 0; ; offset += pointer.args.limit) {
       const page = must(env.tasks.listTasks({ ...pointer.args, offset })).tasks

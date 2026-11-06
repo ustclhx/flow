@@ -39,6 +39,7 @@ import {
   type TaskContract,
   type TaskOrigin,
   type TaskShowResponse,
+  type TaskStage,
   type TaskView,
   USER_ACTOR,
   type VerifyStep,
@@ -66,7 +67,7 @@ import {
   taskKind,
   wakePrs,
 } from './supervisor-checks.ts'
-import { readTaskStage } from './task-stage.ts'
+import { readTaskStage, stageFromEvents } from './task-stage.ts'
 
 /**
  * 任务服务（tasks.md 2.3；task-ledger spec "任务合同""幂等创建""取消"）。
@@ -314,10 +315,12 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         ? { ...storedTask, blocked: { ...storedTask.blocked, tail: undefined } }
         : storedTask
     if (section === 'summary') return ok({ task, section })
-    const events = ledger.taskEvents(id).filter((event) => isKnownEventType(event.type))
+    const all = ledger.taskEvents(id)
+    const events = all.filter((event) => isKnownEventType(event.type))
     if (section === undefined) {
       return ok({
-        task: { ...task, stage: readTaskStage(ledger, task) },
+        // 只读一次事件：阶段与详情共用同一份事件。
+        task: { ...task, stage: stageFromEvents(task, all) },
         events,
         replies: ledger.taskReplies(id),
         attempts: foldTaskAttempts(task, events),
@@ -960,19 +963,25 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       const parsed = listTasksQuery.safeParse(filter)
       if (!parsed.success) return invalidArguments('查询参数', parsed.error.issues, filter)
       const { stage, limit, ...filters } = parsed.data
-      // SQLite 的 LIMIT -1 读取全部候选，派生阶段后才过滤、排序与截取。
-      const tasks = ledger
-        .listTasks({ ...filters, limit: -1 })
-        .map((task) => ({ ...task, stage: readTaskStage(ledger, task) }))
+      const staged = (list: TaskView[]) =>
+        list.map((task) => ({ ...task, stage: readTaskStage(ledger, task) }))
+      const waitingHumanFirst = (a: { stage: TaskStage | null }, b: { stage: TaskStage | null }) =>
+        Number(isWaitingHumanStage(b.stage)) - Number(isWaitingHumanStage(a.stage))
+      // 不过滤阶段：保留 SQL 的排序与 LIMIT，只在这一页内把等人的任务排到最前。
+      if (stage === undefined) {
+        return ok({
+          tasks: staged(ledger.listTasks({ ...filters, limit })).sort(waitingHumanFirst),
+        })
+      }
+      // 按阶段过滤：终态任务没有阶段，只取未结束的候选，派生阶段后再过滤、排序与截取；
+      // offset 作用于过滤后的结果，不能交给 SQL。
+      const { offset = 0, ...candidates } = filters
+      const tasks = staged(ledger.listTasks({ ...candidates, open_only: true, limit: -1 }))
         .filter((task) =>
-          stage === undefined
-            ? true
-            : stage === 'waiting-human'
-              ? isWaitingHumanStage(task.stage)
-              : task.stage === stage,
+          stage === 'waiting-human' ? isWaitingHumanStage(task.stage) : task.stage === stage,
         )
-        .sort((a, b) => Number(isWaitingHumanStage(b.stage)) - Number(isWaitingHumanStage(a.stage)))
-        .slice(0, limit)
+        .sort(waitingHumanFirst)
+        .slice(offset, offset + limit)
       return ok({ tasks })
     },
 

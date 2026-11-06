@@ -176,7 +176,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   eventsByPayload(type: EventType, key: string, value: string): LedgerEvent[]
 
   getTask(id: string): TaskView | null
-  listTasks(filter?: Partial<ListTasksQuery>): TaskView[]
+  /** `open_only`：只取未结束（非 done / failed / cancelled）的任务；`limit: -1` 不截取。 */
+  listTasks(filter?: Partial<ListTasksQuery> & { open_only?: boolean }): TaskView[]
   /** 从可重放的 PR 索引读取，按创建时间倒序分页，包含历史派工产物。 */
   tasksForPr(workspace: string, pr: string, limit?: number, offset?: number): TaskView[]
   taskPrs(taskId: string): string[]
@@ -1579,6 +1580,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         )
         params.push(normalizePrUrl(filter.pr) ?? '')
         if (filter.workspace !== undefined) params.push(filter.workspace)
+      }
+      if (filter.open_only) {
+        where.push(`t.status NOT IN (${TERMINAL_STATUSES.map(() => '?').join(', ')})`)
+        params.push(...TERMINAL_STATUSES)
       }
       params.push(filter.limit ?? 50, filter.offset ?? 0)
       const clause = where.length === 0 ? '' : `WHERE ${where.join(' AND ')}`

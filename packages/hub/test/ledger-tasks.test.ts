@@ -461,3 +461,69 @@ test('旧账本中的相对 cwd 合同仍可 list、show、读取事件及领取
   )
   expect(granted.data.lease?.contract.cwd).toBe('./legacy-repo')
 })
+
+describe('任务列表的阶段派生开销（PR #83 审查 1）', () => {
+  async function spied() {
+    const l = await tempLedger()
+    cleanups.push(l.cleanup)
+    const reads: string[] = []
+    const ledger: LedgerStore = {
+      ...l.store,
+      taskEvents: (id) => {
+        reads.push(id)
+        return l.store.taskEvents(id)
+      },
+    }
+    let n = 0
+    const tasks = createTaskService({
+      ledger,
+      workspaceExists: (ref) => ref === WS,
+      roles: anyRole,
+      newTaskId: () => `t-test-${String(++n).padStart(3, '0')}`,
+    })
+    const open: string[] = []
+    for (let i = 0; i < 3; i++) {
+      open.push(must(await tasks.createTask(contractInput(), { actor: 'user' })).task.id)
+    }
+    const closed: string[] = []
+    for (let i = 0; i < 60; i++) {
+      const id = must(await tasks.createTask(contractInput(), { actor: 'user' })).task.id
+      must(tasks.cancelTask(id, { actor: 'user' }))
+      closed.push(id)
+    }
+    reads.length = 0
+    return { tasks, reads, open, closed }
+  }
+
+  test('不过滤阶段时保留 SQL 的 LIMIT，终态任务不读事件，阶段为 null', async () => {
+    const { tasks, reads, closed } = await spied()
+    const page = must(tasks.listTasks({})).tasks
+    expect(page).toHaveLength(50)
+    expect(page.every((t) => t.status === 'cancelled' && t.stage === null)).toBe(true)
+    expect(page[0]?.id).toBe(closed.at(-1))
+    expect(reads).toEqual([])
+    expect(must(tasks.listTasks({ limit: 5 })).tasks).toHaveLength(5)
+    expect(reads).toEqual([])
+  })
+
+  test('按阶段过滤只取未结束的候选，每个任务只读一次事件', async () => {
+    const { tasks, reads, open } = await spied()
+    const queued = must(tasks.listTasks({ stage: 'queued' })).tasks
+    expect(queued.map((t) => t.id).sort()).toEqual([...open].sort())
+    expect([...reads].sort()).toEqual([...open].sort())
+    expect(must(tasks.listTasks({ stage: 'queued', limit: 2 })).tasks).toHaveLength(2)
+    // offset 作用于阶段过滤之后的结果，而不是 SQL 候选。
+    expect(must(tasks.listTasks({ stage: 'queued', offset: 2 })).tasks.map((t) => t.id)).toEqual([
+      queued[2]?.id ?? '',
+    ])
+    expect(must(tasks.listTasks({ stage: 'waiting-human' })).tasks).toEqual([])
+    expect(must(tasks.listTasks({ stage: 'queued', status: 'cancelled' })).tasks).toEqual([])
+  })
+
+  test('任务详情只读一次事件，同时给出阶段', async () => {
+    const { tasks, reads, open } = await spied()
+    const id = open[0] ?? ''
+    expect(must(tasks.getTask(id)).task.stage).toBe('queued')
+    expect(reads).toEqual([id])
+  })
+})

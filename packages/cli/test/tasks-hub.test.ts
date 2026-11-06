@@ -184,7 +184,15 @@ describe('任务操作与真实中枢', () => {
       ids.stalled,
     ])
     expect(all.tasks.find((t) => t.id === ids.ended)?.stage).toBeNull()
-    expect(data(await client().listTasks({ limit: 1 })).tasks[0]?.id).toBe(ids.review)
+    // 不过滤阶段时 LIMIT 按创建倒序在 SQL 中截取，等人优先只在这一页内生效。
+    expect(data(await client().listTasks({ limit: 1 })).tasks[0]?.id).toBe(ids.ended)
+    expect(data(await client().listTasks({ limit: 5 })).tasks.map((t) => t.id)).toEqual([
+      ids.review,
+      ids.ended,
+      ids.queued,
+      ids.working,
+      ids.stalled,
+    ])
     expect(
       data(await client().listTasks({ stage: 'waiting-human-answer', limit: 1 })).tasks[0]?.id,
     ).toBe(ids.answer)

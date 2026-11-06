@@ -144,9 +144,10 @@ describe('收件箱操作与查询（3.2）', () => {
     await ctx.reactor.idle()
     expect((await list()).items[0]?.task_stage).toBe('waiting-supervisor')
     expect(listOpenItems(ctx.store)).toContain('等 supervisor')
-    // 故意重用创建时读出的 item：渲染不能依赖旧条目携带的阶段快照。
+    // 推送卡片发出后不会随阶段变化而更新，因此卡片里不显示阶段（避免过期）；查询结果照常显示。
     const delegated = renderMessage('item', [item], { ledger: ctx.store, snippetMax: 0 })
-    expect(renderTelegramMessage(delegated, (text) => text).text).toContain('阶段：等 supervisor')
+    expect(delegated.kind === 'item' ? delegated.item : null).not.toHaveProperty('task_stage')
+    expect(renderTelegramMessage(delegated, (text) => text).text).not.toContain('阶段')
     must(
       ctx.store.append(
         {
@@ -160,8 +161,9 @@ describe('收件箱操作与查询（3.2）', () => {
     )
     await ctx.reactor.idle()
     expect((await list()).items[0]?.task_stage).toBe('waiting-human-answer')
+    expect(listOpenItems(ctx.store)).toContain('等人回答')
     const escalated = renderMessage('batch', [item], { ledger: ctx.store, snippetMax: 0 })
-    expect(renderTelegramMessage(escalated, (text) => text).text).toContain('阶段：等人回答')
+    expect(renderTelegramMessage(escalated, (text) => text).text).not.toContain('阶段')
     const created = ctx.store
       .taskEvents(task.id)
       .find((event) => event.type === 'inbox.item_created')

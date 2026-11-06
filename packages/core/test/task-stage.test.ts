@@ -246,4 +246,61 @@ describe('任务阶段', () => {
       expect(taskStage(view, null, { events, hasActiveSubscription })).toBe(expected)
     }
   })
+
+  test('已请求取消：不再等人，也不等 supervisor 或审阅，按派工派生为工作中或排队', () => {
+    const cancelling = (reason: NonNullable<TaskView['blocked']>['reason']) => ({
+      ...blockedTask(reason),
+      cancel_requested: true,
+    })
+    const active = [started(), blockedEvent(2, 'question')]
+    const endedEvents = [...active, ended()]
+    for (const reason of ['awaiting_approval', 'question', 'other'] as const) {
+      expect(taskStage(cancelling(reason), null, { events: active })).toBe('working')
+      expect(taskStage(cancelling(reason), null, { events: endedEvents })).toBe('queued')
+      expect(taskStage(cancelling(reason), delegation, { events: active })).toBe('working')
+    }
+    const review = [started(), ready()]
+    expect(taskStage(task({ cancel_requested: true }), null, { events: review })).toBe('working')
+    expect(
+      taskStage(task({ cancel_requested: true }), null, { events: [...review, ended()] }),
+    ).toBe('queued')
+    // 排序上不再与等人的任务并列。
+    expect(isWaitingHumanStage(taskStage(cancelling('question'), null, { events: active }))).toBe(
+      false,
+    )
+  })
+
+  test.each([
+    ['question', 'waiting-human-answer'],
+    ['awaiting_approval', 'waiting-human-approval'],
+  ] as const)('%s 已有用户回复（待送达或已取走）时不再等人', (reason, waiting) => {
+    const events = [started(), blockedEvent(2, reason)]
+    expect(taskStage(blockedTask(reason), null, { events })).toBe(waiting)
+    const replied = [...events, reply(3)]
+    expect(taskStage(blockedTask(reason), null, { events: replied })).toBe('working')
+    const fetched = [
+      ...replied,
+      event(4, 'task.reply_fetched', { reply_id: 'r-3', lease_id: 'l1' }),
+    ]
+    expect(taskStage(blockedTask(reason), null, { events: fetched })).toBe('working')
+    // 派工已结束（回复随重排送达）时排队。
+    expect(taskStage(blockedTask(reason), null, { events: [...replied, ended(5)] })).toBe('queued')
+    // 回复早于当前这次卡住时不算。
+    expect(
+      taskStage(blockedTask(reason), null, {
+        events: [started(), reply(2), blockedEvent(3, reason)],
+      }),
+    ).toBe(waiting)
+  })
+
+  test('supervisor 委托下已代回复但尚未解除阻塞时仍是等 supervisor', () => {
+    const events = [
+      started(),
+      blockedEvent(2, 'awaiting_approval'),
+      reply(4, 'supervisor', 'supervisor'),
+    ]
+    expect(taskStage(blockedTask('awaiting_approval'), delegation, { events })).toBe(
+      'waiting-supervisor',
+    )
+  })
 })

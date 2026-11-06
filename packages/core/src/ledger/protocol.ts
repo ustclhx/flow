@@ -516,7 +516,11 @@ export const listTasksQuery = z
     offset: z.coerce.number().int().nonnegative().optional(),
     limit: limit.default(50),
   })
-  .meta({ title: 'GET /v1/tasks 查询参数', description: '等人的任务优先，同组按创建时间倒序' })
+  .meta({
+    title: 'GET /v1/tasks 查询参数',
+    description:
+      '按创建时间倒序取 limit 条，页内等人的任务优先；按阶段过滤时只在未结束的任务中筛选',
+  })
 export type ListTasksQuery = z.infer<typeof listTasksQuery>
 
 /** 阶段只在读取时附加；可缺省以兼容旧中枢，不进入任务投影。 */
