@@ -87,6 +87,54 @@ const inboxEvents = (store: LedgerStore) =>
   store.eventsAfter(0, {}, 10_000).filter((e) => e.type.startsWith('inbox.'))
 
 describe('条目来源', () => {
+  test('worker 上报的结构化问题保留八个标签、说明与推荐项，终端文字不替代问题', async () => {
+    const { store, reactor } = await setup()
+    running(store, 'reported')
+    const options = Array.from({ length: 8 }, (_, i) => ({
+      label: `方案 ${i}`,
+      description: `说明 ${i}`,
+    }))
+    const blocked = must(
+      store.append(
+        {
+          type: 'task.blocked',
+          task_id: 'reported',
+          workspace: WS,
+          payload: {
+            reason: 'question',
+            basis: 'reported',
+            message: '请决定',
+            question: { text: '标题用哪个？', options, recommended: '方案 7' },
+            tail: ['终端中的过时问题'],
+            lease_held: true,
+          },
+        },
+        { actor: 'node:n1' },
+      ),
+    )
+    await reactor.idle()
+    const item = store.getInboxItem(`blk.${blocked.seq}`)
+    expect(item?.options).toEqual(options.map((option) => option.label))
+    expect(item?.body).toContain('来源：worker 上报\n标题用哪个？')
+    expect(item?.body).toContain('方案 7（推荐）：说明 7')
+    must(store.rebuild())
+    expect(store.getInboxItem(`blk.${blocked.seq}`)?.options).toEqual(item?.options)
+  })
+
+  test('无需处理的任务以 dropped 结束，不创建收件箱条目', async () => {
+    const { store, reactor } = await setup()
+    running(store, 'dropped')
+    const done = drafts('dropped', { ws: WS })['task.done']
+    must(
+      store.append(
+        { ...done, payload: { result: { ...done.payload.result, dropped: true } } },
+        { actor: 'node:n1' },
+      ),
+    )
+    await reactor.idle()
+    expect(store.listInboxItems({ task_id: 'dropped' })).toHaveLength(0)
+  })
+
   test('ws/product-res 的任务 blocked(question)：新增一个 Interrupt 条目，关联任务，操作为回复', async () => {
     const { store, reactor } = await setup()
     running(store, 't1')
@@ -109,6 +157,7 @@ describe('条目来源', () => {
     })
     expect(items[0]?.title).toContain(WS)
     expect(items[0]?.body).toContain('用哪个分支？')
+    expect(items[0]?.body).toContain('来源：从终端推断')
     expect(items[0]?.body).toContain('$ git status')
     // 短 id 是创建事件 seq 的 base36
     const created = inboxEvents(store)[0] as LedgerEvent

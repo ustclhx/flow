@@ -31,6 +31,7 @@ type FieldPath = readonly string[]
 
 const RESULT_TEXT: readonly FieldPath[] = [
   ['result', 'summary'],
+  ['result', 'reported_reason'],
   ['result', 'verify', '*', 'output_tail', '*'],
 ]
 
@@ -57,7 +58,22 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task.failed': [...RESULT_TEXT, ['message']],
   'task.cancelled': [...RESULT_TEXT, ['reason']],
   // request.command 与 policy.decided 的 request.command 同样按自由文本脱敏，两者仍可逐字比较（D15）。
+  'task.reported': [
+    ['summary'],
+    ['question'],
+    ['options', '*', 'label'],
+    ['options', '*', 'description'],
+    ['recommended'],
+    ['missing'],
+    ['tried'],
+    ['reason'],
+    ['handback', 'reason'],
+  ],
   'task.blocked': [
+    ['question', 'text'],
+    ['question', 'options', '*', 'label'],
+    ['question', 'options', '*', 'description'],
+    ['question', 'recommended'],
     ['message'],
     ['tail', '*'],
     ['diff_stat'],
@@ -100,9 +116,30 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
  * 保证脱敏后的载荷仍不超过 schema 的上限。未列出的字段由各自的协议 / 写入方限长。
  */
 export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string, number>>>> = {
+  'task.done': { 'result.reported_reason': PROTOCOL_MESSAGE_MAX },
+  'task.failed': { 'result.reported_reason': PROTOCOL_MESSAGE_MAX },
+  'task.cancelled': { 'result.reported_reason': PROTOCOL_MESSAGE_MAX },
   'task.attempt_ended': { last_report: 16_384 },
   'task.policy_changed': { note: 2000 },
-  'task.blocked': { diff_stat: DIFF_STAT_MAX, 'request.reason': 2000 },
+  'task.reported': {
+    summary: PROTOCOL_MESSAGE_MAX,
+    question: PROTOCOL_MESSAGE_MAX,
+    'options.*.label': 100,
+    'options.*.description': PROTOCOL_MESSAGE_MAX,
+    recommended: 100,
+    missing: PROTOCOL_MESSAGE_MAX,
+    tried: PROTOCOL_MESSAGE_MAX,
+    reason: PROTOCOL_MESSAGE_MAX,
+    'handback.reason': PROTOCOL_MESSAGE_MAX,
+  },
+  'task.blocked': {
+    'question.text': PROTOCOL_MESSAGE_MAX,
+    'question.options.*.label': 100,
+    'question.options.*.description': PROTOCOL_MESSAGE_MAX,
+    'question.recommended': 100,
+    diff_stat: DIFF_STAT_MAX,
+    'request.reason': 2000,
+  },
   'task.reply_escalated': { note: 2000 },
   'task.replied': { reason: 2000 },
   'task.requeued': { retry_reason: PROTOCOL_MESSAGE_MAX },

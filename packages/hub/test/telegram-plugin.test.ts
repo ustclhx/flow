@@ -400,6 +400,8 @@ describe('条目消息与交互（telegram-channel "条目消息与交互"）', 
 
   test('supervisor 提问的选项按钮：点选即以该选项原文答复（选项取自条目）', async () => {
     const r = await rig()
+    const lastOption = '完整标签'.repeat(22)
+    const options = ['方案 A', '方案 B', 'C', 'D', 'E', 'F', 'G', lastOption]
     must(
       r.ledger.append(
         {
@@ -411,7 +413,7 @@ describe('条目消息与交互（telegram-channel "条目消息与交互"）', 
             source_ref: 't-1',
             title: '用哪个方案？',
             actions: ['reply'],
-            options: ['方案 A', '方案 B'],
+            options,
           },
         },
         { actor: 'hub' },
@@ -421,7 +423,7 @@ describe('条目消息与交互（telegram-channel "条目消息与交互"）', 
     const view = r.ledger.getInboxItem('ask.q')
     const message: ChannelMessage =
       base.kind === 'item'
-        ? { kind: 'item', item: { ...base.item, options: ['方案 A', '方案 B'] } }
+        ? { kind: 'item', item: { ...base.item, options, recommended: lastOption } }
         : base
     const ref = await r.plugin.send(message, { signal: new AbortController().signal })
     must(
@@ -432,16 +434,19 @@ describe('条目消息与交互（telegram-channel "条目消息与交互"）', 
     )
     const messageId = Number(ref.split(':')[1])
     const sent = r.fake.sent.at(-1)
-    expect(sent?.reply_markup?.inline_keyboard[0]).toEqual([
-      { text: '方案 A', callback_data: `i:${view?.short_id}:o0` },
-      { text: '方案 B', callback_data: `i:${view?.short_id}:o1` },
+    expect(sent?.reply_markup?.inline_keyboard.slice(0, 2)).toEqual([
+      [{ text: '方案 A', callback_data: `i:${view?.short_id}:o0` }],
+      [{ text: '方案 B', callback_data: `i:${view?.short_id}:o1` }],
     ])
     await r.processed(r.fake.press(messageId, `i:${view?.short_id}:o1`))
     expect(r.actions).toEqual([{ item: 'ask.q', action: 'reply', text: '方案 B' }])
     expect(r.fake.answers.at(-1)?.text).toBe('已回复')
-    // 不存在的选项序号：按钮失效。
-    await r.processed(r.fake.press(messageId, `i:${view?.short_id}:o3`))
-    expect(r.actions).toHaveLength(1)
+    // 第八个长标签被截短显示，点击仍回复条目里的完整标签。
+    await r.processed(r.fake.press(messageId, `i:${view?.short_id}:o7`))
+    expect(r.actions[1]).toEqual({ item: 'ask.q', action: 'reply', text: lastOption })
+    // 超过八个选项的序号：按钮失效。
+    await r.processed(r.fake.press(messageId, `i:${view?.short_id}:o8`))
+    expect(r.actions).toHaveLength(2)
     expect(r.fake.answers.at(-1)?.text).toBe('按钮已失效')
   })
 

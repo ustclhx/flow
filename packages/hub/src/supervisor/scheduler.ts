@@ -549,7 +549,12 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
             `${who}卡住（${ev.payload.reason}）：${ev.payload.message}`,
             WAKE_EVENT_SUMMARY_MAX,
           ),
-          data: { reason: ev.payload.reason, tail: (ev.payload.tail ?? []).slice(-TAIL_LINES) },
+          data: {
+            reason: ev.payload.reason,
+            basis: ev.payload.basis ?? 'inferred',
+            ...(ev.payload.question ? { question: ev.payload.question } : {}),
+            tail: (ev.payload.tail ?? []).slice(-TAIL_LINES),
+          },
         }
       case 'supervisor.answered':
         return {
@@ -616,6 +621,8 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         deadline: p.deadline,
         ...(p.decision_id === undefined ? {} : { decision_id: p.decision_id }),
         ...(b ? { message: clip(b.message), tail: (b.tail ?? []).slice(-TAIL_LINES) } : {}),
+        ...(b ? { basis: b.basis ?? 'inferred' } : {}),
+        ...(b?.question ? { question: b.question } : {}),
         ...(b?.diff_stat ? { diff_stat: b.diff_stat } : {}),
         ...(request
           ? {

@@ -666,6 +666,9 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     if (blocked.reason !== p.kind) {
       return invalidEvent(`委托的 kind ${p.kind} 与卡住原因 ${blocked.reason} 不一致`)
     }
+    if (blocked.reason === 'question' && blocked.basis !== 'reported') {
+      return notDelegable('推断的提问不能委托 supervisor 代答')
+    }
     if (blocked.no_delegate === true) return notDelegable('这次卡住带 no_delegate，不能委托')
     if (blocked.prior_reason !== undefined) {
       return notDelegable('节点掉线后保留 prior_reason 的卡住不能委托')
@@ -844,6 +847,36 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'task.reported': {
+        const lease = get('SELECT * FROM leases WHERE lease_id = ?', draft.payload.lease_id) as
+          | { task_id: string; state: string; attempt: number }
+          | undefined
+        if (
+          draft.payload.attempt !== task?.attempt ||
+          lease?.task_id !== draft.task_id ||
+          lease?.state !== 'active'
+        ) {
+          return invalidEvent('上报必须属于当前活动派工')
+        }
+        return ok(null)
+      }
+      case 'task.report_consumed': {
+        const report = get(
+          'SELECT task_id, type, payload_json FROM events WHERE seq = ?',
+          draft.payload.report_seq,
+        ) as { task_id: string; type: string; payload_json: string } | undefined
+        const p = report ? JSON.parse(report.payload_json) : null
+        if (
+          report?.type !== 'task.reported' ||
+          report.task_id !== draft.task_id ||
+          p?.attempt !== draft.payload.attempt ||
+          p?.lease_id !== draft.payload.lease_id ||
+          draft.payload.attempt !== task?.attempt
+        ) {
+          return invalidEvent('消费确认必须引用本派工的上报')
+        }
+        return ok(null)
+      }
       case 'task.attempt_ended': {
         if (draft.payload.attempt !== task?.attempt) {
           return invalidEvent('task.attempt_ended 的 attempt 必须是当前派工')
@@ -961,7 +994,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           'SELECT task_id, state FROM leases WHERE lease_id = ?',
           draft.payload.lease_id,
         )
-        if (!lease || lease.task_id !== draft.task_id || lease.state !== 'active') {
+        if (!lease || lease.task_id !== draft.task_id || lease?.state !== 'active') {
           return invalidEvent(`租约 ${draft.payload.lease_id} 不是该任务的活动租约`)
         }
         return ok(null)

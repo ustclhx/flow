@@ -70,6 +70,8 @@ export interface ExecutorContext {
    * 路径作为 `RAINDOWN_HUB_TOKEN_FILE` 交给 Raindown MCP 进程，不得读出 token 放进 argv、env、活动、结果或日志。
    */
   wakeTokenFile?: string
+  /** 当前 worker 派工凭证文件（0600）；只传路径到受管 MCP，不传凭证明文。 */
+  leaseTokenFile?: string
   /**
    * 上报执行器创建的任务分支与 worktree（D15，codex-orca 开始时调用）：节点随下一次续约上报，
    * 中枢写 `task.branch_reported`（每个任务一次、不可更改）。worktree 由节点 realpath 后上报；

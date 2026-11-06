@@ -54,6 +54,7 @@ import {
   taskWorktree,
   type WakeOrigin,
 } from './task.ts'
+import { pendingWorkerReport, workerReportData, workerReportRequest } from './worker-report.ts'
 
 /**
  * 中枢 HTTP 协议（hub-daemon、node-protocol spec；design D3、D4）。
@@ -104,6 +105,10 @@ export const PROTOCOL_ERRORS = {
   lease_not_found: { status: 404, kind: 'failure' },
   invalid_lease_token: { status: 403, kind: 'failure' },
   node_not_registered: { status: 409, kind: 'failure' },
+  not_running: { status: 409, kind: 'failure' },
+  forbidden: { status: 403, kind: 'failure' },
+  deliverable_not_found: { status: 422, kind: 'failure' },
+  deliverable_check_failed: { status: 502, kind: 'failure' },
   not_blocked: { status: 409, kind: 'failure' },
   reply_kind_mismatch: { status: 409, kind: 'failure' },
   reply_pending: { status: 409, kind: 'failure' },
@@ -706,6 +711,11 @@ export const leaseGrant = z
       .meta({ description: '任务带着回复重新排队时，本次执行要带上的回复与会话 id' }),
     // 恢复上下文只是提示；较新中枢扩展字段或原因时，旧节点仍须接受租约。
     recovery: taskRecovery.optional().catch(undefined),
+    dispatch_token: z
+      .string()
+      .min(16)
+      .optional()
+      .meta({ description: '当前派工的 worker 受限身份凭证；与节点 lease_token 分离' }),
     wake_token: z.string().min(16).optional().meta({
       description:
         '唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略',
@@ -727,6 +737,12 @@ export const renewLeaseRequest = z
   .strictObject({
     lease_token: z.string().min(16),
     activity: z.array(activity).max(500).default([]).meta({ description: '自上次续约以来的活动' }),
+    report_seq: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .meta({ description: '确认已消费本派工的上报，确认后续约不再下发' }),
     phase: z
       .literal('verifying')
       .optional()
@@ -791,6 +807,7 @@ export const renewLeaseData = z
       })
       .optional()
       .meta({ description: '本次 blocked 上报对应的事件；request_id 不同则不确认' }),
+    report: pendingWorkerReport.optional(),
     branch_report: z.enum(['recorded', 'ignored', 'retry']).optional().meta({
       description:
         '续约带了 branch 时的处理结果（D15）：recorded 已写入；ignored 已上报过或被拒绝（节点不再上报）；retry 临时失败（例如数据库忙），节点保留并重发',
@@ -803,7 +820,10 @@ export const renewLeaseData = z
   .meta({ title: 'POST /v1/leases/:id/renew 响应' })
 export type RenewLeaseData = z.infer<typeof renewLeaseData>
 
-const token = { lease_token: z.string().min(16) }
+const token = {
+  lease_token: z.string().min(16),
+  report_seq: z.number().int().positive().optional(),
+}
 export const completeLeaseRequest = z
   .discriminatedUnion('outcome', [
     z.strictObject({ ...token, outcome: z.literal('done'), result: taskResult }),
@@ -970,7 +990,7 @@ export const askUserRequest = z
   .strictObject({
     workspace: workspaceRef,
     question: z.string().trim().min(1).max(QUESTION_MAX).meta({ description: '提问全文' }),
-    options: inboxOptions.optional(),
+    options: inboxOptions.max(4).optional(),
   })
   .meta({ title: 'POST /v1/supervisor/questions 请求体' })
 export type AskUserRequest = z.infer<typeof askUserRequest>
@@ -1128,7 +1148,48 @@ export interface EndpointDef {
   stream?: 'sse'
 }
 
+export const sessionBindingData = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('task'),
+    task: z.object({
+      actor,
+      task_id: taskId,
+      workspace: workspaceRef,
+      lease_id: leaseId,
+      attempt: z.number().int().positive(),
+    }),
+  }),
+  z.object({
+    kind: z.literal('wake'),
+    wake: z.object({
+      actor,
+      task_id: taskId,
+      workspace: workspaceRef,
+      lease_id: leaseId,
+      origin: z.enum(['instruction', 'autonomous', 'reply']),
+      generation: z.number().int().nonnegative(),
+    }),
+  }),
+  z.object({ kind: z.literal('user') }),
+  z.object({ kind: z.literal('bound') }),
+  z.object({ kind: z.literal('none') }),
+])
+export type SessionBindingData = z.infer<typeof sessionBindingData>
+
 export const ENDPOINTS = {
+  'session-binding': {
+    method: 'GET',
+    path: '/v1/binding',
+    auth: true,
+    response: sessionBindingData,
+  },
+  'tasks-report': {
+    method: 'POST',
+    path: '/v1/tasks/:id/report',
+    auth: true,
+    request: workerReportRequest,
+    response: workerReportData,
+  },
   'inbox-list': {
     method: 'GET',
     path: '/v1/inbox',

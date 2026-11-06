@@ -927,6 +927,59 @@
                         "other"
                       ]
                     },
+                    "basis": {
+                      "type": "string",
+                      "enum": [
+                        "reported",
+                        "inferred"
+                      ]
+                    },
+                    "question": {
+                      "type": "object",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 8192
+                        },
+                        "options": {
+                          "minItems": 2,
+                          "maxItems": 8,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "description": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192
+                              }
+                            },
+                            "required": [
+                              "label",
+                              "description"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "recommended": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        }
+                      },
+                      "required": [
+                        "text",
+                        "options",
+                        "recommended"
+                      ],
+                      "additionalProperties": false
+                    },
                     "decision_id": {
                       "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",
                       "type": "integer",
@@ -1209,6 +1262,16 @@
                       "additionalProperties": false,
                       "title": "Task cost",
                       "description": "执行器上报的费用与用量（估算）"
+                    },
+                    "reported_reason": {
+                      "description": "worker 上报的失败或无需处理原因原文",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 8192
+                    },
+                    "dropped": {
+                      "description": "经核实无需处理，不推送通知",
+                      "type": "boolean"
                     },
                     "review": {
                       "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
@@ -3492,6 +3555,16 @@
                             "title": "Task cost",
                             "description": "执行器上报的费用与用量（估算）"
                           },
+                          "reported_reason": {
+                            "description": "worker 上报的失败或无需处理原因原文",
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 8192
+                          },
+                          "dropped": {
+                            "description": "经核实无需处理，不推送通知",
+                            "type": "boolean"
+                          },
                           "review": {
                             "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
                             "type": "object",
@@ -3778,6 +3851,16 @@
                             "title": "Task cost",
                             "description": "执行器上报的费用与用量（估算）"
                           },
+                          "reported_reason": {
+                            "description": "worker 上报的失败或无需处理原因原文",
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 8192
+                          },
+                          "dropped": {
+                            "description": "经核实无需处理，不推送通知",
+                            "type": "boolean"
+                          },
                           "review": {
                             "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
                             "type": "object",
@@ -3851,6 +3934,244 @@
                 ],
                 "additionalProperties": false,
                 "title": "task.failed"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991,
+                    "description": "账本序号，单调递增"
+                  },
+                  "ts": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "task.reported"
+                  },
+                  "workspace": {
+                    "type": "string",
+                    "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                    "description": "workspace 标识，形如 ws/<id>"
+                  },
+                  "task_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                    "description": "任务 id，由中枢在创建时分配"
+                  },
+                  "actor": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                    "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "progress",
+                          "question",
+                          "ready",
+                          "blocked",
+                          "failed",
+                          "dropped"
+                        ]
+                      },
+                      "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
+                      },
+                      "question": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
+                      },
+                      "options": {
+                        "minItems": 2,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            },
+                            "description": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 8192
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "description"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "recommended": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "deliverables": {
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 2048,
+                          "format": "uri"
+                        }
+                      },
+                      "missing": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
+                      },
+                      "tried": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
+                      },
+                      "handback": {
+                        "type": "object",
+                        "properties": {
+                          "pr_event_seq": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 8192
+                          }
+                        },
+                        "required": [
+                          "pr_event_seq",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "attempt": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "lease_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                        "description": "租约 id，由中枢在分配任务时生成"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "summary",
+                      "attempt",
+                      "lease_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "seq",
+                  "ts",
+                  "type",
+                  "workspace",
+                  "task_id",
+                  "actor",
+                  "payload"
+                ],
+                "additionalProperties": false,
+                "title": "task.reported"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991,
+                    "description": "账本序号，单调递增"
+                  },
+                  "ts": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "task.report_consumed"
+                  },
+                  "workspace": {
+                    "type": "string",
+                    "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                    "description": "workspace 标识，形如 ws/<id>"
+                  },
+                  "task_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                    "description": "任务 id，由中枢在创建时分配"
+                  },
+                  "actor": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                    "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "properties": {
+                      "attempt": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "lease_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                        "description": "租约 id，由中枢在分配任务时生成"
+                      },
+                      "report_seq": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "attempt",
+                      "lease_id",
+                      "report_seq"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "seq",
+                  "ts",
+                  "type",
+                  "workspace",
+                  "task_id",
+                  "actor",
+                  "payload"
+                ],
+                "additionalProperties": false,
+                "title": "task.report_consumed"
               },
               {
                 "type": "object",
@@ -3952,6 +4273,59 @@
                           "node_lost",
                           "other"
                         ]
+                      },
+                      "basis": {
+                        "type": "string",
+                        "enum": [
+                          "reported",
+                          "inferred"
+                        ]
+                      },
+                      "question": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 8192
+                          },
+                          "options": {
+                            "minItems": 2,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "label": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 100
+                                },
+                                "description": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 8192
+                                }
+                              },
+                              "required": [
+                                "label",
+                                "description"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "recommended": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100
+                          }
+                        },
+                        "required": [
+                          "text",
+                          "options",
+                          "recommended"
+                        ],
+                        "additionalProperties": false
                       },
                       "decision_id": {
                         "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",
@@ -4960,6 +5334,16 @@
                             "additionalProperties": false,
                             "title": "Task cost",
                             "description": "执行器上报的费用与用量（估算）"
+                          },
+                          "reported_reason": {
+                            "description": "worker 上报的失败或无需处理原因原文",
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 8192
+                          },
+                          "dropped": {
+                            "description": "经核实无需处理，不推送通知",
+                            "type": "boolean"
                           },
                           "review": {
                             "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
@@ -6328,7 +6712,7 @@
                       "options": {
                         "description": "supervisor 提问的候选答复（2–4 个，D11）；只用于 source=supervisor 的条目",
                         "minItems": 2,
-                        "maxItems": 4,
+                        "maxItems": 8,
                         "type": "array",
                         "items": {
                           "type": "string",

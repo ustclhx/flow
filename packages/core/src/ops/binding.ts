@@ -43,6 +43,15 @@ export const replyOnlyWake = (name: string) =>
     { tool: name },
   )
 
+/** worker 只能访问只读知识、本任务详情与结构化上报。 */
+export function taskBindingAllows(op: Pick<Operation<never, unknown>, 'name' | 'access'>): boolean {
+  return (
+    op.name === 'raindown_report' ||
+    op.name === 'task_show' ||
+    (op.access === 'read' && op.name.startsWith('kb_'))
+  )
+}
+
 /** 按会话绑定检查并改写操作输入；没有绑定时原样返回。 */
 export function applyBinding<I>(
   op: Pick<Operation<I, unknown>, 'name' | 'access' | 'replyAllowed' | 'bind'>,
@@ -50,6 +59,15 @@ export function applyBinding<I>(
   binding: OpBinding | undefined,
 ): Result<I> {
   if (!binding) return ok(input)
+  if (binding.kind === 'task') {
+    if (!taskBindingAllows(op)) return fail('failure', 'forbidden', `任务绑定不能调用 ${op.name}`)
+    if (op.name === 'task_show' || op.name === 'raindown_report') {
+      const id = (input as { id?: string }).id
+      if (id !== undefined && id !== binding.task)
+        return fail('failure', 'forbidden', '任务绑定只能访问本任务')
+    }
+    return ok(input)
+  }
   if (op.access === 'read') return ok(input)
   if (binding.replyOnly && !op.replyAllowed) return replyOnlyWake(op.name)
   return op.bind ? op.bind(input, binding) : ok(input)

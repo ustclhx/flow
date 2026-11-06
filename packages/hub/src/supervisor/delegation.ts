@@ -39,7 +39,7 @@ import type { ReplyUnavailableReason } from './scheduler.ts'
  *   带 `prior_reason`（node_lost 遗留）或 `no_delegate` 的卡住、已请求取消的任务、已有待送达回复的任务、
  *   条目已被用户关闭的卡住；中枢侧对 `no_delegate` 独立兜底：同一 running 区间（最近一次 `task.started`
  *   之后）出现过被节点拒收（dropped）的 supervisor 回复，之后的卡住一律不委托；角色查不到也不委托；
- * - question：其余条件满足即委托；
+ * - question：只委托 worker 明确上报（basis=reported）的提问；旧事件缺省视为 inferred；
  * - awaiting_approval：卡住时节点持有租约（`lease_held`）、`decision_id` 指向本任务、由策略引擎写入、
  *   档位为 `supervisor` 的 `policy.decided`，且卡住上报的请求与判定的请求逐字一致（含工具与路径；
  *   没有命令的请求一律不委托）；"晚于上次离开 blocked"等不变量由 store 再校验一次。
@@ -236,7 +236,12 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
   /** 只看卡住事件本身就能排除的情况（同步，用于决定是否先挡住推送）。 */
   function candidate(e: EventOf<'task.blocked'>): boolean {
     const p = e.payload
-    if (!DELEGABLE.has(p.reason) || p.no_delegate === true || p.prior_reason !== undefined) {
+    if (
+      !DELEGABLE.has(p.reason) ||
+      (p.reason === 'question' && p.basis !== 'reported') ||
+      p.no_delegate === true ||
+      p.prior_reason !== undefined
+    ) {
       return false
     }
     return e.task_id !== undefined && ledger.wakeOf(e.task_id) === null
@@ -533,6 +538,10 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
     for (const task of ledger.listTasks({ status: 'blocked', limit: 100_000 })) {
       const d = ledger.activeDelegation(task.id)
       if (d) {
+        if (task.blocked?.reason === 'question' && task.blocked.basis !== 'reported') {
+          escalate(task.id, d.seq, 'supervisor', '终端推断的提问须由用户回答')
+          continue
+        }
         arm(task.id, d)
         continue
       }
@@ -658,6 +667,9 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
           ) {
             return staleBlock('审批依据已失效或当前策略不再允许 supervisor 代批')
           }
+        }
+        if (d.kind === 'question' && t.blocked?.basis !== 'reported') {
+          return notDelegated('终端推断的提问须由用户回答')
         }
         if (d.kind === 'question' && (input.decision === 'approve' || input.decision === 'deny')) {
           return invalidArguments('提问只能 answer 或 escalate，不能 approve / deny', 'decision')

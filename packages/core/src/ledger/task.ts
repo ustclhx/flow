@@ -11,7 +11,8 @@ import {
   taskId,
   timestamp,
 } from './common.ts'
-import { clipText } from './redact.ts'
+import { clipText, PROTOCOL_MESSAGE_MAX } from './redact.ts'
+import { reportQuestion } from './worker-report.ts'
 
 /**
  * 任务合同、任务结果、状态与状态机（task-ledger spec）。
@@ -551,6 +552,8 @@ export const blockedRequest = z
 export type BlockedRequest = z.infer<typeof blockedRequest>
 
 const delegationCommon = {
+  basis: z.enum(['reported', 'inferred']).optional(),
+  question: reportQuestion.optional(),
   decision_id: policyDecisionId.optional().meta({
     description: '策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq',
   }),
@@ -791,6 +794,13 @@ export const taskResult = z
       description: '执行器会话 id（例如 Claude Agent SDK 的 session_id），便于事后查看或恢复',
     }),
     cost: taskCost.optional(),
+    reported_reason: z
+      .string()
+      .min(1)
+      .max(PROTOCOL_MESSAGE_MAX)
+      .optional()
+      .meta({ description: 'worker 上报的失败或无需处理原因原文' }),
+    dropped: z.boolean().optional().meta({ description: '经核实无需处理，不推送通知' }),
     review: reviewResult.optional().meta({
       description: '审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信',
     }),

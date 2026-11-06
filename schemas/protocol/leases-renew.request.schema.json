@@ -52,6 +52,12 @@
         "description": "执行器上报的一条活动"
       }
     },
+    "report_seq": {
+      "description": "确认已消费本派工的上报，确认后续约不再下发",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
     "phase": {
       "description": "开始执行验收命令时带上，中枢写入 task.verifying",
       "type": "string",
@@ -103,6 +109,59 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 512
+        },
+        "basis": {
+          "type": "string",
+          "enum": [
+            "reported",
+            "inferred"
+          ]
+        },
+        "question": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "options": {
+              "minItems": 2,
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                },
+                "required": [
+                  "label",
+                  "description"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "recommended": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "text",
+            "options",
+            "recommended"
+          ],
+          "additionalProperties": false
         },
         "decision_id": {
           "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",

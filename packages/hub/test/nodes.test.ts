@@ -324,6 +324,7 @@ describe('续约与提交', () => {
       reason: 'question',
       message: '要用哪个分支？',
       tail: ['line'],
+      basis: 'inferred',
       lease_held: false,
     })
     expect(ctx.ledger.activeLease(id)).toBeNull()

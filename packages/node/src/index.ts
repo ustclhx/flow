@@ -143,6 +143,12 @@ export {
   untrustedCheckoutConfig,
 } from './github.ts'
 export {
+  cleanLeaseTokenFiles,
+  leaseTokenDir,
+  removeLeaseTokenFile,
+  writeLeaseTokenFile,
+} from './lease-token.ts'
+export {
   DELIVER_GIVE_UP_MS,
   DELIVER_TIMEOUT_MS,
   generateNodeId,

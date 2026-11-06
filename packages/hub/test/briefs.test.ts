@@ -183,7 +183,12 @@ describe('简报的中枢数据', () => {
       const d = drafts(id, { ws: WS })
       must(store.append(d['task.created'], { actor: 'user' }))
       must(store.appendMany([d['task.started'], d['lease.granted']], sys))
-      must(store.append(d['task.blocked'], { actor: 'node:n1' }))
+      must(
+        store.append(
+          { ...d['task.blocked'], payload: { ...d['task.blocked'].payload, basis: 'reported' } },
+          { actor: 'node:n1' },
+        ),
+      )
       return d
     }
     block('t-sup')

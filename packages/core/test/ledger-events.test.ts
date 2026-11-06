@@ -70,6 +70,20 @@ const samples: Record<
     valid: { ...task, payload: { message: '用户放弃' } },
     invalid: { ...task, payload: {} },
   },
+  'task.reported': {
+    valid: {
+      ...task,
+      payload: { attempt: 1, lease_id: 'l1', status: 'progress', summary: '完成数据层' },
+    },
+    invalid: {
+      ...task,
+      payload: { attempt: 1, lease_id: 'l1', status: 'question', summary: '缺少问题' },
+    },
+  },
+  'task.report_consumed': {
+    valid: { ...task, payload: { attempt: 1, lease_id: 'l1', report_seq: 1 } },
+    invalid: { ...task, payload: { attempt: 1, lease_id: 'l1', report_seq: 0 } },
+  },
   'task.blocked': {
     valid: { ...task, payload: { reason: 'question', message: '哪个分支？', tail: ['> ?'] } },
     invalid: { ...task, payload: { reason: 'tired', message: 'x' } },
@@ -482,6 +496,12 @@ describe('事件触发的状态转换', () => {
     'task.started': [['queued', 'running']],
     'task.attempt_ended': TASK_STATUSES.map((status) => [status, status]),
     'lease.granted': [['running', 'running']],
+    'task.reported': [['running', 'running']],
+    'task.report_consumed': [
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
+    ],
     'task.verifying': [['running', 'verifying']],
     'task.done': [
       ['running', 'done'],

@@ -39,7 +39,7 @@ export interface HubClientOptions {
   /** 写入 `X-Raindown-Actor`。user token 可以借此降级；绑定 token 必须与绑定身份一致。 */
   actor: string
   /**
-   * 显式的中枢 token。缺省时依次取环境变量 `RAINDOWN_HUB_TOKEN_FILE` 指向的文件（supervisor 唤醒的
+   * 显式的中枢 token。缺省时依次取 `RAINDOWN_LEASE_TOKEN_FILE`（worker 派工）、`RAINDOWN_HUB_TOKEN_FILE` 指向的文件（supervisor 唤醒的
    * MCP 进程，见 add-m1-supervisor D6）、`RAINDOWN_HUB_TOKEN`（例如签发给某个 AI 的绑定 token），
    * 最后取 `state/hub.token`（user token）。
    */
@@ -67,6 +67,8 @@ export const HUB_TOKEN_ENV = 'RAINDOWN_HUB_TOKEN'
  * 节点把唤醒绑定 token 写进 `state/wake/<task>.token`，只把路径交给 MCP 进程，token 本身不进 argv 与 env。
  */
 export const HUB_TOKEN_FILE_ENV = 'RAINDOWN_HUB_TOKEN_FILE'
+/** worker 派工凭证的文件路径；优先于通用中枢凭证，读取失败时不降级。 */
+export const LEASE_TOKEN_FILE_ENV = 'RAINDOWN_LEASE_TOKEN_FILE'
 
 const unavailable = () =>
   fail('retryable', HUB_UNAVAILABLE, '无法连接中枢，请运行 raindown daemon status 检查')
@@ -88,14 +90,14 @@ export class HubClient {
     let token: string | undefined
     if (endpoint.auth) {
       token = this.options.token?.trim() || undefined
-      const tokenFile = readRaindownEnv(HUB_TOKEN_FILE_ENV)
+      const tokenFile = readRaindownEnv(LEASE_TOKEN_FILE_ENV) ?? readRaindownEnv(HUB_TOKEN_FILE_ENV)
       if (token === undefined && tokenFile) {
         // 指定了 token 文件就只用它：读不到时失败，不回退到 user token。
         try {
           token = (await readFile(tokenFile, 'utf8')).trim()
         } catch (err) {
           if (isMissing(err))
-            return fail('failure', 'token_file_missing', '中枢 token 文件不存在（唤醒可能已结束）')
+            return fail('failure', 'token_file_missing', '中枢 token 文件不存在（派工可能已结束）')
           return fail('failure', 'read_failed', '无法读取中枢 token 文件')
         }
         if (!token) return fail('failure', 'token_file_missing', '中枢 token 文件为空')

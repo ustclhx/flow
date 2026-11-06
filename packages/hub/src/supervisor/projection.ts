@@ -217,6 +217,9 @@ export class WakeProjection {
       case 'decision.review_due':
         return e.workspace === undefined ? null : 'autonomous'
       case 'task.done':
+        if (e.payload.result.dropped === true) return null
+        if (e.task_id === undefined || this.wakes.has(e.task_id)) return null
+        return this.taskOrigin.get(e.task_id) ?? null
       case 'task.failed':
       case 'task.cancelled':
         if (e.task_id === undefined || this.wakes.has(e.task_id)) return null

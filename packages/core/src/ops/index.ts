@@ -9,6 +9,7 @@ import {
   kbProposalsRejectOp,
   kbProposeOp,
 } from './proposals.ts'
+import { raindownReportOp } from './report.ts'
 import { kbGetOp, kbQueryOp, kbSearchOp } from './search.ts'
 import {
   askUserOp,
@@ -34,6 +35,7 @@ export * from './inbox.ts'
 export * from './journal.ts'
 export * from './operation.ts'
 export * from './proposals.ts'
+export * from './report.ts'
 export * from './search.ts'
 export * from './supervisor.ts'
 export * from './tasks.ts'
@@ -44,6 +46,7 @@ export * from './workspace.ts'
  * 新增操作时在 `ops/` 下新建文件并在此追加。
  */
 export const operations = [
+  raindownReportOp,
   inboxListOp,
   inboxActOp,
   taskCreateOp,

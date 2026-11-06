@@ -998,6 +998,11 @@
                   "title": "Task recovery",
                   "description": "同一任务上一次派工的结束与交付事实"
                 },
+                "dispatch_token": {
+                  "description": "当前派工的 worker 受限身份凭证；与节点 lease_token 分离",
+                  "type": "string",
+                  "minLength": 16
+                },
                 "wake_token": {
                   "description": "唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略",
                   "type": "string",

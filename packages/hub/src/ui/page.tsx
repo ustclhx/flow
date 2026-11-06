@@ -20,6 +20,8 @@ export interface UiItem {
   pending: { kind: string } | null
   /** 任务提案的目标全文（D11：Web 上可以修改目标后再接受）；其他条目省略。 */
   goal?: string
+  /** 上报的推荐选项标签；回复仍使用原标签。 */
+  recommended?: string
 }
 
 export interface BoardModel {
@@ -151,6 +153,7 @@ export const Card: FC<{ entry: UiItem; now: number }> = ({ entry, now }) => {
           {item.options.map((o) => (
             <button type="button" class="btn secondary" data-option={o}>
               {o}
+              {o === entry.recommended ? '（推荐）' : ''}
             </button>
           ))}
         </div>

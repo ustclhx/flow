@@ -1,5 +1,10 @@
-import { ok } from '@raindown/core'
-import { checkMcpActor, resolveMcpBinding, startStdioServer } from '@raindown/mcp'
+import { LEASE_TOKEN_FILE_ENV, ok, readRaindownEnv } from '@raindown/core'
+import {
+  checkMcpActor,
+  RaindownMcpConfigError,
+  resolveMcpBinding,
+  startStdioServer,
+} from '@raindown/mcp'
 import { defineCommand } from '../command.ts'
 
 /**
@@ -8,14 +13,17 @@ import { defineCommand } from '../command.ts'
  */
 export const mcpCommand = defineCommand({
   name: 'mcp',
-  summary: '以 stdio 传输启动 MCP 服务，把全部知识访问操作暴露为工具（需要 --actor）',
-  usage: 'mcp --actor <name> [--workspace <ws> [--task <id>] [--reply-only]]',
+  summary: '以 stdio 传输启动 MCP 服务，按派工或唤醒绑定暴露工具（需要 --actor）',
+  usage: 'mcp --actor <name> [--task <id>] [--workspace <ws>] [--reply-only]',
   options: {
     workspace: {
       type: 'string',
       description: '绑定 workspace：写类操作只能作用于它（supervisor 会话，由节点注入）',
     },
-    task: { type: 'string', description: '绑定任务：task_create 未写 parent 时以它为 parent' },
+    task: {
+      type: 'string',
+      description: '核对派工绑定任务；唤醒会话中作为 task_create 的默认 parent',
+    },
     'reply-only': {
       type: 'boolean',
       description: 'reply 唤醒：只放行只读操作（中枢仍是最终裁决）',
@@ -30,15 +38,23 @@ export const mcpCommand = defineCommand({
       task: str(options.task),
       replyOnly: options['reply-only'] === true,
     }
-    const bound = resolveMcpBinding(bindingOptions)
-    if (!bound.ok) return { ok: false, error: bound.error }
+    // worker 的 --task 可以单独给出，workspace 由中枢按派工凭证核定。
+    if (!readRaindownEnv(LEASE_TOKEN_FILE_ENV)) {
+      const bound = resolveMcpBinding(bindingOptions)
+      if (!bound.ok) return { ok: false, error: bound.error }
+    }
     // 防御：任何误用 console.log 的代码都不能污染协议通道。
     console.log = console.error
     console.info = console.error
     console.debug = console.error
-    const { closed } = await startStdioServer({ actor, binding: bindingOptions })
-    await closed
-    return ok(null)
+    try {
+      const { closed } = await startStdioServer({ actor, binding: bindingOptions })
+      await closed
+      return ok(null)
+    } catch (err) {
+      if (err instanceof RaindownMcpConfigError) return { ok: false, error: err.error }
+      throw err
+    }
   },
   human: () => '',
 })

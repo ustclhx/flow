@@ -59,13 +59,19 @@ const node = { actor: 'node:n1' }
 const hub = { actor: 'hub' }
 const DEADLINE = '2026-10-24T01:00:00.000Z'
 
-/** 写一次 task.blocked（缺省为持有租约的 question）。 */
+/** 写一次 task.blocked（缺省为 worker 上报、持有租约的 question）。 */
 const block = (store: LedgerStore, id: string, extra: Record<string, unknown> = {}) =>
   must(
     store.append(
       {
         ...drafts(id)['task.blocked'],
-        payload: { reason: 'question', message: '用哪个方案？', lease_held: true, ...extra },
+        payload: {
+          reason: 'question',
+          basis: 'reported',
+          message: '用哪个方案？',
+          lease_held: true,
+          ...extra,
+        },
       } as EventInput,
       node,
     ),
@@ -251,6 +257,18 @@ describe('task.blocked 的代回复字段', () => {
 })
 
 describe('task.reply_delegated 的不变量', () => {
+  test.each([undefined, 'inferred'])(
+    '推断或旧缺省提问不能直接写入委托（basis=%s）',
+    async (basis) => {
+      const { store, newTask } = await setup()
+      const task = await newTask()
+      startTask(store, task.id)
+      const blocked = block(store, task.id, { basis })
+      const before = store.seq()
+      expect(code(delegate(store, task.id, { block_seq: blocked.seq }))).toBe('not_delegable')
+      expect(store.seq()).toBe(before)
+    },
+  )
   test('question：block_seq 是当前卡住、kind 一致；离开卡住后不能委托', async () => {
     const { store, newTask } = await setup()
     const t = await newTask()

@@ -17,6 +17,8 @@ import {
 export const CHILD_ENV_DENYLIST: readonly string[] = [
   HUB_TOKEN_ENV,
   HUB_TOKEN_FILE_ENV,
+  'RAINDOWN_LEASE_TOKEN_FILE',
+  'FLOW_LEASE_TOKEN_FILE',
   'FLOW_HUB_TOKEN',
   'FLOW_HUB_TOKEN_FILE',
 ]

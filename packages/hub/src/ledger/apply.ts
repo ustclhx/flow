@@ -160,6 +160,8 @@ export function createApplier(db: Database): Applier {
         const p = e.payload
         const blocked = {
           reason: p.reason,
+          basis: p.basis ?? 'inferred',
+          ...(p.question ? { question: p.question } : {}),
           message: p.message,
           ...(p.tail ? { tail: p.tail } : {}),
           ...(p.session ? { session: p.session } : {}),

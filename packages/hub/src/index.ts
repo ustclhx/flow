@@ -20,6 +20,12 @@ export {
 export { type AuthInfo, hubAuth, userOnly } from './server/auth.ts'
 export { type HubClock, systemClock } from './server/clock.ts'
 export { createEventsApp, type EventStreamOptions } from './server/events.ts'
+export {
+  createTaskTokenAuthority,
+  TASK_TOKEN_PREFIX,
+  type TaskCaller,
+  type TaskTokenAuthority,
+} from './server/lease-tokens.ts'
 export { acquireHubLock, type HubLock } from './server/lock.ts'
 export {
   type BackupInfo,
@@ -52,3 +58,4 @@ export * from './supervisor/index.ts'
 export * from './supervisor-tools/index.ts'
 export * from './ui/app.tsx'
 export * from './ui/sessions.ts'
+export * from './worker-report/routes.ts'

@@ -56,6 +56,26 @@ function item(over: Partial<OutboundItem> = {}): OutboundItem {
 }
 
 describe('消息渲染', () => {
+  test('八个长选项按行显示、推荐标记始终保留；按钮只存索引', () => {
+    const options = Array.from({ length: 8 }, (_, i) => `${i} ${'长标签'.repeat(28)}`)
+    const question = item({ actions: ['reply'], options, recommended: `7 ${'长标签'.repeat(28)}` })
+    const rendered = renderTelegramMessage({ kind: 'batch', items: [question] }, id)
+    const rows = rendered.reply_markup.inline_keyboard
+    expect(rows).toHaveLength(9)
+    expect(rows.slice(0, 8).every((row) => row.length === 1)).toBe(true)
+    const last = rows[7]?.[0]
+    expect(last?.text).toStartWith('#16 ★ 推荐 ')
+    expect(last?.text.length).toBe(60)
+    expect(last?.text).toEndWith('…')
+    expect(last?.callback_data).toBe('i:16:o7')
+    expect(parseCallbackData(last?.callback_data)).toEqual({
+      short_id: '16',
+      action: 'reply',
+      option: 7,
+    })
+    expect(parseCallbackData('i:16:o8')).toBeNull()
+  })
+
   test('HTML 注入：标题、正文、片段里的 <b> 与 & 都被转义', () => {
     const r = renderTelegramMessage(
       {

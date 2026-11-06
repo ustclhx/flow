@@ -47,6 +47,7 @@ import {
   wakeGeneration,
   wakeOrigin,
 } from './task.ts'
+import { workerReportRequest } from './worker-report.ts'
 
 /**
  * 账本事件（design D2：事件类型集中定义在这里，导出到 `schemas/events/`）。
@@ -241,6 +242,15 @@ export const eventPayloads = {
     .refine((p) => p.result !== undefined || p.message !== undefined, {
       message: 'task.failed 至少需要 result 或 message',
     }),
+  'task.reported': workerReportRequest.safeExtend({
+    attempt: z.number().int().positive(),
+    lease_id: leaseId,
+  }),
+  'task.report_consumed': z.strictObject({
+    attempt: z.number().int().positive(),
+    lease_id: leaseId,
+    report_seq: z.number().int().positive(),
+  }),
   'task.blocked': z.strictObject({
     request_id: z.string().min(1).max(512).optional(),
     approval_fingerprint: approvalFingerprint.optional(),
@@ -688,6 +698,8 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task.verifying': 'task',
   'task.done': 'task',
   'task.failed': 'task',
+  'task.reported': 'task',
+  'task.report_consumed': 'task',
   'task.blocked': 'task',
   'task.reply_dropped': 'task',
   'task.out_of_band': 'task',
@@ -853,6 +865,8 @@ export const TASK_EVENT_RULES: Readonly<
   'task.done': { from: ['running', 'verifying', 'blocked'], to: 'done' },
   'task.failed': { from: ['running', 'verifying', 'blocked'], to: 'failed' },
   // blocked → blocked：只用于"本轮结束"（lease_held=false），例如卡住期间 worker 崩溃、节点掉线（D7a）。
+  'task.reported': { from: ['running'], to: 'unchanged' },
+  'task.report_consumed': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   'task.blocked': { from: ['running', 'verifying', 'blocked'], to: 'blocked' },
   'task.out_of_band': {
     from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed', 'cancelled'],

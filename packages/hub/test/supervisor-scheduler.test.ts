@@ -238,7 +238,7 @@ const block = (store: LedgerStore, id: string, reason: string) =>
         type: 'task.blocked',
         task_id: id,
         workspace: WS,
-        payload: { reason, message: '卡住了', tail: ['最后一行'] },
+        payload: { reason, basis: 'reported', message: '卡住了', tail: ['最后一行'] },
       } as EventInput,
       { actor: 'node:n1' },
     ),
@@ -342,6 +342,25 @@ describe('唤醒事件识别（3.1）', () => {
 
     finish(env.store, 'd2')
     expect(await wakeCount(env)).toBe(2)
+  })
+
+  test('派生任务 dropped 完成不唤醒 supervisor', async () => {
+    const env = await setup()
+    derived(env.store, 'dropped', 'instruction')
+    start(env.store, 'dropped')
+    must(
+      env.store.append(
+        {
+          type: 'task.done',
+          task_id: 'dropped',
+          workspace: WS,
+          payload: { result: { ...result(), dropped: true } },
+        },
+        { actor: 'node:n1' },
+      ),
+    )
+    expect(await wakeCount(env)).toBe(0)
+    expect(env.scheduler.projection().pending(WS, 'instruction')).toHaveLength(0)
   })
 
   test('冒充唤醒：inputs.wake 伪造的普通任务不被当作唤醒，它结束时按派生规则（无 origin 不唤醒）', async () => {
@@ -615,7 +634,30 @@ describe('reply 队列骨架（3.2，D15）', () => {
   function delegate(store: LedgerStore, id: string) {
     derived(store, id)
     start(store, id)
-    const blockSeq = block(store, id, 'question')
+    const blockSeq = must(
+      store.append(
+        {
+          type: 'task.blocked',
+          task_id: id,
+          workspace: WS,
+          payload: {
+            reason: 'question',
+            basis: 'reported',
+            message: '卡住了',
+            tail: ['最后一行'],
+            question: {
+              text: '标题用哪个？',
+              options: [
+                { label: 'A', description: '简短标题' },
+                { label: 'B', description: '完整标题' },
+              ],
+              recommended: 'A',
+            },
+          },
+        },
+        { actor: 'node:n1' },
+      ),
+    ).seq
     return must(
       store.append(
         {
@@ -648,7 +690,21 @@ describe('reply 队列骨架（3.2，D15）', () => {
     expect(task?.contract.inputs?.wake?.events[0]).toMatchObject({
       type: 'task.reply_delegated',
       task_id: 'q1',
-      data: { kind: 'question', message: '卡住了', tail: ['最后一行'], goal: '写一个测试' },
+      data: {
+        kind: 'question',
+        message: '卡住了',
+        tail: ['最后一行'],
+        goal: '写一个测试',
+        basis: 'reported',
+        question: {
+          text: '标题用哪个？',
+          options: [
+            { label: 'A', description: '简短标题' },
+            { label: 'B', description: '完整标题' },
+          ],
+          recommended: 'A',
+        },
+      },
     })
     failTask(env.store, reply?.task_id ?? '')
     expect(await wakeCount(env)).toBe(2)

@@ -1,0 +1,108 @@
+{
+  "$id": "https://raindown.local/schemas/protocol/tasks-report.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "progress",
+        "question",
+        "ready",
+        "blocked",
+        "failed",
+        "dropped"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "options": {
+      "minItems": 2,
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "required": [
+          "label",
+          "description"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "recommended": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "deliverables": {
+      "minItems": 1,
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 2048,
+        "format": "uri"
+      }
+    },
+    "missing": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "tried": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "handback": {
+      "type": "object",
+      "properties": {
+        "pr_event_seq": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      },
+      "required": [
+        "pr_event_seq",
+        "reason"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "status",
+    "summary"
+  ],
+  "additionalProperties": false
+}

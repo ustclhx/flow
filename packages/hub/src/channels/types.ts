@@ -35,8 +35,10 @@ export interface OutboundItem {
   snippet: string | null
   /** 可用的操作；条目未关闭时，忽略（dismiss）总是可用，不在这里列出。 */
   actions: InboxItemAction[]
-  /** supervisor 提问的候选答复（D11）：渠道显示为按钮，点选即以该选项答复；没有时省略。 */
+  /** 提问的候选答复（D11）：渠道显示为按钮，点选即以该选项答复；没有时省略。 */
   options?: string[]
+  /** worker 上报的推荐选项标签；按钮装饰不改变实际回复值。 */
+  recommended?: string
   state: 'open' | 'closed'
   /** 关闭信息；`label` 是给用户看的说明，例如"已处理（来自 CLI）"。 */
   closed: { reason: InboxCloseReason; label: string } | null

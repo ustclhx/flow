@@ -11,6 +11,7 @@ import {
 } from '@raindown/core'
 import type { Context, MiddlewareHandler } from 'hono'
 import { errorResponse } from '../app.ts'
+import type { TaskCaller, TaskTokenAuthority } from './lease-tokens.ts'
 import type { BoundTokenLookup } from './tokens.ts'
 import type { WakeCaller, WakeTokenAuthority } from './wake-tokens.ts'
 
@@ -19,6 +20,7 @@ export type AuthInfo =
   | { kind: 'user' }
   | { kind: 'bound'; token_id: string; remote: boolean }
   | { kind: 'wake'; wake: WakeCaller }
+  | { kind: 'task'; task: TaskCaller }
   | { kind: 'none' }
 
 // 子应用无需额外的 Hono 泛型即可读取已校验的审计身份。
@@ -37,6 +39,8 @@ export interface HubAuthOptions {
   tokens?: BoundTokenLookup
   /** 唤醒绑定 token（D6）：只有它能认定 `supervisor` 身份。 */
   wakeTokens?: Pick<WakeTokenAuthority, 'authenticate'>
+  /** 当前派工绑定的 worker 凭证。 */
+  taskTokens?: Pick<TaskTokenAuthority, 'authenticate'>
   /** 某任务未过期的活动租约所属节点 id；用于任务详情与策略检查的 scope 校验。 */
   leaseHolders?: (taskId: string) => readonly string[]
 }
@@ -127,7 +131,7 @@ async function checkNodeScope(
  * 摘要用常数时间比较；错误响应不包含凭证或账本信息。健康检查不鉴权，身份记为 `unknown`。
  */
 export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
-  const { token, tokens, wakeTokens, leaseHolders } = options
+  const { token, tokens, wakeTokens, taskTokens, leaseHolders } = options
   const expected = digest(token ?? '')
   return async (c, next) => {
     if (c.req.method === ENDPOINTS.health.method && c.req.path === ENDPOINTS.health.path) {
@@ -144,7 +148,8 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
     // 各种 token 都检查，避免按 token 种类出现时间差。
     const bound = tokens?.authenticate(presented) ?? null
     const wake = wakeTokens?.authenticate(presented) ?? null
-    if (!isUser && !bound && !wake) return errorResponse(c, 'unauthorized', '未授权')
+    const task = taskTokens?.authenticate(presented) ?? null
+    if (!isUser && !bound && !wake && !task) return errorResponse(c, 'unauthorized', '未授权')
 
     const currentActor = c.req.header(HEADERS.actor)?.trim()
     const legacyActor = c.req.header('X-Flow-Actor')?.trim()
@@ -197,8 +202,30 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
       }
       actor = wake.actor
       c.set('auth', { kind: 'wake', wake })
+    } else if (task) {
+      if (declared !== '' && declared !== task.actor) {
+        return errorResponse(c, 'actor_mismatch', `该 token 绑定的身份为 ${task.actor}`)
+      }
+      actor = task.actor
+      c.set('auth', { kind: 'task', task })
     } else return errorResponse(c, 'unauthorized', '未授权')
     c.set('actor', actor)
+    if (c.get('auth').kind === 'task') {
+      // 身份与 scope 来自凭证，任何自报 task id 或 actor 都不能扩权。默认拒绝未来新增接口。
+      const show = taskShow(c)
+      const report =
+        c.req.method === 'POST' ? /^\/v1\/tasks\/([^/]+)\/report$/.exec(c.req.path) : null
+      if (c.req.method === 'GET' && c.req.path === '/v1/binding') {
+        await next()
+        return
+      }
+      const id = show?.[1] ?? report?.[1]
+      if (!id || decodeURIComponent(id) !== task?.task_id) {
+        return errorResponse(c, 'forbidden', '派工凭证只能读取与上报当前任务')
+      }
+      await next()
+      return
+    }
     if (policyCheck(c) && actor !== USER_ACTOR && !isNodeActor(actor)) {
       return errorResponse(c, 'scope_denied', '策略检查只允许 user 或持有活动租约的节点调用')
     }

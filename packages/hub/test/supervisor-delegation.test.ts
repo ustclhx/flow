@@ -236,7 +236,7 @@ function blockQuestion(env: Env, lease: Lease, extra: Record<string, unknown> = 
   must(
     env.protocol.service.renew(lease.lease_id, {
       lease_token: lease.lease_token,
-      blocked: { reason: 'question', message: '用 A 还是 B？', ...extra },
+      blocked: { reason: 'question', basis: 'reported', message: '用 A 还是 B？', ...extra },
     }),
   )
   return blockSeqOf(env, lease.task_id)
@@ -250,7 +250,13 @@ function reblock(env: Env, id: string, extra: Record<string, unknown> = {}) {
         task_id: id,
         workspace: WS,
         type: 'task.blocked',
-        payload: { reason: 'question', message: '还有一个问题', lease_held: false, ...extra },
+        payload: {
+          reason: 'question',
+          basis: 'reported',
+          message: '还有一个问题',
+          lease_held: false,
+          ...extra,
+        },
       },
       { actor: 'node:n1' },
     ),
@@ -392,6 +398,20 @@ describe('core delegationRequestMatches', () => {
 })
 
 describe('委托判定（3.5）', () => {
+  test.each(['inferred', undefined] as const)(
+    '终端推断与旧提问直接交给用户（basis=%s）',
+    async (basis) => {
+      const env = await setup()
+      const id = await create(env)
+      const lease = await grant(env, 'fake')
+      const seq = blockQuestion(env, lease, { basis })
+      expect(env.delegation.held({ id: `blk.${seq}`, source: 'task', task_id: id })).toBe(false)
+      await env.settle()
+      expect(delegationsOf(env, id)).toHaveLength(0)
+      expect(env.store.activeDelegation(id)).toBeNull()
+    },
+  )
+
   test('用户手动建的任务卡在提问：委托，deadline 为 reply_timeout_s 之后；条目在判定期间就被挡住', async () => {
     const env = await setup({ supervisor: { reply_timeout_s: 120 } })
     const id = await create(env)
@@ -695,6 +715,7 @@ describe('委托判定（3.5）', () => {
         lease_token: lease.lease_token,
         outcome: 'blocked',
         blocked_reason: 'question',
+        basis: 'reported',
         message: '用 A 还是 B？',
       }),
     )
@@ -1093,6 +1114,7 @@ describe('task_respond（4.9）', () => {
             lease_token: lease.lease_token,
             outcome: 'blocked',
             blocked_reason: 'question',
+            basis: 'reported',
             message: '用 A 还是 B？',
           }),
         )
