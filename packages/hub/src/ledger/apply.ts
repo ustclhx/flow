@@ -1,5 +1,5 @@
 import type { Database, LedgerEvent, Statement, TaskStatus } from '@raindown/core'
-import { readExecutorInfo } from '@raindown/core'
+import { compareCursor, readExecutorInfo } from '@raindown/core'
 import { indexTaskPrs } from './pr-index.ts'
 
 /**
@@ -446,6 +446,29 @@ export function createApplier(db: Database): Applier {
             itemId,
           )
         }
+        return
+      }
+      case 'pr.subscribed':
+        stmt(
+          `INSERT INTO pr_subscriptions (subscribed_seq, task_id, workspace, pr, role, subscribed_at, state)
+           VALUES (?, ?, ?, ?, ?, ?, 'active')`,
+        ).run(e.seq, e.task_id ?? null, e.workspace ?? null, e.payload.pr, e.payload.role, e.ts)
+        return
+      case 'pr.unsubscribed':
+        stmt(
+          `UPDATE pr_subscriptions SET state = 'ended', ended_at = ?, ended_seq = ?, reason = ?
+           WHERE task_id = ? AND pr = ? AND state = 'active'`,
+        ).run(e.ts, e.seq, e.payload.reason, e.task_id ?? null, e.payload.pr)
+        return
+      case 'pr.event': {
+        const row = stmt(
+          'SELECT cursor FROM pr_cursors WHERE workspace = ? AND pr = ? AND kind = ?',
+        ).get(e.workspace ?? null, e.payload.pr, e.payload.kind) as { cursor: string } | undefined
+        if (row && compareCursor(row.cursor, e.payload.cursor) >= 0) return
+        stmt(
+          `INSERT INTO pr_cursors (workspace, pr, kind, cursor, seq) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (workspace, pr, kind) DO UPDATE SET cursor = excluded.cursor, seq = excluded.seq`,
+        ).run(e.workspace ?? null, e.payload.pr, e.payload.kind, e.payload.cursor, e.seq)
         return
       }
       case 'hub.started':

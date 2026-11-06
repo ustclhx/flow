@@ -1,0 +1,18 @@
+{
+  "$id": "https://raindown.local/schemas/protocol/tasks-unsubscribe.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "pr": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+      "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+    }
+  },
+  "required": [
+    "pr"
+  ],
+  "additionalProperties": false,
+  "title": "POST /v1/tasks/:id/unsubscribe"
+}

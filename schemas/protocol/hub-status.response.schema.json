@@ -381,6 +381,69 @@
             ],
             "additionalProperties": false
           }
+        },
+        "pr_watch": {
+          "default": {
+            "watched": 0,
+            "errors": []
+          },
+          "description": "PR 订阅采集（harness-neutral D11）的状态",
+          "type": "object",
+          "properties": {
+            "watched": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "正在轮询的 PR 数"
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "workspace": {
+                    "type": "string",
+                    "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                    "description": "workspace 标识，形如 ws/<id>"
+                  },
+                  "pr": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+                    "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+                  },
+                  "failures": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "since": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                  }
+                },
+                "required": [
+                  "workspace",
+                  "pr",
+                  "failures",
+                  "message",
+                  "since"
+                ],
+                "additionalProperties": false
+              },
+              "description": "连续 3 次及以上查询失败的 PR（系统问题）"
+            }
+          },
+          "required": [
+            "watched",
+            "errors"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -395,7 +458,8 @@
         "last_backup",
         "secrets",
         "policies",
-        "channels"
+        "channels",
+        "pr_watch"
       ],
       "additionalProperties": false,
       "title": "GET /v1/hub/status"

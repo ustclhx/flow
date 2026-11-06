@@ -19,6 +19,7 @@ import {
   listTasksQuery,
   loadRoles,
   loadWorkspaces,
+  normalizePrUrl,
   ok,
   type PolicyConfig,
   policyVersion,
@@ -41,7 +42,9 @@ import {
   type TaskOrigin,
   type TaskShowResponse,
   type TaskView,
+  type UnsubscribeTaskData,
   USER_ACTOR,
+  unsubscribeTaskRequest,
   type VerifyStep,
   type VerifyVerdict,
   type WakeInputs,
@@ -86,8 +89,9 @@ export function workspaceCheckFromHome(home: string): WorkspaceCheck {
   }
 }
 
-/** 建任务校验需要的 workspace 信息：登记仓库与 supervisor 设置。 */
-export type WorkspaceInfo = Pick<Workspace, 'ref' | 'repos' | 'supervisor'>
+/** 建任务校验需要的 workspace 信息：登记仓库与 supervisor 设置；github 缺省视为不关注 PR。 */
+export type WorkspaceInfo = Pick<Workspace, 'ref' | 'repos' | 'supervisor'> &
+  Partial<Pick<Workspace, 'github'>>
 
 /** 按 ref 查 workspace：未定义时为 null。 */
 export type WorkspaceLookup = (ref: string) => Promise<WorkspaceInfo | null>
@@ -273,6 +277,8 @@ export interface TaskService {
   cancelTask(id: string, opts: CancelTaskOptions): Result<CancelTaskData>
   retryTask(id: string, opts: RetryTaskOptions): Promise<Result<RetryTaskData>>
   replyTask(id: string, body: unknown, opts: ReplyTaskOptions): Result<ReplyTaskData>
+  /** 用户取消任务对某个 PR 的订阅（harness-neutral 8.1）。 */
+  unsubscribeTask(id: string, body: unknown, opts: { actor: string }): Result<UnsubscribeTaskData>
 }
 
 /** zod issues → 逐字段错误（field、code=missing_field|invalid_field、message）。 */
@@ -344,6 +350,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         events,
         replies: ledger.taskReplies(id),
         attempts: foldTaskAttempts(task, events),
+        subscriptions: ledger.prSubscriptions(id),
       })
     }
     const pagination = (total: number) => {
@@ -1246,6 +1253,36 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       if (!written.ok) return written
       const after = ledger.getTask(id)
       return after ? ok({ task: after }) : notFound(id)
+    },
+
+    unsubscribeTask(id, body, opts) {
+      // 取消订阅只限用户本人：supervisor 与 worker 不能借此让任务错过 PR 上的请求。
+      if (opts.actor !== USER_ACTOR) {
+        return fail('failure', 'user_only', `只有用户本人可以取消 PR 订阅，当前为 ${opts.actor}`)
+      }
+      const parsed = unsubscribeTaskRequest.safeParse(body)
+      if (!parsed.success) return invalidArguments('取消订阅请求', parsed.error.issues, body)
+      const task = ledger.getTask(id)
+      if (!task) return notFound(id)
+      const pr = normalizePrUrl(parsed.data.pr) ?? parsed.data.pr
+      const find = () => ledger.prSubscriptions(id).findLast((sub) => sub.pr === pr)
+      const current = find()
+      if (!current) return fail('failure', 'not_subscribed', `任务 ${id} 没有订阅 ${pr}`)
+      if (!current.active) return ok({ subscription: current, changed: false })
+      const written = ledger.append(
+        {
+          type: 'pr.unsubscribed',
+          task_id: id,
+          workspace: task.workspace,
+          payload: { pr, reason: 'user' },
+        },
+        { actor: USER_ACTOR },
+      )
+      if (!written.ok) return written
+      const after = find()
+      return after
+        ? ok({ subscription: after, changed: true })
+        : fail('failure', 'internal_error', '订阅写入后不可见')
     },
 
     replyTask(id, body, opts) {

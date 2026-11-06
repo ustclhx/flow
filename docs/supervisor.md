@@ -487,3 +487,50 @@ raindown supervisor report [product-res] [--days 30]        # observe 一致率�
 使用任务重试前，先停止服务并备份账本，升级中枢、节点与使用该账本的客户端。需要退回旧版本时，必须停止服务并使用升级前的备份，不能继续使用已经发生任何任务重试或包含其收件箱通知的账本；升级后产生的记录不会包含在该备份中，详见 [任务重试的升级与回滚限制](daemon.md#任务重试的升级与回滚限制)。其他情况下需要回到旧版本二进制时，先删掉 `node.yaml` 的 `reserved` 与 `policies.yaml` 中带 `push_to` / `gh_scope` / `level: supervisor` 的规则。
 
 `user.instruction` 的长度上限已从 4000 提高到 8192 字符；一旦账本写入超过 4000 字符的指令，旧中枢重放会校验失败，回滚必须停止服务并恢复升级前的账本备份。
+
+## 13. PR 订阅与直通（`github.watch`）
+
+开出或审查 PR 的任务可以持续跟随这个 PR：PR 上后来的 CI 结果、审查结论与评论由中枢读取并记入账本，
+之后（见下文"直通送达"）直接送到负责的 worker，不必每次都唤醒 supervisor。默认关闭；不打开时行为与之前完全相同。
+
+### 开启
+
+在 `config/workspaces/<id>.yaml` 加 `github` 段：
+
+```yaml
+github:
+  watch: true              # 轮询本 workspace 有订阅的 PR；默认 false
+  allowed_users: [ustclhx] # 可选：其评论算"请求"的 GitHub 用户（不区分大小写）
+```
+
+- 中枢用**自己所在机器上的 `gh` 登录**只读查询（`gh api --method GET`），先确认 `gh auth status` 正常；
+- PR 必须位于 workspace 登记仓库（`repos`）的 origin 所在的 github.com 仓库，否则订阅被取消（`repo_not_registered`）；
+- `raindown doctor` 显示每个打开了 `github` 段的 workspace 的开关与名单；打开了 `watch` 却没有登记仓库时给出 warning。
+
+### 订阅
+
+- 开发任务上报任务分支后，账本记录到它的 PR（`raindown_report` 的 ready 交付物、结果里的 PR）时自动订阅（关系 `author`）。
+  中枢首次轮询时用 GitHub 的 head 信息核对：PR 不是由该任务分支开出、或来自 fork，订阅即取消（`not_task_branch`）；
+- 审查任务创建时订阅它审查的 PR（关系 `reviewer`）；
+- 订阅在任务结束后保留，直到 PR 关闭或合并后再过 14 天（`pr_closed`）；
+- `raindown task show <task>` 列出订阅；`raindown task unsubscribe <task> <PR 链接>` 取消（只限你本人经 CLI，AI 身份返回 `user_only`）。
+  取消后不会被自动重新订阅。
+
+### 采集（pr-watcher）
+
+- 只轮询 `watch: true` 的 workspace 中有有效订阅的 PR：每 2 分钟一次，连续无变化时依次退避到 4、8、10 分钟，读到新内容后回到 2 分钟；
+- 读取 check runs、reviews、PR 评论与代码行评论，写 `pr.event{pr, kind, actor, actor_kind, allowed, text, url, cursor}`。
+  订阅之前的历史内容不送达；每种内容按游标续读，游标随事件落账，中枢重启后不会重复送达；
+- `text` 先遮蔽疑似密钥再截断（附原始字符数）；
+- 单个 PR 查询失败只记在该 PR 上，下一轮重试；连续 3 次失败才出现在 `raindown hub status` 的"PR 查询失败"一行并写告警日志。
+
+### `allowed_users` 的安全含义
+
+仓库公开时，任何人都能在 PR 上评论。**只有名单内用户的人类评论算"请求"**：能恢复已结束的任务、被 worker 交回给 supervisor、
+或在没有订阅任务时唤醒 supervisor。名单外用户、机器人（GitHub App、`[bot]` 账号）与 CI 的内容 `allowed` 恒为 false，
+只作为不可信的上下文送达运行中的任务，不恢复任务、不唤醒 supervisor。
+
+- 不写 `allowed_users` 时，名单是登记仓库 origin 的 owner（例如 `git@github.com:ustclhx/raindown.git` → `ustclhx`）；
+  origin 读不出时名单为空——没有人的评论算请求。owner 是组织时，组织账号本身不会评论，请显式列出成员；
+- `allowed: true` 只表示"可以算请求"，**不扩大任务的授权依据或合同范围**：worker 收到超出范围的请求时应交回 supervisor；
+- 名单写错（如拼错用户名）只会让评论被当作不可信上下文，不会放宽任何权限。

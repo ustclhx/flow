@@ -23,6 +23,7 @@ import { fail, ok, type Result } from '../result.ts'
 import { dateString, workspaceRef } from '../schema/common.ts'
 import { adapterCapabilities, NO_ADAPTER_CAPABILITIES, readAdapterCapabilities } from './adapter.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
+import { prEventPayload, prSubscriptionRole, prUnsubscribeReason } from './pr-subscription.ts'
 import { PROTOCOL_MESSAGE_MAX } from './redact.ts'
 import {
   approvalFingerprint,
@@ -723,6 +724,24 @@ export const eventPayloads = {
     note: z.string().max(2000).optional().meta({ description: '驳回理由' }),
     via: inboxVia.optional(),
   }),
+  /**
+   * 任务订阅 PR（D11；pr-subscription "订阅 PR"）：开发任务在任务分支上开出的 PR（author）、
+   * 审查任务审查的 PR（reviewer）。只由中枢写入；同一任务对同一 PR 同时只有一条有效订阅。
+   */
+  'pr.subscribed': z.strictObject({
+    pr: prUrl.meta({ description: '规范化的 PR 链接' }),
+    role: prSubscriptionRole,
+  }),
+  /** 结束订阅：用户取消（actor user）或中枢判定（PR 关闭满保留期、不是任务分支开出、仓库未登记）。 */
+  'pr.unsubscribed': z.strictObject({
+    pr: prUrl,
+    reason: prUnsubscribeReason,
+  }),
+  /**
+   * 中枢 pr-watcher 读到的一条 PR 事件（D11）。只由中枢写入；`allowed` 由中枢按 `github.allowed_users`
+   * 计算，不取自任何评论内容。重启后按 `cursor` 续读，已入账的不再送达。
+   */
+  'pr.event': prEventPayload,
 } as const
 
 export type EventType = keyof typeof eventPayloads
@@ -806,6 +825,9 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'merge_request.created': 'workspace',
   'merge_request.approved': 'workspace',
   'merge_request.rejected': 'workspace',
+  'pr.subscribed': 'task',
+  'pr.unsubscribed': 'task',
+  'pr.event': 'workspace',
 }
 
 const scopeShape = (scope: Scope) =>
@@ -902,6 +924,7 @@ export const TASK_EVENT_RULES: Readonly<
       | `task_proposal.${string}`
       | `decision.${string}`
       | `merge_request.${string}`
+      | `pr.${string}`
       | 'policy.changed'
       | 'supervisor.answered'
       | 'supervisor.release'

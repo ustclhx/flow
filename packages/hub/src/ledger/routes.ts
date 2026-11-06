@@ -20,6 +20,7 @@ import {
   taskShowResponse,
   toJsonDocument,
   USER_ACTOR,
+  unsubscribeTaskData,
 } from '@raindown/core'
 import { type Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
@@ -243,6 +244,19 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
       c,
       tasks.replyTask(c.req.param('id'), body.data, { actor: actor.data }),
       replyTaskData,
+    )
+  })
+
+  // 取消 PR 订阅只有用户能做（harness-neutral 8.1）：在读取请求体之前按身份拒绝。
+  app.post(ENDPOINTS['tasks-unsubscribe'].path, userOnly('取消 PR 订阅'), async (c) => {
+    const actor = actorOf(c)
+    if (!actor.ok) return respond(c, actor, unsubscribeTaskData)
+    const body = await jsonBody(c, false)
+    if (!body.ok) return respond(c, body, unsubscribeTaskData)
+    return respond(
+      c,
+      tasks.unsubscribeTask(c.req.param('id'), body.data, { actor: actor.data }),
+      unsubscribeTaskData,
     )
   })
 

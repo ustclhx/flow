@@ -8795,6 +8795,274 @@
       ],
       "additionalProperties": false,
       "title": "merge_request.rejected"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "pr.subscribed"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "pr": {
+              "type": "string",
+              "maxLength": 512,
+              "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+              "description": "规范化的 PR 链接"
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "author",
+                "reviewer"
+              ],
+              "description": "author：任务分支开出的 PR；reviewer：审查任务审查的 PR"
+            }
+          },
+          "required": [
+            "pr",
+            "role"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "task_id",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "pr.subscribed"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "pr.unsubscribed"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "pr": {
+              "type": "string",
+              "maxLength": 512,
+              "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+              "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "user",
+                "pr_closed",
+                "not_task_branch",
+                "repo_not_registered"
+              ],
+              "description": "user 用户取消；pr_closed PR 关闭或合并已满保留期；not_task_branch PR 不是由任务分支开出；repo_not_registered PR 不在 workspace 登记的仓库"
+            }
+          },
+          "required": [
+            "pr",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "task_id",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "pr.unsubscribed"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "pr.event"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "pr": {
+              "type": "string",
+              "maxLength": 512,
+              "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+              "description": "规范化的 PR 链接（来自订阅，不来自评论内容）"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "check_run",
+                "review",
+                "issue_comment",
+                "review_comment"
+              ]
+            },
+            "actor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "GitHub 用户名或检查所属 App 的 slug"
+            },
+            "actor_kind": {
+              "type": "string",
+              "enum": [
+                "human",
+                "bot"
+              ],
+              "description": "bot：GitHub App、[bot] 账号或 CI 检查"
+            },
+            "allowed": {
+              "type": "boolean",
+              "description": "中枢按 github.allowed_users 计算；bot 恒为 false。只有 allowed 的人类评论算请求"
+            },
+            "state": {
+              "description": "审查结论（approved / changes_requested / commented）或检查结论",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z_]+$"
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 8192,
+              "description": "内容（疑似密钥已遮蔽、超长截断）"
+            },
+            "chars": {
+              "description": "截断前的字符数；只在截断时出现",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^https:\\/\\/github\\.com\\/[\\x21-\\x7e]*$",
+              "description": "该条内容在 GitHub 上的链接"
+            },
+            "cursor": {
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T[0-9:.]+Z\\|\\d{1,20}$"
+            }
+          },
+          "required": [
+            "pr",
+            "kind",
+            "actor",
+            "actor_kind",
+            "allowed",
+            "text",
+            "url",
+            "cursor"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "pr.event"
     }
   ],
   "title": "Raindown ledger event",

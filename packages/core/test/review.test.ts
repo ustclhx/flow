@@ -153,6 +153,7 @@ describe('审查角色必须是只读配置', () => {
       repos: [],
       file: 'config/workspaces/demo.yaml',
       supervisor: { ...sup, reviewer_roles: ['pr-reviewer', 'reviewer', 'missing'] },
+      github: { watch: false },
     }
     const issues = reviewerRoleIssues([ws], [
       { name: 'pr-reviewer', prompt: 'x', ...role() },

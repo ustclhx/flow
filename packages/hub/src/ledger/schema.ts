@@ -17,6 +17,8 @@ export const PROJECTION_TABLES = [
   'replies',
   'inbox_items',
   'channel_messages',
+  'pr_subscriptions',
+  'pr_cursors',
 ] as const
 export type ProjectionTable = (typeof PROJECTION_TABLES)[number]
 
@@ -30,6 +32,8 @@ export const SOFT_COLUMNS: Readonly<Record<ProjectionTable, readonly string[]>> 
   replies: [],
   inbox_items: [],
   channel_messages: [],
+  pr_subscriptions: [],
+  pr_cursors: [],
 }
 
 /** 每张投影表的主键（快照排序用）。 */
@@ -42,6 +46,8 @@ export const PROJECTION_KEYS: Readonly<Record<ProjectionTable, string>> = {
   replies: 'id',
   inbox_items: 'id',
   channel_messages: 'channel, ref, item_id',
+  pr_subscriptions: 'subscribed_seq',
+  pr_cursors: 'workspace, pr, kind',
 }
 
 export const LEDGER_DDL = `
@@ -232,6 +238,34 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 );
 CREATE INDEX IF NOT EXISTS channel_messages_item ON channel_messages (item_id);
 CREATE INDEX IF NOT EXISTS channel_messages_sync ON channel_messages (channel, synced_at);
+
+-- PR 订阅（harness-neutral D11；由 pr.subscribed / pr.unsubscribed 派生）。同一任务对同一 PR
+-- 同时只有一条 active 订阅；结束后保留记录，task show 一并显示。
+CREATE TABLE IF NOT EXISTS pr_subscriptions (
+  subscribed_seq INTEGER PRIMARY KEY,
+  task_id        TEXT NOT NULL,
+  workspace      TEXT NOT NULL,
+  pr             TEXT NOT NULL,
+  role           TEXT NOT NULL,
+  subscribed_at  TEXT NOT NULL,
+  state          TEXT NOT NULL CHECK (state IN ('active', 'ended')),
+  ended_at       TEXT,
+  ended_seq      INTEGER,
+  reason         TEXT
+);
+CREATE INDEX IF NOT EXISTS pr_subscriptions_task ON pr_subscriptions (task_id, pr, state);
+CREATE INDEX IF NOT EXISTS pr_subscriptions_active ON pr_subscriptions (state, workspace, pr);
+
+-- PR 事件的读取游标（由 pr.event 派生）：每个 workspace、PR 与种类保留已入账的最大游标，
+-- 中枢重启后从这里续读，已入账的事件不再送达。
+CREATE TABLE IF NOT EXISTS pr_cursors (
+  workspace TEXT NOT NULL,
+  pr        TEXT NOT NULL,
+  kind      TEXT NOT NULL,
+  cursor    TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  PRIMARY KEY (workspace, pr, kind)
+);
 `
 
 /**

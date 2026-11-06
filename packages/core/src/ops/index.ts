@@ -27,6 +27,7 @@ import {
   taskReplyOp,
   taskRetryOp,
   taskShowOp,
+  taskUnsubscribeOp,
 } from './tasks.ts'
 import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './workspace.ts'
 
@@ -58,6 +59,7 @@ export const operations = [
   taskCancelOp,
   taskRetryOp,
   taskReplyOp,
+  taskUnsubscribeOp,
   kbJournalOp,
   captureOp,
   kbSearchOp,

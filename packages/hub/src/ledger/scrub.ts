@@ -46,6 +46,8 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
     ['actions', '*', 'matched_rules', '*', 'rule', 'when', 'paths', '*'],
   ],
   'task.attempt_ended': [['last_report']],
+  // PR 上的评论与 CI 输出是外部输入：入账前按自由文本遮蔽疑似密钥（pr-watcher 写入前也先遮蔽一次）。
+  'pr.event': [['text']],
   'task.policy_changed': [['note']],
   'task.created': [
     ['mandate', 'matched_rules', '*', 'rule', 'when', 'command_prefix'],

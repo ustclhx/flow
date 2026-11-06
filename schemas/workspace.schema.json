@@ -198,6 +198,31 @@
           "additionalProperties": false,
           "title": "Workspace supervisor"
         },
+        "github": {
+          "default": {
+            "watch": false
+          },
+          "description": "PR 订阅与直通设置（D11）；缺省不轮询 PR",
+          "type": "object",
+          "properties": {
+            "watch": {
+              "default": false,
+              "description": "是否轮询本 workspace 有订阅的 PR（CI、审查与评论）；默认 false",
+              "type": "boolean"
+            },
+            "allowed_users": {
+              "description": "其评论算请求的 GitHub 用户（不区分大小写）；缺省为登记仓库 origin 的 owner，无法解析时为空名单。名单外用户与机器人的内容只作为不可信上下文",
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "Workspace GitHub settings"
+        },
         "kind": {
           "type": "string",
           "const": "product",
@@ -417,6 +442,31 @@
           },
           "additionalProperties": false,
           "title": "Workspace supervisor"
+        },
+        "github": {
+          "default": {
+            "watch": false
+          },
+          "description": "PR 订阅与直通设置（D11）；缺省不轮询 PR",
+          "type": "object",
+          "properties": {
+            "watch": {
+              "default": false,
+              "description": "是否轮询本 workspace 有订阅的 PR（CI、审查与评论）；默认 false",
+              "type": "boolean"
+            },
+            "allowed_users": {
+              "description": "其评论算请求的 GitHub 用户（不区分大小写）；缺省为登记仓库 origin 的 owner，无法解析时为空名单。名单外用户与机器人的内容只作为不可信上下文",
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "Workspace GitHub settings"
         },
         "kind": {
           "type": "string",
