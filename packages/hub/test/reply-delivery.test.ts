@@ -131,7 +131,7 @@ for (const kind of ['approve', 'deny', 'text'] as const) {
   })
 }
 
-test('已自行恢复并出现新blocked时，旧回复的round_closed回执仍通知且幂等', async () => {
+test('自行恢复已丢弃的旧回复收到round_closed回执不追加通知', async () => {
   const c = await setup()
   c.block('round-old')
   c.reply('approve')
@@ -142,8 +142,68 @@ test('已自行恢复并出现新blocked时，旧回复的round_closed回执仍�
   await c.reactor.idle()
   expect(
     c.ledger.taskEvents(c.task.id).filter((e) => e.type === 'task.reply_dropped'),
-  ).toHaveLength(1)
-  expect(c.ledger.listInboxItems({ source: 'reply_delivery', state: 'open' })).toHaveLength(1)
+  ).toHaveLength(0)
+  expect(c.ledger.listInboxItems({ source: 'reply_delivery', state: 'open' })).toHaveLength(0)
   expect(c.block('round-new').blocked).toEqual(next.blocked)
   expect(c.ledger.getTask(c.task.id)?.blocked?.message).toBe('round-new')
+})
+
+test('重新排队的恢复回复可被主动拒收，通知一次且可重建', async () => {
+  const c = await setup()
+  c.block('round-old')
+  c.reply('deny')
+  must(
+    c.protocol.service.ackReply(c.lease.lease_id, {
+      lease_token: c.lease.lease_token,
+      reply_id: 'r-human',
+      outcome: 'not_running',
+    }),
+  )
+  const next = must(
+    await c.protocol.service.acquire({
+      node_id: 'n1',
+      capabilities: ['executor:fake'],
+      wait_s: 0,
+    }),
+  ).lease
+  if (!next) throw new Error('缺少恢复租约')
+  const drop = () =>
+    c.protocol.service.ackReply(next.lease_id, {
+      lease_token: next.lease_token,
+      reply_id: 'r-human',
+      outcome: 'dropped',
+      reason: 'round_closed',
+    })
+  expect(c.ledger.getReply('r-human')?.state).toBe('requeued')
+  must(drop())
+  must(drop())
+  await c.reactor.idle()
+  expect(
+    c.ledger.taskEvents(c.task.id).filter((e) => e.type === 'task.reply_dropped'),
+  ).toHaveLength(1)
+  expect(c.ledger.listInboxItems({ source: 'reply_delivery', state: 'open' })).toHaveLength(1)
+  expect(c.ledger.getTask(c.task.id)?.status).toBe('running')
+  must(c.ledger.rebuild())
+  expect(c.ledger.getReply('r-human')?.state).toBe('dropped')
+})
+
+test('兼容重放历史上自动丢弃后追加的拒收事件', async () => {
+  const c = await setup()
+  c.block('round-old')
+  c.reply('approve')
+  c.renew({ resumed: {} })
+  expect(c.ledger.getReply('r-human')?.state).toBe('dropped')
+  must(
+    c.ledger.append(
+      {
+        task_id: c.task.id,
+        workspace: c.task.workspace,
+        type: 'task.reply_dropped',
+        payload: { reply_id: 'r-human', reason: 'round_closed', message: '历史拒收通知' },
+      },
+      { actor: 'node:n1' },
+    ),
+  )
+  must(c.ledger.rebuild())
+  expect(c.ledger.getReply('r-human')?.state).toBe('dropped')
 })

@@ -678,12 +678,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       // 重复确认（例如上一次的响应丢失）：已送达或已拒收就直接返回，保证只处理一次。
       if (reply.state === 'delivered' && req.data.outcome === 'delivered') return ok({ task })
       if (req.data.outcome === 'dropped' && req.data.reason === 'round_closed') {
-        // 即使已自行恢复并出现新卡住，也只记录这一条回复的拒收，不解除当前卡住。
-        const recorded = ledger
-          .taskEvents(task.id)
-          .some((e) => e.type === 'task.reply_dropped' && e.payload.reply_id === reply.id)
-        if (recorded) return ok({ task })
-        if (reply.state !== 'pending' && reply.state !== 'dropped') {
+        // 自行恢复已通过 task.unblocked 丢弃的回复不追加通知；主动拒收同样只确认一次。
+        if (reply.state === 'dropped') return ok({ task })
+        if (reply.state !== 'pending' && reply.state !== 'requeued') {
           return fail(
             'failure',
             'invalid_transition',

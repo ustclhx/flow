@@ -343,8 +343,8 @@ class LeaseRunner {
   private released = false
   /** 节点视角的阶段：blocked 表示已判定卡住、等待回复（worker 仍活着）。 */
   private phase: 'running' | 'blocked' | 'verifying' = 'running'
-  /** 待随下一次续约上报的状态变化。 */
-  private signal: RenewSignal | undefined
+  /** 按发生顺序逐次续约上报状态变化，避免新卡住覆盖尚未确认的恢复。 */
+  private signals: RenewSignal[] = []
   /** 带外操作独立缓冲，避免被后续 blocked/resumed 状态覆盖；id 用于中枢幂等。 */
   private outOfBand: OutOfBandSignal[] = []
   /** 最近的输出行。 */
@@ -451,8 +451,7 @@ class LeaseRunner {
   private async renewOnce() {
     this.cancelRenew()
     const batch = this.buffer.splice(0, ACTIVITY_PER_RENEW)
-    const signal = this.signal
-    this.signal = undefined
+    const signal = this.signals.shift()
     const branch = this.pendingBranch
     const outOfBand = this.outOfBand.splice(0, 100)
     const r = await this.env.client.renew(this.grant.lease_id, {
@@ -475,8 +474,8 @@ class LeaseRunner {
       if (r.error.kind === 'retryable') {
         this.buffer.unshift(...batch)
         this.outOfBand.unshift(...outOfBand)
-        // 续约期间产生了更新的状态变化时以新的为准。
-        this.signal ??= signal
+        // 重试仍从队首发送，先确认恢复再上报后续的新回合。
+        if (signal) this.signals.unshift(signal)
         this.scheduleRenew(Math.min(this.intervalMs, this.env.retryMs))
         return
       }
@@ -486,7 +485,7 @@ class LeaseRunner {
         if (this.pendingBranch === branch) this.pendingBranch = undefined
         this.buffer.unshift(...batch)
         this.outOfBand.unshift(...outOfBand)
-        this.signal ??= signal
+        if (signal) this.signals.unshift(signal)
         this.scheduleRenew(0)
         return
       }
@@ -495,7 +494,8 @@ class LeaseRunner {
       await this.run?.cancel().catch(() => {})
       return
     }
-    if (this.buffer.length > 0 || this.signal || this.outOfBand.length > 0) this.renewAgain = true
+    if (this.buffer.length > 0 || this.signals.length > 0 || this.outOfBand.length > 0)
+      this.renewAgain = true
     if (r.data.cancel_requested && !this.cancelRequested) {
       this.cancelRequested = true
       this.abort.abort()
@@ -578,6 +578,18 @@ class LeaseRunner {
     })
   }
 
+  /** 恢复时只允许拒收租约自带的回复，执行器不能指定其他回复。 */
+  private reportResumeReplyDropped() {
+    const reply = this.grant.resume?.reply
+    if (!reply || this.released || this.delivered.has(reply.reply_id)) return
+    this.delivered.add(reply.reply_id)
+    this.unacked = {
+      reply_id: reply.reply_id,
+      outcome: { outcome: 'dropped', reason: 'round_closed' },
+    }
+    void this.renewNow()
+  }
+
   private async ack() {
     const u = this.unacked
     if (!u) return
@@ -656,7 +668,7 @@ class LeaseRunner {
     } else if (isResumedSignal(a)) {
       // round_closed 只确认旧回复被拒收；确认重试期间的真实恢复仍须上报。
       if (this.phase === 'blocked' && (!this.unacked || typeof this.unacked.outcome === 'object')) {
-        this.signal = { resumed: { note: a.text ?? 'worker 自行恢复' } }
+        this.signals.push({ resumed: { note: a.text ?? 'worker 自行恢复' } })
         this.enterRunning()
         void this.renewNow()
       }
@@ -698,7 +710,7 @@ class LeaseRunner {
     const report = (diff?: string) => {
       // 计算期间 worker 已恢复、回复已送达或租约已结束：这次上报作废。
       if (gen !== this.stuckGen || this.phase !== 'blocked' || this.released) return
-      this.signal = {
+      this.signals.push({
         blocked: {
           reason: v.reason,
           message: v.message,
@@ -708,7 +720,7 @@ class LeaseRunner {
           ...delegation,
           ...(diff ? { diff_stat: diff } : {}),
         },
-      }
+      })
       void this.renewNow()
     }
     // 改动摘要（D15）：工作目录在 git 仓库中时附带；不是 git 目录直接上报，取不到时省略。
@@ -1023,6 +1035,9 @@ class LeaseRunner {
           precheck,
           reportBranch: (report) => this.reportBranch(report),
           confirmApproval: (reply, live) => this.confirmApproval(reply, live),
+          ...(grant.resume
+            ? { reportResumeReplyDropped: () => this.reportResumeReplyDropped() }
+            : {}),
         })
         const run = this.run
         const forced = new Promise<Result<ExecutorOutcome>>((resolve) => {
@@ -1059,7 +1074,10 @@ class LeaseRunner {
     this.runEnded = true
     // 回复已交给 worker、worker 随即结束：先把送达确认完（写 task.unblocked），回复才不会被当作丢弃。
     if (this.delivering) await this.delivering
-    if (this.unacked && !this.released) await this.ack()
+    while (this.unacked && !this.released) {
+      await this.renewNow()
+      if (this.unacked && !this.released) await sleep(env.clock, env.retryMs)
+    }
     if (this.released) return
     let req = this.completion(outcome)
     // 卡住期间执行器完成（例如用户直接在终端里答复后 worker 做完了）：blocked 不能直接转 done，
@@ -1068,7 +1086,7 @@ class LeaseRunner {
     if (this.phase === 'blocked' && req.outcome === 'done') {
       this.phase = 'running'
       this.stuckGen++
-      this.signal = { resumed: { note: '执行器已结束' } }
+      this.signals.push({ resumed: { note: '执行器已结束' } })
     }
     if (req.outcome === 'blocked') {
       // 以 blocked 结束（崩溃、执行器自己判定卡住）时同样附带改动摘要；刚拒收过批准时不委托。
@@ -1085,9 +1103,12 @@ class LeaseRunner {
       }
     }
     // 最后一批活动与状态变化随续约送达，再提交结束。
-    while (!this.released && (this.buffer.length > 0 || this.signal || this.outOfBand.length > 0)) {
+    while (
+      !this.released &&
+      (this.buffer.length > 0 || this.signals.length > 0 || this.outOfBand.length > 0)
+    ) {
       await this.renewNow()
-      if ((this.signal || this.outOfBand.length > 0) && !this.released)
+      if ((this.signals.length > 0 || this.outOfBand.length > 0) && !this.released)
         await sleep(env.clock, env.retryMs)
     }
     if (this.released) return
@@ -1098,11 +1119,11 @@ class LeaseRunner {
       !this.cancelRequested
     ) {
       this.phase = 'verifying'
-      this.signal = { phase: 'verifying' }
+      this.signals.push({ phase: 'verifying' })
       // 中枢确认阶段切换后才启动命令；可重试错误时保留 signal，期间继续续约。
-      while (this.signal && !this.released && !this.cancelRequested) {
+      while (this.signals.length > 0 && !this.released && !this.cancelRequested) {
         await this.renewNow()
-        if (this.signal && !this.released) await sleep(env.clock, env.retryMs)
+        if (this.signals.length > 0 && !this.released) await sleep(env.clock, env.retryMs)
       }
       if (this.released) return
       const verify = await verifyTask(

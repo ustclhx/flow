@@ -837,12 +837,13 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           'SELECT task_id, state FROM replies WHERE id = ?',
           draft.payload.reply_id,
         )
+        // dropped 保留给旧版账本重建：历史上自动丢弃后仍可能追加拒收通知。
         if (
           !reply ||
           reply.task_id !== draft.task_id ||
-          !['pending', 'dropped'].includes(reply.state)
+          !['pending', 'requeued', 'dropped'].includes(reply.state)
         ) {
-          return invalidEvent('只能丢弃该任务待送达或已丢弃的回复')
+          return invalidEvent('只能丢弃该任务待送达、重新排队或已丢弃的回复')
         }
         if (
           get(
