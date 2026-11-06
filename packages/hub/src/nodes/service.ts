@@ -674,7 +674,6 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         ? reportBranch(ledger.getTask(task.id) ?? task, lease, req.data.branch)
         : undefined
       const after = ledger.getTask(task.id) ?? task
-      const dispatchToken = o.renewTaskToken?.({ lease_id: lease.lease_id, task_id: task.id })
       // 已请求取消的任务不再送达回复。
       const pending =
         after.status === 'blocked' && !after.cancel_requested ? ledger.pendingReply(task.id) : null
@@ -700,6 +699,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         after.status === 'blocked'
           ? lastBlock
           : undefined
+      // 先持久化回复交付事实，再补发凭证；记录失败的续约不能留下未送达的新凭证。
+      const dispatchToken = o.renewTaskToken?.({ lease_id: lease.lease_id, task_id: task.id })
       return ok({
         lease_id: lease.lease_id,
         expires_at: expiresAt,

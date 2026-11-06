@@ -731,7 +731,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     if (blocked.reason !== p.kind) {
       return invalidEvent(`委托的 kind ${p.kind} 与卡住原因 ${blocked.reason} 不一致`)
     }
-    if (blocked.reason === 'question' && blocked.basis !== 'reported') {
+    // 旧账本没有 basis 时可能已合法委托；重放保留事实，启动恢复负责转交用户。
+    // 新追加始终执行 reported 门槛，历史中显式 inferred 的记录也不豁免。
+    const legacyReplay = before !== Number.MAX_SAFE_INTEGER && blocked.basis === undefined
+    if (blocked.reason === 'question' && blocked.basis !== 'reported' && !legacyReplay) {
       return notDelegable('推断的提问不能委托 supervisor 代答')
     }
     if (blocked.no_delegate === true) return notDelegable('这次卡住带 no_delegate，不能委托')
