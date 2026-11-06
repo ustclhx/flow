@@ -5,6 +5,7 @@ import {
   type Result,
   redactSecrets,
   type SupervisorConfig,
+  type TaskView,
 } from '@raindown/core'
 import type { LedgerStore } from '../ledger/store.ts'
 import { HUB_ACTOR } from '../ledger/supervisor-checks.ts'
@@ -30,11 +31,32 @@ export const observeAutonomous = (
   source?: 'pr',
 ): boolean => (origin === 'autonomous' || source === 'pr') && config?.observe.autonomous === true
 
-/** 唤醒是否合并了 PR 评论（来源 instruction:pr）。 */
-export const prSourcedWake = (
-  ledger: Pick<LedgerStore, 'wakeOf'>,
+/**
+ * 唤醒是否为 PR 来源（instruction:pr）：不只信 payload 标记，也从唤醒合并的事件推导——
+ * 事件中有 `pr.wake_requested`，或事件涉及的任务授权依据带 `pr_sourced`（污染沿唤醒链向下传递）。
+ */
+export function prSourcedWake(
+  ledger: Pick<LedgerStore, 'wakeOf' | 'eventsAfter' | 'getTask'>,
   wakeTaskId: string | undefined,
-): boolean => wakeTaskId !== undefined && ledger.wakeOf(wakeTaskId)?.source === 'pr'
+): boolean {
+  if (wakeTaskId === undefined) return false
+  const wake = ledger.wakeOf(wakeTaskId)
+  if (!wake) return false
+  if (wake.source === 'pr') return true
+  for (const seq of wake.events) {
+    const e = ledger.eventsAfter(seq - 1, {}, 1)[0]
+    if (e?.seq !== seq) continue
+    if (e.type === 'pr.wake_requested') return true
+    if (e.task_id !== undefined && ledger.getTask(e.task_id)?.mandate?.pr_sourced) return true
+  }
+  return false
+}
+
+/** 任务是否带 PR 来源污染：授权依据标记，或其来源唤醒为 PR 来源。 */
+export const prSourcedTask = (
+  ledger: Pick<LedgerStore, 'wakeOf' | 'eventsAfter' | 'getTask'>,
+  task: Pick<TaskView, 'mandate'> | null | undefined,
+): boolean => !!task?.mandate?.pr_sourced || prSourcedWake(ledger, task?.mandate?.wake_task)
 
 /** 参数摘要：JSON 序列化后遮蔽疑似密钥，再截断到 `OBSERVED_ARGS_MAX`（先遮蔽后截断，避免切开密钥）。 */
 export function summarizeArgs(args: unknown): string {

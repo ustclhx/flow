@@ -48,7 +48,9 @@ export const isAllowedHumanPrEvent = (
 ) =>
   p.allowed === true &&
   p.actor_kind === 'human' &&
-  (p.kind === undefined || PR_REQUEST_KINDS.includes(p.kind))
+  // 缺少种类即不算请求（fail closed）。
+  p.kind !== undefined &&
+  PR_REQUEST_KINDS.includes(p.kind)
 
 /** 逐条宽松解析输入：单条格式错误只丢弃它本身，不让整批丢失。 */
 export const lenientInputs = (value: unknown): unknown =>

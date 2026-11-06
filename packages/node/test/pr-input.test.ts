@@ -131,3 +131,53 @@ test('任务未运行期间到达的输入随下一次派工下发', async () =>
     { payload: { input_seqs: [seq], via: 'dispatch' } },
   ])
 })
+
+test('短任务：执行器很快结束时，派工输入的确认随提交前的续约一并发出', async () => {
+  const b = await bench()
+  current = b
+  const id = await b.create(fake({ outcome: 'failed', message: '先失败一次' }))
+  await b.until(id, (t) => t.status === 'failed')
+  subscribe(b, id)
+  const event = b.ledger.append(
+    {
+      type: 'pr.event',
+      workspace: WS,
+      payload: {
+        pr: PR,
+        kind: 'issue_comment',
+        actor: 'acme',
+        actor_kind: 'human',
+        allowed: true,
+        text: '补一个测试',
+        url: `${PR}#issuecomment-77`,
+        cursor: '2026-10-25T08:00:00.000Z|77',
+      },
+    },
+    { actor: 'hub' },
+  )
+  if (!event.ok) throw new Error(event.error.message)
+  const resumed = b.ledger.appendMany(
+    [
+      {
+        type: 'task.input_added',
+        task_id: id,
+        workspace: WS,
+        payload: { source: 'pr', pr_event_seq: event.data.seq },
+      },
+      {
+        type: 'task.requeued',
+        task_id: id,
+        workspace: WS,
+        payload: { reason: 'input', pr_event_seq: event.data.seq },
+      },
+    ],
+    { actor: 'hub' },
+  )
+  if (!resumed.ok) throw new Error(resumed.error.message)
+  // 第二次派工立即以 failed 结束：只拨到任务结束，不额外等续约周期。
+  await b.until(id, (t) => t.attempt === 2 && t.status === 'failed')
+  expect(b.ledger.pendingTaskInputs(id)).toEqual([])
+  expect(b.events(id).filter((e) => e.type === 'task.input_delivered')).toMatchObject([
+    { payload: { via: 'dispatch' } },
+  ])
+})

@@ -1406,6 +1406,8 @@ class LeaseRunner {
     this.runEnded = true
     // 回复已交给 worker、worker 随即结束：先把送达确认完（写 task.unblocked），回复才不会被当作丢弃。
     if (this.delivering) await this.delivering
+    // 送到一半的输入先结束；待发的派工 / 运行中输入确认随下面提交前的续约一并发出（短任务不丢确认）。
+    if (this.injecting) await this.injecting
     while (this.unacked && !this.released) {
       await this.renewNow()
       if (this.unacked && !this.released) await sleep(env.clock, env.retryMs)
@@ -1415,7 +1417,10 @@ class LeaseRunner {
     do {
       await this.renewNow()
       if (this.renewReadFailed && !this.released) await sleep(env.clock, env.retryMs)
-    } while (this.renewReadFailed && !this.released)
+    } while (
+      (this.renewReadFailed || this.dispatchAcks.length > 0 || this.inputAcks.length > 0) &&
+      !this.released
+    )
     if (this.released) return
     if (this.terminalReport) outcome = this.reportedOutcome(this.terminalReport)
     let req = this.completion(this.tokenWriteFailed ? this.dispatchTokenFailure() : outcome)

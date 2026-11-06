@@ -53,7 +53,12 @@ import {
 } from '@raindown/core'
 import { auditRules } from '../policy/service.ts'
 import { redactDeep } from '../secrets/redactor.ts'
-import { observeAutonomous, recordObservedAction } from '../supervisor/observe.ts'
+import {
+  observeAutonomous,
+  prSourcedTask,
+  prSourcedWake,
+  recordObservedAction,
+} from '../supervisor/observe.ts'
 import type { EventInput, LedgerStore } from './store.ts'
 import {
   chainDepth,
@@ -639,8 +644,11 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
             { field: 'parent', wake: callerWake.task_id },
           )
         }
-        // D5 第 2 步：autonomous 唤醒不能直接建写类任务（含带 verify 的任务），只能提案。
-        if (kind === 'write' && callerWake.origin === 'autonomous') {
+        // D5 第 2 步：autonomous 唤醒与 PR 来源唤醒不能直接建写类任务（含带 verify 的任务），只能提案。
+        if (
+          kind === 'write' &&
+          (callerWake.origin === 'autonomous' || prSourcedWake(ledger, callerWake.task_id))
+        ) {
           return fail(
             'failure',
             'proposal_required',
@@ -936,6 +944,12 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         ...(provenanceWake ? { wake_task: provenanceWake.task_id } : {}),
         ...(instructionSeq === undefined ? {} : { instruction_seq: instructionSeq }),
         ...(instructionNote ? { instruction_note: instructionNote } : {}),
+        // PR 来源的污染：调用方唤醒为 PR 来源，或来源 / 父任务带标记时向下传递（中枢计算，调用方不能提供）。
+        ...((callerWake && prSourcedWake(ledger, callerWake.task_id)) ||
+        prSourcedTask(ledger, source) ||
+        prSourcedTask(ledger, contract.parent ? ledger.getTask(contract.parent) : null)
+          ? { pr_sourced: true as const }
+          : {}),
         policy_version: policy.version,
         matched_rules: auditRules(creationDecision.matched_rules),
       }
@@ -1184,11 +1198,14 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         if (kind === 'merge' || kind === 'supervisor') {
           return fail('failure', 'role_not_allowed', `supervisor 不能重试 ${kind} 类任务`)
         }
-        if (kind === 'write' && wake.origin === 'autonomous') {
+        if (
+          kind === 'write' &&
+          (wake.origin === 'autonomous' || prSourcedWake(ledger, wake.task_id))
+        ) {
           return fail(
             'failure',
             'proposal_required',
-            '自发唤醒不能直接重试写类任务，请提交任务提案',
+            '自发唤醒与 PR 评论引起的唤醒不能直接重试写类任务，请提交任务提案',
           )
         }
         // 任务必须确实源自本 workspace 的普通唤醒；后续唤醒可以恢复前代唤醒的子孙任务。

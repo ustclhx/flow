@@ -1155,7 +1155,9 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const replyInProgress = Object.values(state.replies).some(
           (r) => r.esc_sent === true && r.done !== true,
         )
+        // 本次运行已上报停下（idle / blocked）：输入框里等的是用户或 supervisor 的回答，不插入输入。
         if (
+          reported ||
           inflight.size > 0 ||
           (approvalRound !== undefined && !approvalRound.closed) ||
           replyInProgress ||
@@ -1168,11 +1170,11 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           const current = await orca.terminalRead({ handle: h, limit: 200 })
           if (!current.ok) throw new TransientDeliverError(current.error.message)
           const kind = analyzeTail(current.data.tail).kind
+          // 只在"回合结束后的普通空闲输入框"送入：提问、授权、信任弹窗、忙碌或空屏都不送（不能替用户回答）。
           if (
             current.data.status !== 'running' ||
-            kind === 'working' ||
-            kind === 'trust_prompt' ||
-            kind === 'awaiting_approval' ||
+            (kind !== 'other' && kind !== 'pr_opened') ||
+            reported ||
             !current.data.tail.some((line) => /^›(?:\s|$)|\? for shortcuts/.test(line.trim()))
           ) {
             throw new TransientDeliverError('普通输入框尚不可用，输入等待下一次送达')
@@ -1185,8 +1187,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           if (!submitted) return 'not_now'
           st.done = true
           await saveState()
-          reported = false
-          idlePolls = 0
+          // 不重置 reported / idlePolls：送达不能掩盖随后的提问或停下。
           status(`已把 PR 动态（输入 ${input.input_seq}）送进终端`)
           return 'delivered'
         } catch (error) {

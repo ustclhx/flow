@@ -2173,17 +2173,33 @@ describe('PR 直通的输入（harness-neutral 8.4）', () => {
     text: `## 订阅的 PR 有新动态\n<untrusted-pr-event>\n{"text": "第 ${seq} 条"}\n</untrusted-pr-event>`,
   })
 
-  test('只在普通输入框空闲时送入，按 input_seq 幂等', async () => {
-    const s = await start({}, (o) => o.show('question'))
+  test('只在回合结束后的普通空闲输入框送入，按 input_seq 幂等；送达不掩盖之后的停下', async () => {
+    const s = await start({}, (o) => o.show('working'))
     await ready(s)
-    await s.poll(2)
-    s.orca.show('question')
+    s.orca.reads.splice(0)
+    s.orca.show('stopped-statement')
     expect(await s.run.inject?.(input(1))).toBe('delivered')
     expect(await s.run.inject?.(input(1))).toBe('delivered')
     const text = input(1).text.replace(/\n/g, ' ')
     expect(sends(s)).toEqual([{ handle: s.orca.handle, text, enter: true, waitSubmitS: 10 }])
     await s.run.cancel()
     expect(await s.run.inject?.(input(2))).toBe('not_running')
+  })
+
+  test('Codex 停在提问时不送入（不能替用户回答），已上报停下后也不送入', async () => {
+    const s = await start({}, (o) => o.show('working'))
+    await ready(s)
+    s.orca.reads.splice(0)
+    s.orca.show('question')
+    expect(await s.run.inject?.(input(6))).toBe('not_now')
+    // 连续两轮停在普通输入框后上报停下：之后即使屏幕看起来空闲也不送入。
+    s.orca.reads.splice(0)
+    s.orca.show('stopped-statement')
+    await s.poll(3)
+    expect(idles(s).length).toBeGreaterThan(0)
+    expect(await s.run.inject?.(input(7))).toBe('not_now')
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
   })
 
   test.each(['approval', 'trust-prompt', 'working'])(

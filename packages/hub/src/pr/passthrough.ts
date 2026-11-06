@@ -309,7 +309,8 @@ export function createPrPassthrough(o: PrPassthroughOptions) {
     for (;;) {
       if (stopped) return
       const batch = ledger.prEventsAfter(after, CATCH_UP_BATCH)
-      for (const e of batch) enqueue(e)
+      // 检查点只推进到第一个缺口：之后已处理过的事件跳过，处理失败或追赶中的事件重新处理。
+      for (const e of batch) if (!ledger.prIsDispatched(e.seq)) enqueue(e)
       await chain
       if (batch.length < CATCH_UP_BATCH) return
       after = batch.at(-1)?.seq ?? after

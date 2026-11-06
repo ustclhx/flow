@@ -327,3 +327,47 @@ test('PR 评论引起的唤醒（source: pr）建的任务不继承来源任务�
   expect(task.mandate?.instruction_seq).toBeUndefined()
   expect(task.mandate?.instruction_note).toContain('PR 评论')
 })
+
+test('PR 来源的污染沿唤醒链向下传递：两跳之后的任务仍带 pr_sourced，其唤醒也按 PR 来源推导', async () => {
+  const { prSourcedWake } = await import('../src/supervisor/observe.ts')
+  const s = await setup()
+  const prWake = await s.wake([], 'instruction', 'pr')
+  const d = must(await s.create(prWake)).task
+  expect(d.mandate?.pr_sourced).toBe(true)
+  // D 完成 → 普通 instruction 唤醒（payload 没有 source 标记），从事件涉及的任务推导为 PR 来源。
+  const done = await complete(s, d.id)
+  const w2 = await s.wake([done])
+  expect(s.ledger.wakeOf(w2)?.source).toBeUndefined()
+  expect(prSourcedWake(s.ledger, w2)).toBe(true)
+  const d2 = must(await s.create(w2)).task
+  expect(d2.mandate?.pr_sourced).toBe(true)
+  // 对照：与 PR 无关的唤醒链不带标记。
+  const seq = s.instruction('普通指令')
+  const plain = await s.wake([seq])
+  expect(prSourcedWake(s.ledger, plain)).toBe(false)
+  expect(must(await s.create(plain)).task.mandate?.pr_sourced).toBeUndefined()
+})
+
+test('PR 来源唤醒不能直接建或重试写类任务，与 autonomous 一样要求提案', async () => {
+  const s = await setup()
+  const seq = s.instruction('写代码')
+  const plain = await s.wake([seq])
+  const write = { executor: 'codex-orca' }
+  const created = must(await s.create(plain, write)).task
+  const prWake = await s.wake([], 'instruction', 'pr')
+  expect(await s.create(prWake, write)).toMatchObject({
+    ok: false,
+    error: { code: 'proposal_required' },
+  })
+  // 重试：普通唤醒建的写类任务失败后，PR 来源唤醒也不能直接重试。
+  const { startTask, drafts } = await import('./ledger-helpers.ts')
+  startTask(s.ledger, created.id)
+  must(s.ledger.append(drafts(created.id)['task.failed'], { actor: 'hub' }))
+  expect(
+    await s.tasks.retryTask(created.id, {
+      actor: 'supervisor',
+      wake: { task_id: prWake },
+      reason: 'PR 评论要求重试',
+    }),
+  ).toMatchObject({ ok: false, error: { code: 'proposal_required' } })
+})

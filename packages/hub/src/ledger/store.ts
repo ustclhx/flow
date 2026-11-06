@@ -206,6 +206,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   prWakeRequested(prEventSeq: number, reason: string, taskId?: string): boolean
   /** 直通已处理到的最后一条 pr.event 的 seq（持久化检查点；没有时为 0）。 */
   prDispatchedUpTo(): number
+  /** 这条 pr.event 是否已有直通检查点。 */
+  prIsDispatched(prEventSeq: number): boolean
   /** seq 大于 after 的 pr.event，按 seq 升序。 */
   prEventsAfter(after: number, limit: number): EventOf<'pr.event'>[]
   /** 任务尚未送达的输入，按 seq 升序。 */
@@ -2022,11 +2024,23 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       ).map((r) => rowToEvent(r) as EventOf<'pr.event'>)
     },
     prDispatchedUpTo() {
+      // 无缺口的检查点：第一条还没有 pr.dispatched 的 pr.event 之前（处理失败或追赶中的事件不会被跳过）。
+      const first = get<{ s: number | null }>(
+        `SELECT MIN(e.seq) AS s FROM events e WHERE e.type = 'pr.event' AND NOT EXISTS (
+           SELECT 1 FROM events d WHERE d.type = 'pr.dispatched'
+             AND json_extract(d.payload_json, '$.pr_event_seq') = e.seq)`,
+      )?.s
+      if (first != null) return first - 1
       return (
-        get<{ s: number | null }>(
-          `SELECT MAX(json_extract(payload_json, '$.pr_event_seq')) AS s FROM events
-           WHERE type = 'pr.dispatched'`,
-        )?.s ?? 0
+        get<{ s: number | null }>("SELECT MAX(seq) AS s FROM events WHERE type = 'pr.event'")?.s ??
+        0
+      )
+    },
+    prIsDispatched(prEventSeq) {
+      return !!get(
+        `SELECT 1 FROM events WHERE type = 'pr.dispatched'
+           AND json_extract(payload_json, '$.pr_event_seq') = ? LIMIT 1`,
+        prEventSeq,
       )
     },
     prEventsAfter(after, limit) {

@@ -43,7 +43,12 @@ import {
 } from '../ledger/supervisor-checks.ts'
 import type { WorkspaceInfo } from '../ledger/tasks.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
-import { observeAutonomous, prSourcedWake, recordObservedAction } from '../supervisor/observe.ts'
+import {
+  observeAutonomous,
+  prSourcedTask,
+  prSourcedWake,
+  recordObservedAction,
+} from '../supervisor/observe.ts'
 import type { SupervisorToolsDeps } from './common.ts'
 
 /**
@@ -552,8 +557,11 @@ export async function requestMerge(
   if (!elig.ok) return elig
   const e = elig.data
   // observe（D10）：autonomous 唤醒的合并请求只记录为 supervisor.observed_action，不建 merger、不生成审批条目。
+  // 检查整条链：发起请求的唤醒、开发任务与审查任务的授权依据（PR 来源的污染向下传递）。
   const fromPr =
-    prSourcedWake(ledger, wake.task_id) || prSourcedWake(ledger, e.dev.mandate?.wake_task)
+    prSourcedWake(ledger, wake.task_id) ||
+    prSourcedTask(ledger, e.dev) ||
+    prSourcedTask(ledger, e.review)
   if (observeAutonomous(wake.origin, e.workspace.supervisor, fromPr ? 'pr' : undefined)) {
     return recordObservedAction(ledger, {
       workspace: wake.workspace,

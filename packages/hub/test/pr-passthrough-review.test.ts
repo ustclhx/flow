@@ -107,6 +107,9 @@ async function setup(github: WorkspaceInfo['github'] = { watch: true }) {
     await passthrough.idle()
     return e
   }
+  const stopPassthrough = async () => {
+    await passthrough.stop()
+  }
   const restart = async () => {
     await passthrough.stop()
     passthrough = make()
@@ -149,6 +152,7 @@ async function setup(github: WorkspaceInfo['github'] = { watch: true }) {
     doneTask,
     comment,
     restart,
+    stopPassthrough,
     wakes,
     finish,
     advance: (ms: number) => {
@@ -312,4 +316,35 @@ test('输入逐条宽松解析：单条格式错误不让整批丢失', () => {
     inputs: [{ source: 'email' }, good],
   })
   expect(renewed.inputs).toEqual([good])
+})
+
+test('检查点只推进到第一个缺口：处理失败的事件在重启后补处理，已处理的不重复', async () => {
+  const s = await setup()
+  s.create('t1')
+  s.subscribe('t1')
+  await s.stopPassthrough()
+  const a = must(
+    s.ledger.append(
+      { type: 'pr.event', workspace: WS, payload: payload({ actor: 'mallory', allowed: false }) },
+      { actor: 'hub' },
+    ),
+  )
+  const b = must(
+    s.ledger.append(
+      { type: 'pr.event', workspace: WS, payload: payload({ actor: 'mallory', allowed: false }) },
+      { actor: 'hub' },
+    ),
+  )
+  // b 已处理（例如追赶中先完成），a 处理失败没有检查点。
+  must(
+    s.ledger.append(
+      { type: 'pr.dispatched', workspace: WS, payload: { pr_event_seq: b.seq } },
+      { actor: 'hub' },
+    ),
+  )
+  expect(s.ledger.prDispatchedUpTo()).toBe(a.seq - 1)
+  await s.restart()
+  const inputs = s.ledger.taskEvents('t1').filter((x) => x.type === 'task.input_added')
+  expect(inputs.map((x) => (x.payload as { pr_event_seq: number }).pr_event_seq)).toEqual([a.seq])
+  expect(s.ledger.prDispatchedUpTo()).toBe(b.seq)
 })

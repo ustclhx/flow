@@ -74,3 +74,10 @@ test('多条派工输入按顺序拼接', () => {
   expect(text.indexOf('A')).toBeLessThan(text.indexOf('B'))
   expect(text).toStartWith('# 任务上次运行后收到的新输入')
 })
+
+test('缺少种类的事件不算请求（fail closed）', () => {
+  expect(isAllowedHumanPrEvent({ allowed: true, actor_kind: 'human' })).toBe(false)
+  expect(isAllowedHumanPrEvent({ allowed: true, actor_kind: 'human', kind: 'issue_comment' })).toBe(
+    true,
+  )
+})

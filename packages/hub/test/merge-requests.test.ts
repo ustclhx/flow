@@ -224,6 +224,8 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       actor?: 'user' | 'hub'
       /** 授权依据中的唤醒（模拟在该唤醒里建的任务）。 */
       mandateWake?: string
+      /** 授权依据带 PR 来源污染（两跳之后的任务）。 */
+      prSourced?: boolean
     } = {},
   ) => {
     clock.time += 1000
@@ -238,12 +240,13 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
           payload: {
             contract: { goal: 'g', workspace: ws, requires: [], timeout_s: 60, ...contract },
             ...(opts.origin ? { origin: opts.origin } : {}),
-            ...(opts.mandateWake
+            ...(opts.mandateWake || opts.prSourced
               ? {
                   mandate: {
                     created_by: 'supervisor',
                     origin: 'supervisor',
-                    wake_task: opts.mandateWake,
+                    ...(opts.mandateWake ? { wake_task: opts.mandateWake } : {}),
+                    ...(opts.prSourced ? { pr_sourced: true } : {}),
                     policy_version: '012345abcdef',
                   },
                 }
@@ -326,6 +329,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       remoteUrl?: string | null
       parent?: string
       mandateWake?: string
+      prSourced?: boolean
     } = {},
     status: 'done' | 'failed' | 'blocked' = 'done',
   ) =>
@@ -351,6 +355,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
             }
           : {}),
         ...(o.mandateWake ? { mandateWake: o.mandateWake } : {}),
+        ...(o.prSourced ? { prSourced: true } : {}),
         status,
       },
     )
@@ -1202,6 +1207,16 @@ describe('自动合并与收尾', () => {
     const r = must(await s.request(w.token, rv))
     expect(r.mode).toBe('approval')
     expect(r.task).toBeUndefined()
+    expect(s.events('merge_request.created')[0]?.payload).toMatchObject({ auto_merge: false })
+  })
+
+  test('两跳之后的开发任务（授权依据带 pr_sourced）由普通唤醒请求合并也不自动合并', async () => {
+    const s = await setup({ supervisor: { auto_merge: true } })
+    s.dev({ prSourced: true })
+    const rv = s.review()
+    const w = await s.wake('instruction')
+    const r = must(await s.request(w.token, rv))
+    expect(r.mode).toBe('approval')
     expect(s.events('merge_request.created')[0]?.payload).toMatchObject({ auto_merge: false })
   })
 

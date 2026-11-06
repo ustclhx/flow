@@ -870,7 +870,12 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     const generation = projection.workspace(ref).generation + 1
     const seqs = events.map((e) => e.seq)
     // 合并了 PR 评论的唤醒（instruction:pr）：保留 instruction 优先级，但不满足 auto_merge、受 observe 约束。
-    const prSourced = events.some((e) => e.type === 'pr.wake_requested')
+    // 事件涉及带 PR 来源污染的任务时同样标为 PR 来源（污染沿唤醒链向下传递）。
+    const prSourced = events.some(
+      (e) =>
+        e.type === 'pr.wake_requested' ||
+        (e.task_id !== undefined && ledger.getTask(e.task_id)?.mandate?.pr_sourced === true),
+    )
     if (prSourced) {
       note = [
         note,
