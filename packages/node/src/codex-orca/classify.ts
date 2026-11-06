@@ -389,6 +389,67 @@ export function approvalForPrecheck(tail: readonly string[]): ApprovalPrompt | u
   return { command, prompt: block, ...(reason ? { reason } : {}) }
 }
 
+/** 屏幕折行可能发生在词中或空格处；只放宽折行边界，不改写命令内部空白。 */
+function executionCommandMatches(
+  displayed: string,
+  command: string,
+  allowTruncated = false,
+): boolean {
+  const truncated = allowTruncated && /(?:…|\.\.\.)$/.test(displayed)
+  const prefix = truncated ? displayed.replace(/(?:…|\.\.\.)$/, '') : displayed
+  // 截断必须留下有区分度的命令和参数，不能只凭 `gh…`、`git push…` 等短前缀确认。
+  if (truncated && (prefix.replace(/\s/g, '').length < 20 || !/\S+\s+\S/.test(prefix))) return false
+  const pattern = prefix
+    .split('\n')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join(' ?')
+  return new RegExp(`^${pattern}${truncated ? '' : '$'}`).test(command)
+}
+
+/**
+ * 只接受 Codex 明确的批准/执行记录；忙碌标记本身不是批准证据。
+ * 批准文案来自上游 `tui/src/history_cell/approvals.rs`，尚无真实截屏 fixture；
+ * 本地 approval fixture 的 Running 行在弹窗打开前就会出现，只有 Ran 才能证明命令已执行。
+ * 返回每条记录的原始物理行（折行用换行拼接），同文本多次出现也保留，供调用方按数量比较新证据。
+ */
+export function approvalExecutionLines(tail: readonly string[], command: string): string[] {
+  const records: string[] = []
+  const start = /^(?:• Ran |(?:[✓✔]\s*)?You approved codex to run )/
+  const matchesRecord = (lines: readonly string[]) => {
+    const text = lines.map((line) => line.trim()).join('\n')
+    const approved = /^(?:[✓✔]\s*)?You approved codex to run ([\s\S]+)$/.exec(text)?.[1]
+    if (approved !== undefined) {
+      const snippet = approved.replace(
+        /[ \n]+(?:this[ \n]+time|every[ \n]+time[ \n]+this[ \n]+session)$/,
+        '',
+      )
+      return snippet !== approved && executionCommandMatches(snippet, command, true)
+    }
+    const ran = /^• Ran ([\s\S]+)$/.exec(text)?.[1]
+    return ran !== undefined && executionCommandMatches(ran, command, true)
+  }
+  for (let at = 0; at < tail.length; at++) {
+    if (!start.test(tail[at]?.trim() ?? '')) continue
+    const lines = [tail[at] ?? '']
+    // 执行输出以 └ 开始；空行、新消息、输入框与状态提示也不属于命令续行。
+    while (at + 1 < tail.length) {
+      const next = tail[at + 1] ?? ''
+      if (
+        !/^[ \t]+\S/.test(next) ||
+        /^[ \t]+[└│+⋮]/.test(next) ||
+        /^\s*(?:>_|›|Would you like to run|Environment:|Reason:|\$\s|Press enter)/.test(next) ||
+        CHROME_RE.test(next) ||
+        start.test(next.trim())
+      )
+        break
+      lines.push(next)
+      at++
+    }
+    if (matchesRecord(lines)) records.push(lines.join('\n'))
+  }
+  return records
+}
+
 /** 从 idle 信号的 hint 中取终端末尾；没有时用节点累积的末尾输出。 */
 function snapshotTail(snapshot: StuckSnapshot): readonly string[] {
   const t = snapshot.hint?.tail

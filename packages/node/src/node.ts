@@ -23,7 +23,9 @@ import {
   loadHubConfig,
   loadNodeConfig,
   loadRoles,
+  type OutOfBandSignal,
   ok,
+  outOfBandSignal,
   PROTOCOL_MESSAGE_MAX,
   type RepoSnapshot,
   type Result,
@@ -61,7 +63,7 @@ import {
 } from './push-env.ts'
 import { verifyTask } from './verify.ts'
 import { cleanWakeTokenDir, removeWakeTokenFile, writeWakeTokenFile } from './wake-token.ts'
-import { resolveContractCwd, workspaceRepos } from './workdir.ts'
+import { checkWorkingDirectory, resolveContractCwd, workspaceRepos } from './workdir.ts'
 
 /**
  * `raindown node` 执行节点（tasks.md 4.3；design D6；node-protocol spec）。
@@ -343,6 +345,8 @@ class LeaseRunner {
   private phase: 'running' | 'blocked' | 'verifying' = 'running'
   /** 待随下一次续约上报的状态变化。 */
   private signal: RenewSignal | undefined
+  /** 带外操作独立缓冲，避免被后续 blocked/resumed 状态覆盖；id 用于中枢幂等。 */
+  private outOfBand: OutOfBandSignal[] = []
   /** 最近的输出行。 */
   private tail: string[] = []
   private lastActivityAt: number
@@ -450,6 +454,7 @@ class LeaseRunner {
     const signal = this.signal
     this.signal = undefined
     const branch = this.pendingBranch
+    const outOfBand = this.outOfBand.splice(0, 100)
     const r = await this.env.client.renew(this.grant.lease_id, {
       lease_token: this.grant.lease_token,
       activity: batch,
@@ -457,6 +462,7 @@ class LeaseRunner {
         ? { blocked: clipBlocked(signal.blocked) }
         : (signal ?? {})),
       ...(branch ? { branch } : {}),
+      ...(outOfBand.length > 0 ? { out_of_band: outOfBand } : {}),
     })
     if (this.released) return
     // 中枢已处理分支上报（写入或因已上报而忽略）：不再重复发送。
@@ -468,6 +474,7 @@ class LeaseRunner {
     if (!r.ok) {
       if (r.error.kind === 'retryable') {
         this.buffer.unshift(...batch)
+        this.outOfBand.unshift(...outOfBand)
         // 续约期间产生了更新的状态变化时以新的为准。
         this.signal ??= signal
         this.scheduleRenew(Math.min(this.intervalMs, this.env.retryMs))
@@ -478,6 +485,7 @@ class LeaseRunner {
         this.env.logger.warn('中枢不接受任务分支上报，忽略', r.error.message)
         if (this.pendingBranch === branch) this.pendingBranch = undefined
         this.buffer.unshift(...batch)
+        this.outOfBand.unshift(...outOfBand)
         this.signal ??= signal
         this.scheduleRenew(0)
         return
@@ -487,11 +495,14 @@ class LeaseRunner {
       await this.run?.cancel().catch(() => {})
       return
     }
-    if (this.buffer.length > 0 || this.signal) this.renewAgain = true
+    if (this.buffer.length > 0 || this.signal || this.outOfBand.length > 0) this.renewAgain = true
     if (r.data.cancel_requested && !this.cancelRequested) {
       this.cancelRequested = true
       this.abort.abort()
       await this.run?.cancel().catch(() => {})
+    }
+    if (r.data.blocked?.request_id) {
+      this.run?.bindBlocked?.({ seq: r.data.blocked.seq, request_id: r.data.blocked.request_id })
     }
     if (r.data.reply && !this.cancelRequested && !this.unacked) this.deliver(r.data.reply)
     if (this.unacked) await this.ack()
@@ -573,8 +584,12 @@ class LeaseRunner {
     const r = await this.env.client.ackReply(this.grant.lease_id, {
       lease_token: this.grant.lease_token,
       reply_id: u.reply_id,
-      outcome: u.outcome,
-      ...(u.outcome === 'dropped' ? { reason: 'request_changed' as const } : {}),
+      outcome: typeof u.outcome === 'string' ? u.outcome : u.outcome.outcome,
+      ...(typeof u.outcome === 'object'
+        ? { reason: u.outcome.reason }
+        : u.outcome === 'dropped'
+          ? { reason: 'request_changed' as const }
+          : {}),
     })
     if (this.released) return
     if (!r.ok) {
@@ -591,6 +606,8 @@ class LeaseRunner {
     if (u.outcome === 'delivered') {
       // 中枢已写入 task.unblocked：回到 running，重新开始计时。
       this.enterRunning()
+    } else if (typeof u.outcome === 'object') {
+      this.env.logger.info(`回复 ${u.reply_id} 已拒收：授权回合已关闭或请求已变化`)
     } else if (u.outcome === 'dropped') {
       // supervisor 的批准被拒收（D15）：中枢已写 task.unblocked 并丢弃这条回复。worker 仍在等待，
       // 执行器随后重新报告停下；这次卡住以 no_delegate 上报，直接交给用户。
@@ -622,6 +639,13 @@ class LeaseRunner {
     if (this.buffer.length > ACTIVITY_BUFFER_MAX) this.buffer.shift()
     if (a.kind === 'output' && a.text !== undefined) this.pushTail(a.text)
     this.lastActivityAt = this.mono()
+    if (a.kind === 'status' && a.data?.out_of_band !== undefined) {
+      const parsed = outOfBandSignal.safeParse(a.data.out_of_band)
+      if (parsed.success) {
+        this.outOfBand.push(parsed.data)
+        void this.renewNow()
+      } else this.env.logger.warn('执行器的带外操作信号不合法', parsed.error.message)
+    }
     if (isIdleSignal(a)) {
       const hint = a.data?.hint
       this.stuck(
@@ -630,7 +654,8 @@ class LeaseRunner {
         a.text,
       )
     } else if (isResumedSignal(a)) {
-      if (this.phase === 'blocked' && !this.unacked) {
+      // round_closed 只确认旧回复被拒收；确认重试期间的真实恢复仍须上报。
+      if (this.phase === 'blocked' && (!this.unacked || typeof this.unacked.outcome === 'object')) {
         this.signal = { resumed: { note: a.text ?? 'worker 自行恢复' } }
         this.enterRunning()
         void this.renewNow()
@@ -677,6 +702,7 @@ class LeaseRunner {
         blocked: {
           reason: v.reason,
           message: v.message,
+          ...(typeof hint?.request_id === 'string' ? { request_id: hint.request_id } : {}),
           ...(tail.length > 0 ? { tail } : {}),
           ...(session ? { session } : {}),
           ...delegation,
@@ -903,6 +929,8 @@ class LeaseRunner {
     let outcome: Result<ExecutorOutcome>
     this.scheduleRenew()
     const cwd = await resolveContractCwd(env.home, grant.contract)
+    this.repos = cwd.ok ? await workspaceRepos(env.home, grant.contract.workspace) : []
+    const directory = cwd.ok ? checkWorkingDirectory(cwd.data) : undefined
     if (this.released) return
     if (!executor) {
       outcome = fail('failure', 'unknown_executor', `节点没有执行器 ${grant.contract.executor}`)
@@ -918,9 +946,20 @@ class LeaseRunner {
           node_id: env.nodeId,
         },
       })
+    } else if (directory && !directory.ok) {
+      const registeredRepoMissing = this.repos.includes(cwd.data)
+      outcome =
+        directory.error.code === 'cwd_missing'
+          ? ok({
+              outcome: 'blocked',
+              reason: registeredRepoMissing ? 'other' : 'workdir_missing',
+              message: registeredRepoMissing
+                ? `登记的仓库路径不存在：${cwd.data}`
+                : directory.error.message,
+            })
+          : directory
     } else {
       this.cwd = cwd.data
-      this.repos = await workspaceRepos(env.home, grant.contract.workspace)
       // 登记仓库快照（D15）：中枢投影里已固定的快照随租约下发，节点直接使用、不再采集；
       // 没有时在任务首次上报分支时对执行器解析出的仓库采集（见 reportBranch）。
       this.snapshot = grant.repo_snapshot
@@ -1046,9 +1085,10 @@ class LeaseRunner {
       }
     }
     // 最后一批活动与状态变化随续约送达，再提交结束。
-    while (!this.released && (this.buffer.length > 0 || this.signal)) {
+    while (!this.released && (this.buffer.length > 0 || this.signal || this.outOfBand.length > 0)) {
       await this.renewNow()
-      if (this.signal && !this.released) await sleep(env.clock, env.retryMs)
+      if ((this.signal || this.outOfBand.length > 0) && !this.released)
+        await sleep(env.clock, env.retryMs)
     }
     if (this.released) return
     if (
@@ -1076,10 +1116,36 @@ class LeaseRunner {
       )
       if (this.released) return
       const failed = !this.cancelRequested && verify.some((v) => v.exit_code !== 0 || v.timed_out)
-      req = {
-        ...req,
-        outcome: failed ? 'failed' : 'done',
-        result: { ...req.result, verify, ...(failed ? { reason: 'verify_failed' } : {}) },
+      const missing = failed
+        ? verify.find((v) => {
+            if (v.cwd === undefined) return false
+            const directory = checkWorkingDirectory(v.cwd)
+            return !directory.ok && directory.error.code === 'cwd_missing'
+          })
+        : undefined
+      if (missing) {
+        const message = `工作目录不存在：${missing.cwd}`
+        this.outOfBand.push({
+          id: `verify-workdir-missing:${grant.lease_id}`,
+          kind: 'session_removed',
+          message,
+        })
+        req = {
+          lease_token: grant.lease_token,
+          outcome: 'blocked',
+          blocked_reason: 'workdir_missing',
+          message,
+        }
+        while (!this.released && this.outOfBand.length > 0) {
+          await this.renewNow()
+          if (this.outOfBand.length > 0 && !this.released) await sleep(env.clock, env.retryMs)
+        }
+      } else {
+        req = {
+          ...req,
+          outcome: failed ? 'failed' : 'done',
+          result: { ...req.result, verify, ...(failed ? { reason: 'verify_failed' } : {}) },
+        }
       }
     }
     if (this.cancelRequested) {

@@ -41,14 +41,32 @@ export const BLOCKED_REASONS = [
   'question',
   'no_progress',
   'crashed',
+  'workdir_missing',
   'node_lost',
   'other',
 ] as const
 export type BlockedReason = (typeof BLOCKED_REASONS)[number]
 export const blockedReason = z.enum(BLOCKED_REASONS).meta({
   description:
-    '卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、node_lost 节点掉线（租约过期）、other 其他',
+    '卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、workdir_missing 工作目录或会话丢失、node_lost 节点掉线（租约过期）、other 其他',
 })
+
+/** 适配器检测到的带外操作；id 在续约重试时保持不变，供中枢幂等写入。 */
+export const outOfBandSignal = z.discriminatedUnion('kind', [
+  z.strictObject({
+    id: z.string().min(1).max(128),
+    kind: z.literal('approval_outside_raindown'),
+    command: z.string().min(1).max(16_384),
+    message: z.string().max(16_384).optional(),
+  }),
+  z.strictObject({
+    id: z.string().min(1).max(128),
+    kind: z.literal('session_removed'),
+    command: z.string().max(16_384).optional(),
+    message: z.string().max(16_384).optional(),
+  }),
+])
+export type OutOfBandSignal = z.infer<typeof outOfBandSignal>
 
 // ---------------------------------------------------------------------------
 // 状态机
@@ -766,6 +784,12 @@ export const replyState = z.enum(REPLY_STATES)
 export const deliveredReply = z
   .object({
     reply_id: replyId,
+    block_seq: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .meta({ description: '这条回复所针对的 task.blocked seq' }),
     kind: replyKind,
     text: z.string().optional(),
     by: z.string().meta({ description: '回复者（task.replied 的 actor）' }),

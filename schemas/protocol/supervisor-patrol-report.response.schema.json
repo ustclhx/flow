@@ -35,6 +35,8 @@
               "type": "string",
               "enum": [
                 "task",
+                "out_of_band",
+                "reply_delivery",
                 "proposal",
                 "policy",
                 "supervisor",
@@ -260,6 +262,7 @@
                       "type": "string",
                       "enum": [
                         "task_running",
+                        "handled_externally",
                         "task_queued",
                         "task_done",
                         "task_failed",

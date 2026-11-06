@@ -2,7 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { taskContract } from '@raindown/core'
-import { analyzeTail, classifyCodexOrca, isBusy, lastMessage } from '../src/codex-orca/classify.ts'
+import {
+  analyzeTail,
+  approvalExecutionLines,
+  classifyCodexOrca,
+  isBusy,
+  lastMessage,
+} from '../src/codex-orca/classify.ts'
 import { TUI_FIXTURES, tuiFixture } from './codex-orca-helpers.ts'
 
 /**
@@ -627,5 +633,95 @@ describe('classifyCodexOrca', () => {
       contract,
     })
     expect(v?.reason).toBe('question')
+  })
+})
+
+describe('approvalExecutionLines', () => {
+  test.each([
+    [
+      'working',
+      'bunx biome check --write packages/node/src/node.ts packages/node/test/verification.test.ts && bun test packages/node/test/verification.test.ts',
+    ],
+    [
+      'pr-opened',
+      "gh run view 1000000001 --json status,conclusion,jobs --jq '{status,conclusion,jobs:[.jobs[] | {databaseId,status,conclusion}]}'",
+    ],
+  ])('真实 %s 的省略号 Ran 记录匹配完整命令', (fixture, command) => {
+    const evidence = approvalExecutionLines(tuiFixture(fixture).tail, command)
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]).toStartWith('• Ran ')
+    expect(evidence[0]).toEndWith('…')
+    expect(
+      approvalExecutionLines(tuiFixture(fixture).tail, 'git push --force origin HEAD'),
+    ).toEqual([])
+  })
+
+  test('按 approval-denied 的屏幕折行布局拼接 Ran 命令，包括词内断行', () => {
+    const tail = tuiFixture('approval-denied').tail
+    const command = 'mkdir -p /tmp/raindown-tui-probe-dir3'
+    // 复用真实拒绝场景，注入执行后的 Ran 行；fixture 原本的 Exited 不算批准。
+    const wrapped = tail.flatMap((line) =>
+      line.startsWith('• Exited') ? ['• Ran mkdir -p /tmp/raindown-', '  tui-probe-dir3'] : [line],
+    )
+    expect(approvalExecutionLines(tail, command)).toEqual([])
+    expect(approvalExecutionLines(wrapped, command)).toEqual([
+      '• Ran mkdir -p /tmp/raindown-\n  tui-probe-dir3',
+    ])
+    expect(
+      approvalExecutionLines(['• Ran mkdir -p', '  /tmp/raindown-tui-probe-dir3'], command),
+    ).toHaveLength(1)
+  })
+
+  test('保留每次相同执行记录，方便调用方按数量识别新增证据', () => {
+    const command = 'mkdir -p /tmp/raindown-tui-probe-dir2'
+    const ran = `• Ran ${command}`
+    const old = [ran, '  └ (no output)', '• 已完成。']
+    expect(approvalExecutionLines(old, command)).toEqual([ran])
+    expect(approvalExecutionLines([...old, ran, '  └ (no output)'], command)).toEqual([ran, ran])
+    // 已完整匹配的历史记录不会吞入后面的终端标题和待批弹窗。
+    expect(approvalExecutionLines([ran, ...tuiFixture('approval').tail], command)).toEqual([ran])
+  })
+
+  test('批准文案兼容上游源码，并可折行', () => {
+    const command = 'mkdir -p /tmp/raindown-tui-probe-dir2'
+    // 这两种批准文字来自上游 approvals.rs，没有声称是真实屏幕 fixture。
+    expect(
+      approvalExecutionLines(
+        [
+          `✓ You approved codex to run ${command} this time`,
+          'You approved codex to run mkdir -p',
+          '  /tmp/raindown-tui-probe-dir2 every time this session',
+        ],
+        command,
+      ),
+    ).toHaveLength(2)
+    expect(
+      approvalExecutionLines(
+        ['✔ You approved codex to run mkdir -p /tmp/raindown-tui-probe… this time'],
+        command,
+      ),
+    ).toHaveLength(1)
+  })
+
+  test('短前缀、不同命令、输出文字和批准前 Running 均不算执行证据', () => {
+    const command = 'mkdir -p /tmp/raindown-tui-probe-dir2'
+    expect(
+      approvalExecutionLines(
+        [
+          ...tuiFixture('approval').tail,
+          '• Ran mkdir…',
+          '• Ran mkdir -p…',
+          '• Ran mkdir -p /tmp/another-directory…',
+          '• Ran mkdir -p /tmp/raindown-tui-probe-dir20',
+          '• Ran git push --force origin HEAD',
+          `  └ • Ran ${command}`,
+          `✗ You did not approve codex to run ${command}`,
+          `You approved codex to run ${command}…`,
+        ],
+        command,
+      ),
+    ).toEqual([])
+    expect(approvalExecutionLines([`• Ran ${command}`], 'git push --force origin HEAD')).toEqual([])
+    expect(approvalExecutionLines([`• Ran ${command}`, '  --other'], command)).toEqual([])
   })
 })

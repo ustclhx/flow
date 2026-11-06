@@ -61,6 +61,11 @@
       "description": "worker 卡住但仍活着（交互式执行器）：中枢写入 task.blocked(lease_held=true)，租约照常续约",
       "type": "object",
       "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
         "reason": {
           "type": "string",
           "enum": [
@@ -68,10 +73,11 @@
             "question",
             "no_progress",
             "crashed",
+            "workdir_missing",
             "node_lost",
             "other"
           ],
-          "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、node_lost 节点掉线（租约过期）、other 其他"
+          "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、workdir_missing 工作目录或会话丢失、node_lost 节点掉线（租约过期）、other 其他"
         },
         "message": {
           "type": "string",
@@ -152,6 +158,71 @@
         "message"
       ],
       "additionalProperties": false
+    },
+    "out_of_band": {
+      "description": "自上次续约以来的带外操作；每个信号的 id 在重试时不变",
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "kind": {
+                "type": "string",
+                "const": "approval_outside_raindown"
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16384
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 16384
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "command"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "kind": {
+                "type": "string",
+                "const": "session_removed"
+              },
+              "command": {
+                "type": "string",
+                "maxLength": 16384
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 16384
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
     },
     "resumed": {
       "description": "worker 未经回复自行恢复（或即将结束）：中枢写入 task.unblocked",

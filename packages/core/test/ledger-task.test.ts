@@ -173,6 +173,7 @@ describe('状态与状态机', () => {
       'question',
       'no_progress',
       'crashed',
+      'workdir_missing',
       'node_lost',
       'other',
     ])

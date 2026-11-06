@@ -39,11 +39,14 @@ const REASON_LABEL: Record<string, string> = {
   question: '提问',
   no_progress: '无进展',
   crashed: '执行器崩溃',
+  workdir_missing: '工作目录或会话丢失',
   node_lost: '节点掉线',
   other: '已卡住',
 }
 const SOURCE_LABEL: Record<string, string> = {
   task: '任务',
+  out_of_band: '带外操作',
+  reply_delivery: '回复送达',
   proposal: '修改提案',
   policy: '自动放行记录',
   supervisor: 'supervisor 提问',

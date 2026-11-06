@@ -203,6 +203,7 @@
                             "question",
                             "no_progress",
                             "crashed",
+                            "workdir_missing",
                             "node_lost",
                             "other"
                           ]
@@ -449,6 +450,7 @@
                                 "question",
                                 "no_progress",
                                 "crashed",
+                                "workdir_missing",
                                 "node_lost",
                                 "other"
                               ]
@@ -907,10 +909,11 @@
                         "question",
                         "no_progress",
                         "crashed",
+                        "workdir_missing",
                         "node_lost",
                         "other"
                       ],
-                      "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、node_lost 节点掉线（租约过期）、other 其他"
+                      "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、workdir_missing 工作目录或会话丢失、node_lost 节点掉线（租约过期）、other 其他"
                     },
                     "message": {
                       "type": "string"
@@ -933,6 +936,7 @@
                         "question",
                         "no_progress",
                         "crashed",
+                        "workdir_missing",
                         "node_lost",
                         "other"
                       ]
@@ -1408,6 +1412,8 @@
               "type": "string",
               "enum": [
                 "task",
+                "out_of_band",
+                "reply_delivery",
                 "proposal",
                 "policy",
                 "supervisor",
@@ -1633,6 +1639,7 @@
                       "type": "string",
                       "enum": [
                         "task_running",
+                        "handled_externally",
                         "task_queued",
                         "task_done",
                         "task_failed",

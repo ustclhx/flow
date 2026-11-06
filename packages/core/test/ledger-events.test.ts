@@ -62,6 +62,17 @@ const samples: Record<
     valid: { ...task, payload: { reason: 'question', message: '哪个分支？', tail: ['> ?'] } },
     invalid: { ...task, payload: { reason: 'tired', message: 'x' } },
   },
+  'task.reply_dropped': {
+    valid: {
+      ...task,
+      payload: { reply_id: 'r-1', reason: 'round_closed', message: '授权回合已关闭' },
+    },
+    invalid: { ...task, payload: { reply_id: 'r-1', reason: 'unknown', message: '拒收' } },
+  },
+  'task.out_of_band': {
+    valid: { ...task, payload: { id: 'oob-1', kind: 'session_removed' } },
+    invalid: { ...task, payload: { id: 'oob-1', kind: 'approval_outside_raindown' } },
+  },
   'task.unblocked': {
     valid: { ...task, payload: { note: '用 main', reply_id: 'r-1' } },
     invalid: { ...task, payload: { note: 1 } },
@@ -424,6 +435,8 @@ describe('事件触发的状态转换', () => {
       ['verifying', 'blocked'],
       ['blocked', 'blocked'],
     ],
+    'task.out_of_band': TASK_STATUSES.map((status) => [status, status]),
+    'task.reply_dropped': TASK_STATUSES.map((status) => [status, status]),
     'task.unblocked': [['blocked', 'running']],
     'task.replied': [['blocked', 'blocked']],
     'task.requeued_with_reply': [['blocked', 'queued']],

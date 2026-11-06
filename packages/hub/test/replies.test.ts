@@ -185,6 +185,7 @@ describe('回复卡住的任务（task-interaction）', () => {
     const r1 = renew()
     expect(r1.ok && r1.data.reply).toEqual({
       reply_id: 'r-1',
+      block_seq: ctx.ledger.taskEvents(id).findLast((event) => event.type === 'task.blocked')?.seq,
       kind: 'text',
       text: '用 main',
       by: 'user',

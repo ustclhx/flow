@@ -200,6 +200,7 @@
                         "question",
                         "no_progress",
                         "crashed",
+                        "workdir_missing",
                         "node_lost",
                         "other"
                       ]
@@ -446,6 +447,7 @@
                             "question",
                             "no_progress",
                             "crashed",
+                            "workdir_missing",
                             "node_lost",
                             "other"
                           ]

@@ -832,6 +832,30 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return validateReplyDelegation(draft)
       }
+      case 'task.reply_dropped': {
+        const reply = get<{ task_id: string; state: string }>(
+          'SELECT task_id, state FROM replies WHERE id = ?',
+          draft.payload.reply_id,
+        )
+        if (
+          !reply ||
+          reply.task_id !== draft.task_id ||
+          !['pending', 'dropped'].includes(reply.state)
+        ) {
+          return invalidEvent('只能丢弃该任务待送达或已丢弃的回复')
+        }
+        if (
+          get(
+            `SELECT 1 FROM events WHERE task_id = ? AND type = 'task.reply_dropped' AND json_extract(payload_json, '$.reply_id') = ? AND seq < ?`,
+            draft.task_id ?? null,
+            draft.payload.reply_id,
+            before,
+          )
+        ) {
+          return invalidEvent('这条回复已经记录拒收')
+        }
+        return ok(null)
+      }
       case 'task.requeued_with_reply':
         return pendingReplyOf(draft)
       case 'task.lease_expired': {

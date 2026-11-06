@@ -73,6 +73,7 @@ const REASON_LABEL: Readonly<Record<BlockedReason, string>> = {
   question: '提问',
   no_progress: '没有进展',
   crashed: '崩溃',
+  workdir_missing: '工作目录或会话丢失',
   node_lost: '节点掉线',
   other: '卡住',
 }
@@ -101,6 +102,7 @@ const STATUS_CLOSE: Readonly<Record<TaskStatus, InboxCloseReason>> = {
 
 export const blockedItemId = (seq: number) => `blk.${seq}`
 export const policyItemId = (seq: number) => `pol.${seq}`
+export const outOfBandItemId = (seq: number) => `oob.${seq}`
 
 /** 条目上的操作：与 `task_reply` 接受的回复种类一致（text → reply）。 */
 export function blockedActions(reason: string, priorReason?: string): InboxItemAction[] {
@@ -233,6 +235,80 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     }
   }
 
+  /** 带外条目独立于卡住条目，直到用户确认才关闭。 */
+  function onOutOfBand(e: EventOf<'task.out_of_band'>) {
+    const task = ledger.getTask(e.task_id ?? '')
+    if (!task) return
+    const p = e.payload
+    const drafts: EventInput[] = []
+    if (p.kind === 'approval_outside_raindown') {
+      for (const draft of closeTaskDrafts(task, 'handled_externally', {
+        seq: e.seq,
+        actor: e.actor,
+      })) {
+        if (draft.type !== 'inbox.item_closed') continue
+        const item = ledger.getInboxItem(draft.payload.item_id)
+        if (item?.reason === 'awaiting_approval') drafts.push(draft)
+      }
+    }
+    if (!ledger.getInboxItem(outOfBandItemId(e.seq))) {
+      const label =
+        p.kind === 'approval_outside_raindown'
+          ? '授权在 Raindown 之外被批准'
+          : '工作目录或会话被删除'
+      drafts.push({
+        type: 'inbox.item_created',
+        task_id: task.id,
+        workspace: task.workspace,
+        payload: {
+          item_id: outOfBandItemId(e.seq),
+          level: 'interrupt',
+          source: 'out_of_band',
+          source_ref: task.id,
+          source_seq: e.seq,
+          reason: p.kind,
+          title: clipText(`[${task.workspace}] ${label}`, INBOX_TITLE_MAX),
+          body: clipText(
+            [
+              label,
+              `任务 ${task.id}`,
+              ...(p.command ? [`命令 ${p.command}`] : []),
+              ...(p.message ? [p.message] : []),
+            ].join('\n'),
+            INBOX_BODY_MAX,
+          ),
+        },
+      })
+    }
+    write(...drafts)
+  }
+
+  /** 回复拒收是独立通知，不随任务恢复或新一轮卡住关闭。 */
+  function onReplyDropped(e: EventOf<'task.reply_dropped'>) {
+    const task = ledger.getTask(e.task_id ?? '')
+    const itemId = `reply.${e.payload.reply_id}`
+    if (!task || ledger.getInboxItem(itemId)) return
+    write({
+      type: 'inbox.item_created',
+      task_id: task.id,
+      workspace: task.workspace,
+      payload: {
+        item_id: itemId,
+        source: 'reply_delivery',
+        source_ref: e.payload.reply_id,
+        source_seq: e.seq,
+        level: 'interrupt',
+        reason: e.payload.reason,
+        title: clipText(`[${task.workspace}] 回复没有送达`, INBOX_TITLE_MAX),
+        body: clipText(
+          `任务 ${task.id}\n回复 ${e.payload.reply_id}\n${e.payload.message}`,
+          INBOX_BODY_MAX,
+        ),
+        actions: [],
+      },
+    })
+  }
+
   function onTaskLeft(e: LedgerEvent, reason: InboxCloseReason) {
     const task = ledger.getTask(e.task_id ?? '')
     if (!task) return
@@ -355,6 +431,8 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     if (e.seq <= done) return
     try {
       if (e.type === 'task.blocked') onBlocked(e)
+      else if (e.type === 'task.reply_dropped') onReplyDropped(e)
+      else if (e.type === 'task.out_of_band') onOutOfBand(e)
       else if (e.type === 'policy.decided') onPolicyDecided(e)
       else if (e.type === 'task.reply_delegated' || e.type === 'task.reply_escalated') {
         onDelegation(e)
@@ -418,6 +496,14 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
    */
   function reconcile() {
     needsReconcile = false
+    for (const kind of ['approval_outside_raindown', 'session_removed']) {
+      for (const event of ledger.eventsByPayload('task.out_of_band', 'kind', kind)) {
+        if (event.type === 'task.out_of_band') onOutOfBand(event)
+      }
+    }
+    for (const event of ledger.eventsByPayload('task.reply_dropped', 'reason', 'round_closed')) {
+      if (event.type === 'task.reply_dropped') onReplyDropped(event)
+    }
     for (const task of ledger.listTasks({ status: 'blocked', limit: 100_000 })) {
       const e = latestBlocked(task.id)
       if (e === null || ledger.getInboxItem(blockedItemId(e.seq))) continue

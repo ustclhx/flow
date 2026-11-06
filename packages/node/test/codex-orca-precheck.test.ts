@@ -82,8 +82,23 @@ async function start(
     ...extra,
   })
   const activity: Activity[] = []
+  let blockSeq = 0
+  const replySequences = new Map<string, number>()
+  const originalDeliver = run.deliver?.bind(run)
+  run.deliver = (reply) => {
+    const seq = reply.block_seq ?? replySequences.get(reply.reply_id) ?? blockSeq
+    replySequences.set(reply.reply_id, seq)
+    return originalDeliver?.({ ...reply, block_seq: seq }) ?? Promise.resolve('not_running')
+  }
   void (async () => {
-    for await (const a of run.activity) activity.push(a)
+    for await (const a of run.activity) {
+      activity.push(a)
+      if (a.data?.idle) {
+        blockSeq++
+        const hint = a.data.hint as { request_id?: string } | undefined
+        if (hint?.request_id) run.bindBlocked?.({ seq: blockSeq, request_id: hint.request_id })
+      }
+    }
   })()
   let outcome: Result<ExecutorOutcome> | undefined
   void run.done.then((o) => {
@@ -245,9 +260,16 @@ describe('codex-orca 监控循环中的预检', () => {
     ])
     expect(s.enters()).toHaveLength(1)
     expect(s.texts().some((t) => t.startsWith('策略自动放行：执行命令 mkdir'))).toBe(true)
+    s.orca.reads = [
+      ok({
+        ...tuiFixture('working'),
+        tail: [`• Ran ${COMMAND}`, '• Working (1s • esc to interrupt)'],
+      }),
+    ]
     await s.poll(3)
     expect(s.idles()).toHaveLength(0)
     expect(calls).toHaveLength(1)
+    expect(s.activity.filter((a) => a.data?.out_of_band)).toHaveLength(0)
     await s.run.cancel()
   })
 
@@ -469,7 +491,7 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
     await s.run.cancel()
   })
 
-  test('复核通过后、发回车前界面变了：不发回车，按拒收处理；用户的批准不重读', async () => {
+  test('复核通过后界面变了：拒收旧批准，用户也必须等待新的阻塞回合', async () => {
     let orca: FakeOrca | undefined
     const other = approvalWith(replaceLine(COMMAND, 'ls /other'))
     const { precheck } = stub(SUPERVISOR)
@@ -486,15 +508,20 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
       'dropped',
     )
     expect(s.enters()).toHaveLength(0)
-    // 用户的批准：复核直接通过，不再重读，照常发回车。
-    expect(await s.run.deliver?.({ reply_id: 'r-2', kind: 'approve', by: 'user' })).toBe(
+    // 新的弹窗尚未上报，旧回合的用户批准也不能按键。
+    await expect(
+      s.run.deliver?.({ reply_id: 'r-2', kind: 'approve', by: 'user' }),
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
+    expect(s.enters()).toHaveLength(0)
+    await s.poll(2)
+    expect(await s.run.deliver?.({ reply_id: 'r-3', kind: 'approve', by: 'user' })).toBe(
       'delivered',
     )
     expect(s.enters()).toHaveLength(1)
     await s.run.cancel()
   })
 
-  test('弹窗已不在时的批准：以 undefined 复核', async () => {
+  test('没有授权回合时的批准：不进入复核，不发送任何按键', async () => {
     const lives: unknown[] = []
     const s = await start([tuiFixture('question')], undefined, {
       confirmApproval: async (_reply, live) => {
@@ -503,11 +530,32 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
       },
     })
     await s.poll(2)
-    expect(await s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'supervisor' })).toBe(
-      'dropped',
-    )
-    expect(lives).toEqual([undefined])
+    await expect(
+      s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'supervisor' }),
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
+    expect(lives).toEqual([])
     expect(s.orca.ops('terminalSend')).toHaveLength(0)
+    await s.run.cancel()
+  })
+
+  test('用户批准复核期间命令变化：不允许按键落到新弹窗', async () => {
+    let orca: FakeOrca | undefined
+    const s = await start([APPROVAL], undefined, {
+      confirmApproval: async () => {
+        orca?.reads.splice(
+          0,
+          orca.reads.length,
+          ok(approvalWith(replaceLine(COMMAND, 'git push --force origin HEAD'))),
+        )
+        return true
+      },
+    })
+    orca = s.orca
+    await s.poll(2)
+    await expect(
+      s.run.deliver?.({ reply_id: 'user-old', kind: 'approve', by: 'user' }),
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
+    expect(s.enters()).toHaveLength(0)
     await s.run.cancel()
   })
 })

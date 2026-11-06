@@ -10,6 +10,7 @@ import {
 } from '@raindown/core'
 import type { NodeClock } from './clock.ts'
 import { executorRoleEnv } from './env.ts'
+import { checkWorkingDirectory } from './workdir.ts'
 
 const DEFAULT_VERIFY_TIMEOUT_S = 600
 
@@ -75,6 +76,12 @@ function verifyCommand(
     }
     let child: ReturnType<typeof spawn>
     try {
+      const directory = checkWorkingDirectory(cwd)
+      if (!directory.ok) {
+        output('stderr', directory.error.message)
+        complete(null)
+        return
+      }
       const env = executorRoleEnv(actor)
       if (!env.ok) {
         output('stderr', env.error.message)
