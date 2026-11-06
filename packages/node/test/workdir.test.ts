@@ -147,6 +147,30 @@ test('启动前工作目录丢失：blocked(workdir_missing)，不调用执行�
     blocked: { reason: 'workdir_missing', message: `工作目录不存在：${cwd}` },
   })
   expect(contexts).toHaveLength(0)
+  expect(b.types(id)).not.toContain('task.out_of_band')
+})
+
+test('登记的仓库路径从未存在：blocked(other) 配置错误，不调用执行器或记录带外事件', async () => {
+  const { b, contexts } = await setup()
+  const repo = join(b.home, 'never-created-repo')
+  workspace(b, [])
+  writeFileSync(
+    join(b.home, 'config/workspaces/demo.yaml'),
+    JSON.stringify({
+      id: 'demo',
+      name: 'Demo',
+      description: '测试',
+      kind: 'product',
+      repos: [repo],
+    }),
+  )
+  const id = await b.create({ executor: 'claude-sdk', cwd: undefined })
+  expect(await finish(b, id)).toMatchObject({
+    status: 'blocked',
+    blocked: { reason: 'other', message: `登记的仓库路径不存在：${repo}` },
+  })
+  expect(contexts).toHaveLength(0)
+  expect(b.types(id)).not.toContain('task.out_of_band')
 })
 
 test('workspace 不存在：沿用 repo_not_in_workspace', async () => {

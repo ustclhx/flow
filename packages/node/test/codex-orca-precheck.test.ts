@@ -476,7 +476,7 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
     await s.run.cancel()
   })
 
-  test('复核通过后、发回车前界面变了：不发回车，按拒收处理；用户的批准不重读', async () => {
+  test('复核通过后界面变了：拒收旧批准，用户也必须等待新的阻塞回合', async () => {
     let orca: FakeOrca | undefined
     const other = approvalWith(replaceLine(COMMAND, 'ls /other'))
     const { precheck } = stub(SUPERVISOR)
@@ -493,15 +493,20 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
       'dropped',
     )
     expect(s.enters()).toHaveLength(0)
-    // 用户的批准：复核直接通过，不再重读，照常发回车。
-    expect(await s.run.deliver?.({ reply_id: 'r-2', kind: 'approve', by: 'user' })).toBe(
+    // 新的弹窗尚未上报，旧回合的用户批准也不能按键。
+    await expect(
+      s.run.deliver?.({ reply_id: 'r-2', kind: 'approve', by: 'user' }),
+    ).rejects.toThrow()
+    expect(s.enters()).toHaveLength(0)
+    await s.poll(2)
+    expect(await s.run.deliver?.({ reply_id: 'r-3', kind: 'approve', by: 'user' })).toBe(
       'delivered',
     )
     expect(s.enters()).toHaveLength(1)
     await s.run.cancel()
   })
 
-  test('弹窗已不在时的批准：以 undefined 复核', async () => {
+  test('没有授权回合时的批准：不进入复核，不发送任何按键', async () => {
     const lives: unknown[] = []
     const s = await start([tuiFixture('question')], undefined, {
       confirmApproval: async (_reply, live) => {
@@ -510,11 +515,32 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
       },
     })
     await s.poll(2)
-    expect(await s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'supervisor' })).toBe(
-      'dropped',
-    )
-    expect(lives).toEqual([undefined])
+    await expect(
+      s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'supervisor' }),
+    ).rejects.toThrow()
+    expect(lives).toEqual([])
     expect(s.orca.ops('terminalSend')).toHaveLength(0)
+    await s.run.cancel()
+  })
+
+  test('用户批准复核期间命令变化：不允许按键落到新弹窗', async () => {
+    let orca: FakeOrca | undefined
+    const s = await start([APPROVAL], undefined, {
+      confirmApproval: async () => {
+        orca?.reads.splice(
+          0,
+          orca.reads.length,
+          ok(approvalWith(replaceLine(COMMAND, 'git push --force origin HEAD'))),
+        )
+        return true
+      },
+    })
+    orca = s.orca
+    await s.poll(2)
+    await expect(
+      s.run.deliver?.({ reply_id: 'user-old', kind: 'approve', by: 'user' }),
+    ).rejects.toThrow()
+    expect(s.enters()).toHaveLength(0)
     await s.run.cancel()
   })
 })

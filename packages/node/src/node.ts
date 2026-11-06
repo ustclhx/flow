@@ -918,6 +918,7 @@ class LeaseRunner {
     let outcome: Result<ExecutorOutcome>
     this.scheduleRenew()
     const cwd = await resolveContractCwd(env.home, grant.contract)
+    this.repos = cwd.ok ? await workspaceRepos(env.home, grant.contract.workspace) : []
     const directory = cwd.ok ? checkWorkingDirectory(cwd.data) : undefined
     if (this.released) return
     if (!executor) {
@@ -935,20 +936,19 @@ class LeaseRunner {
         },
       })
     } else if (directory && !directory.ok) {
-      if (directory.error.code === 'cwd_missing') {
-        this.outOfBand.push({
-          id: `workdir-missing:${grant.lease_id}`,
-          kind: 'session_removed',
-          message: directory.error.message,
-        })
-      }
+      const registeredRepoMissing = this.repos.includes(cwd.data)
       outcome =
         directory.error.code === 'cwd_missing'
-          ? ok({ outcome: 'blocked', reason: 'workdir_missing', message: directory.error.message })
+          ? ok({
+              outcome: 'blocked',
+              reason: registeredRepoMissing ? 'other' : 'workdir_missing',
+              message: registeredRepoMissing
+                ? `登记的仓库路径不存在：${cwd.data}`
+                : directory.error.message,
+            })
           : directory
     } else {
       this.cwd = cwd.data
-      this.repos = await workspaceRepos(env.home, grant.contract.workspace)
       // 登记仓库快照（D15）：中枢投影里已固定的快照随租约下发，节点直接使用、不再采集；
       // 没有时在任务首次上报分支时对执行器解析出的仓库采集（见 reportBranch）。
       this.snapshot = grant.repo_snapshot
