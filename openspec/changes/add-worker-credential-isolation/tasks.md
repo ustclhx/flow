@@ -4,7 +4,7 @@
 
 ## 1. 实测与清单
 
-- [ ] 1.1 实测（只用临时目录与临时 HOME/CODEX_HOME，不改 `~/.codex`、`~/.claude`）：外层 `sandbox-exec` 包裹 Codex（danger-full-access / bypass）、Claude Code（无 bash 沙箱）、bun、git、gh 时能否正常工作；Codex workspace-write/read-only 与 Claude Code bash 沙箱是否有按路径禁止读取的原生配置及其可靠性；结果写入 `docs/executors.md` 的"隔离实测"一节，并据此确定每个适配器 × 沙箱设置的施加层（D1）。验证：文档中有逐项结果与复现命令
+- [x] 1.1 实测（只用临时目录与临时 HOME/CODEX_HOME，不改 `~/.codex`、`~/.claude`）：外层 `sandbox-exec` 包裹 Codex（danger-full-access / bypass）、Claude Code（无 bash 沙箱）、bun、git、gh 时能否正常工作；Codex workspace-write/read-only 与 Claude Code bash 沙箱是否有按路径禁止读取的原生配置及其可靠性；结果写入 `docs/executors.md` 的"隔离实测"一节，并据此确定每个适配器 × 沙箱设置的施加层（D1）。验证：文档中有逐项结果与复现命令
 - [ ] 1.2 core：`IsolationSpec` 类型与受保护/允许资源清单计算（D2），路径 realpath 规范化，Orca 控制套接字由运行时解析。验证：单元测试覆盖清单内容、符号链接与不存在路径
 - [ ] 1.3 适配器能力 `credential_isolation`（`seatbelt | native | separate_user | none`，按角色沙箱设置）加入注册信息与中枢投影。验证：节点注册测试与旧节点兼容测试
 

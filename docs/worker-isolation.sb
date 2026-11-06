@@ -1,0 +1,56 @@
+;; worker 外层 seatbelt 配置样例（add-worker-credential-isolation 1.1 实测用，非产品代码）
+;; 说明见 docs/executors.md 的“隔离实测”一节。
+;;
+;; 配置本身不含任何路径，全部经 sandbox-exec -D 传入（参数值按字面量处理，含引号、括号也不会改变配置结构）：
+;;
+;;   /usr/bin/sandbox-exec -f docs/worker-isolation.sb \
+;;     -D RD_STATE=<raindown-home realpath>/state \
+;;     -D RD_CONFIG=<raindown-home realpath>/config \
+;;     -D AGE_DIR=<home realpath>/.config/sops/age \
+;;     -D ORCA_DIR="<home realpath>/Library/Application Support/orca" \
+;;     -D LAUNCH_AGENTS=<home realpath>/Library/LaunchAgents \
+;;     -D DISPATCH_TOKEN=<本任务派工令牌文件 realpath> \
+;;     -D DISPATCH_TOKEN_DIRS_1=<RD_STATE 与令牌之间的第一级目录 realpath，例如 state/tasks> \
+;;     -D DISPATCH_TOKEN_DIRS_2=<令牌文件所在目录 realpath，例如 state/tasks/<task>> \
+;;     -D HARNESS_HOME=<适配器声明的 harness 目录 realpath，例如 Raindown 管理的 CODEX_HOME> \
+;;     -D HUB_PORT=<中枢监听的本机端口> \
+;;     <harness 命令…>
+;;
+;; 所有路径必须先 realpath：规则写 /tmp/…、/var/… 等经符号链接的路径时不匹配任何访问（静默放行）。
+;; 规则按出现顺序求值，同一操作后写的规则优先，所以放行项必须写在拒绝项之后。
+
+(version 1)
+(allow default)
+
+;; 1. 受保护目录：读写都拒绝（以目录为单位，新增文件自动覆盖）
+(deny file-read* file-write*
+  (subpath (param "RD_STATE"))
+  (subpath (param "RD_CONFIG"))
+  (subpath (param "AGE_DIR"))
+  (subpath (param "ORCA_DIR")))
+
+;; 2. LaunchAgents：不可写，无法安装持久服务
+(deny file-write* (subpath (param "LAUNCH_AGENTS")))
+
+;; 3. 最窄放行（必须在 1 之后）：本任务派工令牌只读
+(allow file-read* (literal (param "DISPATCH_TOKEN")))
+;; 被拒目录内的放行路径还需要祖先目录的元数据（只 stat，不能列目录、不能读内容），
+;; 否则 libc realpath()（Rust canonicalize、/bin/realpath）失败。实际生成时为
+;; 拒绝根到放行路径之间的每一级目录各写一条 literal。
+(allow file-read-metadata
+  (literal (param "RD_STATE"))
+  (literal (param "DISPATCH_TOKEN_DIRS_1"))
+  (literal (param "DISPATCH_TOKEN_DIRS_2")))
+
+;; 4. harness 自己的目录（若位于被拒目录内，同样需要祖先元数据，见上）
+(allow file-read* file-write* (subpath (param "HARNESS_HOME")))
+
+;; 5. 控制通道：文件规则拦不住 unix 套接字 connect，必须单独写 network 规则
+(deny network-outbound (remote unix-socket (subpath (param "ORCA_DIR"))))
+;; 本机 TCP：只允许中枢端口（Orca 另有本机 TCP 监听端口）
+(deny network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote ip (string-append "localhost:" (param "HUB_PORT"))))
+
+;; 6. 跨进程调试：allow default 并不拒绝 attach 同用户的非 hardened 进程，需要显式拒绝
+(deny mach-priv-task-port (target others))
+(deny mach-task-name (target others))

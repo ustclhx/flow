@@ -779,3 +779,239 @@ codex-exec 的提问与 resume，均在真实 harness 上走通。挂起中的�
 reviewer 的 canUseTool 审批需要选择不在 allowedTools 中、也未被 Raindown 策略自动放行的工具请求；
 triage 则需先得到一条真实提问，再用文字回复验证 exec resume。Codex TUI 文本会随版本变化，
 识别问题应附脱敏的终端片段，更新 fixture 后再验证。
+
+## 隔离实测（worker-credential-isolation 1.1）
+
+2026-11-07 在本机实测，服务于 `openspec/changes/add-worker-credential-isolation` 的 D1、D2、D4、D6。全程不调用模型。
+只用临时目录与临时 `HOME`、`CODEX_HOME`、`RAINDOWN_HOME`、`CLAUDE_CONFIG_DIR`，受保护文件都是伪造的（内容如 `FAKE-HUB-TOKEN-not-a-secret`）。
+只读取了 Orca 运行时的元数据（`orca status --json`、`lsof`），没有连接或操作它。
+外层 seatbelt 配置样例见 [`worker-isolation.sb`](worker-isolation.sb)。配置本身不含路径，路径全部经 `sandbox-exec -D` 传入。
+
+环境：macOS 15.1（24B2083，Darwin 24.1.0）、codex-cli 0.167.0、Claude Code 2.1.310（Agent SDK 0.3.310 自带的原生二进制）、
+bun 1.4.2、gh 2.102.0、git 2.39.5（Apple Git-154）、Orca 1.4.218。
+
+下文的 `$P` 指 `/usr/bin/sandbox-exec -f docs/worker-isolation.sb -D RD_STATE=… -D …`，参数与样例头部注释一致。
+`$R` 指临时 raindown-home 的 realpath。
+
+### 1. 嵌套：harness 自带沙箱不能放进外层 seatbelt
+
+| 命令 | 无外层 | 外层 `(allow default)` 或隔离配置内 |
+| --- | --- | --- |
+| `codex sandbox -P :read-only -- /bin/echo hi` | 0，`hi` | 71，`sandbox-exec: sandbox_apply: Operation not permitted` |
+| `codex sandbox -P :workspace -- …`（以及 `-c sandbox_mode="workspace-write"`） | 0 | 71，同上 |
+| `codex sandbox -P :danger-full-access -- …` | 0 | 0（这个模式不调用 `sandbox-exec`） |
+| `sandbox-exec -p '(version 1)(allow default)' /usr/bin/true` | 0 | 71，同上 |
+
+- 结论：Codex 的 read-only 与 workspace-write 都在外层 seatbelt 内失败，失败时命令根本不执行，不会降级为无沙箱运行。
+  danger-full-access 与 bypass 不经 seatbelt，可以放进外层。
+- codex-cli 0.167.0 已经没有 `codex sandbox macos` 子命令和 `--full-auto` 选项，改用 `codex sandbox [-P <profile> | -c sandbox_mode=…] -- <cmd>`。
+- `codex exec` 的会话内命令遇到 71 时，是否会请求越出沙箱重试，需要调用模型才能验证，**未验证**。
+- Claude Code 的 bash 沙箱：不调用模型无法触发 Bash 工具，**未直接验证**。它在 macOS 上同样经 `sandbox-exec` 执行命令，
+  由上面的内核行为推断：在外层 seatbelt 内会以同样方式失败。
+  `claude sandbox status` 在外层 seatbelt 内仍报告 `enabled: true`、`unavailableReason: null`，它不探测能否嵌套，不能用来发现这个问题。
+
+### 2. 外层 seatbelt 下的受保护资源与工具链
+
+复现：`$P cat $R/state/hub.token`。其余各项同理，把命令换掉即可。用 `docs/worker-isolation.sb` 整体复测，22 项全部符合预期。
+
+| 类别 | 操作 | 结果 |
+| --- | --- | --- |
+| 拒绝 | 读 `state/hub.token`、`state/ledger.db`、他人派工令牌、本任务目录内的其他文件；`ls state/` | `Operation not permitted` |
+| 拒绝 | 写或新建 `config/` 下的文件；`mv config config2` | `Operation not permitted` |
+| 拒绝 | 读 `~/.config/sops/age/keys.txt`，读 Orca 目录内的 token，写 `~/Library/LaunchAgents/x.plist` | `Operation not permitted` |
+| 拒绝 | 经符号链接、硬链接、`cp` 间接读 hub.token；`bun -e readFileSync(hub.token)` | 全部失败 |
+| 放行 | `cat` 或 `bun` 读本任务派工令牌（deny 目录内 allow 单个文件） | 成功 |
+| 放行 | 写本任务派工令牌（只放行了读） | 失败（符合预期） |
+| 工具链 | `codex --version`、`codex exec --help`、`codex features list`（CODEX_HOME 在 `state/` 下并已放行） | 成功 |
+| 工具链 | Claude Code 原生二进制 `--version`、`bun --version`、`gh --version`、工作目录内 `git init` 与 `commit` | 成功 |
+
+规则优先级（两份只含 `(allow default)`、一条 deny、一条 allow 的配置，只调换后两条的顺序作对照）：
+
+- SBPL 按出现顺序求值，同一操作**后写的规则优先**。`deny subpath state` 写在前、`allow literal <token>` 写在后时，令牌可读。
+  顺序反过来时，令牌也读不到。D2 的“后者优先、允许项写得最窄”可以直接落地。
+- **被拒目录内的放行路径还需要祖先目录的元数据。** 只放行文件本身时，`cat`、`stat` 和 `bun` 的 `realpathSync` 都成功，
+  但 libc `realpath()` 会失败（`/bin/realpath`、Rust 的 `canonicalize`）。Codex 因此报错退出：
+  `failed to canonicalize CODEX_HOME`。补上 `(allow file-read-metadata (literal <每一级祖先目录>))` 之后恢复正常，
+  `ls state/` 仍然失败，所以只泄露“目录存在”和时间戳。
+
+realpath 的影响：
+
+| 规则中的路径 | 访问路径 | 结果 |
+| --- | --- | --- |
+| `/private/tmp/…/state`（realpath） | `/tmp/…/state/hub.token` 或 `/private/…` | 拒绝 |
+| `/tmp/…/state`（经符号链接） | 任一写法 | **放行**（规则不匹配） |
+| `$TMPDIR` 原样（`/var/folders/…`） | `/var/folders/…` | **放行** |
+| `/private/var/folders/…` | `/var/folders/…` | 拒绝 |
+| 指向 raindown-home 的符号链接路径 | 符号链接路径或真实路径 | **放行** |
+| 真实路径 | 符号链接路径 | 拒绝 |
+
+- seatbelt 按解析后的真实路径匹配。规则写了未规范化的路径，会**静默失效（放行）**。
+  所以 D1 要求的 realpath 规范化是正确性前提，探针必须覆盖这一点。
+- 用 `-D` 传参时，路径中的 `"`、`)`、`(` 按字面量处理（测试路径 `we"ird) (allow default`），不会改变配置结构。
+  4.1 生成配置时建议优先用参数；若改为内联字符串，必须做转义测试。
+
+### 3. Unix 套接字与本机端口
+
+用 bun 在 `$TMPDIR` 下模拟两个 unix 套接字（orca.sock、other.sock）和两个本机 TCP 端口（中枢端口与其他端口）。
+
+| 配置 | `nc -U orca.sock` | `nc -U other.sock` | 中枢端口 | 其他本机端口 |
+| --- | --- | --- | --- | --- |
+| `(deny network-outbound (remote unix-socket (path-literal <sock>)))` + `(deny network-outbound (remote ip "localhost:*"))` + `(allow … "localhost:<hub>")` | 拒绝（bun 报 `ECONNREFUSED`） | 成功 | 成功 | 拒绝 |
+| 只写 `(deny file-read* file-write* (subpath <sockdir>))` | **成功** | 成功 | 成功 | 成功 |
+| `(deny network-outbound (remote unix-socket (subpath <sockdir>)))` | 拒绝 | 拒绝 | 成功 | 成功 |
+
+- 可以按路径（`path-literal`）或目录（`subpath`）拒绝 unix 套接字连接，同时放行本机 TCP 端口。也可以只放行中枢一个端口。
+- **文件规则拦不住 `connect()`**，必须单独写 network 规则。
+- 经 `/var` 路径或指向套接字的符号链接去连接，同样被拒绝（按真实路径匹配）。
+- 真实 Orca 运行时的控制通道（只读查看，未连接）：
+  - `orca status --json` **不输出**控制通道路径，只有 `runtimeId`、`app.pid` 等字段；
+  - `lsof` 显示 app 进程监听 `~/Library/Application Support/orca/o-<app pid>-<runtimeId 前 4 位>.sock`；
+  - 守护进程使用 `~/Library/Application Support/orca/daemon/daemon-v<N>.sock`，同目录还有 `daemon-v<N>.token`，路径出现在 argv 中；
+  - app 进程另外监听本机 TCP 端口（实测 `localhost:60211` 和 `*:10129`），用途未查。
+  - 建议：D2 不再“由 `orca status` 解析套接字”，改为对整个 `~/Library/Application Support/orca/` 同时拒绝文件读写与 unix 连接，
+    并对本机 TCP 只放行中枢端口。
+
+### 4. harness 原生的按路径读限制
+
+**Codex：有，并且可靠（只覆盖沙箱内执行的命令）。** 0.167.0 支持 permissions profile（[配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)）。
+在临时 `CODEX_HOME/config.toml` 中写入：
+
+```toml
+[permissions.rd]
+extends = ":workspace"            # 只读角色用 ":read-only"
+
+[permissions.rd.filesystem]
+"<raindown-home>/state" = "deny"
+"<raindown-home>/config" = "deny"
+"<home>/.config/sops/age" = "deny"
+"<raindown-home>/state/tasks/<task>/dispatch.token" = "read"
+
+[permissions.rd.network.unix_sockets]
+"<orca 套接字>" = "deny"
+```
+
+| 命令（`cd <work>`） | 结果 |
+| --- | --- |
+| `codex sandbox -P rd -- cat <state>/hub.token`；`ls <state>`；读 config、age 私钥、他人令牌 | 全部 `Operation not permitted` |
+| `codex sandbox -P rd -- cat <本任务令牌>`（deny 目录内 `"read"` 单个文件） | 成功 |
+| `-P rd` 下写工作目录 / 写 config | 成功 / 失败 |
+| profile 中写 `/tmp/…`（非 realpath） | 仍然拒绝：Codex 自己会规范化路径 |
+| 在 `-P rd` 之外再加 `-c sandbox_mode="workspace-write"`；或用 `-c default_permissions="rd"` 代替 `-P` | 仍然拒绝 |
+| 不用 profile：`-P :workspace` 或 `-c sandbox_mode="workspace-write"` | **可读 hub.token**（印证 design：workspace-write 不限制读） |
+| `-P :workspace` 与 `-P rd` 下 `nc -U` 任意套接字 | 拒绝（默认不允许 unix 套接字）；`:danger-full-access` 下成功 |
+| `-P :workspace` 下读 `$CODEX_HOME/config.toml` | 可读：Codex 不会自动保护自己的目录 |
+
+局限：
+
+- profile 只约束 Codex 在沙箱内执行的命令。以下几类不受约束：
+  - Codex 进程本身及其内置工具；
+  - MCP 服务器进程（任务绑定的 raindown MCP 是可信代码）；
+  - 经审批**越出沙箱**执行的命令（on-request 角色）。
+    `required` 角色的审批（包括 supervisor 代回复，D15）必须把越出沙箱视为解除隔离。
+- 两个执行器目前都用 `-s <mode>`（codex-orca 见 `executor.ts`，codex-exec 见 `codex-exec.ts`）。
+  官方文档要求 `default_permissions` 不与 `sandbox_mode` 混用。`codex exec -s workspace-write -c default_permissions=…` 的实际优先级
+  需要调用模型才能在会话里验证，**未验证**。建议 5.1 改为不传 `-s`，只传 `-c default_permissions="<生成的 profile>"`，并保留探针。
+- 文档注明 deny 的 glob 在部分平台上于沙箱启动前展开。建议只用具体目录（`subpath` 语义），不用 glob。
+- 好处：Codex 进程本身不在沙箱内，所以 profile 可以额外 deny 共享的 `CODEX_HOME/sessions`、`auth.json` 以及它链接到的源文件，
+  命令读不到，harness 照常工作。外层 seatbelt 做不到这一点，见第 7 点。
+
+**Claude Code：有 OS 级配置，但只覆盖 Bash 工具，不能单独作为 `required` 的依据。** SDK 0.3.310 的 `Options.sandbox`
+（`SandboxSettings`，`sdk.d.ts`）提供以下设置：
+
+- `filesystem.denyRead`、`filesystem.allowRead`：后者在 denyRead 区域内重新放行，并优先于 denyRead；
+- `filesystem.denyWrite`、`filesystem.allowWrite`；
+- `network.allowUnixSockets`（macOS 按路径，默认阻止 unix 套接字）；
+- `allowUnsandboxedCommands`（设为 `false` 时忽略 `dangerouslyDisableSandbox`）；
+- `failIfUnavailable`（SDK 设置 `enabled: true` 时默认为 `true`）；
+- `credentials.files[].mode: deny`（macOS 上 `mask` 退化为 `deny`）。
+
+类型注释写明，这些限制作用于“sandboxed commands”，也就是 Bash 工具。Read、Grep、Glob、Edit 等工具运行在 harness 进程内，
+只受 `Read(…)`、`Edit(…)` 权限规则约束，属于工具级限制。hooks 和 MCP 服务器不在沙箱内；`excludedCommands` 也在沙箱外运行。
+不调用模型时能验证到的程度：SDK 会把 `sandbox` 选项序列化为 `--settings '{"sandbox":{…,"failIfUnavailable":true}}'`
+（见第 5 点的截获结果）；`claude --settings … sandbox status` 能读出 `enabled: true`、`strictMode`。
+Bash 命令实际被拒绝，需要调用模型才能验证，**未验证**。`enableWeakerNestedSandbox` 只对 Linux 有效。
+
+### 5. claude-sdk 的包裹点
+
+SDK 0.3.310 有三个相关选项：
+
+- `pathToClaudeCodeExecutable`：替换可执行文件；
+- `executable` / `executableArgs`：只用于 JS 运行时，对原生二进制无意义；
+- `spawnClaudeCodeProcess(options: SpawnOptions) => SpawnedProcess`：自定义启动。
+  `SpawnOptions` 含 `command`、`args`、`cwd`、`env`、`signal`；`ChildProcess` 本身满足 `SpawnedProcess`。
+
+实测：`spawnClaudeCodeProcess` 返回一个立即退出的假进程，不启动 Claude Code，因此不发出请求。截获的 `command` 是
+`…/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`（原生二进制），`args` 为
+`--output-format stream-json --verbose --input-format stream-json [--settings …]`。
+把截获的 `command` 用 `$P <command> --version` 在隔离配置内启动，成功（`2.1.310 (Claude Code)`）。可行写法：
+
+```ts
+spawnClaudeCodeProcess: ({ command, args, cwd, env, signal }) =>
+  spawn('/usr/bin/sandbox-exec', ['-f', profilePath, ...profileParams, command, ...args], {
+    cwd, env, signal, stdio: ['pipe', 'pipe', 'pipe'],
+  }),
+```
+
+- 这样包裹后，Read、Grep 等进程内工具、hooks、MCP 子进程都继承外层 seatbelt，覆盖面比 Claude 的 bash 沙箱更完整。
+- 前提：此时不能同时开启 Claude 的 bash 沙箱（否则嵌套失败）。Raindown 目前的 claude-sdk 没有传 `sandbox` 选项，即 bash 沙箱关闭。
+- 不建议用 `pathToClaudeCodeExecutable` 指向包装脚本：配置路径需要按任务变化，`spawnClaudeCodeProcess` 更直接，也便于测试 argv。
+- 注意 harness 自己的凭证路径：CLAUDE_CONFIG_DIR 和 macOS 钥匙串（OAuth 凭证）需要保持可用。钥匙串经 mach 服务访问，
+  `allow default` 不拦截；worker 内的 `security` 命令能否取出凭证，本次没有在真实钥匙串上验证。
+
+### 6. 跨进程调试与观察（同一用户）
+
+目标都是本次临时启动的进程：`/bin/sleep` 是 Apple 平台二进制；另外编译了一个 ad-hoc 签名、没有 hardened runtime 的 C 程序，
+模拟未加固的节点进程。
+
+| 操作（在外层 seatbelt 内执行） | `(allow default)` | 追加 `(deny mach-priv-task-port (target others))`、`(deny mach-task-name (target others))` |
+| --- | --- | --- |
+| `lldb -p <未加固进程>` | **attach 成功**（进程被 SIGSTOP） | `Not allowed to attach to process` |
+| `lldb -p /bin/sleep`；`dtrace -p` | 失败（平台二进制或 hardened；DTrace 受 SIP 限制） | 失败 |
+| `sysctl KERN_PROCARGS2` 读目标进程的 argv 和**环境变量** | **可读** | **仍可读**；`process-info*`、`sysctl-read` 规则都拦不住 |
+| `kill -TERM <目标>` | 成功 | `(deny signal (target others))` 也拦不住；只有不带过滤的 `(deny signal)` 能拦，但同时禁止向自己的子进程发信号 |
+| `/bin/ps` | `execvp … Operation not permitted`（setuid 程序不能在沙箱内执行） | 同左 |
+
+- 结论：design 的“seatbelt 默认拒绝跨进程调试”**不成立**。在 `allow default` 下，worker 可以调试同一用户的未加固进程，
+  必须显式加入上表的两条 mach 规则（样例已包含）。bun、Codex 等 hardened 二进制本来就拒绝 attach。
+- 拦不住的部分：worker 仍能读取同一用户其他进程启动时的环境变量，也能向它们发信号。
+  所以凭证不能放在长期运行的同用户进程的环境变量里（例如以 `RAINDOWN_HUB_TOKEN` 启动的节点），应改用 0600 文件加 deny 规则。
+  “worker 能杀掉节点”是外层 seatbelt 无法消除的边界，只有独立系统用户能解决。
+
+### 7. 其他发现
+
+- **CODEX_HOME 位于 `state/` 下**（`state/codex-orca-home`、`state/codex-exec-home`、`state/codex-read-home`）。
+  外层 seatbelt 整体 deny `state/` 时，必须放行该目录及其祖先元数据，否则 Codex 无法启动。
+  放行后，worker 能读到同一执行器其他任务的会话记录（实测读到了伪造的 `sessions/other-task/rollout.jsonl`），
+  也能经 `auth.json` 链接读到 Codex 登录凭证。harness 和它执行的命令在同一个沙箱里，外层 seatbelt 无法区分两者。
+- 派工令牌同样位于被拒目录内，需要逐级的祖先元数据规则。把 CODEX_HOME 与任务私有目录移出 `state/`，配置会简单很多。
+
+### 施加层建议（D1：适配器 × 沙箱设置）
+
+| 适配器 | 沙箱设置 | `credential_isolation` | 方式 | 备注 |
+| --- | --- | --- | --- | --- |
+| codex-orca | danger-full-access / bypass（默认 dev） | `seatbelt` | 终端命令改为 `cd … && exec /usr/bin/sandbox-exec -f <profile> -D … env … codex …` | 需要放行 CODEX_HOME 及其祖先元数据；同一执行器的会话记录与 `auth.json` 仍可读（见第 7 点） |
+| codex-orca | workspace-write / read-only | `native` | 生成的 profile 中 `[permissions.<name>.filesystem]` 写 deny；不传 `-s`，改传 `-c default_permissions=…` | 越出沙箱的审批即解除隔离；`-s` 与 profile 的组合未验证 |
+| codex-exec | danger-full-access | `seatbelt` | `spawn('/usr/bin/sandbox-exec', ['-f', profile, …, 'codex', …])` | 同 codex-orca |
+| codex-exec | workspace-write / read-only（默认 read-only） | `native` | 同 codex-orca | 同上 |
+| claude-sdk | bash 沙箱关闭（当前默认） | `seatbelt` | `spawnClaudeCodeProcess` 包裹 `sandbox-exec` | 覆盖进程内工具、hooks、MCP |
+| claude-sdk | bash 沙箱开启 | `none` | 不提供 | 原生 denyRead 只覆盖 Bash，Read 等工具靠权限规则，不足以支撑 `required`；建议这类角色关闭 bash 沙箱，改走 `seatbelt` |
+| pr-merge | 节点内执行，不启动 harness | `none` | 不适用 | 节点属于可信计算基 |
+
+`separate_user` 目前不需要作为默认施加层。它只在以下几种边界不可接受时才有必要，届时按 5.1 写出方案，交给用户决定：
+
+- 同用户读取进程环境变量、发信号；
+- 外层 seatbelt 下的 harness 凭证与共享会话可读；
+- Codex 越出沙箱审批。
+
+### design 需要修订的地方
+
+1. D1：Codex 有可靠的原生读限制（permissions profile 的 `"deny"` / `"read"`），可以声明为 `native`；
+   Claude Code 的原生限制只覆盖 Bash，claude-sdk 开启 bash 沙箱时声明为 `none`。
+2. D2 的 Orca 控制套接字：`orca status` 不输出其路径。改为对 `~/Library/Application Support/orca/` 整体拒绝文件读写与 unix 连接，
+   并对本机 TCP 只放行中枢端口（Orca 另有本机 TCP 监听端口）。
+3. D2 的允许清单：放行位于被拒目录内的路径时，要为每一级祖先目录生成 `file-read-metadata` 规则；
+   或者把 CODEX_HOME、任务私有目录移出 `state/`（推荐）。另外写明，同一执行器的 Codex 会话记录在外层 seatbelt 下仍可读。
+4. D1 的 realpath 要求由“规范化”升级为正确性前提：未规范化的规则静默放行。D6 的探针应包含经符号链接路径访问受保护文件这一项。
+5. Risks 中的“seatbelt 默认拒绝跨进程调试”不成立。配置需要显式加入 `mach-priv-task-port` 和 `mach-task-name` 拒绝规则。
+   同时补充两条拦不住的边界：同用户进程的环境变量可读、可以发信号；并要求节点凭证不经环境变量传递。
+6. D4/D5：采用 `native` 的 Codex 角色，审批越出沙箱即解除隔离。`required` 角色的授权请求（包括 supervisor 代回复）需要单独标注或拒绝。
