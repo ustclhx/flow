@@ -932,6 +932,45 @@ describe('审查修复（PR #85）', () => {
   })
 })
 
+describe('任务阶段（与 #83 的阶段派生）', () => {
+  const stageOf = (env: Env, id: string) => {
+    const shown = must(env.tasks.getTask(id)) as { task: { stage?: string | null } }
+    return shown.task.stage
+  }
+
+  test('observe 转交与其他转交一样：委托期间 waiting-supervisor，转交后回到 waiting-human-*，用户回复后不再等人', async () => {
+    const env = await setup({ observe: { approvals: true } })
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const { blockSeq } = blockApproval(env, lease)
+    await env.settle()
+    expect(stageOf(env, id)).toBe('waiting-supervisor')
+    const caller = await replyCaller(env)
+    must(respond(env, caller, { task_id: id, block_seq: blockSeq, decision: 'approve' }))
+    expect(env.store.taskEvents(id).at(-1)?.type).toBe('task.reply_escalated')
+    expect(stageOf(env, id)).toBe('waiting-human-approval')
+    must(env.tasks.replyTask(id, { kind: 'approve' }, { actor: 'user' }))
+    expect(stageOf(env, id)).toBe('working')
+  })
+
+  test('config_unavailable 转交的提问回到 waiting-human-answer', async () => {
+    const env = await setup()
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const blockSeq = blockQuestion(env, lease)
+    await env.settle()
+    expect(stageOf(env, id)).toBe('waiting-supervisor')
+    const caller = await replyCaller(env)
+    must(
+      respond(env, caller, { task_id: id, block_seq: blockSeq }, { forced: 'config_unavailable' }),
+    )
+    expect(
+      env.store.taskEvents(id).find((e) => e.type === 'task.reply_escalated')?.payload,
+    ).toMatchObject({ reason: 'config_unavailable' })
+    expect(stageOf(env, id)).toBe('waiting-human-answer')
+  })
+})
+
 describe('raindown supervisor report（7.4）', () => {
   test('按执行器统计卡住 basis；observed_action 按类型计数；时间范围与 workspace 过滤；HTTP 只限 user', async () => {
     const env = await setup()

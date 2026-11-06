@@ -11,8 +11,8 @@ import {
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import { actOnInbox, type InboxActionDeps } from './actions.ts'
-import { readInboxItem } from './read.ts'
 import { stripObserveLine } from './reactor.ts'
+import { readInboxItem } from './read.ts'
 
 export function createInboxRoutes(deps: InboxActionDeps): Hono {
   const app = new Hono()
