@@ -252,7 +252,7 @@ const ALLOWED: Record<TaskStatus | 'none', DraftKey[]> = {
   // blocked → blocked（lease_held=false）表示本轮结束，例如卡住期间崩溃、节点掉线。
   blocked: ['task.failed', 'task.blocked', 'task.requeued:manual', 'task.cancelled'],
   done: [],
-  failed: [],
+  failed: ['task.requeued:manual'],
   cancelled: [],
 }
 const STATUS_AFTER: Partial<Record<DraftKey, TaskStatus>> = {

@@ -156,6 +156,97 @@ describe('任务操作与真实中枢', () => {
     expect(taskCancelOp.human?.(cancelled)).toContain('已取消')
   })
 
+  test('task show 表格与 JSON、MCP 都列出原任务崩溃重试后的派工', async () => {
+    await start()
+    const task = data(await client().createTask(contract)).task
+    const ledger = await openLedger(raindownPaths(home).ledgerDb)
+    const base = { task_id: task.id, workspace: task.workspace }
+    try {
+      data(
+        ledger.appendMany(
+          [
+            {
+              ...base,
+              type: 'task.started',
+              payload: { node_id: 'n1', lease_id: 'l1', attempt: 1 },
+            },
+            {
+              ...base,
+              type: 'task.blocked',
+              payload: { reason: 'crashed', message: '执行器崩溃' },
+            },
+            {
+              ...base,
+              type: 'task.attempt_ended',
+              payload: { attempt: 1, reason: 'blocked', last_report: '检查完成前崩溃' },
+            },
+          ],
+          { actor: 'hub' },
+        ),
+      )
+      const retried = await runCli(
+        ['task', 'retry', task.id, '--reason', '重跑原任务', '--json'],
+        commands,
+      )
+      expect(retried.exitCode).toBe(0)
+      expect(JSON.parse(retried.stdout).data.task).toMatchObject({ id: task.id, status: 'queued' })
+      data(
+        ledger.appendMany(
+          [
+            {
+              ...base,
+              type: 'task.started',
+              payload: { node_id: 'n2', lease_id: 'l2', attempt: 2 },
+            },
+            {
+              ...base,
+              type: 'task.done',
+              payload: { result: { summary: '完成', executor: 'fake', node_id: 'n2' } },
+            },
+            { ...base, type: 'task.attempt_ended', payload: { attempt: 2, reason: 'done' } },
+          ],
+          { actor: 'hub' },
+        ),
+      )
+    } finally {
+      ledger.close()
+    }
+    const shown = await runCli(['task', 'show', task.id, '--json'], commands)
+    expect(shown.exitCode).toBe(0)
+    const doc = JSON.parse(shown.stdout)
+    expect(doc.data.task.attempt).toBe(2)
+    expect(doc.data.attempts).toMatchObject([
+      {
+        attempt: 1,
+        executor: 'fake',
+        node_id: 'n1',
+        reason: 'blocked',
+        last_report: '检查完成前崩溃',
+      },
+      { attempt: 2, executor: 'fake', node_id: 'n2', reason: 'done' },
+    ])
+    const table = await runCli(['task', 'show', task.id], commands)
+    for (const text of [
+      '派工',
+      '执行器',
+      '节点',
+      '开始',
+      '结束',
+      '最后上报',
+      'n1',
+      'n2',
+      '检查完成前崩溃',
+    ]) {
+      expect(table.stdout).toContain(text)
+    }
+    const mcp = await connect({ home, actor: 'test-agent' })
+    try {
+      expect((await callJson(mcp, 'task_show', { id: task.id })).doc).toEqual(doc)
+    } finally {
+      await mcp.close()
+    }
+  })
+
   test('四个操作的错误路径：未知 workspace、非法筛选、不存在任务、终态取消', async () => {
     await start()
     const created = await invokeOperation(

@@ -10,6 +10,8 @@ import {
   rebuildData,
   redactSecrets,
   replyTaskData,
+  retryTaskData,
+  retryTaskRequest,
   showTaskData,
   toJsonDocument,
 } from '@raindown/core'
@@ -126,6 +128,32 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
       ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
     })
     return respond(c, r, cancelTaskData)
+  })
+
+  app.post(ENDPOINTS['tasks-retry'].path, async (c) => {
+    const actor = actorOf(c)
+    if (!actor.ok) return respond(c, actor, retryTaskData)
+    const body = await jsonBody(c, true)
+    if (!body.ok) return respond(c, body, retryTaskData)
+    const parsed = retryTaskRequest.safeParse(body.data)
+    if (!parsed.success) {
+      const fields = fieldIssues(parsed.error.issues, body.data)
+      return respond(
+        c,
+        usage(`请求体不合法：${fields.map((f) => f.message).join('；')}`, fields),
+        retryTaskData,
+      )
+    }
+    const auth = c.get('auth')
+    return respond(
+      c,
+      tasks.retryTask(c.req.param('id'), {
+        actor: actor.data,
+        ...(auth?.kind === 'wake' ? { wake: { task_id: auth.wake.task_id } } : {}),
+        ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
+      }),
+      retryTaskData,
+    )
   })
 
   // 回复卡住的任务只有用户能做：在读取请求体之前按身份拒绝，不产生任何事件。

@@ -113,6 +113,7 @@ permissions:
 拆任务时：
 - 用 task_create 建任务，写清目标、范围、完成条件和验收命令；cwd 与仓库必须在本 workspace 登记的仓库内。
 - PR 完成后建 pr-reviewer 任务审查；审查通过后用 pr_merge_request 请求合并；要求修改时在同一分支建修改任务。
+- 审查或开发任务崩溃时，用 task_retry 重跑原任务，沿用合同、工作目录、分支与 PR；不要另建审查任务。只有 failed 或 blocked(crashed、node_lost、other) 可重试；只能重试本 workspace 的 supervisor 唤醒链派生任务。
 - 写类工作在自主唤醒中只能用 task_propose 提案，由用户接受。
 - 需要用户判断时用 ask_user 提问，不要猜。
 

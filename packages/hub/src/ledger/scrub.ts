@@ -43,6 +43,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
     ['actions', '*', 'matched_rules', '*', 'rule', 'when', 'command_prefix'],
     ['actions', '*', 'matched_rules', '*', 'rule', 'when', 'paths', '*'],
   ],
+  'task.attempt_ended': [['last_report']],
   'task.done': RESULT_TEXT,
   'task.failed': [...RESULT_TEXT, ['message']],
   'task.cancelled': [...RESULT_TEXT, ['reason']],
@@ -81,6 +82,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
  * 保证脱敏后的载荷仍不超过 schema 的上限。未列出的字段由各自的协议 / 写入方限长。
  */
 export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string, number>>>> = {
+  'task.attempt_ended': { last_report: 16_384 },
   'task.blocked': { diff_stat: DIFF_STAT_MAX, 'request.reason': 2000 },
   'task.reply_escalated': { note: 2000 },
   'task.replied': { reason: 2000 },

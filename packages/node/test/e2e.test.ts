@@ -197,7 +197,7 @@ describe('节点端到端（fake 执行器）', () => {
       lease_held: false,
     })
     // 收件箱反应器随后可能在任务上写 inbox.item_created，这里只看任务自身的事件。
-    expect(events.filter((e) => e.type.startsWith('task.')).at(-1)).toMatchObject({
+    expect(events.findLast((e) => e.type === 'task.blocked')).toMatchObject({
       type: 'task.blocked',
       actor: `node:${node.nodeId}`,
       payload: { reason: 'question', message: '用哪个分支？', node_id: node.nodeId },
@@ -209,7 +209,11 @@ describe('节点端到端（fake 执行器）', () => {
     await until(id, (t) => t.status === 'running', 'running')
     await api('POST', `/v1/tasks/${id}/cancel`, { reason: '不要了' })
     const { events } = await until(id, (t) => t.status === 'cancelled', 'cancelled')
-    expect(events.map((e) => e.type).slice(-2)).toEqual(['task.cancel_requested', 'task.cancelled'])
+    expect(events.map((e) => e.type).slice(-3)).toEqual([
+      'task.cancel_requested',
+      'task.cancelled',
+      'task.attempt_ended',
+    ])
     expect(events.at(-1)?.actor).toBe(`node:${node.nodeId}`)
   })
 
@@ -237,7 +241,11 @@ describe('节点端到端（fake 执行器）', () => {
     const { task, events } = await until(id, (t) => t.status === 'blocked', 'node_lost')
     expect(task.blocked?.reason).toBe('node_lost')
     const lifecycle = events.map((e) => e.type).filter((t) => !t.startsWith('inbox.'))
-    expect(lifecycle.slice(-2)).toEqual(['task.lease_expired', 'task.blocked'])
+    expect(lifecycle.slice(-3)).toEqual([
+      'task.lease_expired',
+      'task.attempt_ended',
+      'task.blocked',
+    ])
   })
 
   test('允许重试：过期后 requeued，被另一个节点再次领取', async () => {
@@ -265,6 +273,7 @@ describe('节点端到端（fake 执行器）', () => {
       'task.started',
       'lease.granted',
       'task.lease_expired',
+      'task.attempt_ended',
       'task.requeued',
       'task.started',
       'lease.granted',

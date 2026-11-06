@@ -292,6 +292,7 @@ describe('端点清单与 JSON Schema 导出', () => {
       'GET /v1/tasks',
       'GET /v1/tasks/:id',
       'POST /v1/tasks/:id/cancel',
+      'POST /v1/tasks/:id/retry',
       'POST /v1/tasks/:id/reply',
       'GET /v1/events',
       'POST /v1/nodes',

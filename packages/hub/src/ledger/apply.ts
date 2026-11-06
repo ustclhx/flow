@@ -218,7 +218,11 @@ export function createApplier(db: Database): Applier {
         return
       }
       case 'task.requeued':
-        setStatus(e, 'queued', ', blocked_json = NULL')
+        setStatus(
+          e,
+          'queued',
+          ', blocked_json = NULL, result_json = NULL, finished_at = NULL, cancel_requested = 0, resume_json = NULL',
+        )
         return
       case 'task.cancel_requested':
         touchTask(e, ', cancel_requested = 1')
@@ -248,6 +252,7 @@ export function createApplier(db: Database): Applier {
           e.payload.repo_snapshot ? JSON.stringify(e.payload.repo_snapshot) : null,
         )
         return
+      case 'task.attempt_ended':
       case 'task.reply_delegated':
       case 'task.reply_escalated':
       case 'supervisor.wake_started':

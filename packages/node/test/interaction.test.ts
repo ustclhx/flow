@@ -70,6 +70,7 @@ describe('送达与恢复', () => {
       'task.replied',
       'task.unblocked',
       'task.done',
+      'task.attempt_ended',
     ])
     // 同一条回复只送达一次。
     const got = b.ledger.taskActivity(id).filter((a) => a.text?.startsWith('收到回复'))
@@ -98,11 +99,13 @@ describe('送达与恢复', () => {
     expect(t.result?.summary).toBe('已恢复（会话 sess-7）：text 用 main')
     expect(b.types(id).slice(3)).toEqual([
       'task.blocked',
+      'task.attempt_ended',
       'task.replied',
       'task.requeued_with_reply',
       'task.started',
       'lease.granted',
       'task.done',
+      'task.attempt_ended',
     ])
   })
 
@@ -167,7 +170,12 @@ describe('送达与恢复', () => {
     )
     await b.until(id, (t) => t.status === 'blocked')
     await b.until(id, (t) => t.status === 'done', 2 * 60_000)
-    expect(b.types(id).slice(3)).toEqual(['task.blocked', 'task.unblocked', 'task.done'])
+    expect(b.types(id).slice(3)).toEqual([
+      'task.blocked',
+      'task.unblocked',
+      'task.done',
+      'task.attempt_ended',
+    ])
   })
 
   test('卡住期间 worker 直接结束：先恢复为 running 再提交 done', async () => {
@@ -178,7 +186,12 @@ describe('送达与恢复', () => {
       }),
     )
     await b.until(id, (t) => t.status === 'done', 2 * 60_000)
-    expect(b.types(id).slice(3)).toEqual(['task.blocked', 'task.unblocked', 'task.done'])
+    expect(b.types(id).slice(3)).toEqual([
+      'task.blocked',
+      'task.unblocked',
+      'task.done',
+      'task.attempt_ended',
+    ])
   })
 
   test('取消持有租约的 blocked 任务：节点得知取消、停止执行器、提交 cancelled', async () => {
@@ -189,7 +202,10 @@ describe('送达与恢复', () => {
     expect(r.ok).toBe(true)
     const t = await b.until(id, (t) => t.status === 'cancelled', 2 * 60_000)
     expect(t.finished_at).not.toBeNull()
-    expect(b.events(id).at(-1)).toMatchObject({ type: 'task.cancelled', actor: 'node:n-bench' })
+    expect(b.events(id).slice(-2)).toMatchObject([
+      { type: 'task.cancelled', actor: 'node:n-bench' },
+      { type: 'task.attempt_ended', payload: { reason: 'cancelled' }, actor: 'node:n-bench' },
+    ])
   })
 
   test('卡住期间 worker 崩溃：不上报恢复，已提交的回复随重新排队带到下一次执行（审查第 5 条）', async () => {
@@ -211,10 +227,11 @@ describe('送达与恢复', () => {
     expect(t.result?.summary).toBe('已恢复（会话 无）：text 用 main')
     const types = b.types(id)
     expect(types).not.toContain('task.unblocked')
-    expect(types.slice(3, 7)).toEqual([
+    expect(types.slice(3, 8)).toEqual([
       'task.blocked',
       'task.replied',
       'task.blocked',
+      'task.attempt_ended',
       'task.requeued_with_reply',
     ])
     expect(b.events(id)[5]?.payload).toMatchObject({ reason: 'crashed', lease_held: false })
@@ -235,6 +252,7 @@ describe('送达与恢复', () => {
       'task.replied',
       'task.unblocked',
       'task.done',
+      'task.attempt_ended',
     ])
     const got = b.ledger.taskActivity(id).filter((a) => a.text?.startsWith('收到回复'))
     expect(got).toHaveLength(1)

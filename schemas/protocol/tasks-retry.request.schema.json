@@ -1,0 +1,14 @@
+{
+  "$id": "https://raindown.local/schemas/protocol/tasks-retry.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    }
+  },
+  "additionalProperties": false,
+  "title": "POST /v1/tasks/:id/retry"
+}

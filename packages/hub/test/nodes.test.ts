@@ -264,7 +264,7 @@ describe('续约与提交', () => {
       outcome: 'cancelled',
     })
     expect(c.ok && c.data.task.status).toBe('cancelled')
-    expect(ctx.ledger.taskEvents(id).at(-1)).toMatchObject({
+    expect(ctx.ledger.taskEvents(id).at(-2)).toMatchObject({
       type: 'task.cancelled',
       actor: 'node:n1',
       payload: { node_id: 'n1' },
@@ -359,6 +359,38 @@ describe('续约与提交', () => {
   })
 })
 
+describe('派工结束', () => {
+  test.each(['done', 'failed', 'blocked', 'cancelled'] as const)(
+    '%s outcome 记录一次派工结束',
+    async (outcome) => {
+      const ctx = await setup()
+      ctx.register('n1')
+      const id = await ctx.create()
+      const lease = await grant(ctx)
+      if (outcome === 'cancelled') {
+        const tasks = createTaskService({
+          ledger: ctx.ledger,
+          workspaceExists: () => true,
+          roles: anyRole,
+        })
+        expect(tasks.cancelTask(id, { actor: 'user' }).ok).toBe(true)
+      }
+      const completed = ctx.protocol.service.complete(lease.lease_id, {
+        lease_token: lease.lease_token,
+        outcome,
+        ...(outcome === 'blocked'
+          ? { blocked_reason: 'crashed', message: '执行器崩溃' }
+          : { result: result('n1') }),
+      })
+      expect(completed.ok).toBe(true)
+      expect(
+        ctx.ledger.taskEvents(id).filter((e) => e.type === 'task.attempt_ended'),
+      ).toMatchObject([{ actor: 'node:n1', payload: { attempt: 1, reason: outcome } }])
+      expect(ctx.ledger.activeLease(id)).toBeNull()
+    },
+  )
+})
+
 describe('租约过期', () => {
   test('节点掉线：默认合同 → task.lease_expired + blocked(node_lost)', async () => {
     const ctx = await setup()
@@ -373,8 +405,13 @@ describe('租约过期', () => {
     expect(task?.status).toBe('blocked')
     expect(task?.blocked?.reason).toBe('node_lost')
     const events = ctx.ledger.taskEvents(id)
-    expect(events.slice(-2).map((e) => e.type)).toEqual(['task.lease_expired', 'task.blocked'])
-    expect(events.at(-2)?.payload).toMatchObject({ lease_id: lease.lease_id, node_id: 'n1' })
+    expect(events.slice(-3).map((e) => e.type)).toEqual([
+      'task.lease_expired',
+      'task.attempt_ended',
+      'task.blocked',
+    ])
+    expect(events.at(-2)?.payload).toEqual({ attempt: 1, reason: 'node_lost' })
+    expect(events.at(-3)?.payload).toMatchObject({ lease_id: lease.lease_id, node_id: 'n1' })
   })
 
   test('过期租约的迟到提交被拒绝（lease_expired），任务状态不变', async () => {
@@ -427,13 +464,29 @@ describe('租约过期', () => {
       'task.started',
       'lease.granted',
       'task.lease_expired',
+      'task.attempt_ended',
       'task.requeued',
       'task.started',
       'lease.granted',
     ])
+    expect(ctx.ledger.taskEvents(id).find((e) => e.type === 'task.attempt_ended')?.payload).toEqual(
+      {
+        attempt: 1,
+        reason: 'lease_expired',
+      },
+    )
     await ctx.clock.advance(TTL * 1000 + 1)
     ctx.protocol.sweep()
     expect(ctx.ledger.getTask(id)?.blocked?.reason).toBe('node_lost')
+    expect(
+      ctx.ledger
+        .taskEvents(id)
+        .filter((e) => e.type === 'task.attempt_ended')
+        .at(-1)?.payload,
+    ).toEqual({
+      attempt: 2,
+      reason: 'node_lost',
+    })
   })
 })
 
@@ -456,7 +509,12 @@ describe('已请求取消的任务丢失租约', () => {
     expect(ctx.protocol.sweep()).toBe(1)
     expect(ctx.ledger.getTask(id)?.status).toBe('cancelled')
     const events = ctx.ledger.taskEvents(id)
-    expect(events.slice(-2).map((e) => e.type)).toEqual(['task.lease_expired', 'task.cancelled'])
+    expect(events.slice(-3).map((e) => e.type)).toEqual([
+      'task.lease_expired',
+      'task.attempt_ended',
+      'task.cancelled',
+    ])
+    expect(events.at(-2)?.payload).toEqual({ attempt: 1, reason: 'cancelled' })
     expect(events.at(-1)?.payload).toMatchObject({
       node_id: 'n1',
       reason: expect.stringContaining('未确认 worker 已停止'),

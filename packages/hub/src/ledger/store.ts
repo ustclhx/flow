@@ -783,6 +783,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'task.attempt_ended':
+        return draft.payload.attempt === task?.attempt
+          ? ok(null)
+          : invalidEvent('task.attempt_ended 的 attempt 必须是当前派工')
       case 'lease.granted': {
         if (get('SELECT 1 FROM leases WHERE lease_id = ?', draft.payload.lease_id)) {
           return invalidEvent(`租约 ${draft.payload.lease_id} 已存在`)

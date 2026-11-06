@@ -16,6 +16,7 @@ export const COMMAND_ACTION_MAPPINGS: readonly CommandActionMapping[] = [
   // raindown CLI 与 raindown MCP 工具等价（RAINDOWN_TOOL_ACTIONS）：Bash 调 CLI 不能绕过受保护的动作。
   { prefix: ['raindown', 'task', 'create'], action: 'task.create' },
   { prefix: ['raindown', 'task', 'cancel'], action: 'task.cancel' },
+  { prefix: ['raindown', 'task', 'retry'], action: 'task.retry' },
   { prefix: ['raindown', 'task', 'reply'], action: 'task.reply' },
   { prefix: ['raindown', 'task', 'respond'], action: 'task.respond' },
   { prefix: ['raindown', 'inbox', 'act'], action: 'inbox.act' },
@@ -57,6 +58,7 @@ export const hasLegacyPolicyAction = (action: string): boolean =>
 export const RAINDOWN_TOOL_ACTIONS: Readonly<Record<string, string>> = {
   task_create: 'task.create',
   task_cancel: 'task.cancel',
+  task_retry: 'task.retry',
   task_reply: 'task.reply',
   // supervisor 代用户回复委托的卡住（D15）；受保护，不能被判为 supervisor 档位。
   task_respond: 'task.respond',

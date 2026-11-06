@@ -24,6 +24,7 @@ import {
   type PatrolReportRequest,
   type PolicyCheckRequest,
   type ReplyTaskRequest,
+  type RetryTaskRequest,
   type TaskProposeRequest,
   type TaskRespondRequest,
   type TelegramLinkCodeRequest,
@@ -166,6 +167,9 @@ export class HubClient {
   }
   cancelTask(id: string, input: CancelTaskRequest = {}) {
     return this.request('tasks-cancel', input, id)
+  }
+  retryTask(id: string, input: RetryTaskRequest = {}) {
+    return this.request('tasks-retry', input, id)
   }
   replyTask(id: string, input: ReplyTaskRequest) {
     return this.request('tasks-reply', input, id)

@@ -199,6 +199,7 @@ describe('状态与状态机', () => {
     'verifying>cancelled',
     'running>queued',
     'verifying>queued',
+    'failed>queued',
   ])
 
   const pairs: [TaskStatus, TaskStatus][] = TASK_STATUSES.flatMap((from) =>
@@ -213,10 +214,11 @@ describe('状态与状态机', () => {
     expect(canTransition(from, to)).toBe(false)
   })
 
-  test('终态没有出边', () => {
-    for (const s of ['done', 'failed', 'cancelled'] as const) {
+  test('完成与取消不能恢复，失败仅允许重新排队', () => {
+    for (const s of ['done', 'cancelled'] as const) {
       expect(TASK_STATUSES.some((t) => canTransition(s, t))).toBe(false)
     }
+    expect(TASK_STATUSES.filter((t) => canTransition('failed', t))).toEqual(['queued'])
   })
 })
 

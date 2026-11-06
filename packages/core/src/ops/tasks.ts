@@ -7,6 +7,7 @@ import {
   createTaskRequest,
   listTasksQuery,
   type ReplyTaskRequest,
+  retryTaskRequest,
 } from '../ledger/protocol.ts'
 import { checkContractSecrets } from '../ledger/redact.ts'
 import type { TaskContractInput, TaskView } from '../ledger/task.ts'
@@ -75,11 +76,11 @@ export const taskShowOp = defineOperation({
   name: 'task_show',
   access: 'read',
   cli: 'task show',
-  summary: '查看任务合同、结果与事件',
+  summary: '查看任务合同、结果、派工与事件',
   input: z.strictObject({ id: taskId }),
   positional: ['id'],
   run: (input: { id: string }, ctx) => client(ctx).showTask(input.id),
-  human: ({ task, events }) =>
+  human: ({ task, events, attempts }) =>
     [
       taskSummary(task),
       `合同：${JSON.stringify(task.contract, null, 2)}`,
@@ -91,6 +92,16 @@ export const taskShowOp = defineOperation({
             ...task.result.verify.map((v) => `验收：${v.cmd.join(' ')} → 退出码 ${v.exit_code}`),
           ]
         : []),
+      '派工：',
+      renderTable(attempts, [
+        { header: '派工', value: (a) => String(a.attempt) },
+        { header: '执行器', value: (a) => a.executor },
+        { header: '节点', value: (a) => a.node_id },
+        { header: '开始', value: (a) => a.started_at },
+        { header: '结束', value: (a) => a.ended_at ?? '—' },
+        { header: '结束原因', value: (a) => a.reason ?? '—' },
+        { header: '最后上报', value: (a) => a.last_report ?? '—', max: 80 },
+      ]),
       `事件：${JSON.stringify(events, null, 2)}`,
     ].join('\n'),
 })
@@ -106,6 +117,20 @@ export const taskCancelOp = defineOperation({
     return client(ctx).cancelTask(id, body)
   },
   human: ({ task }) => `${task.cancel_requested ? '已请求取消' : '已取消'}：${taskSummary(task)}`,
+})
+
+export const taskRetryOp = defineOperation({
+  name: 'task_retry',
+  cli: 'task retry',
+  summary:
+    '重试 failed 或 blocked(crashed/node_lost/other) 的原任务；用户可重试，supervisor 仅限本 workspace 唤醒链派生的任务，reply 唤醒不可用',
+  input: retryTaskRequest.extend({ id: taskId }),
+  positional: ['id'],
+  run: (input: { id: string; reason?: string }, ctx) => {
+    const { id, ...body } = input
+    return client(ctx).retryTask(id, body)
+  },
+  human: ({ task }) => `已重新排队：${taskSummary(task)}`,
 })
 
 /**
