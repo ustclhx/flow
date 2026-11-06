@@ -260,6 +260,7 @@ describe('唤醒事件识别（3.1）', () => {
     expect(task).toMatchObject({
       created_by: 'hub',
       origin: 'instruction',
+      mandate: { origin: 'user' },
       contract: {
         role: 'supervisor',
         executor: 'claude-sdk',
@@ -303,6 +304,14 @@ describe('唤醒事件识别（3.1）', () => {
       ),
     )
     expect(await wakeCount(env)).toBe(1)
+  })
+
+  test('定时巡检唤醒的授权来源为 schedule', async () => {
+    const env = await setup()
+    patrol(env.store)
+    await env.settle()
+    const [wake] = env.wakes()
+    expect(env.store.getTask(wake?.task_id ?? '')?.mandate?.origin).toBe('schedule')
   })
 
   test('派生任务：终态与 crashed/node_lost/no_progress/other 卡住唤醒（同一任务同一原因一次）；question、无 origin 不唤醒', async () => {

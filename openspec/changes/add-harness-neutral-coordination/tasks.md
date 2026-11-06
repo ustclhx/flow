@@ -34,11 +34,11 @@
 
 ## 4. 策略版本与授权依据
 
-- [ ] 4.1 策略版本哈希（D7），`policy.decided`、委托、代答记录写入；`raindown hub status` / `raindown doctor` 显示
-- [ ] 4.2 `policy.changed` 检测（启动与定期检查）
-- [ ] 4.3 `task.created.mandate` 由中枢计算
-- [ ] 4.4 受影响任务的策略变化输入；进行中代批委托依赖的规则被删时转交用户
-- [ ] 4.5 已结束任务恢复前的重新校验（task-mandate spec）
+- [x] 4.1 策略版本哈希（D7），`policy.decided`、委托、代答记录写入；`raindown hub status` / `raindown doctor` 显示
+- [x] 4.2 `policy.changed` 检测（启动与定期检查）
+- [x] 4.3 `task.created.mandate` 由中枢计算
+- [x] 4.4 受影响任务的策略变化输入；进行中代批委托依赖的规则被删时转交用户
+- [x] 4.5 已结束任务恢复前的重新校验（task-mandate spec）
 
 ## 5. 阶段
 

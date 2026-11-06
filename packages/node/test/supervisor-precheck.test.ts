@@ -416,6 +416,7 @@ describe('supervisor 的批准送达前复核', () => {
     const types = bb.types(id)
     expect(types.slice(types.lastIndexOf('task.replied'))).toEqual([
       'task.replied',
+      'task.reply_fetched',
       'task.unblocked',
       'task.blocked',
     ])

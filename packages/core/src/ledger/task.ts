@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { indexedPolicyRuleSchema } from '../policy/decide.ts'
+import { policyVersionSchema } from '../policy/version.ts'
 import { workspaceRef } from '../schema/common.ts'
 import {
   capability,
@@ -311,6 +313,17 @@ export const taskOrigin = z.enum(TASK_ORIGINS).meta({
   description:
     '任务来源（中枢计算并固化）：instruction 用户指令链；autonomous 巡检、回看等自发工作',
 })
+
+/** 中枢在创建时固化的授权依据，调用方不能提供或修改。 */
+export const taskMandate = z.strictObject({
+  created_by: z.string().min(1),
+  origin: z.string().min(1).meta({ description: '创建来源，例如 user、supervisor、schedule' }),
+  wake_task: taskId.optional(),
+  instruction_seq: z.number().int().min(1).optional(),
+  policy_version: policyVersionSchema,
+  matched_rules: z.array(indexedPolicyRuleSchema).optional(),
+})
+export type TaskMandate = z.infer<typeof taskMandate>
 
 /** 唤醒的来源：在任务来源之外多一个只能回复的 `reply`（D15），它不会出现在任何任务上。 */
 export const WAKE_ORIGINS = [...TASK_ORIGINS, 'reply'] as const
@@ -834,6 +847,10 @@ export const replyView = z
     by: z.string(),
     created_at: timestamp,
     state: replyState,
+    fetched_at: timestamp
+      .nullable()
+      .optional()
+      .meta({ description: '中枢首次交给持有租约的节点的时间' }),
     delivered_at: timestamp.nullable().meta({ description: '送达或随重新排队附上的时间' }),
   })
   .meta({ title: 'Task reply view' })
@@ -884,6 +901,10 @@ export const taskView = z
       .meta({ description: '当前有效的租约' }),
     result: taskResult.nullable(),
     created_by: z.string().meta({ description: '创建者（task.created 的 actor）' }),
+    mandate: taskMandate
+      .nullable()
+      .optional()
+      .meta({ description: '创建时固化的授权依据；旧任务可缺省' }),
     origin: taskOrigin
       .nullable()
       .meta({ description: '中枢在创建时写入的来源；不在 supervisor 链上的任务为 null' }),

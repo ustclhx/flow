@@ -5,6 +5,7 @@ import {
   canCreateRole,
   checkContractSecrets,
   createTaskRequest,
+  decide,
   decideVerifySteps,
   defaultSupervisorConfig,
   fail,
@@ -17,6 +18,8 @@ import {
   loadRoles,
   loadWorkspaces,
   ok,
+  type PolicyConfig,
+  policyVersion,
   RETRYABLE_BLOCKED_REASONS,
   type ReplyKind,
   type ReplyTaskData,
@@ -35,6 +38,7 @@ import {
   type VerifyVerdict,
   type Workspace,
 } from '@raindown/core'
+import { auditRules } from '../policy/service.ts'
 import type { EventInput, LedgerStore } from './store.ts'
 import {
   chainDepth,
@@ -162,6 +166,8 @@ export interface TaskServiceOptions {
   workspaces?: WorkspaceLookup
   /** 仓库检查的选项（测试注入家目录）。 */
   repoCheck?: RepoCheckOptions
+  /** 创建与手动重试时固化策略版本；生产环境注入共享策略加载器。 */
+  policy?: { load(): Promise<Result<PolicyConfig>>; current?(): PolicyConfig | undefined }
   /** 验收命令的策略判定；缺省为没有规则（全部拒绝）。 */
   verifyPolicy?: VerifyPolicyCheck
   now?: () => number
@@ -173,6 +179,10 @@ export interface TaskServiceOptions {
 
 export interface CreateTaskOptions {
   actor: string
+  /** 仅中枢内部创建路径可指定授权来源；HTTP 与 MCP 不得取自请求。 */
+  mandateOrigin?: string
+  /** 仅中枢内部管线：从此账本任务追溯唤醒与原始指令（如 merger 的源 dev）。 */
+  mandateSourceTask?: string
   /** 幂等键；也可以写在合同的 `idempotency_key` 中（两处都给时必须一致）。 */
   idempotency_key?: string
   /**
@@ -609,6 +619,51 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         }
       }
 
+      // 授权依据只由中枢计算；与策略检查共用加载与版本比较入口。
+      const loadedPolicy = o.policy
+        ? await o.policy.load()
+        : ok({ rules: [], version: policyVersion([]) })
+      // 任务创建权限沿用角色与 verify 校验；策略损坏不能额外阻止原本合法的创建。
+      // mandate 只记录最近成功加载的快照或空规则，不能把损坏配置当成已授权的依据。
+      const policy = loadedPolicy.ok
+        ? loadedPolicy.data
+        : (o.policy?.current?.() ?? { rules: [], version: policyVersion([]) })
+      const creationDecision = decide(policy.rules, {
+        scope: { workspace: contract.workspace, role: opts.actor },
+        actions: ['task.create'],
+      })
+      const source = opts.mandateSourceTask ? ledger.getTask(opts.mandateSourceTask) : parent
+      let provenanceWake = opts.mandateSourceTask ? null : (callerWake ?? parentWake)
+      let ancestor = source
+      const seen = new Set<string>()
+      while (!provenanceWake && ancestor && !seen.has(ancestor.id)) {
+        seen.add(ancestor.id)
+        provenanceWake = ledger.wakeOf(ancestor.mandate?.wake_task ?? ancestor.id)
+        ancestor = ancestor.contract.parent ? ledger.getTask(ancestor.contract.parent) : null
+      }
+      const instructions = (provenanceWake?.events ?? []).filter((seq) => {
+        const event = ledger.eventsAfter(seq - 1, undefined, 1)[0]
+        return event?.type === 'user.instruction' && event.actor === USER_ACTOR
+      })
+      const sourceInstruction = source?.mandate?.instruction_seq
+      const instructionSeq =
+        sourceInstruction !== undefined && instructions.includes(sourceInstruction)
+          ? sourceInstruction
+          : instructions.length === 1
+            ? instructions[0]
+            : undefined
+      const mandate = {
+        created_by: opts.actor,
+        origin:
+          opts.mandateOrigin ??
+          (callerWake ? `supervisor:${callerWake.origin}` : undefined) ??
+          (isHub && review !== undefined ? 'pipeline:review' : opts.actor),
+        ...(provenanceWake ? { wake_task: provenanceWake.task_id } : {}),
+        ...(instructionSeq === undefined ? {} : { instruction_seq: instructionSeq }),
+        policy_version: policy.version,
+        matched_rules: auditRules(creationDecision.matched_rules),
+      }
+
       // 从这里到 append 都是同步代码，不会与其他请求交错：重新检查幂等键、上限与 parent 状态。
       const raced = existing()
       if (raced) return ok({ task: raced, created: false })
@@ -630,7 +685,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         type: 'task.created',
         task_id: id,
         workspace: contract.workspace,
-        payload: { contract, ...(origin === undefined ? {} : { origin }) },
+        payload: { contract, mandate, ...(origin === undefined ? {} : { origin }) },
       }
       const before = opts.coWrite?.before ?? []
       const own = [created, ...(opts.withCreated?.(id) ?? [])]
@@ -759,7 +814,14 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         }
         role = found.data
       }
-      // 角色加载后重新读状态；此后的校验与写入之间不能 await，避免撤销并发取消或释放新租约。
+      // 与建任务共用策略快照，加载失败时保留最近成功版本；这里只追溯重试依据，不增加放行门槛。
+      const loadedPolicy = o.policy
+        ? await o.policy.load()
+        : ok({ rules: [], version: policyVersion([]) })
+      const policy = loadedPolicy.ok
+        ? loadedPolicy.data
+        : (o.policy?.current?.() ?? { rules: [], version: policyVersion([]) })
+      // 角色与策略加载后重新读状态；此后的校验与写入之间不能 await，避免撤销并发取消或释放新租约。
       const task = ledger.getTask(id)
       if (!task) return notFound(id)
       if (task.cancel_requested) {
@@ -862,6 +924,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
             payload: {
               reason: 'manual',
               requested_by: opts.actor,
+              policy_version: policy.version,
               ...(reason === undefined ? {} : { retry_reason: reason, note: reason }),
             },
           },

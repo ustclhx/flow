@@ -14,6 +14,8 @@ import {
   formatDoctorReport,
 } from '../src/doctor.ts'
 import { initRaindownHome } from '../src/init.ts'
+import { loadPoliciesConfig } from '../src/policy/config.ts'
+import { policyVersion } from '../src/policy/version.ts'
 import { doctorOptions } from './doctor-helpers.ts'
 import { tempHome, writeText } from './helpers.ts'
 
@@ -36,6 +38,23 @@ const runDoctor = (home: string, source: DoctorReport['homeSource'], options: Do
   actualDoctor(home, source, doctorOptions(home, options))
 
 describe('raindown doctor', () => {
+  test('显示从当前有效规则计算的策略版本', async () => {
+    const home = tempHome('raindown-doctor-policy-version-')
+    writeText(
+      join(home, 'config/policies.yaml'),
+      '- scope: "*"\n  action: shell.exec\n  level: notify\n',
+    )
+    const loaded = await loadPoliciesConfig(home)
+    if (!loaded.ok) throw new Error(loaded.error.message)
+    const version = policyVersion(loaded.data.rules)
+    const report = reportOf(await runDoctor(home, 'RAINDOWN_HOME'))
+    expect(report.checks.find((check) => check.id === 'policies.version')).toMatchObject({
+      ok: true,
+      message: `当前策略版本：${version}`,
+    })
+    expect(formatDoctorReport(report)).toContain(`当前策略版本：${version}`)
+  })
+
   test('执行器未知：报告角色文件和 executor，已知执行器全部通过；配置错误带字段', async () => {
     const home = tempHome('raindown-doctor-roles-')
     await initRaindownHome(home)

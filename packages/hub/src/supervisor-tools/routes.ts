@@ -109,6 +109,10 @@ export function createSupervisorToolRoutes(deps: SupervisorToolsDeps): Hono {
     if (!deps.delegation) {
       return respond(c, fail('failure', 'action_not_available', '代回复尚未启用'), taskRespondData)
     }
+    if (deps.policy) {
+      const loaded = await deps.policy.load()
+      if (!loaded.ok) return respond(c, loaded, taskRespondData)
+    }
     return respond(
       c,
       deps.delegation.respond(actorOf(c), wakeCallerOf(c), input.data),

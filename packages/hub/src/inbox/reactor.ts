@@ -290,7 +290,23 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
   function onReplyDropped(e: EventOf<'task.reply_dropped'>) {
     const task = ledger.getTask(e.task_id ?? '')
     const itemId = `reply.${e.payload.reply_id}`
-    if (!task || ledger.getInboxItem(itemId)) return
+    if (!task) return
+    const blocked = latestBlocked(task.id)
+    const reply = ledger
+      .taskEvents(task.id)
+      .find(
+        (event) => event.type === 'task.replied' && event.payload.reply_id === e.payload.reply_id,
+      )
+    // 只恢复这条 supervisor 回复所属的当前卡住；旧回复拒收通知不改新回合的标题。
+    if (
+      blocked &&
+      reply?.actor === 'supervisor' &&
+      reply.seq > blocked.seq &&
+      !delegatedNow(task, blocked.seq)
+    ) {
+      restoreDelegatedTitle(task.id)
+    }
+    if (ledger.getInboxItem(itemId)) return
     write({
       type: 'inbox.item_created',
       task_id: task.id,
@@ -463,6 +479,28 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     })
   }
 
+  /** 策略变化作为独立通知保留；不改变任务状态或取消任务。 */
+  function onTaskPolicyChanged(e: EventOf<'task.policy_changed'>) {
+    const ws = e.workspace as string
+    write({
+      type: 'inbox.item_created',
+      task_id: e.task_id as string,
+      workspace: ws,
+      payload: {
+        item_id: `policychg.${e.seq}`,
+        level: 'decide',
+        source: 'policy',
+        source_ref: String(e.seq),
+        source_seq: e.seq,
+        title: clipText(`[${ws}] 任务授权策略已变化：${e.task_id}`, INBOX_TITLE_MAX),
+        body: clipText(
+          `${e.payload.note ? `${e.payload.note}\n\n` : ''}策略变化事件 #${e.payload.policy_seq}；任务 ${e.task_id} 依赖的规则已删除或修改：${e.payload.rules.join('、')}。任务继续保留。`,
+          INBOX_BODY_MAX,
+        ),
+      },
+    })
+  }
+
   /**
    * 代回复委托（D15）：委托开始时条目标题标"supervisor 处理中"；委托结束（转交）时恢复标题，
    * 由 supervisor、超时或唤醒问题转交的在正文末尾注明原因（转交说明来自 supervisor，只给用户看）。
@@ -504,9 +542,9 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     })
   }
 
-  /** 请求取消结束了这次卡住上的委托（不写转交事件）：去掉"supervisor 处理中"。 */
-  function onCancelRequested(e: EventOf<'task.cancel_requested'>) {
-    const task = ledger.getTask(e.task_id ?? '')
+  /** 委托隐式结束（请求取消或当前回复拒收）：去掉"supervisor 处理中"。 */
+  function restoreDelegatedTitle(taskId: string) {
+    const task = ledger.getTask(taskId)
     if (task?.status !== 'blocked') return
     const blocked = latestBlocked(task.id)
     if (!blocked) return
@@ -527,9 +565,10 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
       else if (e.type === 'task.reply_dropped') onReplyDropped(e)
       else if (e.type === 'task.out_of_band') onOutOfBand(e)
       else if (e.type === 'policy.decided') onPolicyDecided(e)
+      else if (e.type === 'task.policy_changed') onTaskPolicyChanged(e)
       else if (e.type === 'task.reply_delegated' || e.type === 'task.reply_escalated') {
         onDelegation(e)
-      } else if (e.type === 'task.cancel_requested') onCancelRequested(e)
+      } else if (e.type === 'task.cancel_requested') restoreDelegatedTitle(e.task_id ?? '')
       else {
         const reason = CLOSING[e.type]
         if (reason !== undefined) onTaskLeft(e, reason)
@@ -693,6 +732,7 @@ const delegatedTitle = (title: string) =>
 const ESCALATION_LABEL: Record<ReplyEscalationReason, string> = {
   supervisor: 'supervisor 判断需要你来决定',
   timeout: 'supervisor 超时未回复',
+  policy_changed: '代批依据的策略规则已删除或修改',
   wake_unavailable: 'supervisor 无法开始处理',
   wake_failed: 'supervisor 处理失败',
   wake_ended: 'supervisor 结束时没有回复',

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { policyVersionSchema } from '../policy/version.ts'
 import { executorType, nodeId, timestamp } from './common.ts'
 import type { LedgerEvent } from './events.ts'
 import { type TaskView, taskAttemptEndReason } from './task.ts'
@@ -10,6 +11,7 @@ export const taskAttempt = z
     executor: executorType,
     node_id: nodeId,
     started_at: timestamp,
+    policy_version: policyVersionSchema.optional(),
     ended_at: timestamp.optional(),
     reason: taskAttemptEndReason.or(z.literal('unknown')).optional(),
     last_report: z.string().max(16_384).optional(),
@@ -24,13 +26,14 @@ export type TaskAttempt = z.infer<typeof taskAttempt>
  * 的时间推断结束，原因标记 unknown，不猜测历史上未记录的事实。
  */
 export function foldTaskAttempts(
-  task: Pick<TaskView, 'id' | 'contract'>,
+  task: Pick<TaskView, 'id' | 'contract' | 'mandate'>,
   events: readonly LedgerEvent[],
 ): TaskAttempt[] {
   const attempts: TaskAttempt[] = []
   const byAttempt = new Map<number, TaskAttempt>()
   const explicitEnds = new Set<number>()
   let current: TaskAttempt | undefined
+  let policyVersion = task.mandate?.policy_version
   const inferEnd = (ts: string) => {
     if (current && current.ended_at === undefined) {
       current.ended_at = ts
@@ -47,11 +50,18 @@ export function foldTaskAttempts(
           executor: task.contract.executor,
           node_id: event.payload.node_id,
           started_at: event.ts,
+          ...(policyVersion === undefined ? {} : { policy_version: policyVersion }),
         }
         attempts.push(current)
         byAttempt.set(current.attempt, current)
         break
       }
+      case 'task.requeued':
+        // 自动租约重排沿用授权；旧手动重试未记版本，不能借用创建时的版本。
+        if (event.payload.reason === 'manual' || event.payload.policy_version !== undefined) {
+          policyVersion = event.payload.policy_version
+        }
+        break
       case 'task.attempt_ended': {
         const attempt = byAttempt.get(event.payload.attempt)
         if (!attempt) break

@@ -140,6 +140,10 @@
               "legacy_tool_action": {
                 "type": "boolean",
                 "const": true
+              },
+              "rule_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
               }
             },
             "required": [
@@ -269,6 +273,10 @@
                     "legacy_tool_action": {
                       "type": "boolean",
                       "const": true
+                    },
+                    "rule_hash": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
                     }
                   },
                   "required": [
@@ -295,6 +303,10 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
           "description": "任务 id，由中枢在创建时分配"
+        },
+        "policy_version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{12}$"
         },
         "request": {
           "type": "object",

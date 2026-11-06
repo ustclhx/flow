@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   activity_json    TEXT NOT NULL DEFAULT '[]',
   resume_json      TEXT,
   origin           TEXT,
+  mandate_json     TEXT,
   branch           TEXT,
   worktree         TEXT,
   repo_snapshot_json TEXT
@@ -134,7 +135,8 @@ CREATE TABLE IF NOT EXISTS replies (
   created_at   TEXT NOT NULL,
   created_seq  INTEGER NOT NULL,
   state        TEXT NOT NULL CHECK (state IN ('pending', 'delivered', 'requeued', 'dropped')),
-  delivered_at TEXT
+  delivered_at TEXT,
+  fetched_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS replies_task ON replies (task_id, state, created_seq);
 
@@ -206,9 +208,11 @@ export const LEDGER_COLUMN_MIGRATIONS: ReadonlyArray<{
   column: string
   ddl: string
 }> = [
+  { table: 'replies', column: 'fetched_at', ddl: 'ALTER TABLE replies ADD COLUMN fetched_at TEXT' },
   { table: 'tasks', column: 'resume_json', ddl: 'ALTER TABLE tasks ADD COLUMN resume_json TEXT' },
   // add-m1-supervisor：task.created 的 origin（D2）与 task.branch_reported 的分支（D15）。
   { table: 'tasks', column: 'origin', ddl: 'ALTER TABLE tasks ADD COLUMN origin TEXT' },
+  { table: 'tasks', column: 'mandate_json', ddl: 'ALTER TABLE tasks ADD COLUMN mandate_json TEXT' },
   { table: 'tasks', column: 'branch', ddl: 'ALTER TABLE tasks ADD COLUMN branch TEXT' },
   // add-m1-supervisor 5.6：task.branch_reported 一并上报的任务 worktree。
   { table: 'tasks', column: 'worktree', ddl: 'ALTER TABLE tasks ADD COLUMN worktree TEXT' },

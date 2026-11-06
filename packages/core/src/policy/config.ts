@@ -6,6 +6,7 @@ import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { formatZodIssues, type ValidationIssue } from '../validation-issue.ts'
 import { hasLegacyPolicyAction, normalizePolicyAction } from './actions.ts'
+import { policyVersion } from './version.ts'
 
 /** `supervisor`：委托给本 workspace 的 supervisor 判断（D15）；节点对它不放行，按卡住上报。 */
 export const policyLevelSchema = z.enum([
@@ -61,9 +62,12 @@ export interface IndexedPolicyRule {
   rule_index: number
   rule: PolicyRule
   /** 仅由加载器标记：从旧 MCP 工具名规范化而来的规则。 */
-  legacy_tool_action?: true
+  legacy_tool_action?: true | undefined
+  /** 入账脱敏前的规则内容摘要；用于追踪跨版本授权依赖。 */
+  rule_hash?: string | undefined
 }
 export interface PolicyConfig {
+  version: string
   rules: IndexedPolicyRule[]
   errors: (ValidationIssue & { rule_index: number })[]
   warnings: (ValidationIssue & { rule_index: number })[]
@@ -77,7 +81,7 @@ export async function loadPoliciesConfig(home: string): Promise<Result<PolicyCon
     text = await readFile(raindownPaths(home).policiesConfig, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT')
-      return ok({ rules: [], errors: [], warnings: [] })
+      return ok({ version: policyVersion([]), rules: [], errors: [], warnings: [] })
     return fail('failure', 'read_failed', `无法读取 ${file}：${String(err)}`)
   }
   let input: unknown
@@ -132,5 +136,5 @@ export async function loadPoliciesConfig(home: string): Promise<Result<PolicyCon
       )
     }
   })
-  return ok({ rules, errors, warnings })
+  return ok({ version: policyVersion(rules), rules, errors, warnings })
 }

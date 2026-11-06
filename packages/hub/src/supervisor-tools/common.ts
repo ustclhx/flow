@@ -16,6 +16,7 @@ import type {
   VerifyPolicyCheck,
   WorkspaceLookup,
 } from '../ledger/tasks.ts'
+import type { PolicyService } from '../policy/service.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
 import type { DelegationService } from '../supervisor/delegation.ts'
 
@@ -49,6 +50,8 @@ export interface SupervisorToolsDeps {
   now: () => number
   /** 代回复（D15）：`task_respond` 由它在同一事务里核对并写入；未注入时该接口不可用。 */
   delegation?: Pick<DelegationService, 'respond'>
+  /** 代回复前重新加载，与委托服务共用策略实例。 */
+  policy?: Pick<PolicyService, 'load'>
 }
 
 /** 鉴权中间件认定的唤醒调用方；其他认证方式返回 null。 */

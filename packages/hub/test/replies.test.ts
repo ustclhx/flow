@@ -172,7 +172,7 @@ describe('回复卡住的任务（task-interaction）', () => {
     )
   })
 
-  test('交互式任务的回复：续约取得 → 确认送达 → 依次记录 task.replied 与 task.unblocked', async () => {
+  test('交互式任务的回复：续约记录交付后再确认送达', async () => {
     const ctx = await setup()
     const { id, lease } = await blockedHeld(ctx)
     expect(ctx.ledger.getTask(id)?.blocked).toMatchObject({ reason: 'question', lease_held: true })
@@ -207,9 +207,19 @@ describe('回复卡住的任务（task-interaction）', () => {
       reply_id: 'r-1',
     })
     expect(code(again)).toBe('ok')
-    expect(types(ctx, id).slice(-3)).toEqual(['task.blocked', 'task.replied', 'task.unblocked'])
+    expect(types(ctx, id).slice(-4)).toEqual([
+      'task.blocked',
+      'task.replied',
+      'task.reply_fetched',
+      'task.unblocked',
+    ])
     const events = ctx.ledger.taskEvents(id)
-    expect(events.at(-2)).toMatchObject({ actor: 'user', payload: { reply_id: 'r-1' } })
+    expect(events.at(-3)).toMatchObject({ actor: 'user', payload: { reply_id: 'r-1' } })
+    expect(events.at(-2)).toMatchObject({
+      type: 'task.reply_fetched',
+      actor: 'hub',
+      payload: { reply_id: 'r-1', lease_id: lease.lease_id },
+    })
     expect(events.at(-1)).toMatchObject({ actor: 'node:n1', payload: { reply_id: 'r-1' } })
     expect(ctx.ledger.getReply('r-1')).toMatchObject({ state: 'delivered' })
     expect(ctx.ledger.getReply('r-1')?.delivered_at).not.toBeNull()
@@ -624,7 +634,7 @@ describe('旧账本迁移', () => {
       // 旧版 DDL：去掉 resume_json（以及 ④ 的 origin、branch、worktree）列与 replies 表。
       db.exec(
         LEDGER_DDL.replace(
-          ',\n  resume_json      TEXT,\n  origin           TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
+          ',\n  resume_json      TEXT,\n  origin           TEXT,\n  mandate_json     TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
           '\n',
         ).replace(/CREATE TABLE IF NOT EXISTS replies[\s\S]*$/, ''),
       )

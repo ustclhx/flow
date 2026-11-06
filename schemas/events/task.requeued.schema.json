@@ -57,6 +57,10 @@
           "minLength": 1,
           "maxLength": 8192
         },
+        "policy_version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{12}$"
+        },
         "note": {
           "type": "string"
         }

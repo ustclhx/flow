@@ -41,6 +41,17 @@
           "type": "string",
           "minLength": 1
         },
+        "policy_version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{12}$"
+        },
+        "policy_rules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
         "pid": {
           "type": "integer",
           "exclusiveMinimum": 0,

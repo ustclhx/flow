@@ -8,7 +8,7 @@ import type { TaskStatus } from './task.ts'
  * `block_seq` 时有效。任务离开这次卡住时委托**隐式失效，不写事件**：离开包括
  * `task.unblocked`、`task.requeued`、`task.requeued_with_reply`、`task.lease_expired`，
  * 以及进入新的卡住（blocked → blocked，新卡住重新判定是否委托）。
- * 委托被 `task.reply_escalated` 结束后同样无效。
+ * 委托被 `task.reply_escalated` 结束，或本次卡住的 supervisor 回复被拒收后同样无效。
  */
 export interface ActiveDelegation {
   /** `task.reply_delegated` 的 seq。 */
@@ -98,6 +98,7 @@ export function activeDelegation(
   for (const e of events) if (e.type === 'task.blocked') blockSeq = e.seq
   if (blockSeq === null) return null
   let found: ActiveDelegation | null = null
+  const supervisorReplies = new Set<string>()
   for (const e of events) {
     if (e.seq <= blockSeq) continue
     if (DELEGATION_ENDING_EVENTS.has(e.type)) return null
@@ -111,6 +112,10 @@ export function activeDelegation(
       }
     }
     if (e.type === 'task.reply_escalated' && e.payload.block_seq === blockSeq) return null
+    if (e.type === 'task.replied' && e.actor === 'supervisor') {
+      supervisorReplies.add(e.payload.reply_id)
+    }
+    if (e.type === 'task.reply_dropped' && supervisorReplies.has(e.payload.reply_id)) return null
   }
   return found
 }

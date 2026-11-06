@@ -710,6 +710,11 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     const create = (bare: boolean) =>
       o.tasks.createTask(contract(bare), {
         actor: 'hub',
+        mandateOrigin: events.some((e) => e.type === 'schedule.fired')
+          ? 'schedule'
+          : events.some((e) => e.type === 'user.instruction')
+            ? 'user'
+            : 'supervisor',
         idempotency_key: `supervisor:${ref}:${generation}`,
         ...(origin === 'reply' ? {} : { origin }),
         withCreated: (taskId) => [

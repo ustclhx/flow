@@ -25,6 +25,10 @@ const samples: Record<
   EventType,
   { valid: Record<string, unknown>; invalid: Record<string, unknown> }
 > = {
+  'policy.changed': {
+    valid: { payload: { from: null, to: '012345abcdef', added: [sha], removed: [] } },
+    invalid: { payload: { from: null, to: 'invalid', added: [sha], removed: [] } },
+  },
   'policy.decided': {
     valid: {
       ...task,
@@ -41,6 +45,10 @@ const samples: Record<
   'task.created': {
     valid: { ...task, payload: { contract } },
     invalid: { ...task, payload: { contract: { ...contract, workspace: undefined } } },
+  },
+  'task.policy_changed': {
+    valid: { ...task, payload: { policy_seq: 10, rules: [sha] } },
+    invalid: { ...task, payload: { policy_seq: 0, rules: [sha] } },
   },
   'task.started': {
     valid: { ...task, payload: { node_id: 'n1', lease_id: 'l1', attempt: 1 } },
@@ -80,6 +88,10 @@ const samples: Record<
   'task.unblocked': {
     valid: { ...task, payload: { note: '用 main', reply_id: 'r-1' } },
     invalid: { ...task, payload: { note: 1 } },
+  },
+  'task.reply_fetched': {
+    valid: { ...task, payload: { reply_id: 'r-1', lease_id: 'l1' } },
+    invalid: { ...task, payload: { reply_id: 'bad', lease_id: 'l1' } },
   },
   'task.replied': {
     valid: { ...task, payload: { reply_id: 'r-1', kind: 'text', text: '用 main' } },
@@ -395,19 +407,44 @@ describe('事件 schema', () => {
     expect(ledgerEventDraft.safeParse(draft).success).toBe(true)
   })
 
-  test('task.requeued 兼容旧载荷并校验重试身份与非空限长理由', () => {
+  test('task.requeued 兼容旧载荷并校验重试身份、理由与策略版本', () => {
     const parse = (payload: Record<string, unknown>) =>
       ledgerEvent.safeParse(envelope('task.requeued', { ...task, payload }))
     expect(parse({ reason: 'manual', note: '旧理由' }).success).toBe(true)
     expect(
-      parse({ reason: 'manual', requested_by: 'supervisor', retry_reason: '  已恢复目录  ' })
-        .success,
+      parse({
+        reason: 'manual',
+        requested_by: 'supervisor',
+        retry_reason: '  已恢复目录  ',
+        policy_version: '012345abcdef',
+      }).success,
     ).toBe(true)
     expect(parse({ reason: 'manual', requested_by: 'user' }).success).toBe(true)
     expect(parse({ reason: 'manual', requested_by: 'hub' }).success).toBe(false)
+    for (const policy_version of ['invalid', '012345abcde', '012345abcdeF']) {
+      expect(parse({ reason: 'manual', policy_version }).success).toBe(false)
+    }
     for (const retry_reason of ['', '   ', 'x'.repeat(8193)]) {
       expect(parse({ reason: 'manual', retry_reason }).success).toBe(false)
     }
+  })
+
+  test('策略变化转交保留原判定版本，并校验新版本与撤回回复 id', () => {
+    const payload = {
+      reason: 'policy_changed',
+      block_seq: 7,
+      policy_version: '012345abcdef',
+      to_version: 'abcdef012345',
+      dropped_reply_id: 'r-policy',
+    }
+    const event = envelope('task.reply_escalated', { ...task, payload })
+    expect(ledgerEvent.parse(event).payload).toEqual(payload)
+    expect(
+      ledgerEvent.safeParse({ ...event, payload: { ...payload, to_version: 'invalid' } }).success,
+    ).toBe(false)
+    expect(
+      ledgerEvent.safeParse({ ...event, payload: { ...payload, dropped_reply_id: 'bad' } }).success,
+    ).toBe(false)
   })
 
   test('信封：seq、ts、actor 与未知 type', () => {
@@ -437,6 +474,11 @@ describe('事件触发的状态转换', () => {
   const expected: Record<string, [TaskStatus | null, TaskStatus][]> = {
     'policy.decided': TASK_STATUSES.map((status) => [status, status]),
     'task.created': [[null, 'queued']],
+    'task.policy_changed': [
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
+    ],
     'task.started': [['queued', 'running']],
     'task.attempt_ended': TASK_STATUSES.map((status) => [status, status]),
     'lease.granted': [['running', 'running']],
@@ -459,6 +501,7 @@ describe('事件触发的状态转换', () => {
     'task.reply_dropped': TASK_STATUSES.map((status) => [status, status]),
     'task.unblocked': [['blocked', 'running']],
     'task.replied': [['blocked', 'blocked']],
+    'task.reply_fetched': [['blocked', 'blocked']],
     'task.requeued_with_reply': [['blocked', 'queued']],
     'task.requeued': [
       ['blocked', 'queued'],

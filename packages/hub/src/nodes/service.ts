@@ -670,6 +670,19 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       // 已请求取消的任务不再送达回复。
       const pending =
         after.status === 'blocked' && !after.cancel_requested ? ledger.pendingReply(task.id) : null
+      // 先提交交付事实再把回复交给节点；追加失败时不下发，重复续约不重复记录。
+      if (pending && pending.fetched_at == null) {
+        const fetched = ledger.append(
+          {
+            type: 'task.reply_fetched',
+            task_id: task.id,
+            workspace: task.workspace,
+            payload: { reply_id: pending.id, lease_id: lease.lease_id },
+          },
+          { actor: 'hub' },
+        )
+        if (!fetched.ok) return fetched
+      }
       const lastBlock = req.data.blocked
         ? ledger.taskEvents(task.id).findLast((e) => e.type === 'task.blocked')
         : undefined
@@ -747,6 +760,45 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         if (!written.ok) return written
         ledger.touchNode(lease.node_id)
         return ok({ task: ledger.getTask(task.id) ?? task })
+      }
+      if (
+        reply.state === 'dropped' &&
+        req.data.outcome === 'delivered' &&
+        reply.by === SUPERVISOR_ACTOR &&
+        reply.kind === 'approve' &&
+        task.status === 'blocked' &&
+        ledger.replyPredatesDeliveryTracking(reply.id)
+      ) {
+        const events = ledger.taskEvents(task.id)
+        const blocked = events.findLast((event) => event.type === 'task.blocked')
+        const withdrawal = events.findLast(
+          (event) =>
+            event.type === 'task.reply_escalated' &&
+            event.payload.reason === 'policy_changed' &&
+            event.payload.dropped_reply_id === reply.id,
+        )
+        if (
+          withdrawal?.type === 'task.reply_escalated' &&
+          blocked?.seq === withdrawal.payload.block_seq
+        ) {
+          // 仅兼容交付机制之前的旧回复：确认实际送达，并保留原撤回与纠正说明供审计。
+          const written = ledger.append(
+            {
+              type: 'task.unblocked',
+              task_id: task.id,
+              workspace: task.workspace,
+              payload: {
+                reply_id: reply.id,
+                note: '节点确认批准已送达；批准在撤回生效前已交给节点，纠正先前的策略撤回记录。',
+              },
+            },
+            { actor: `node:${lease.node_id}` },
+          )
+          if (!written.ok) return written
+          ledger.touchNode(lease.node_id)
+          const after = ledger.getTask(task.id)
+          return after ? ok({ task: after }) : fail('failure', 'internal_error', '任务不可见')
+        }
       }
       if (reply.state === 'dropped' && req.data.outcome === 'dropped') return ok({ task })
       // request_changed 仍只用于 supervisor 的批准（D15）；人类回复只能经带通知的 round_closed 拒收。

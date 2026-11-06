@@ -12,6 +12,7 @@ import {
   type PolicyRequest,
   type PolicyRule,
   policiesConfigSchema,
+  policyVersion,
 } from '../src/policy/index.ts'
 import type { Result } from '../src/result.ts'
 import { jsonSchemas } from '../src/schema/index.ts'
@@ -80,9 +81,19 @@ describe('策略配置', () => {
   test('不存在或空文件返回空配置；读取、YAML、顶层类型错误返回稳定错误码', async () => {
     const root = home()
     const path = join(root, 'config/policies.yaml')
-    expect(data(await loadPoliciesConfig(root))).toEqual({ rules: [], errors: [], warnings: [] })
+    expect(data(await loadPoliciesConfig(root))).toEqual({
+      version: policyVersion([]),
+      rules: [],
+      errors: [],
+      warnings: [],
+    })
     writeText(path, '')
-    expect(data(await loadPoliciesConfig(root))).toEqual({ rules: [], errors: [], warnings: [] })
+    expect(data(await loadPoliciesConfig(root))).toEqual({
+      version: policyVersion([]),
+      rules: [],
+      errors: [],
+      warnings: [],
+    })
     for (const text of ['[\n', 'rules: []\n']) {
       writeText(path, text)
       expect(await loadPoliciesConfig(root)).toMatchObject({

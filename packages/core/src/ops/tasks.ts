@@ -84,6 +84,7 @@ export const taskShowOp = defineOperation({
     [
       taskSummary(task),
       `合同：${JSON.stringify(task.contract, null, 2)}`,
+      `授权依据：${task.mandate ? JSON.stringify(task.mandate, null, 2) : '未记录（旧任务）'}`,
       ...(task.blocked ? [`卡住原因：${task.blocked.reason} — ${task.blocked.message}`] : []),
       ...(task.result
         ? [
@@ -97,6 +98,7 @@ export const taskShowOp = defineOperation({
         { header: '派工', value: (a) => String(a.attempt) },
         { header: '执行器', value: (a) => a.executor },
         { header: '节点', value: (a) => a.node_id },
+        { header: '策略版本', value: (a) => a.policy_version ?? '—' },
         { header: '开始', value: (a) => a.started_at },
         { header: '结束', value: (a) => a.ended_at ?? '—' },
         { header: '结束原因', value: (a) => a.reason ?? '—' },

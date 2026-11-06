@@ -88,6 +88,7 @@ export const hubStatusCommand = defineCommand({
         ['PID', String(status.pid ?? '未知')],
         ['运行时长', `${status.uptime.toFixed(1)} 秒`],
         ['账本序号', String(status.ledger_seq)],
+        ['策略版本', status.policies?.version ?? '（未知）'],
         [
           '定时规则错误',
           status.schedules.errors.map((e) => `${e.rule_id ?? ''} ${e.message}`.trim()).join('；') ||

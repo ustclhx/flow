@@ -621,19 +621,21 @@ class LeaseRunner {
     }
     this.unacked = undefined
     if (u.outcome === 'delivered') {
-      // 中枢已写入 task.unblocked：回到 running，重新开始计时。
-      this.enterRunning()
+      // 幂等确认可能返回后续回合的 blocked；只有中枢确实恢复运行时才重新计时。
+      if (r.data.task.status === 'running') this.enterRunning()
     } else if (typeof u.outcome === 'object' && u.outcome.reason === 'round_closed') {
       this.env.logger.info(`回复 ${u.reply_id} 已拒收：授权回合已关闭或请求已变化`)
     } else if (
       u.outcome === 'dropped' ||
       (typeof u.outcome === 'object' && u.outcome.reason === 'request_changed')
     ) {
-      // supervisor 的批准被拒收（D15）：中枢已写 task.unblocked 并丢弃这条回复。worker 仍在等待，
-      // 执行器随后重新报告停下；这次卡住以 no_delegate 上报，直接交给用户。
+      // supervisor 的批准被拒收（D15）：中枢解除卡住后，下一次以 no_delegate 上报。
+      // 策略已撤回批准时幂等确认仍返回 blocked，保留当前回合，不能重新上报卡住。
       this.env.logger.info(`回复 ${u.reply_id} 已拒收：待批请求已变化或环境复查未通过`)
-      this.enterRunning()
-      this.noDelegateNext = true
+      if (r.data.task.status === 'running') {
+        this.enterRunning()
+        this.noDelegateNext = true
+      }
     } else {
       // worker 已不在：中枢让任务带着回复重新排队，本租约随之结束。
       this.release()

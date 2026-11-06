@@ -7,6 +7,44 @@
 旧动作 `flow.admin`、`tool:mcp__flow__<操作名>` 在加载时归一为新名称，规则档位和索引保留；
 迁移提示单独收集到 `warnings`（`legacy_policy_action`），不作为错误排除规则，也不改写配置文件。
 
+加载结果的 `version` 是有效规则有序数组经对象键排序的规范 JSON 的 SHA-256 前 12 位。
+注释、空白、无效规则与 `rule_index` 不参与；有效规则顺序及 `legacy_tool_action` 参与。
+`policyVersion(rules)` 计算该版本，`policyRuleHash(rule)` 返回单条规则的完整 SHA-256。
+可选 `rule_hash` 保存入账脱敏前的摘要，本身不参与哈希。
+`flow.admin` 与 `raindown.admin` 归一后语义一致，因此版本相同；旧 MCP 工具规则与直接写新名的规则
+因 `legacy_tool_action` 的保守合并语义不同，版本也不同。
+中枢在启动与每 60 秒检查文件 mtime，所有判定与建任务的加载也共用版本比较入口。
+首次有效基线写入 `hub.started`；若启动时配置损坏，运行中首次成功加载以 `policy.changed{from:null}`
+补记基线。重启只读取最近有效启动基线及其后的策略变化。
+全局 `policy.changed` 先入账，单任务通知写入失败记警告并跳过，不阻断其他任务或策略加载；受影响任务记录
+`task.policy_changed` 并显示在详情和收件箱。通用追加输入由第 8 阶段统一送达。
+`checkTaskMandateForResume(task, { supervisor_enabled, role })` 在恢复前检查 supervisor
+是否仍启用、角色的 `creatable_by` 是否仍允许它，角色不存在返回 `role_missing`。
+hub 合并管线通过 mandate 的源唤醒追溯 supervisor，只重新检查启用状态；合并角色仍由 hub/user 创建。
+旧任务使用账本中的 `created_by`。
+授权来源 `mandate.origin` 与创建者、任务业务字段 `origin` 分开。中枢目前产生以下来源：
+
+- `user`：用户直接创建、接受提案，或用户指令触发的 supervisor 唤醒；
+- `supervisor:instruction`、`supervisor:autonomous`：supervisor 分别在指令、自主唤醒中直接创建任务；
+- `schedule`：定时事件触发的 supervisor 唤醒；
+- `pipeline:review`、`pipeline:merge`：hub 的审查、合并管线；
+- `supervisor`：其他内部事件触发的 supervisor 唤醒，包括代回复唤醒；
+- `hub`：没有指定管线来源的其他 hub 创建任务。
+
+其他 AI 身份创建任务时，来源保留该 actor 的原始字符串；字段保持开放字符串以兼容这些身份及旧账本，
+不把未知来源当作 supervisor 授权。已有任务的旧来源不改写。接受提案仍保留提出草稿的唤醒与指令；
+业务字段 `origin` 的 `instruction/autonomous` 取值与继承规则不变。
+`task_retry` 的 `task.requeued` 另记本次重试的 `policy_version`，派工视图与 `task show` 展示每次派工的版本；
+创建时的 mandate 保持不变。旧账未记录重试版本时留空，租约过期的自动重排沿用上一派工依据。
+任务创建在策略文件损坏时沿用原有创建权限检查，以最近有效快照或空规则记录 mandate；验收命令的策略拒绝语义不变。
+进行中的代批在策略变化、委托前与 `task_respond` 前重新判定；原命中规则删除或新规则不再允许 supervisor
+时转交用户，尚未交付的 supervisor 批准通过同一转交事件标记为丢弃。续约首次下发回复前，
+`task.reply_fetched` 事件记录 `ReplyView.fetched_at`：已交付的批准不能撤回，未交付的批准可以撤回；
+迟到的 ack 只为交付机制之前的旧回复兜底：回复创建序号须早于账本首条 `task.reply_fetched`，
+或账本尚无任何交付记录；机制启用后创建且未交付的批准被撤回后，不能再靠 delivered 回执解锁。
+记录保留原决定/委托的 `policy_version`，
+策略变化引起的转交另记 `to_version`。
+
 ```yaml
 - scope: dev
   action: 'tool:*'
@@ -66,10 +104,10 @@ core 不访问文件系统或解析符号链接；节点在预检前对每个路
 最近的已存在祖先目录做 realpath 再拼回其余部分），原路径与解析后的路径都送去判定。
 
 raindown MCP 工具（`mcp__raindown__<操作名>`）中会扩大权限或替用户做决定的操作额外识别为具体
-动作（`RAINDOWN_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、
+动作（`RAINDOWN_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、`task_retry` → `task.retry`、
 `task_reply` → `task.reply`、`task_respond` → `task.respond`、`kb_proposals_accept` / `kb_proposals_reject` → `proposal.decide`、
 `resource_transfer` → `resource.transfer`。Bash 调 raindown CLI 时识别为同样的动作
-（`raindown task create|cancel|reply|respond`、`raindown kb proposals accept|reject`、`raindown resource transfer`）；
+（`raindown task create|cancel|retry|reply|respond`、`raindown kb proposals accept|reject`、`raindown resource transfer`）；
 `raindown hub`、`raindown policy`、`raindown daemon`、`raindown mcp`、`raindown node`、`raindown init` 识别为
 `raindown.admin`，`raindown secrets` 识别为 `secrets`。raindown 可执行文件按 basename 识别
 （`/Users/x/.bun/bin/raindown`），`bunx|npx|pnpx raindown`、`bun x raindown`、`bun [run] <脚本>.ts`、

@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   decideVerifySteps,
   defaultSupervisorConfig,
   issueTokenRequest,
+  loadPoliciesConfig,
   ok,
   type PolicyRule,
   policyRuleSchema,
@@ -130,6 +131,7 @@ async function setup(
         ),
       ),
     roles,
+    policy: { load: () => loadPoliciesConfig(raindownHome) },
     now: clock.now,
     newTaskId: () => `t-${String(++n).padStart(3, '0')}`,
     repoCheck: { homedir: () => fakeHome },
@@ -715,6 +717,9 @@ describe('supervisor 建任务的检查（2.4，D5）', () => {
     const triage = await s.supCreate(a.token, { parent: a.id, role: 'triage' })
     expect(triage.code).toBe('ok')
     expect(triage.body.data?.task?.origin).toBe('autonomous')
+    expect(s.store.getTask(triage.body.data?.task?.id ?? '')?.mandate?.origin).toBe(
+      'supervisor:autonomous',
+    )
     // 默认 reviewer（无只读配置）是 write
     expect((await s.supCreate(a.token, { parent: a.id, role: 'reviewer' })).code).toBe(
       'proposal_required',
@@ -1308,5 +1313,147 @@ describe('第二轮复核：只有节点与 user 能走节点协议并拿到唤�
         expected,
       ])
     }
+  })
+})
+
+describe('创建时固化授权依据', () => {
+  test('策略加载失败时授权依据沿用最近已知有效快照', async () => {
+    const s = await setup()
+    mkdirSync(join(s.raindownHome, 'config'), { recursive: true })
+    await writeFile(
+      join(s.raindownHome, 'config/policies.yaml'),
+      '- scope: user\n  action: task.create\n  level: auto\n',
+    )
+    const snapshot = must(await loadPoliciesConfig(s.raindownHome))
+    await writeFile(join(s.raindownHome, 'config/policies.yaml'), '[invalid yaml')
+    const tasks = createTaskService({
+      ledger: s.store,
+      workspaceExists: () => true,
+      roles,
+      policy: { load: () => loadPoliciesConfig(s.raindownHome), current: () => snapshot },
+    })
+    const task = must(
+      await tasks.createTask(
+        { goal: '用户任务', workspace: WS, role: 'triage', executor: 'claude-sdk' },
+        { actor: 'user' },
+      ),
+    ).task
+    expect(task.mandate).toMatchObject({
+      policy_version: snapshot.version,
+      matched_rules: [{ rule: snapshot.rules[0]?.rule }],
+    })
+  })
+
+  test('策略文件损坏不阻止原本合法的创建，授权依据不使用损坏规则', async () => {
+    const s = await setup()
+    mkdirSync(join(s.raindownHome, 'config'), { recursive: true })
+    await writeFile(join(s.raindownHome, 'config/policies.yaml'), '[invalid yaml')
+    const task = must(await s.userTask()).task
+    expect(task.mandate).toMatchObject({ origin: 'user', matched_rules: [] })
+    const wake = await s.wake()
+    expect((await s.supCreate(wake.token, { parent: wake.id })).status).toBe(201)
+    expect(code(await s.userTask({ verify: [{ cmd: ['pnpm', 'check'] }] }, 'reviewer'))).toBe(
+      'verify_not_allowed',
+    )
+  })
+
+  test('hub 审查管线写明来源', async () => {
+    const s = await setup()
+    const task = must(
+      await s.tasks.createTask(
+        {
+          goal: '审查',
+          workspace: WS,
+          role: 'pr-reviewer',
+          executor: 'claude-sdk',
+          inputs: { review: { pr: 'https://github.com/acme/repo/pull/1' } },
+        },
+        { actor: 'hub' },
+      ),
+    ).task
+    expect(task.mandate?.origin).toBe('pipeline:review')
+  })
+
+  test('由中枢记录创建策略、唯一原始指令与唤醒；重建后相同', async () => {
+    const s = await setup()
+    mkdirSync(join(s.raindownHome, 'config'), { recursive: true })
+    await writeFile(
+      join(s.raindownHome, 'config', 'policies.yaml'),
+      '- scope: supervisor\n  action: task.create\n  level: auto\n',
+    )
+    const instruction = must(
+      s.store.append(
+        {
+          type: 'user.instruction',
+          workspace: WS,
+          payload: { text: '检查当前状态', via: 'cli' },
+        },
+        { actor: 'user' },
+      ),
+    )
+    const wake = await s.wake('instruction', WS, [instruction.seq])
+    const created = await s.supCreate(wake.token, { parent: wake.id })
+    expect(created.status).toBe(201)
+    const createdTask = created.body.data?.task
+    if (!createdTask) throw new Error('没有创建任务')
+    const task = s.store.getTask(createdTask.id)
+    if (!task) throw new Error('任务投影不存在')
+    expect(task.mandate).toMatchObject({
+      created_by: 'supervisor',
+      origin: 'supervisor:instruction',
+      wake_task: wake.id,
+      instruction_seq: instruction.seq,
+      policy_version: must(await loadPoliciesConfig(s.raindownHome)).version,
+      matched_rules: [{ rule: { scope: 'supervisor', action: 'task.create', level: 'auto' } }],
+    })
+    expect(task.mandate?.matched_rules?.[0]?.rule_hash).toMatch(/^[0-9a-f]{64}$/)
+    must(s.store.rebuild())
+    expect(s.store.getTask(task.id)?.mandate).toEqual(task.mandate)
+  })
+
+  test('多个原始指令时省略instruction_seq；HTTP拒绝伪造mandate且幂等不改依据', async () => {
+    const s = await setup()
+    const seqs = ['第一条', '第二条'].map(
+      (text) =>
+        must(
+          s.store.append(
+            {
+              type: 'user.instruction',
+              workspace: WS,
+              payload: { text, via: 'cli' },
+            },
+            { actor: 'user' },
+          ),
+        ).seq,
+    )
+    const wake = await s.wake('instruction', WS, seqs)
+    const created = await s.supCreate(wake.token, {
+      parent: wake.id,
+      idempotency_key: 'mandate-immutable',
+    })
+    expect(created.status).toBe(201)
+    const createdTask = created.body.data?.task
+    if (!createdTask) throw new Error('没有创建任务')
+    const task = s.store.getTask(createdTask.id)
+    if (!task) throw new Error('任务投影不存在')
+    expect(task.mandate?.instruction_seq).toBeUndefined()
+    const again = await s.supCreate(wake.token, {
+      parent: wake.id,
+      idempotency_key: 'mandate-immutable',
+    })
+    const existingTask = again.body.data?.task
+    if (!existingTask) throw new Error('没有返回幂等任务')
+    expect(s.store.getTask(existingTask.id)?.mandate).toEqual(task.mandate)
+    const forged = await s.call('POST', '/v1/tasks', {
+      body: {
+        goal: '伪造依据',
+        workspace: WS,
+        role: 'triage',
+        executor: 'claude-sdk',
+        mandate: task.mandate,
+      },
+    })
+    expect(forged.status).toBe(400)
+    expect(forged.code).toBe('invalid_arguments')
   })
 })

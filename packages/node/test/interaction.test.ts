@@ -52,7 +52,7 @@ const interactive = (extra: Record<string, unknown>[] = []) =>
   })
 
 describe('送达与恢复', () => {
-  test('交互式任务的回复：下一次续约送进 worker，账本依次记录 task.replied 与 task.unblocked', async () => {
+  test('交互式任务的回复：下一次续约送进 worker，账本先记录交付再确认 task.unblocked', async () => {
     const b = await open()
     const id = await b.create(interactive())
     await b.until(id, (t) => t.status === 'blocked')
@@ -68,6 +68,7 @@ describe('送达与恢复', () => {
       'lease.granted',
       'task.blocked',
       'task.replied',
+      'task.reply_fetched',
       'task.unblocked',
       'task.done',
       'task.attempt_ended',
@@ -227,14 +228,15 @@ describe('送达与恢复', () => {
     expect(t.result?.summary).toBe('已恢复（会话 无）：text 用 main')
     const types = b.types(id)
     expect(types).not.toContain('task.unblocked')
-    expect(types.slice(3, 8)).toEqual([
+    expect(types.slice(3, 9)).toEqual([
       'task.blocked',
       'task.replied',
+      'task.reply_fetched',
       'task.blocked',
       'task.attempt_ended',
       'task.requeued_with_reply',
     ])
-    expect(b.events(id)[5]?.payload).toMatchObject({ reason: 'crashed', lease_held: false })
+    expect(b.events(id)[6]?.payload).toMatchObject({ reason: 'crashed', lease_held: false })
   })
 
   test('deliver 临时失败：不取消 worker，下一次续约重试直到送达（审查第 6 条）', async () => {
@@ -250,6 +252,7 @@ describe('送达与恢复', () => {
     expect(b.types(id).slice(3)).toEqual([
       'task.blocked',
       'task.replied',
+      'task.reply_fetched',
       'task.unblocked',
       'task.done',
       'task.attempt_ended',

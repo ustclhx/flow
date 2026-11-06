@@ -1,8 +1,15 @@
 import { afterEach, expect, test } from 'bun:test'
-import { type DeliveredReply, NO_ADAPTER_CAPABILITIES, ok, type Result } from '@raindown/core'
+import {
+  type DeliveredReply,
+  NO_ADAPTER_CAPABILITIES,
+  ok,
+  type RenewLeaseData,
+  type Result,
+} from '@raindown/core'
 import { createInboxReactor } from '@raindown/hub'
 import {
   ActivityQueue,
+  type DeliverResult,
   type ExecutorOutcome,
   type ExecutorPlugin,
   idleSignal,
@@ -15,6 +22,216 @@ afterEach(async () => {
   await current?.close()
   current = undefined
 })
+
+for (const outcome of ['dropped', 'delivered'] as const) {
+  test(`${outcome}旧回执幂等返回blocked时保留当前卡住，用户回复仍可送达`, async () => {
+    const activity = new ActivityQueue()
+    let completeInitialPrecheck: () => void = () => {}
+    const initialPrecheck = new Promise<void>((resolve) => {
+      completeInitialPrecheck = resolve
+    })
+    const deliveries: string[] = []
+    let finish: (result: Result<ExecutorOutcome>) => void = () => {}
+    const done = new Promise<Result<ExecutorOutcome>>((resolve) => {
+      finish = resolve
+    })
+    let completeDelivery: (result: DeliverResult) => void = () => {}
+    const firstDelivery = new Promise<DeliverResult>((resolve) => {
+      completeDelivery = resolve
+    })
+    const executor: ExecutorPlugin = {
+      type: 'probe',
+      adapterCapabilities: NO_ADAPTER_CAPABILITIES,
+      classify: () => ({ reason: 'awaiting_approval', message: '等待授权' }),
+      run(_contract, ctx) {
+        void ctx.precheck?.({ tool: 'ApprovalProbe' }).then((verdict) => {
+          if (verdict.allow) throw new Error('预检应等待 supervisor 批准')
+          activity.push(
+            idleSignal(new Date().toISOString(), '等待授权', {
+              request_id: 'round-old',
+              decision_id: verdict.decision_id,
+            }),
+          )
+          completeInitialPrecheck()
+        })
+        return {
+          activity,
+          done,
+          async deliver(reply) {
+            deliveries.push(reply.reply_id)
+            return deliveries.length === 1 ? firstDelivery : 'delivered'
+          },
+          async cancel() {
+            activity.close()
+            finish(ok({ outcome: 'cancelled' }))
+          },
+        }
+      },
+    }
+    let acknowledgements = 0
+    let legacyReplyDelivered = false
+    const blockReports: unknown[] = []
+    const b = await bench(
+      {
+        executors: [executor],
+        policies: [{ scope: 'ws/demo', action: 'tool:ApprovalProbe', level: 'supervisor' }],
+      },
+      60,
+      (url, init) => {
+        if (url.endsWith('/renew')) {
+          const body = JSON.parse(String(init?.body))
+          if (body.blocked) blockReports.push(body.blocked)
+          const pending = b.ledger.getReply('r-old')
+          if (outcome === 'dropped' && !legacyReplyDelivered && pending?.state === 'pending') {
+            // 模拟升级前的旧中枢交付：续约正常生效，但尚无 reply_fetched 事件。
+            // 之后恢复真实服务，验证升级后的中枢如何确认旧版在途回复。
+            const lease = b.ledger.getLease(url.split('/').at(-2) as string)
+            if (!lease) throw new Error('没有旧版交付对应的租约')
+            const block = b.events(lease.task_id).findLast((event) => event.type === 'task.blocked')
+            if (!block) throw new Error('没有旧版交付对应的授权卡住')
+            const expiresAt = new Date(b.clock.now() + lease.ttl_s * 1000).toISOString()
+            expect(b.ledger.renewLease(lease.lease_id, expiresAt)).toBe(true)
+            b.ledger.touchNode(lease.node_id)
+            b.ledger.recordActivity(lease.task_id, body.activity)
+            legacyReplyDelivered = true
+            const data: RenewLeaseData = {
+              lease_id: lease.lease_id,
+              expires_at: expiresAt,
+              cancel_requested: b.task(lease.task_id).cancel_requested,
+              reply: {
+                reply_id: pending.id,
+                block_seq: block.seq,
+                kind: pending.kind,
+                by: pending.by,
+                ...(pending.text === null ? {} : { text: pending.text }),
+              },
+            }
+            return new Response(JSON.stringify(ok(data)))
+          }
+        }
+        if (!url.endsWith('/ack-reply')) return undefined
+        acknowledgements++
+        if (outcome === 'dropped' && acknowledgements === 1) {
+          expect(JSON.parse(String(init?.body))).toMatchObject({
+            reply_id: 'r-old',
+            outcome: 'dropped',
+            reason: 'request_changed',
+          })
+        }
+        if (outcome !== 'delivered' || acknowledgements !== 1) return undefined
+        // 首次确认已生效但响应丢失；重试前中枢进入另一个授权回合。
+        const leaseId = url.split('/').at(-2) as string
+        expect(b.protocol.service.ackReply(leaseId, JSON.parse(String(init?.body))).ok).toBe(true)
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: { kind: 'retryable', code: 'hub_busy', message: '稍后重试' },
+          }),
+          { status: 503 },
+        )
+      },
+    )
+    current = b
+    const id = await b.create({ executor: 'probe' })
+    // 策略读取使用真实 I/O；先等预检完成，避免虚拟时钟触发 5 秒超时。
+    await initialPrecheck
+    await b.until(id, (task) => task.status === 'blocked')
+    const block = b.events(id).find((event) => event.type === 'task.blocked')
+    if (block?.type !== 'task.blocked') throw new Error('没有授权卡住')
+    const base = { task_id: id, workspace: b.task(id).workspace }
+    expect(
+      b.ledger.append(
+        {
+          ...base,
+          type: 'task.reply_delegated',
+          payload: {
+            task_id: id,
+            block_seq: block.seq,
+            kind: 'awaiting_approval',
+            decision_id: block.payload.decision_id,
+            deadline: '2099-01-01T00:00:00.000Z',
+          },
+        },
+        { actor: 'hub' },
+      ).ok,
+    ).toBe(true)
+    expect(
+      b.ledger.append(
+        {
+          ...base,
+          type: 'task.replied',
+          payload: { reply_id: 'r-old', kind: 'approve', via: 'supervisor' },
+        },
+        { actor: 'supervisor' },
+      ).ok,
+    ).toBe(true)
+    await b.until(id, () => deliveries.length === 1)
+    if (outcome === 'dropped') {
+      // 旧中枢交付没有 fetched 记录，升级后的策略撤回仍早于旧 request_changed 回执。
+      expect(legacyReplyDelivered).toBe(true)
+      expect(b.ledger.getReply('r-old')?.fetched_at).toBeUndefined()
+      expect(
+        b.ledger.append(
+          {
+            ...base,
+            type: 'task.reply_escalated',
+            payload: {
+              reason: 'policy_changed',
+              block_seq: block.seq,
+              dropped_reply_id: 'r-old',
+              policy_version: '012345abcdef',
+              to_version: 'abcdef012345',
+            },
+          },
+          { actor: 'hub' },
+        ).ok,
+      ).toBe(true)
+    }
+    completeDelivery(outcome)
+    await b.until(id, () => acknowledgements === 1)
+    if (outcome === 'delivered') {
+      expect(b.task(id).status).toBe('running')
+      expect(
+        b.ledger.append(
+          {
+            ...base,
+            type: 'task.blocked',
+            payload: {
+              reason: 'awaiting_approval',
+              message: '新的授权',
+              lease_held: true,
+              request_id: 'round-new',
+            },
+          },
+          { actor: 'node:n-bench' },
+        ).ok,
+      ).toBe(true)
+      await b.until(id, () => acknowledgements === 2)
+    }
+    await b.clock.advance(0)
+    const blocks = b.events(id).filter((event) => event.type === 'task.blocked')
+    expect(b.task(id).status).toBe('blocked')
+    expect(b.ledger.getReply('r-old')?.state).toBe(outcome)
+    activity.push(idleSignal(new Date(b.clock.now()).toISOString(), '仍在等待授权'))
+    await b.clock.advance(60_000)
+    expect(b.node.active()).toBe(1)
+    expect(blockReports).toHaveLength(1)
+    expect(b.events(id).filter((event) => event.type === 'task.blocked')).toEqual(blocks)
+    const userReply = b.tasks.replyTask(id, { kind: 'approve' }, { actor: 'user' })
+    expect(userReply.ok).toBe(true)
+    await b.until(id, (task) => task.status === 'running', 60_000)
+    expect(deliveries).toHaveLength(2)
+    expect(b.events(id).filter((event) => event.type === 'task.blocked')).toEqual(blocks)
+    activity.push(
+      idleSignal(new Date(b.clock.now()).toISOString(), '用户回复后的新授权', {
+        request_id: 'round-after-user',
+      }),
+    )
+    await b.until(id, (task) => task.status === 'blocked', 60_000)
+    expect(b.task(id).blocked).not.toHaveProperty('no_delegate')
+    expect(blockReports).toHaveLength(2)
+  })
+}
 
 test('续约先绑定卡住seq再投递；round_closed确认一次后保留blocked且不重新委托', async () => {
   const activity = new ActivityQueue()

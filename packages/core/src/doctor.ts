@@ -11,6 +11,7 @@ import type { execCommand } from './git.ts'
 import { isRepoRoot } from './git.ts'
 import { type Env, GIT_REPOS, type RaindownHomeSource, raindownPaths } from './home.ts'
 import { loadPoliciesConfig } from './policy/config.ts'
+import { policyVersion } from './policy/version.ts'
 import { fail, ok, type Result } from './result.ts'
 import {
   CLAUDE_READ_REQUIRED_DISALLOWED,
@@ -449,6 +450,11 @@ export async function runDoctor(
   if (!policies.ok) {
     checks.push({ id: 'policies.config', ok: false, message: policies.error.message })
   } else {
+    checks.push({
+      id: 'policies.version',
+      ok: true,
+      message: `当前策略版本：${policyVersion(policies.data.rules)}`,
+    })
     for (const issue of [...policies.data.errors, ...policies.data.warnings]) {
       const warning = policies.data.warnings.includes(issue)
       checks.push({
