@@ -1,4 +1,5 @@
 import { briefUpdateOp } from './brief.ts'
+import { eventGetOp } from './events.ts'
 import { inboxActOp, inboxListOp } from './inbox.ts'
 import { captureOp, kbJournalOp } from './journal.ts'
 import type { Operation } from './operation.ts'
@@ -31,6 +32,7 @@ import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './worksp
 
 export * from './binding.ts'
 export * from './brief.ts'
+export * from './events.ts'
 export * from './inbox.ts'
 export * from './journal.ts'
 export * from './operation.ts'
@@ -52,6 +54,7 @@ export const operations = [
   taskCreateOp,
   taskListOp,
   taskShowOp,
+  eventGetOp,
   taskCancelOp,
   taskRetryOp,
   taskReplyOp,

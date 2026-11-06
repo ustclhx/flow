@@ -145,6 +145,7 @@ describe('任务操作与真实中枢', () => {
     expect(listed.tasks.map((t) => t.id)).toEqual([created.task.id])
     expect(data(await client().listTasks({ status: 'done' })).tasks).toEqual([])
     const shown = data(await invokeOperation(taskShowOp, { id: created.task.id }, ctx()))
+    if ('section' in shown) throw new Error('默认 task_show 应返回完整详情')
     expect(shown.events[0]?.actor).toBe('test-agent')
     const mandate = {
       created_by: 'supervisor',

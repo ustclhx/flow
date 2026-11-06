@@ -20,6 +20,7 @@ import {
   type LedgerEventDraft,
   type ListTasksQuery,
   type NodeView,
+  normalizePrUrl,
   ok,
   openDatabase,
   parseLedgerEventDraft,
@@ -40,6 +41,7 @@ import type { z } from 'zod'
 import { redactDeep } from '../secrets/redactor.ts'
 import { type Applier, createApplier } from './apply.ts'
 import type { EventFilter, LedgerMaintenance, LedgerReader } from './port.ts'
+import { indexTaskPrs } from './pr-index.ts'
 import {
   LEDGER_COLUMN_MIGRATIONS,
   LEDGER_DDL,
@@ -175,6 +177,10 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
 
   getTask(id: string): TaskView | null
   listTasks(filter?: Partial<ListTasksQuery>): TaskView[]
+  /** 从可重放的 PR 索引读取，按创建时间倒序分页，包含历史派工产物。 */
+  tasksForPr(workspace: string, pr: string, limit?: number, offset?: number): TaskView[]
+  taskPrs(taskId: string): string[]
+  prTasksSummary(workspace: string, pr: string): { count: number; chars: number }
   /** 某 workspace 未结束（非 done / failed / cancelled）的任务，按更新时间倒序，最多 limit 条。 */
   openTasks(workspace: string, limit: number): TaskView[]
   /** 全部 queued 任务，按创建先后（created_seq 升序），供租约分配使用。 */
@@ -292,8 +298,27 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
 /** 打开（必要时创建）账本数据库并建表。 */
 export async function openLedger(path: string, opts: OpenLedgerOptions = {}): Promise<LedgerStore> {
   const db = await openDatabase(path)
-  db.exec(LEDGER_DDL)
-  migrateColumns(db)
+  const hadPrIndex = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'task_prs'")
+    .get()
+  // 建表与回填在一个事务中完成，升级中断后不会留下貌似已初始化的空索引。
+  db.transaction(() => {
+    db.exec(LEDGER_DDL)
+    migrateColumns(db)
+    if (!hadPrIndex) {
+      let after = 0
+      for (;;) {
+        const rows = db
+          .prepare(
+            "SELECT * FROM events WHERE seq > ? AND type IN ('task.created', 'task.done', 'task.failed', 'task.cancelled') ORDER BY seq LIMIT 500",
+          )
+          .all(after) as EventRow[]
+        if (!rows.length) break
+        for (const row of rows) indexTaskPrs(db, rowToEvent(row))
+        after = rows.at(-1)?.seq ?? after
+      }
+    }
+  })
   return createStore(db, opts)
 }
 
@@ -1536,10 +1561,17 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           params.push(v)
         }
       }
-      params.push(filter.limit ?? 50)
+      if (filter.pr !== undefined) {
+        where.push(
+          `t.id IN (SELECT task_id FROM task_prs WHERE pr = ?${filter.workspace === undefined ? '' : ' AND workspace = ?'})`,
+        )
+        params.push(normalizePrUrl(filter.pr) ?? '')
+        if (filter.workspace !== undefined) params.push(filter.workspace)
+      }
+      params.push(filter.limit ?? 50, filter.offset ?? 0)
       const clause = where.length === 0 ? '' : `WHERE ${where.join(' AND ')}`
       return all<TaskRow>(
-        `${TASK_SELECT} ${clause} ORDER BY t.created_seq DESC LIMIT ?`,
+        `${TASK_SELECT} ${clause} ORDER BY t.created_seq DESC LIMIT ? OFFSET ?`,
         ...params,
       ).map(rowToTask)
     },
@@ -1596,18 +1628,37 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         )?.n ?? 0
       )
     },
-    prRelatedTasks(workspace, prNumber, limit) {
-      const suffix = `%/pull/${Math.trunc(prNumber)}`
+    tasksForPr(workspace, pr, limit = 50, offset = 0) {
+      const normalized = normalizePrUrl(pr)
+      if (!normalized) return []
       return all<TaskRow>(
-        `${TASK_SELECT} WHERE t.workspace = ?
-           AND (json_extract(t.contract_json, '$.inputs.review.pr') LIKE ?
-             OR EXISTS (SELECT 1 FROM json_each(t.result_json, '$.artifacts') AS a
-                        WHERE json_extract(a.value, '$.kind') = 'pr'
-                          AND json_extract(a.value, '$.ref') LIKE ?))
-         ORDER BY t.created_seq ASC LIMIT ?`,
+        `${TASK_SELECT} JOIN task_prs p ON p.task_id = t.id WHERE p.workspace = ? AND p.pr = ? ORDER BY t.created_seq DESC LIMIT ? OFFSET ?`,
         workspace,
-        suffix,
-        suffix,
+        normalized,
+        limit,
+        offset,
+      ).map(rowToTask)
+    },
+    prTasksSummary(workspace, pr) {
+      const row = get<{ count: number; chars: number }>(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(p.summary_chars + length(t.status)), 0) + MAX(COUNT(*) - 1, 0) + 2 AS chars
+         FROM task_prs p JOIN tasks t ON t.id = p.task_id WHERE p.workspace = ? AND p.pr = ?`,
+        workspace,
+        normalizePrUrl(pr) ?? '',
+      )
+      return row ?? { count: 0, chars: 2 }
+    },
+    taskPrs(taskId) {
+      return all<{ url: string }>(
+        'SELECT url FROM task_prs WHERE task_id = ? ORDER BY pr',
+        taskId,
+      ).map((row) => row.url)
+    },
+    prRelatedTasks(workspace, prNumber, limit) {
+      return all<TaskRow>(
+        `${TASK_SELECT} WHERE t.id IN (SELECT task_id FROM task_prs WHERE workspace = ? AND pr_number = ?) ORDER BY t.created_seq ASC LIMIT ?`,
+        workspace,
+        Math.trunc(prNumber),
         limit,
       ).map(rowToTask)
     },

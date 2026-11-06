@@ -74,7 +74,7 @@ describe('工具清单', () => {
   test('每个操作一个工具：名称、描述与 inputSchema 来自操作定义', async () => {
     const client = await connect({ actor: 'claude' })
     const { tools } = await client.listTools()
-    const visible = operations.filter((op) => op.name !== 'raindown_report')
+    const visible = operations.filter((op) => !['raindown_report', 'event_get'].includes(op.name))
     expect(tools.map((t) => t.name)).toEqual(visible.map((o) => o.name))
     for (const op of visible) {
       const tool = tools.find((t) => t.name === op.name)

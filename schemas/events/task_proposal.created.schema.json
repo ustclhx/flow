@@ -47,6 +47,12 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
           "description": "提交提案的唤醒任务"
         },
+        "instruction_seq": {
+          "description": "经中枢校验的提案原始指令序号",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
         "draft": {
           "type": "object",
           "properties": {
@@ -54,6 +60,59 @@
               "type": "string",
               "minLength": 1,
               "description": "任务目标"
+            },
+            "origin_instruction": {
+              "description": "中枢附加的用户原始指令；goal 是 supervisor 的目标与补充要求",
+              "type": "object",
+              "properties": {
+                "seq": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 4000
+                },
+                "chars": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "read": {
+                  "type": "object",
+                  "properties": {
+                    "op": {
+                      "type": "string",
+                      "const": "event_get"
+                    },
+                    "args": {
+                      "type": "object",
+                      "properties": {
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "seq"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "seq",
+                "text"
+              ],
+              "additionalProperties": false
             },
             "workspace": {
               "type": "string",
@@ -737,6 +796,288 @@
                             "type": "string",
                             "maxLength": 4000
                           },
+                          "chars": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "read": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "op": {
+                                    "type": "string",
+                                    "const": "task_list"
+                                  },
+                                  "args": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspace": {
+                                        "type": "string",
+                                        "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                                        "description": "workspace 标识，形如 ws/<id>"
+                                      },
+                                      "pr": {
+                                        "type": "string",
+                                        "format": "uri"
+                                      },
+                                      "offset": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "limit": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 1000
+                                      }
+                                    },
+                                    "required": [
+                                      "workspace",
+                                      "pr"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "op",
+                                  "args"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "op": {
+                                    "type": "string",
+                                    "const": "event_get"
+                                  },
+                                  "args": {
+                                    "type": "object",
+                                    "properties": {
+                                      "seq": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "seq"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "op",
+                                  "args"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "op": {
+                                    "type": "string",
+                                    "const": "task_show"
+                                  },
+                                  "args": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                                        "description": "任务 id，由中枢在创建时分配"
+                                      },
+                                      "section": {
+                                        "type": "string",
+                                        "enum": [
+                                          "summary",
+                                          "events",
+                                          "tail",
+                                          "attempts",
+                                          "replies",
+                                          "instruction"
+                                        ]
+                                      },
+                                      "offset": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "limit": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 1000
+                                      }
+                                    },
+                                    "required": [
+                                      "id"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "op",
+                                  "args"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "task": {
+                            "description": "中枢生成的关联任务快照；省略内容附 chars 与读取指针",
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {}
+                          },
+                          "sources": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "field": {
+                                  "type": "string"
+                                },
+                                "chars": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "read": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "const": "task_list"
+                                        },
+                                        "args": {
+                                          "type": "object",
+                                          "properties": {
+                                            "workspace": {
+                                              "type": "string",
+                                              "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                                              "description": "workspace 标识，形如 ws/<id>"
+                                            },
+                                            "pr": {
+                                              "type": "string",
+                                              "format": "uri"
+                                            },
+                                            "offset": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "limit": {
+                                              "type": "integer",
+                                              "minimum": 1,
+                                              "maximum": 1000
+                                            }
+                                          },
+                                          "required": [
+                                            "workspace",
+                                            "pr"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "op",
+                                        "args"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "const": "event_get"
+                                        },
+                                        "args": {
+                                          "type": "object",
+                                          "properties": {
+                                            "seq": {
+                                              "type": "integer",
+                                              "exclusiveMinimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": [
+                                            "seq"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "op",
+                                        "args"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "const": "task_show"
+                                        },
+                                        "args": {
+                                          "type": "object",
+                                          "properties": {
+                                            "id": {
+                                              "type": "string",
+                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                                              "description": "任务 id，由中枢在创建时分配"
+                                            },
+                                            "section": {
+                                              "type": "string",
+                                              "enum": [
+                                                "summary",
+                                                "events",
+                                                "tail",
+                                                "attempts",
+                                                "replies",
+                                                "instruction"
+                                              ]
+                                            },
+                                            "offset": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "limit": {
+                                              "type": "integer",
+                                              "minimum": 1,
+                                              "maximum": 1000
+                                            }
+                                          },
+                                          "required": [
+                                            "id"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "op",
+                                        "args"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "chars",
+                                "read"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "data": {
                             "description": "中枢附上的结构化上下文，例如代回复时的 block_seq、请求的命令、终端末尾、diff_stat、目标与角色",
                             "type": "object",
@@ -754,6 +1095,165 @@
                         "title": "Wake event",
                         "description": "唤醒合并的一条账本事件"
                       }
+                    },
+                    "tasks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      }
+                    },
+                    "prs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      }
+                    },
+                    "overflow": {
+                      "type": "object",
+                      "properties": {
+                        "chars": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "read": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "op": {
+                                  "type": "string",
+                                  "const": "task_list"
+                                },
+                                "args": {
+                                  "type": "object",
+                                  "properties": {
+                                    "workspace": {
+                                      "type": "string",
+                                      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                                      "description": "workspace 标识，形如 ws/<id>"
+                                    },
+                                    "pr": {
+                                      "type": "string",
+                                      "format": "uri"
+                                    },
+                                    "offset": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "limit": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 1000
+                                    }
+                                  },
+                                  "required": [
+                                    "workspace",
+                                    "pr"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "op",
+                                "args"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "op": {
+                                  "type": "string",
+                                  "const": "event_get"
+                                },
+                                "args": {
+                                  "type": "object",
+                                  "properties": {
+                                    "seq": {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "seq"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "op",
+                                "args"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "op": {
+                                  "type": "string",
+                                  "const": "task_show"
+                                },
+                                "args": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                                      "description": "任务 id，由中枢在创建时分配"
+                                    },
+                                    "section": {
+                                      "type": "string",
+                                      "enum": [
+                                        "summary",
+                                        "events",
+                                        "tail",
+                                        "attempts",
+                                        "replies",
+                                        "instruction"
+                                      ]
+                                    },
+                                    "offset": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "limit": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 1000
+                                    }
+                                  },
+                                  "required": [
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "op",
+                                "args"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "chars",
+                        "read"
+                      ],
+                      "additionalProperties": false
                     },
                     "note": {
                       "description": "附加说明，例如手动放行队列时的提示",

@@ -33,6 +33,7 @@ import {
   redactLines,
   redactSecrets,
   renderRecoveryPrompt,
+  renderWorkerTaskPrompt,
   reviewerRoleProblem,
   reviewOutput,
   SUPERVISOR_ACTOR,
@@ -129,6 +130,9 @@ export const RAINDOWN_MCP_AUTO_ALLOWED = [
   'task_list',
   'task_show',
 ] as const
+/** 只在中枢凭证已校验的 task / wake 绑定会话中自动放行的读取工具。 */
+export const BOUND_MCP_AUTO_ALLOWED = ['event_get'] as const
+
 /**
  * 只在 supervisor 会话（`kind: supervisor`）中自动放行的 raindown MCP 工具（design D7；tasks 4.1）：
  * `ask_user`、`task_propose`、`decision_review` 只产生等待用户处理的内容；`patrol_report` 只写 journal 与
@@ -163,14 +167,17 @@ export function readRoleMayUse(
   toolName: string,
   structuredOutput: boolean,
   mcpServer?: { name: string; source: string },
+  binding?: 'task' | 'wake',
 ): boolean {
   if ((READ_ROLE_TOOLS as readonly string[]).includes(toolName)) return true
   if (toolName === STRUCTURED_OUTPUT_TOOL) return structuredOutput
   if (!toolName.startsWith(RAINDOWN_MCP_TOOL_PREFIX)) return false
   // SDK 没有给出来源时按名字判断（只读角色不加载其他 MCP 来源：setting_sources 必须为 []）；给出时必须是 raindown。
   if (mcpServer !== undefined && !isRaindownMcp(toolName, mcpServer)) return false
-  return (RAINDOWN_MCP_AUTO_ALLOWED as readonly string[]).includes(
-    toolName.slice(RAINDOWN_MCP_TOOL_PREFIX.length),
+  const name = toolName.slice(RAINDOWN_MCP_TOOL_PREFIX.length)
+  return (
+    (RAINDOWN_MCP_AUTO_ALLOWED as readonly string[]).includes(name) ||
+    (binding !== undefined && (BOUND_MCP_AUTO_ALLOWED as readonly string[]).includes(name))
   )
 }
 
@@ -356,8 +363,8 @@ export function classifyClaudeSdk(snapshot: StuckSnapshot): StuckVerdict | null 
 }
 
 /** 首条用户消息：任务说明。 */
-export function renderTaskPrompt(contract: TaskContract, cwd: string): string {
-  const lines = ['# 任务', '', contract.goal.trim(), '', `工作目录：${cwd}`]
+export function renderTaskPrompt(contract: TaskContract, cwd: string, taskId?: string): string {
+  const lines = ['# 任务', '', renderWorkerTaskPrompt(contract, taskId), '', `工作目录：${cwd}`]
   if (contract.context?.length) {
     lines.push('', '## 上下文引用', ...contract.context.map((c) => `- ${c}`))
     lines.push('（brain 条目可以通过 raindown MCP 的 kb 工具检索。）')
@@ -668,7 +675,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
       }
 
       const makeCanUseTool =
-        (perms: ClaudeSdkPermissions, kind: RoleKind): CanUseTool =>
+        (perms: ClaudeSdkPermissions, kind: RoleKind, boundWake: boolean): CanUseTool =>
         async (toolName, toolInput, opts) => {
           if (finished) return { behavior: 'deny', message: '任务已结束', interrupt: true }
           // 有效类别为 read 的角色（tasks 5.7）：非只读工具一律拒绝，不做预检、不进审批。
@@ -678,6 +685,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
               toolName,
               sessionCtx.readScope?.structuredOutput === true,
               opts.mcpServer,
+              boundWake ? 'wake' : undefined,
             )
           ) {
             return {
@@ -1045,7 +1053,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
                 reviewGitConfig: review.gitConfig,
               }
             : {}),
-          canUseTool: makeCanUseTool(perms.data, kind),
+          canUseTool: makeCanUseTool(perms.data, kind, supervisor.data !== undefined),
           abortController,
           writtenFiles,
           stderr: (data) => {
@@ -1059,7 +1067,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         const taskInput = resume?.session
           ? renderReply(resume.reply)
           : [
-              renderTaskPrompt(contract, sessionCtx.cwd),
+              renderTaskPrompt(contract, sessionCtx.cwd, sessionCtx.taskId),
               ...(review ? ['', reviewPromptSection(review)] : []),
               ...(resume ? ['', renderReply(resume.reply)] : []),
             ].join('\n')
@@ -1353,7 +1361,12 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
   // 写工具或 MCP 写操作不能借 allowedTools 跳过拦截。
   const roleAllowed = readOnly
     ? i.perms.allowedTools.filter((rule) =>
-        readRoleMayUse(rule.split('(', 1)[0]?.trim() ?? '', structured),
+        readRoleMayUse(
+          rule.split('(', 1)[0]?.trim() ?? '',
+          structured,
+          undefined,
+          sup ? 'wake' : undefined,
+        ),
       )
     : i.perms.allowedTools
   // 只放行清单中的 raindown 工具（见 RAINDOWN_MCP_AUTO_ALLOWED），其余 raindown 工具走 canUseTool 审批。
@@ -1362,7 +1375,9 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
       ...roleAllowed,
       ...RAINDOWN_MCP_AUTO_ALLOWED.map((name) => `${RAINDOWN_MCP_TOOL_PREFIX}${name}`),
       ...(sup
-        ? SUPERVISOR_MCP_AUTO_ALLOWED.map((name) => `${RAINDOWN_MCP_TOOL_PREFIX}${name}`)
+        ? [...BOUND_MCP_AUTO_ALLOWED, ...SUPERVISOR_MCP_AUTO_ALLOWED].map(
+            (name) => `${RAINDOWN_MCP_TOOL_PREFIX}${name}`,
+          )
         : []),
       // 结构化输出（审查任务）只产生结论，不经审批。
       ...(i.outputFormat ? [STRUCTURED_OUTPUT_TOOL] : []),
@@ -1432,6 +1447,7 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
                         input.tool_name,
                         i.ctx.readScope?.structuredOutput === true,
                         input.mcp_server,
+                        sup ? 'wake' : undefined,
                       )
                     ) {
                       return {

@@ -8,7 +8,8 @@ import {
   type AskUserRequest,
   type BriefUpdateRequest,
   type CancelTaskRequest,
-  compatibleShowTaskData,
+  type CreateTaskRequest,
+  compatibleTaskShowResponse,
   type DecisionReviewRequest,
   ENDPOINTS,
   type EndpointName,
@@ -25,12 +26,14 @@ import {
   type PolicyCheckRequest,
   type ReplyTaskRequest,
   type RetryTaskRequest,
+  type ShowTaskData,
+  type ShowTaskQuery,
   type TaskProposeRequest,
   type TaskRespondRequest,
+  type TaskShowResponse,
   type TelegramLinkCodeRequest,
 } from '../ledger/protocol.ts'
 import type { SupervisorWakeRequest } from '../ledger/supervisor-api.ts'
-import type { TaskContractInput } from '../ledger/task.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { loadHubConfig, resolveHubUrl } from './config.ts'
 
@@ -152,20 +155,25 @@ export class HubClient {
       const { kind, code, message, details } = error.data.error
       return fail(kind, code, message, details)
     }
-    const schema = name === 'tasks-show' ? compatibleShowTaskData : endpoint.response
+    const schema = name === 'tasks-show' ? compatibleTaskShowResponse : endpoint.response
     const parsed = okBody(schema).safeParse(body)
     if (!response.ok || !parsed.success) return invalidResponse()
     return ok(parsed.data.data as ResponseData<N>)
   }
 
-  createTask(input: TaskContractInput) {
+  createTask(input: CreateTaskRequest) {
     return this.request('tasks-create', input)
   }
   listTasks(input: z.input<typeof listTasksQuery> = {}) {
     return this.request('tasks-list', input)
   }
-  showTask(id: string) {
-    return this.request('tasks-show', undefined, id)
+  showTask(id: string): Promise<Result<ShowTaskData>>
+  showTask(id: string, query: ShowTaskQuery): Promise<Result<TaskShowResponse>>
+  showTask(id: string, query?: ShowTaskQuery): Promise<Result<TaskShowResponse>> {
+    return this.request('tasks-show', query, id)
+  }
+  getEvent(seq: number) {
+    return this.request('events-get', undefined, String(seq))
   }
   cancelTask(id: string, input: CancelTaskRequest = {}) {
     return this.request('tasks-cancel', input, id)

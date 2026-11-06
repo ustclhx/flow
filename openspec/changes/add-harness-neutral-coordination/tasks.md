@@ -25,7 +25,7 @@
 ## 3. 结构化上报
 
 - [x] 3.1 派工令牌（泛化 wake token，D2）；中枢按令牌识别任务与派工
-- [x] 3.2 MCP 服务器按绑定类型裁剪工具集；任务绑定只暴露 raindown_report、只读知识操作、限本任务的 task_show / event_get（event_get 随 6.1 接入）
+- [x] 3.2 MCP 服务器按绑定类型裁剪工具集；任务绑定只暴露 raindown_report、只读知识操作、限本任务的 task_show / event_get（event_get 已由 6.1 接入）
 - [x] 3.3 `raindown_report` 操作（worker-report spec 全部 Scenario），含 question 选项与推荐项、handback 字段（本 PR 完成中枢接口与结果处理，停下后的节点合并见 3.4）
 - [ ] 3.4 节点合并上报与推断（D3），`basis` 写入 `task.blocked`；矛盾事件
 - [ ] 3.5 适配器注入 Raindown MCP：codex-orca / codex-exec 在 Raindown 生成的 CODEX_HOME 配置中注入；claude-sdk 注入任务绑定
@@ -48,10 +48,10 @@
 
 ## 6. 上下文指针与原始指令
 
-- [ ] 6.1 `event_get` 只读操作（可见范围检查、遮蔽）
-- [ ] 6.2 `task_show` 增加 section 与分页；读取指针格式（D12）
-- [ ] 6.3 唤醒输入降级时附 `chars` 与指针；PR 对象带相关任务
-- [ ] 6.4 原始指令附加（D9），worker 输入两段式模板；审查任务输入同样带原始指令
+- [x] 6.1 `event_get` 只读操作（可见范围检查、遮蔽）
+- [x] 6.2 `task_show` 增加 section 与分页；读取指针格式（D12）
+- [x] 6.3 唤醒输入降级时附 `chars` 与指针；PR 对象带相关任务
+- [x] 6.4 原始指令附加（D9），worker 输入两段式模板；审查任务输入同样带原始指令
 
 ## 7. observe 模式
 

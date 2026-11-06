@@ -13,6 +13,7 @@ import {
   type Role,
   redactSecrets,
   renderRecoveryPrompt,
+  renderWorkerTaskPrompt,
   type TaskContract,
   type TaskCost,
   type TaskResult,
@@ -95,12 +96,18 @@ const replyPrompt = (resume: TaskResume) =>
     convention,
   ].join('\n\n')
 
-async function taskPrompt(home: string, role: Role, contract: TaskContract, resume?: TaskResume) {
+async function taskPrompt(
+  home: string,
+  role: Role,
+  contract: TaskContract,
+  taskId: string,
+  resume?: TaskResume,
+) {
   const context = await resolveContext(home, contract.context)
   return [
     role.prompt,
     note,
-    untrusted('goal', contract.goal),
+    renderWorkerTaskPrompt(contract, taskId),
     untrusted(
       'context',
       context.map((c) => `${c.ref}\n${c.title ?? ''}\n${c.summary ?? ''}`).join('\n\n'),
@@ -319,7 +326,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
           let prompt =
             resumeSession && ctx.resume
               ? replyPrompt(ctx.resume)
-              : await taskPrompt(options.home, role.data, contract, ctx.resume)
+              : await taskPrompt(options.home, role.data, contract, ctx.taskId, ctx.resume)
           if (ctx.resume?.session && !resumeSession)
             prompt = `原会话不存在，以下是原任务与用户回复。请先核对工作目录、git 历史与已有 PR，避免重复提交、推送或创建 PR。\n\n${prompt}`
           if (ctx.recovery) prompt = `${renderRecoveryPrompt(ctx.recovery)}\n\n${prompt}`

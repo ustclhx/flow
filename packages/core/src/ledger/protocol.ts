@@ -17,6 +17,7 @@ import {
   decisionPath,
   executorInfo,
   filterUnknownEventTypes,
+  isKnownEventType,
   ledgerEvent,
   mergeRequestId,
   REPLY_REASON_MAX,
@@ -439,6 +440,10 @@ export type RebuildData = z.infer<typeof rebuildData>
 /** 创建入口要求绝对 cwd；读路径的 taskContract 兼容历史合同。 */
 export const createTaskRequest = taskContract
   .safeExtend({
+    origin_instruction: z.never().optional(),
+    instruction_seq: z.number().int().positive().optional().meta({
+      description: '本次唤醒中的用户指令序号；多条原始指令时必填',
+    }),
     cwd: z
       .string()
       .regex(/^(?:\/|~\/)/, 'cwd 必须是绝对路径或以 ~/ 开头')
@@ -446,6 +451,7 @@ export const createTaskRequest = taskContract
       .meta({ description: '工作目录（节点上的绝对路径，允许 ~/ 开头并由节点展开）' }),
   })
   .meta({ title: 'Raindown task contract', description: '创建任务时提交的合同' })
+export type CreateTaskRequest = z.input<typeof createTaskRequest>
 export const createTaskData = z
   .object({
     task: taskView,
@@ -502,6 +508,8 @@ export const listTasksQuery = z
     workspace: workspaceRef.optional(),
     status: taskStatus.optional(),
     parent: taskId.optional(),
+    pr: prUrl.optional(),
+    offset: z.coerce.number().int().nonnegative().optional(),
     limit: limit.default(50),
   })
   .meta({ title: 'GET /v1/tasks 查询参数', description: '按创建时间倒序' })
@@ -524,6 +532,65 @@ export type ShowTaskData = z.infer<typeof showTaskData>
 export const compatibleShowTaskData = showTaskData.extend({
   events: z.preprocess(filterUnknownEventTypes, showTaskData.shape.events),
 })
+
+export const showTaskQuery = z.strictObject({
+  section: z.enum(['summary', 'events', 'tail', 'attempts', 'replies', 'instruction']).optional(),
+  offset: z.coerce.number().int().nonnegative().default(0),
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+})
+export type ShowTaskQuery = z.input<typeof showTaskQuery>
+
+const taskPage = {
+  offset: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(1000),
+  total: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+  next_offset: z.number().int().nonnegative().optional(),
+}
+export const taskSectionData = z.object({ task: taskView }).and(
+  z.discriminatedUnion('section', [
+    z.object({ section: z.literal('summary') }),
+    z.object({ ...taskPage, section: z.literal('events'), events: z.array(ledgerEvent) }),
+    z.object({ ...taskPage, section: z.literal('tail'), tail: z.string() }),
+    z.object({
+      ...taskPage,
+      section: z.literal('instruction'),
+      text: z.string(),
+      instruction_seq: z.number().int().positive().optional(),
+    }),
+    z.object({ ...taskPage, section: z.literal('attempts'), attempts: z.array(taskAttempt) }),
+    z.object({ ...taskPage, section: z.literal('replies'), replies: z.array(replyView) }),
+  ]),
+)
+export type TaskSectionData = z.infer<typeof taskSectionData>
+export const taskShowResponse = z.union([taskSectionData, showTaskData])
+export type TaskShowResponse = z.infer<typeof taskShowResponse>
+
+/** 分页事件沿用完整详情的读侧兼容规则。 */
+export const compatibleTaskShowResponse = z.preprocess((value) => {
+  if (typeof value !== 'object' || value === null || !('events' in value)) return value
+  return { ...value, events: filterUnknownEventTypes(value.events) }
+}, taskShowResponse)
+
+export const eventGetQuery = z.strictObject({ seq: z.coerce.number().int().positive() })
+/** 未知类型保留原始 JSON；已知类型仍执行对应事件的严格校验。 */
+export const readableLedgerEvent = z.union([
+  ledgerEvent,
+  z.strictObject({
+    seq: z.number().int().positive(),
+    ts: timestamp,
+    type: z
+      .string()
+      .min(1)
+      .refine((type) => !isKnownEventType(type)),
+    workspace: workspaceRef.optional(),
+    task_id: taskId.optional(),
+    actor,
+    payload: z.record(z.string(), z.unknown()),
+  }),
+])
+export const eventGetData = z.object({ event: readableLedgerEvent })
+export type EventGetData = z.infer<typeof eventGetData>
 
 export const cancelTaskRequest = z
   .strictObject({ reason: z.string().optional() })
@@ -1286,7 +1353,19 @@ export const ENDPOINTS = {
     request: listTasksQuery,
     response: listTasksData,
   },
-  'tasks-show': { method: 'GET', path: '/v1/tasks/:id', auth: true, response: showTaskData },
+  'tasks-show': {
+    method: 'GET',
+    path: '/v1/tasks/:id',
+    auth: true,
+    request: showTaskQuery,
+    response: taskShowResponse,
+  },
+  'events-get': {
+    method: 'GET',
+    path: '/v1/events/:id',
+    auth: true,
+    response: eventGetData,
+  },
   'tasks-cancel': {
     method: 'POST',
     path: '/v1/tasks/:id/cancel',

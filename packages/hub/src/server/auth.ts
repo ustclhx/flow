@@ -62,6 +62,7 @@ const matcher = (name: EndpointName) => {
 }
 const nodeMatchers = NODE_ENDPOINTS.map((n) => ({ name: n, match: matcher(n) }))
 const taskShow = matcher('tasks-show')
+const eventGet = matcher('events-get')
 const policyCheck = matcher('policy-check')
 
 /** 任务级 scope：user 可调试任意任务；节点只能操作自己持有未过期活动租约的任务。 */
@@ -215,7 +216,8 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
       const show = taskShow(c)
       const report =
         c.req.method === 'POST' ? /^\/v1\/tasks\/([^/]+)\/report$/.exec(c.req.path) : null
-      if (c.req.method === 'GET' && c.req.path === '/v1/binding') {
+      // 事件范围由路由读取事件后按凭证的任务与 workspace 校验。
+      if (eventGet(c) || (c.req.method === 'GET' && c.req.path === '/v1/binding')) {
         await next()
         return
       }

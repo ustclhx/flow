@@ -237,7 +237,11 @@ async function setup(
   }
 
   /** supervisor 经唤醒 token 建任务。 */
-  const supCreate = (token: string, contract: Partial<TaskContractInput>, actor?: string) =>
+  const supCreate = (
+    token: string,
+    contract: Partial<TaskContractInput> & { instruction_seq?: number },
+    actor?: string,
+  ) =>
     call('POST', '/v1/tasks', {
       token,
       ...(actor === undefined ? {} : { actor }),
@@ -1411,7 +1415,7 @@ describe('创建时固化授权依据', () => {
     expect(s.store.getTask(task.id)?.mandate).toEqual(task.mandate)
   })
 
-  test('多个原始指令时省略instruction_seq；HTTP拒绝伪造mandate且幂等不改依据', async () => {
+  test('多个原始指令必须选择instruction_seq；HTTP拒绝伪造mandate且幂等不改依据', async () => {
     const s = await setup()
     const seqs = ['第一条', '第二条'].map(
       (text) =>
@@ -1430,16 +1434,18 @@ describe('创建时固化授权依据', () => {
     const created = await s.supCreate(wake.token, {
       parent: wake.id,
       idempotency_key: 'mandate-immutable',
+      instruction_seq: seqs[0] as number,
     })
     expect(created.status).toBe(201)
     const createdTask = created.body.data?.task
     if (!createdTask) throw new Error('没有创建任务')
     const task = s.store.getTask(createdTask.id)
     if (!task) throw new Error('任务投影不存在')
-    expect(task.mandate?.instruction_seq).toBeUndefined()
+    expect(task.mandate?.instruction_seq).toBe(seqs[0])
     const again = await s.supCreate(wake.token, {
       parent: wake.id,
       idempotency_key: 'mandate-immutable',
+      instruction_seq: seqs[0] as number,
     })
     const existingTask = again.body.data?.task
     if (!existingTask) throw new Error('没有返回幂等任务')

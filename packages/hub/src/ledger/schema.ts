@@ -10,6 +10,7 @@
 
 export const PROJECTION_TABLES = [
   'tasks',
+  'task_prs',
   'nodes',
   'leases',
   'schedule_fires',
@@ -22,6 +23,7 @@ export type ProjectionTable = (typeof PROJECTION_TABLES)[number]
 /** 每张投影表的软状态列；比较"增量投影 == 重建投影"时排除。 */
 export const SOFT_COLUMNS: Readonly<Record<ProjectionTable, readonly string[]>> = {
   tasks: ['last_activity_at', 'activity_json'],
+  task_prs: [],
   nodes: ['last_seen_at'],
   leases: ['expires_at'],
   schedule_fires: [],
@@ -33,6 +35,7 @@ export const SOFT_COLUMNS: Readonly<Record<ProjectionTable, readonly string[]>> 
 /** 每张投影表的主键（快照排序用）。 */
 export const PROJECTION_KEYS: Readonly<Record<ProjectionTable, string>> = {
   tasks: 'id',
+  task_prs: 'task_id, pr',
   nodes: 'node_id',
   leases: 'lease_id',
   schedule_fires: 'rule_id, planned_at',
@@ -104,6 +107,19 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, created_seq);
 CREATE INDEX IF NOT EXISTS tasks_workspace ON tasks (workspace, created_seq);
 CREATE INDEX IF NOT EXISTS tasks_parent ON tasks (parent, created_seq);
+
+CREATE TABLE IF NOT EXISTS task_prs (
+  task_id TEXT NOT NULL,
+  workspace TEXT NOT NULL,
+  pr TEXT NOT NULL,
+  pr_number INTEGER NOT NULL,
+  url TEXT NOT NULL,
+  summary_chars INTEGER NOT NULL,
+  PRIMARY KEY (task_id, pr)
+);
+CREATE INDEX IF NOT EXISTS task_prs_workspace_pr ON task_prs (workspace, pr, task_id);
+CREATE INDEX IF NOT EXISTS task_prs_pr ON task_prs (pr, workspace, task_id);
+CREATE INDEX IF NOT EXISTS task_prs_workspace_number ON task_prs (workspace, pr_number, task_id);
 
 CREATE TABLE IF NOT EXISTS nodes (
   node_id           TEXT PRIMARY KEY,
