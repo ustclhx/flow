@@ -103,7 +103,7 @@ export function createSecretsCommands(
         if (
           actor !== 'user' ||
           [process.env.RAINDOWN_ACTOR, process.env.FLOW_ACTOR].some(
-            (value) => value?.trim() && value.trim() !== 'user',
+            (value) => value !== undefined && value !== 'user',
           )
         ) {
           return fail('failure', 'user_only', '只有 user 可以读取密钥值')

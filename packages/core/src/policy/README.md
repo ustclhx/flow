@@ -288,4 +288,4 @@ Digest 和收件箱条目由任务 3.1 的反应器生成。
 严格解析出的命令（`approvalForPrecheck`）预检，发回车前重读终端核对弹窗与命令未变；
 fake 执行器的 `approval` 步骤用于端到端测试。codex-exec 无头运行、没有交互审批，不接入。
 
-改名兼容：以 `tool:mcp__raindown__` 开头的显式工具限制（notify、draft-approve）即使同时识别出具体动作也继续参与保守合并；工具规则仍不能代替具体动作规则授予自动放行。旧 `flow.*` 管理动作模式也会规范化为新命名空间。
+改名兼容：只有从 `tool:mcp__flow__` 规范化而来的规则带 `legacy_tool_action` 来源标记，其限制档位（notify、draft-approve）在识别出具体动作后仍参与保守合并。直接用新名编写的工具规则保持原有具体动作优先语义，工具规则仍不能代替具体动作规则授予自动放行。`mcp__flow__*` 与 `flow.*` 可安全规范化；`mcp__flow*`、`mcp__fl*` 等歧义前缀保持原文并报告迁移警告。

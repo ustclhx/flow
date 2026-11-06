@@ -50,6 +50,10 @@ export const RAINDOWN_MCP_TOOL_PREFIX = 'mcp__raindown__'
 /** 旧命名只在策略边界归一，避免既有的限制规则因改名失效。 */
 export const normalizePolicyAction = (action: string): string =>
   action.replace(/^flow\./, 'raindown.').replace(/^(tool:)?mcp__flow__/, '$1mcp__raindown__')
+
+/** 不完整的旧工具名前缀不能安全改写，仍须提示用户检查通配规则。 */
+export const hasLegacyPolicyAction = (action: string): boolean =>
+  /^flow(?:[.*]|$)/.test(action) || /^(?:tool:)?mcp__(?:flow(?:__|\*|$)|flo\*|fl\*)/.test(action)
 export const RAINDOWN_TOOL_ACTIONS: Readonly<Record<string, string>> = {
   task_create: 'task.create',
   task_cancel: 'task.cancel',

@@ -135,6 +135,58 @@ describe('策略配置', () => {
     }
   })
 
+  test.each([
+    ['tool:mcp__flow__*', 'notify', true],
+    ['tool:mcp__raindown__*', 'auto', undefined],
+  ] as const)('具体动作仅保留旧工具名规则的兼容限制：%s', async (action, level, legacy) => {
+    const root = home()
+    writeText(
+      join(root, 'config/policies.yaml'),
+      stringify([rule('*', action, 'notify'), rule('supervisor', 'task.create', 'auto')]),
+    )
+    const loaded = data(await loadPoliciesConfig(root))
+    expect(loaded.rules[0]?.legacy_tool_action).toBe(legacy)
+    const result = decide(loaded.rules, {
+      scope: { workspace: 'ws/xuanxue-saas', role: 'supervisor' },
+      actions: classifyAction({ tool: 'mcp__raindown__task_create' }),
+    })
+    expect(result.level).toBe(level)
+    expect(result.actions.find(({ action }) => action.startsWith('tool:'))?.level).toBe(
+      legacy ? 'notify' : 'skipped',
+    )
+  })
+
+  test('旧名通配规则安全规范化，歧义前缀保留原文并警告', async () => {
+    const root = home()
+    const originals = [
+      'tool:mcp__flow__*',
+      'flow.*',
+      'tool:mcp__flow*',
+      'tool:mcp__fl*',
+      'mcp__flow*',
+      'flow*',
+    ]
+    writeText(
+      join(root, 'config/policies.yaml'),
+      stringify([
+        ...originals.map((action) => rule('dev', action, 'notify')),
+        rule('dev', 'tool:mcp__*'),
+      ]),
+    )
+    const loaded = data(await loadPoliciesConfig(root))
+    expect(loaded.errors).toEqual([])
+    expect(loaded.rules.map(({ rule }) => rule.action)).toEqual([
+      'tool:mcp__raindown__*',
+      'raindown.*',
+      ...originals.slice(2),
+      'tool:mcp__*',
+    ])
+    expect(loaded.warnings.map(({ rule_index, code }) => ({ rule_index, code }))).toEqual(
+      originals.map((_, rule_index) => ({ rule_index, code: 'legacy_policy_action' })),
+    )
+    expect(loaded.warnings[2]?.message).toContain('无法安全规范化')
+  })
+
   test('schema 拒绝拼错字段、部分 scope 通配和无效条件，导出整个配置的 JSON Schema', () => {
     const valid = { ...rule(), when: { command_prefix: 'git push', paths: ['src/**', '*.md'] } }
     expect(policiesConfigSchema.safeParse([valid]).success).toBe(true)

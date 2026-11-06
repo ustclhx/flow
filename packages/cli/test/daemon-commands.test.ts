@@ -62,6 +62,8 @@ test('注册三个命令；安装解析当前 bun 和 CLI 入口，并以表格�
   expect((await runCli(['daemon', 'uninstall'], injected)).exitCode).toBe(0)
   expect(calls.map((c) => c[0])).toEqual([
     'bootout',
+    'bootout',
+    'bootout',
     'bootstrap',
     'bootout',
     'bootstrap',

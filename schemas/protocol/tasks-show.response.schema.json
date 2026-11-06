@@ -1509,6 +1509,10 @@
                                 "level"
                               ],
                               "additionalProperties": false
+                            },
+                            "legacy_tool_action": {
+                              "type": "boolean",
+                              "const": true
                             }
                           },
                           "required": [
@@ -1634,6 +1638,10 @@
                                       "level"
                                     ],
                                     "additionalProperties": false
+                                  },
+                                  "legacy_tool_action": {
+                                    "type": "boolean",
+                                    "const": true
                                   }
                                 },
                                 "required": [

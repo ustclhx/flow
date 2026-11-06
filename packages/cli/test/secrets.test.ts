@@ -174,18 +174,30 @@ test.skipIf(!hasSops)('CLI 真实 sops：初始化提示、stdin set、list 不�
   console.info('CLI 真实 sops 集成通过：init/set/list/get、默认 user 与无明文列表')
 })
 
-test.each([undefined, 'user'])(
-  'FLOW_ACTOR=supervisor 时 secrets get 被拒绝（RAINDOWN_ACTOR=%s）',
-  async (currentActor) => {
-    if (currentActor === undefined) delete process.env.RAINDOWN_ACTOR
-    else process.env.RAINDOWN_ACTOR = currentActor
-    process.env.FLOW_ACTOR = 'supervisor'
+test.each(['RAINDOWN_ACTOR', 'FLOW_ACTOR'] as const)(
+  '%s 必须严格为 user，否则 secrets get 被拒绝',
+  async (actorVariable) => {
     const secretCommands = createSecretsCommands()
     const command = secretCommands.find((command) => command.name === 'secrets get')
-    const result = await command?.run({ args: ['telegram/bot-token'], options: {}, actor: 'user' })
-    expect(result).toMatchObject({ ok: false, error: { code: 'user_only' } })
-    const out = await runCli(['secrets', 'get', 'telegram/bot-token', '--json'], secretCommands)
-    expect(out.exitCode).toBe(1)
-    expect(JSON.parse(out.stdout).error.code).toBe('user_only')
+    for (const otherActor of [undefined, 'user']) {
+      const otherVariable = actorVariable === 'RAINDOWN_ACTOR' ? 'FLOW_ACTOR' : 'RAINDOWN_ACTOR'
+      if (otherActor === undefined) delete process.env[otherVariable]
+      else process.env[otherVariable] = otherActor
+      for (const value of ['supervisor', '', ' user', 'user ']) {
+        process.env[actorVariable] = value
+        const result = await command?.run({
+          args: ['telegram/bot-token'],
+          options: {},
+          actor: 'user',
+        })
+        expect(result).toMatchObject({ ok: false, error: { code: 'user_only' } })
+        const out = await runCli(
+          ['secrets', 'get', 'telegram/bot-token', '--actor', 'user', '--json'],
+          secretCommands,
+        )
+        expect(out.exitCode).toBe(1)
+        expect(JSON.parse(out.stdout).error.code).toBe('user_only')
+      }
+    }
   },
 )

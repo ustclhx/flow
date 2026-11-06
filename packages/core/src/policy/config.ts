@@ -5,7 +5,7 @@ import { raindownPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { formatZodIssues, type ValidationIssue } from '../validation-issue.ts'
-import { normalizePolicyAction } from './actions.ts'
+import { hasLegacyPolicyAction, normalizePolicyAction } from './actions.ts'
 
 /** `supervisor`：委托给本 workspace 的 supervisor 判断（D15）；节点对它不放行，按卡住上报。 */
 export const policyLevelSchema = z.enum([
@@ -60,6 +60,8 @@ export interface IndexedPolicyRule {
   /** YAML 数组中的原始索引，从 0 开始；跳过坏规则后也不重新编号。 */
   rule_index: number
   rule: PolicyRule
+  /** 仅由加载器标记：从旧 MCP 工具名规范化而来的规则。 */
+  legacy_tool_action?: true
 }
 export interface PolicyConfig {
   rules: IndexedPolicyRule[]
@@ -92,15 +94,25 @@ export async function loadPoliciesConfig(home: string): Promise<Result<PolicyCon
   list.data.forEach((raw, rule_index) => {
     const parsed = policyRuleSchema.safeParse(raw)
     if (parsed.success) {
-      const action = normalizePolicyAction(parsed.data.action)
-      rules.push({ rule_index, rule: { ...parsed.data, action } })
-      if (action !== parsed.data.action) {
+      const originalAction = parsed.data.action
+      const action = normalizePolicyAction(originalAction)
+      rules.push({
+        rule_index,
+        rule: { ...parsed.data, action },
+        ...(originalAction.startsWith('tool:mcp__flow__')
+          ? { legacy_tool_action: true as const }
+          : {}),
+      })
+      if (action !== originalAction || hasLegacyPolicyAction(originalAction)) {
         warnings.push({
           file,
           rule_index,
           field: 'action',
           code: 'legacy_policy_action',
-          message: `第 ${rule_index + 1} 条规则：旧动作 ${parsed.data.action} 已按 ${action} 匹配，请更新配置`,
+          message:
+            action !== originalAction
+              ? `第 ${rule_index + 1} 条规则：旧动作 ${originalAction} 已按 ${action} 匹配，请更新配置`
+              : `第 ${rule_index + 1} 条规则：旧命名模式 ${originalAction} 无法安全规范化，已保留原规则，请手动更新配置`,
         })
       }
     } else {

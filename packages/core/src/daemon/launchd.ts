@@ -113,13 +113,13 @@ export async function installDaemons(
     // 先停止旧服务，再移除旧 plist，避免新旧服务同时读写同一个 home。
     for (const label of LEGACY_DAEMON_LABELS) {
       const path = join(directory, `${label}.plist`)
-      if (!existsSync(path)) continue
+      const hadPlist = existsSync(path)
       const args = ['bootout', `${domain}/${label}`]
       const stopped = await launchctl(args)
       if (stopped.code !== 0 && !missingService(stopped))
         return launchctlFailure(args, stopped, cleanupNote())
-      await rm(path)
-      removedLegacyLabels.push(label)
+      if (hadPlist) await rm(path)
+      if (hadPlist || stopped.code === 0) removedLegacyLabels.push(label)
     }
     await mkdir(directory, { recursive: true })
     await mkdir(paths.logs, { recursive: true })

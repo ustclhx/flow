@@ -96,10 +96,13 @@ describe('plist', () => {
 describe('launchd 托管', () => {
   test('安装顺序为每个服务 bootout → bootstrap，重装会更新 plist', async () => {
     expect(await installDaemons(options)).toEqual(ok({ ...healthy, removedLegacyLabels: [] }))
-    const expected = DAEMON_LABELS.flatMap((label) => [
-      ['bootout', `gui/123/${label}`],
-      ['bootstrap', 'gui/123', join(options.launchAgentsDir as string, `${label}.plist`)],
-    ])
+    const expected = [
+      ...LEGACY_DAEMON_LABELS.map((label) => ['bootout', `gui/123/${label}`]),
+      ...DAEMON_LABELS.flatMap((label) => [
+        ['bootout', `gui/123/${label}`],
+        ['bootstrap', 'gui/123', join(options.launchAgentsDir as string, `${label}.plist`)],
+      ]),
+    ]
     expect(calls).toEqual(expected)
     const checks = checkDaemonPlists(options.launchAgentsDir as string)
     expect(checks.every((c) => c.bunExists && c.cliExists)).toBe(true)
@@ -140,6 +143,22 @@ describe('launchd 托管', () => {
     expect(calls).toHaveLength(1)
   })
 
+  test('旧 plist 缺失时仍停止已加载的旧服务，并只报告实际清理的标签', async () => {
+    const result = await installDaemons({
+      ...options,
+      launchctl: async (args) => {
+        calls.push(args)
+        return args[0] === 'bootout' && args[1] !== 'gui/123/dev.flow.hub' ? missing : success
+      },
+    })
+    expect(result).toEqual(ok({ ...healthy, removedLegacyLabels: ['dev.flow.hub'] }))
+    expect(calls.slice(0, 2)).toEqual(
+      LEGACY_DAEMON_LABELS.map((label) => ['bootout', `gui/123/${label}`]),
+    )
+    for (const label of LEGACY_DAEMON_LABELS)
+      expect(existsSync(join(options.launchAgentsDir as string, `${label}.plist`))).toBe(false)
+  })
+
   test('旧服务状态只作迁移诊断，不使新服务健康检查失败', async () => {
     await installDaemons(options)
     const legacy = join(options.launchAgentsDir as string, 'dev.flow.hub.plist')
@@ -173,7 +192,7 @@ describe('launchd 托管', () => {
         },
       })
       expect(result).toMatchObject({ ok: false, error: { code: 'launchctl_failed' } })
-      expect(calls).toHaveLength(command === 'bootout' ? 1 : 2)
+      expect(calls).toHaveLength(command === 'bootout' ? 1 : 4)
       expect(healthCalled).toBe(false)
     })
   }
