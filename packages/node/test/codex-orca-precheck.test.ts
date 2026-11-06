@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { type Activity, ok, type Result, taskContract } from '@flow/core'
 import { approvalForPrecheck, CODEX_ORCA_PRECHECK_TOOL } from '../src/codex-orca/classify.ts'
 import { createCodexOrcaExecutor } from '../src/codex-orca/executor.ts'
@@ -55,6 +56,7 @@ async function start(
   orca.reads.push(...reads.map((r) => ok(r)))
   const plugin = createCodexOrcaExecutor({
     home: h.home,
+    codexAuthSource: join(h.root, 'user-codex'),
     clock,
     orca,
     gh: new FakeGh(),

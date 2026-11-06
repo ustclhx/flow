@@ -14,6 +14,57 @@
 常驻方式见 [守护进程](daemon.md)。Orca 模式的仓库必须登记在合同所属 workspace 的 `repos` 中，
 并已导入 Orca；节点还需要能访问远端仓库的 git、gh 环境。Flow 不负责合并 PR 或清理 worktree。
 
+## Codex 配置隔离
+
+Flow 启动的所有 Codex worker（`codex-orca` 和 `codex-exec` 的全部角色）都显式使用 Flow 管理的 `CODEX_HOME`，
+不加载用户 Codex 目录中的配置、放行规则、MCP 服务器、hooks、notify、项目信任表和全局 `AGENTS.md`。
+用户级的模型、provider 等设置也不会继承；角色需要的设置写在 `permissions.config`（经 `-c` 传入），
+模型与推理强度也可以用角色的 `model` / `effort`。
+
+- 有效类别为 read 的 `codex-exec`：`<flow-home>/state/codex-read-home/`；
+- `codex-orca` 和其他 `codex-exec`：`<flow-home>/state/codex-work-home/`。
+
+目录按读写类别固定，保留会话记录供 `exec resume <session id>` 和 Orca 终端重挂接使用；
+并发任务由 Codex 的会话 id 区分，无需为每个角色复制目录。Orca 在任务状态中记录启动时的隔离目录，
+只重挂接使用同一隔离目录的终端；升级前的存活终端没有该记录，以 `failed(codex_home_mismatch)` 拒绝接管，
+需要先关闭旧终端后重试。句柄失效后的替换终端还须匹配已记录的 pty/incarnation 身份；
+缺少原身份时持续重试，交给节点的无进展检测处理，避免误接用户另开的 Codex。用户目录中的旧会话不会复制到隔离目录。
+
+每次启动前，Flow 原子覆盖隔离目录中的 `config.toml`（只有注释，不含 MCP、notify、hooks、信任记录或 `auto_review`），
+并清除其中的 `rules/` 和 Flow 不生成的扩展。清除而非保留的原因是：这里属于 Flow 的运行状态，
+上次任务积累的“总是允许”规则不能授权下个任务。`approvals_reviewer=user` 的命令行默认行为保持不变，
+角色显式配置仍优先。
+
+唯一共享的用户文件是 `auth.json`：来源取节点/worker 环境的 `CODEX_HOME`，缺省 `~/.codex`。
+Flow 通过临时符号链接加 rename 原子替换，避免并发启动时短暂丢失链接；不会复制或输出凭证内容。
+源目录没有 `auth.json` 时不创建链接，也不回退加载用户配置。Codex 原地刷新凭证可能写回源文件；
+若它将隔离目录中的链接替换成普通文件，Flow 保留该文件并报 `codex_home_failed`，提示确认合并凭证后再删除。
+用户 `CODEX_HOME` 指向隔离目录（含真实路径相同的别名），或隔离目录本身是符号链接时同样拒绝启动，避免改写用户目录。
+
+Codex 0.166.0 实测（2026-11-06，全部使用临时 HOME、CODEX_HOME 和 git 仓库，无真实凭证或模型请求）：
+通过 `codex app-server --stdio` 的 `config/read`（`includeLayers: true`）、`thread/start`，
+以及 `RUST_LOG=codex_core::exec_policy=debug` 观察实际配置层和规则加载路径；
+用临时无效规则产生带文件路径的解析警告来定位来源，另用有效规则确认隔离目录本身的规则仍会加载。
+`execpolicy check --rules <路径>` 只检查显式文件，不用于证明自动加载来源。
+
+| 临时环境条件 | 项目配置 | 实际加载规则 |
+| --- | --- | --- |
+| 原模拟用户 CODEX_HOME，项目未受信任 | 禁用 | 模拟用户 `rules/` |
+| 改用隔离 CODEX_HOME，项目未受信任或无信任记录 | 禁用 | 0 个文件 |
+| 隔离 CODEX_HOME，项目受信任 | 生效 | 项目 `.codex/rules/` |
+| 隔离 CODEX_HOME 自身残留规则，项目未受信任 | 禁用 | 隔离目录 `rules/` 仍生效，故每次启动必须清理 |
+| linked worktree，仅信任主仓库 | worktree 配置生效 | worktree 的 `.codex/rules/` 也加载 |
+
+真实 TUI 中，首次信任弹窗默认选中 `Trust and continue`；按 Enter 后，同一个进程改用项目配置的模型，
+在隔离 config 写入 canonical 仓库路径的 trust 记录，并报告项目规则文件的解析警告。
+因此 **codex-orca 自动确认信任会激活项目配置和规则**，即使启动前清空了隔离目录的信任表。
+本次只处理用户层继承；项目 `.codex/` 仍是后续需要收紧的边界：worker 可以写这里，规则可能在后续加载时绕过审批。
+启动前检查项目规则只能发现当时已有的文件，无法约束后续写入，故本次不加入这种检查。
+没有验证外部修改规则后当前线程会自动热重载，不能据此作此断言。
+后续建议为 Flow worker 增加可靠的项目配置/规则来源限制，再评估自动信任行为。
+官方行为说明见 [Config basics](https://learn.chatgpt.com/docs/config-file/config-basic) 和
+[Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)；升级 Codex 后应复测。
+
 ## doctor 检查
 
 在**节点实际使用的环境**中运行：
@@ -94,8 +145,8 @@ permissions:
 `permissions.config` 是额外的 Codex `-c key=value`，值支持字符串、数字和布尔值。
 它会影响 Codex 的实际权限和行为，应与审批、沙箱字段一起审查。
 `approval` 未设置或不为 `never` 时，Flow 在角色未显式配置 reviewer 的情况下默认传入 `-c approvals_reviewer=user`，
-防止用户级 `auto_review` 自动处理请求，导致审批无法进入 Flow。
-未传 `-a` 时，Codex 仍使用其配置中的审批策略。
+确保授权请求交给 Flow；用户级 `auto_review` 也通过隔离目录排除。
+未传 `-a` 时，Codex 使用隔离环境及角色 `permissions.config` 中的审批策略。
 角色的 `permissions.config.approvals_reviewer` 可覆盖这个默认值；Flow 不修改用户的 Codex 配置文件。
 Codex profile（`profile=...` 或 `-p`）中的同名设置可能覆盖顶层 `-c`，该优先级尚未验证。
 
@@ -311,17 +362,10 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
   `readRoleMayUse` 为假的调用直接拒绝；`canUseTool` 同样拒绝、不做策略预检、不进审批。允许的 Flow 工具只有自动放行清单中的那些；
   StructuredOutput 只在配置了结构化输出时可用。会话设 `strictMcpConfig: true` 与 `ENABLE_CLAUDEAI_MCP_SERVERS=false`：
   不加载 `.mcp.json`、用户设置、插件中的 MCP 服务器与 claude.ai connector。
-- codex-exec：只读角色改用 Flow 管理的 `CODEX_HOME`（`<flow-home>/state/codex-read-home/`）：每次运行前覆盖其中的
-  `config.toml`（只有注释，没有 `mcp_servers`、`notify` 与项目信任记录，因此项目级 `.codex/config.toml` 也不会加载）；
-  会话记录保存在这里，`exec resume` 照常可用。
-  - 凭证：`auth.json` 是指向用户 CODEX_HOME（worker 环境的 `CODEX_HOME`，缺省 `~/.codex`）中 `auth.json` 的符号链接，
-    先建临时链接再 rename（原子替换）；Codex 原地改写凭证时写回用户的文件。隔离目录中的 `auth.json` 若是**普通文件**
-    （例如 Codex 刷新凭证时替换了链接），执行器不删除它，以 `failed(codex_home_failed)` 结束并提示把它合并回用户目录后删除；
-    `CODEX_HOME` 本身指向隔离目录时同样拒绝。用户的 CODEX_HOME 没有 `auth.json`（例如凭证存在钥匙串）时不创建链接，
-    Codex 因未登录而失败，不会回退到用户配置。
-  - 用户级 config.toml 中的模型、provider 等设置也不生效，只读角色需要的设置写在角色的 `permissions.config`
-    （只允许 `model`、`model_reasoning_effort`，否则推断为 write）或 `model` / `effort` 中。
-    `codexExecPermissions` 可用的键与 core 的 `CODEX_EXEC_KNOWN_PERMISSION_KEYS` 由防漂移测试保持一致。
+- codex-exec：继续使用 `codex-read-home` 和只读沙箱；完整的配置隔离、凭证链接与恢复约定见上文「Codex 配置隔离」。
+  只读角色需要的 `permissions.config` 只允许 `model`、`model_reasoning_effort`，否则推断为 write；
+  写类角色也隔离，只是改用 `codex-work-home`。`codexExecPermissions` 可用的键与 core 的
+  `CODEX_EXEC_KNOWN_PERMISSION_KEYS` 由防漂移测试保持一致。
   - **为什么不用 `-c`（Codex 0.164.0 实测，2026-10-26）**：在临时 `CODEX_HOME` 的 `config.toml` 中配置
     `[mcp_servers.userfoo] command = "/bin/sh", args = ["-c", "touch <标记>"]` 与一个指向 `http://127.0.0.1:1/v1` 的 provider，
     在临时 git 仓库中运行 `codex -c 'mcp_servers={}' -c 'notify=[]' exec --skip-git-repo-check -s read-only --json "say hi"`，
