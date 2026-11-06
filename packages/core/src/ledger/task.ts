@@ -579,6 +579,8 @@ export type BlockedRequest = z.infer<typeof blockedRequest>
 const delegationCommon = {
   basis: z.enum(['reported', 'inferred']).optional(),
   question: reportQuestion.optional(),
+  missing: z.string().min(1).max(PROTOCOL_MESSAGE_MAX).optional(),
+  tried: z.string().min(1).max(PROTOCOL_MESSAGE_MAX).optional(),
   decision_id: policyDecisionId.optional().meta({
     description: '策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq',
   }),

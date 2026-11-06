@@ -14,7 +14,11 @@ export interface TaskCaller {
 
 export interface TaskTokenAuthority {
   issue(grant: { lease_id: string; task_id: string }): string | undefined
-  ensure(grant: { lease_id: string; task_id: string }): string | undefined
+  ensure(grant: {
+    lease_id: string
+    task_id: string
+    dispatch_token_sha256?: string
+  }): string | undefined
   authenticate(presented: string): TaskCaller | null
   size(): number
 }
@@ -91,7 +95,16 @@ export function createTaskTokenAuthority(o: TaskTokenOptions): TaskTokenAuthorit
     ensure(grant) {
       const key = byLease.get(grant.lease_id)
       const caller = key === undefined ? undefined : records.get(key)
-      if (caller && caller.task_id === grant.task_id && current(caller)) return undefined
+      // 指纹缺失（旧节点，或凭证文件尚未写好）且有当前记录时不轮换：轮换会让进行中的 MCP 调用拿到 401。
+      // 只有指纹不匹配（节点持有的不是当前凭证）或中枢没有当前记录（例如重启）时才重新下发。
+      if (
+        caller &&
+        caller.task_id === grant.task_id &&
+        current(caller) &&
+        (grant.dispatch_token_sha256 === undefined ||
+          grant.dispatch_token_sha256 === key?.slice(0, 16))
+      )
+        return undefined
       return issue(grant)
     },
     authenticate(presented) {

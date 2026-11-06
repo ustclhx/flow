@@ -107,20 +107,24 @@ describe('续约上报任务分支（task.branch_reported）', () => {
     )
   })
 
-  test('写入被拒（不是 codex-orca 任务）：ignored 并记 warn，续约照常成功', async () => {
-    const ctx = await setup()
-    const id = await ctx.create({ executor: 'fake' })
-    const lease = await grant(ctx)
-    const r = must(
-      ctx.protocol.service.renew(lease.lease_id, {
-        lease_token: lease.lease_token,
-        branch: { branch: 'ustclhx/t-1', worktree: '/w/t-1' },
-      }),
-    )
-    expect(r.branch_report).toBe('ignored')
-    expect(ctx.ledger.getTask(id)?.branch ?? null).toBeNull()
-    expect(ctx.warns.some((m) => m.includes('任务分支上报写入失败'))).toBe(true)
-  })
+  test.each(['fake', 'codex-exec', 'claude-sdk'])(
+    '%s 不拥有任务分支：写入被拒、ignored 并记 warn，续约照常成功',
+    async (executor) => {
+      const caps = [`executor:${executor}`]
+      const ctx = await setup(caps)
+      const id = await ctx.create({ executor })
+      const lease = await grant(ctx, caps)
+      const r = must(
+        ctx.protocol.service.renew(lease.lease_id, {
+          lease_token: lease.lease_token,
+          branch: { branch: 'main', worktree: '/w/user-checkout' },
+        }),
+      )
+      expect(r.branch_report).toBe('ignored')
+      expect(ctx.ledger.getTask(id)).toMatchObject({ branch: null, worktree: null })
+      expect(ctx.warns.some((m) => m.includes('任务分支上报写入失败'))).toBe(true)
+    },
+  )
 
   test('首次上报固定快照；之后的租约随 grant 下发快照', async () => {
     const ctx = await setup()
@@ -236,15 +240,25 @@ describe('续约上报任务分支（task.branch_reported）', () => {
     expect(ctx.ledger.getTask(id)?.branch).toBe('ustclhx/t-1')
   })
 
-  test('非 codex-orca 任务的上报被 store 拒绝，但续约不失败、投影没有分支', async () => {
+  test('非租约持有节点不能直接写入分支报告', async () => {
     const ctx = await setup()
-    const id = await ctx.create()
-    const lease = await grant(ctx)
-    const r = ctx.protocol.service.renew(lease.lease_id, {
-      lease_token: lease.lease_token,
-      branch: { branch: 'ustclhx/t-1', worktree: '/w/t-1' },
-    })
-    expect(code(r)).toBe('ok')
+    const id = await ctx.create({ executor: 'codex-orca' })
+    await grant(ctx)
+    const before = ctx.ledger.seq()
+    expect(
+      code(
+        ctx.ledger.append(
+          {
+            task_id: id,
+            workspace: 'ws/demo',
+            type: 'task.branch_reported',
+            payload: { branch: 'ustclhx/t-1', worktree: '/w/t-1' },
+          },
+          { actor: 'node:other' },
+        ),
+      ),
+    ).toBe('invalid_lease_token')
+    expect(ctx.ledger.seq()).toBe(before)
     expect(ctx.ledger.getTask(id)).toMatchObject({ branch: null, worktree: null })
   })
 

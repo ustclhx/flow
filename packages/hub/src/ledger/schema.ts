@@ -69,6 +69,10 @@ CREATE INDEX IF NOT EXISTS events_worker_report_consumed ON events
   (task_id, json_extract(payload_json, '$.lease_id'), json_extract(payload_json, '$.attempt'),
    json_extract(payload_json, '$.report_seq'), seq)
   WHERE type = 'task.report_consumed';
+CREATE INDEX IF NOT EXISTS events_worker_report_conflict ON events
+  (task_id, json_extract(payload_json, '$.lease_id'), json_extract(payload_json, '$.attempt'),
+   json_extract(payload_json, '$.report_seq'))
+  WHERE type = 'task.report_conflict';
 CREATE INDEX IF NOT EXISTS events_task_reply ON events
   (task_id, json_extract(payload_json, '$.reply_id'), seq)
   WHERE type = 'task.replied';

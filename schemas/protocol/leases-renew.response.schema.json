@@ -22,7 +22,7 @@
           "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
         },
         "dispatch_token": {
-          "description": "中枢没有当前派工凭证记录时重新签发；节点须更新同一凭证文件",
+          "description": "节点凭证指纹与中枢当前记录不一致时重新签发；节点须更新同一凭证文件",
           "type": "string",
           "minLength": 16
         },

@@ -21,7 +21,13 @@ import {
 } from '@raindown/core'
 import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
-import { execCodexHome, prepareCodexHome, readCodexHome } from './codex-home.ts'
+import {
+  codexShellEnvPolicyConfig,
+  codexTaskMcpConfig,
+  execCodexHome,
+  prepareCodexHome,
+  readCodexHome,
+} from './codex-home.ts'
 import { questionMessage } from './codex-orca/classify.ts'
 import { resolveContext } from './codex-orca/spec.ts'
 import { executorRoleEnv } from './env.ts'
@@ -153,7 +159,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
       approval_requests: 'none',
       inject_while_running: false,
       resume_session: true,
-      raindown_mcp: false,
+      raindown_mcp: true,
       out_of_band_detection: false,
     },
     // 进程仍在运行时不从中间消息推断提问；无进展由节点判定。
@@ -313,11 +319,22 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
           return
         }
         if (finished) return
-        const childEnv = { ...env.data, CODEX_HOME: isolated.data }
+        const childEnv = {
+          ...env.data,
+          CODEX_HOME: isolated.data,
+          ...(ctx.leaseTokenFile ? { RAINDOWN_LEASE_TOKEN_FILE: ctx.leaseTokenFile } : {}),
+        }
+        // 不上报任务分支：codex-exec 不创建专用分支或 worktree，cwd 的当前分支不归本任务所有（见 docs/executors.md）。
+        if (finished) return
         // exec 无 -a 选项、不走交互审批，无需默认覆盖 reviewer。
         const args = [...command.slice(1), 'exec', '--json']
         for (const [key, value] of Object.entries(perms.data.config))
           args.push('-c', `${key}=${value}`)
+        args.push(
+          '-c',
+          codexTaskMcpConfig({ home: options.home, role: role.data.name, taskId: ctx.taskId }),
+        )
+        for (const value of codexShellEnvPolicyConfig(perms.data.config)) args.push('-c', value)
         if (role.data.model) args.push('-m', role.data.model)
         if (role.data.effort) args.push('-c', `model_reasoning_effort=${role.data.effort}`)
         // exec 层的 -s 对 resume 同样生效，且优先于 permissions.config 中的 sandbox_mode。

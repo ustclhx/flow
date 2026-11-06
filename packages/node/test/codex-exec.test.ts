@@ -23,6 +23,7 @@ import {
   taskContract,
   taskResult,
 } from '@raindown/core'
+import { codexTaskMcpConfig } from '../src/codex-home.ts'
 import {
   type CodexExecOptions,
   createCodexExecExecutor,
@@ -64,7 +65,7 @@ const { spawn } = require('node:child_process')
 const question = ${JSON.stringify(question)}
 const resumed = ${JSON.stringify(resumed)}
 const args = process.argv.slice(2)
-fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ args, cwd: process.cwd(), token: process.env.RAINDOWN_HUB_TOKEN, home: process.env.RAINDOWN_HOME, actor: process.env.RAINDOWN_ACTOR, codexHome: process.env.CODEX_HOME }))
+fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ args, cwd: process.cwd(), token: process.env.RAINDOWN_HUB_TOKEN, home: process.env.RAINDOWN_HOME, actor: process.env.RAINDOWN_ACTOR, codexHome: process.env.CODEX_HOME, leaseTokenFile: process.env.RAINDOWN_LEASE_TOKEN_FILE }))
 // 故意逐 7 字节输出，覆盖 UTF-8、多行和 JSON 跨 chunk；最后一行没有换行。
 const send = text => { const b = Buffer.from(text.trimEnd()); for (let i = 0; i < b.length; i += 7) fs.writeSync(1, b.subarray(i, i + 7)) }
 ${body}
@@ -123,9 +124,18 @@ ${body}
         actor: string
         home: string
         codexHome?: string
+        leaseTokenFile?: string
       },
     launched: () => existsSync(report),
   }
+}
+
+// 旧 argv 断言只移除新增绑定层；下方独立验证它的真实内容。
+/** 去掉每个任务固定追加的 -c 层（Raindown MCP 与 shell 环境排除项），只比较角色相关参数。 */
+const pinned = (arg: string | undefined) =>
+  arg?.startsWith('mcp_servers.raindown=') || arg?.startsWith('shell_environment_policy.')
+function withoutMcp(args: string[]) {
+  return args.filter((arg, index) => !pinned(arg) && !(arg === '-c' && pinned(args[index + 1])))
 }
 
 async function collect(run: ExecutorRun) {
@@ -162,6 +172,50 @@ describe('codex-exec 无头执行器', () => {
     await collect(s.run({ ...s.ctx, taskId: 't-real' }))
     expect(s.report().args.at(-1)).toContain(renderWorkerTaskPrompt(s.contract, 't-real'))
     expect(s.contract.origin_instruction.read?.op).toBe('event_get')
+  })
+
+  test('读角色也注入唯一的任务 MCP，仅通过环境传递凭证文件路径', async () => {
+    const s = setup()
+    const tokenFile = join(s.dir, 'lease.token')
+    await collect(s.run({ ...s.ctx, leaseTokenFile: tokenFile }))
+    const report = s.report()
+    const configs = report.args.filter((arg) => arg.startsWith('mcp_servers.raindown='))
+    expect(configs).toEqual([
+      codexTaskMcpConfig({ home: s.home, role: 'triage', taskId: s.ctx.taskId }),
+    ])
+    expect(Bun.TOML.parse(configs[0] ?? '')).toMatchObject({
+      mcp_servers: {
+        raindown: {
+          command: 'raindown',
+          args: ['mcp', '--actor', 'triage', '--task', 't-test'],
+          env_vars: ['RAINDOWN_LEASE_TOKEN_FILE'],
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    })
+    expect(report.leaseTokenFile).toBe(tokenFile)
+    expect(report.args.join(' ')).not.toContain(tokenFile)
+    expect(report.codexHome).toBe(readCodexHome(s.home))
+    expect(createCodexExecExecutor(s.options).adapterCapabilities.raindown_mcp).toBe(true)
+  })
+
+  test('写任务不上报工作目录的当前分支：codex-exec 不拥有任务分支', async () => {
+    const s = setup('send(resumed)', { permissions: { sandbox: 'workspace-write' } })
+    mkdirSync(join(s.home, 'config', 'workspaces'), { recursive: true })
+    writeFileSync(
+      join(s.home, 'config', 'workspaces', 'demo.yaml'),
+      `id: demo\nname: Demo\ndescription: 测试\nkind: product\nrepos:\n  - ${s.dir}\n`,
+    )
+    const reports: unknown[] = []
+    const run = s.run({
+      ...s.ctx,
+      reportBranch: async (report) => {
+        reports.push(report)
+      },
+    })
+    expect((await collect(run)).outcome.outcome).toBe('done')
+    expect(s.launched()).toBe(true)
+    expect(reports).toEqual([])
   })
 
   test.each([false, true])('恢复提示放在输入开头（恢复旧会话：%s）', async (resume) => {
@@ -205,7 +259,7 @@ describe('codex-exec 无头执行器', () => {
     })
     expect(outcome.result.cost).not.toHaveProperty('usd')
     const report = s.report()
-    expect(report.args.slice(0, 4)).toEqual(['exec', '--json', '-s', 'read-only'])
+    expect(withoutMcp(report.args).slice(0, 4)).toEqual(['exec', '--json', '-s', 'read-only'])
     expect(report.cwd).toBe(realpathSync(s.dir))
     expect(report.home).toBe(s.home)
     expect(report.token).toBeUndefined()
@@ -248,7 +302,7 @@ describe('codex-exec 无头执行器', () => {
     expect(s.report().actor).toBe('triage')
     expect(s.report().codexHome).toBe(initialHome)
     expect(initialHome).toBe(execCodexHome(s.home))
-    const args = s.report().args
+    const args = withoutMcp(s.report().args)
     expect(args.slice(0, 7)).toEqual([
       'exec',
       '--json',
@@ -496,6 +550,33 @@ describe('codex-exec 无头执行器', () => {
     }
   })
 
+  test('角色配置不能让模型 shell 看到凭证路径：shell 环境排除项固定在角色配置之后', async () => {
+    const s = setup(undefined, {
+      permissions: {
+        config: {
+          'shell_environment_policy.ignore_default_excludes': true,
+          'shell_environment_policy.exclude': '["MY_PRIVATE"]',
+        },
+      },
+    })
+    await collect(s.run())
+    const args = s.report().args
+    const at = (value: string) => args.lastIndexOf(value)
+    const pinIgnore = at('shell_environment_policy.ignore_default_excludes=false')
+    const exclude = args.find(
+      (a, i) => i > pinIgnore && a.startsWith('shell_environment_policy.exclude='),
+    )
+    expect(pinIgnore).toBeGreaterThan(at('shell_environment_policy.ignore_default_excludes=true'))
+    expect(args[pinIgnore - 1]).toBe('-c')
+    expect(JSON.parse((exclude ?? '').slice('shell_environment_policy.exclude='.length))).toEqual([
+      'MY_PRIVATE',
+      '*KEY*',
+      '*SECRET*',
+      '*TOKEN*',
+      'RAINDOWN_LEASE_TOKEN_FILE',
+    ])
+  })
+
   test('角色 model、effort、config 以独立 argv 传入，不经过 shell', async () => {
     const s = setup(undefined, {
       model: 'gpt-6.1-sol',
@@ -511,7 +592,7 @@ describe('codex-exec 无头执行器', () => {
       },
     })
     await collect(s.run())
-    expect(s.report().args.slice(0, -2)).toEqual([
+    expect(withoutMcp(s.report().args).slice(0, -2)).toEqual([
       'exec',
       '--json',
       '-c',

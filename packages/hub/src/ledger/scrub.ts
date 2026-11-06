@@ -70,6 +70,8 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
     ['handback', 'reason'],
   ],
   'task.blocked': [
+    ['missing'],
+    ['tried'],
     ['question', 'text'],
     ['question', 'options', '*', 'label'],
     ['question', 'options', '*', 'description'],
@@ -133,6 +135,8 @@ export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string,
     'handback.reason': PROTOCOL_MESSAGE_MAX,
   },
   'task.blocked': {
+    missing: PROTOCOL_MESSAGE_MAX,
+    tried: PROTOCOL_MESSAGE_MAX,
     'question.text': PROTOCOL_MESSAGE_MAX,
     'question.options.*.label': 100,
     'question.options.*.description': PROTOCOL_MESSAGE_MAX,

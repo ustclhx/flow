@@ -163,7 +163,7 @@ describe('任务 origin（D2 的写入通道）', () => {
 })
 
 describe('task.branch_reported', () => {
-  test('只接受 codex-orca 任务、持有活动租约的节点，每个任务一次、不可更改', async () => {
+  test('只接受拥有任务分支的执行器（codex-orca）、持有活动租约的节点，每个任务一次、不可更改', async () => {
     const { store, newTask } = await setup()
     const t = await newTask({ executor: 'codex-orca' })
     const report = (id: string, branch: string, actor = node) =>
@@ -184,12 +184,15 @@ describe('task.branch_reported', () => {
     must(store.rebuild())
     expect(store.snapshot({ includeSoft: false })).toEqual(before)
 
-    // 其他执行器的任务不能上报
-    const f = await newTask({ executor: 'fake' })
-    startTask(store, f.id)
-    const r = report(f.id, 'ustclhx/t-3')
-    expect(code(r)).toBe('invalid_event')
-    expect(message(r)).toContain('codex-orca')
+    // 不创建任务分支的执行器不能上报（工作目录当前分支不归任务所有）
+    for (const executor of ['fake', 'codex-exec', 'claude-sdk']) {
+      const f = await newTask({ executor })
+      startTask(store, f.id)
+      const r = report(f.id, 'main')
+      expect(code(r)).toBe('invalid_event')
+      expect(message(r)).toContain('codex-orca')
+      expect(store.getTask(f.id)?.branch ?? null).toBeNull()
+    }
   })
 })
 

@@ -34,6 +34,42 @@
 授权请求由适配器统一为：**动作、命令或参数、理由、命令执行目录（cwd）、请求 id、识别方式（`structured` 或 `inferred`）**。
 策略、supervisor 代批与推送只消费这个结构，不解析 harness 原始输出；SDK 与终端适配器对同一动作应产生同样的策略输入。
 
+加载 Raindown MCP 的 worker 必须绑定当前任务与派工：启动命令为 `raindown mcp --actor <role> --task <id>`，
+通过 `RAINDOWN_LEASE_TOKEN_FILE` 传文件路径，不传凭证明文。Codex 由 worker 环境向 MCP 透传路径，Claude 只在 MCP 子进程环境中设置路径。
+supervisor 仍使用独立的唤醒绑定，不能套用 worker 凭证。
+Codex 的工具名为 `mcp__raindown__raindown_report`、`mcp__raindown__task_show`、`mcp__raindown__event_get`、`mcp__raindown__kb_*`，Claude 使用相同前缀。
+worker 的上报、本任务查询与只读知识工具自动放行；这只覆盖任务绑定 MCP 暴露的工具，不放行 shell 或其他授权动作。
+`event_get` 对任务绑定开放，由中枢限制为本任务的事件：Codex 的 Raindown 服务器整体免审批，Claude 的 worker 会话中
+写角色仍经审批，只读角色按绑定放行（与 supervisor 唤醒会话的规则一致）。
+
+**Codex 进程环境中的凭证路径。** codex-orca 与 codex-exec 的 Codex 进程环境带有 `RAINDOWN_LEASE_TOKEN_FILE`：
+MCP 配置的 `env_vars` 只能从 Codex 自身环境透传。模型执行的 shell 命令看不到它，依赖的是 Codex
+`shell_environment_policy` 的默认排除项（`*KEY*`、`*SECRET*`、`*TOKEN*`）。为防止角色配置用
+`ignore_default_excludes = true` 或改写 `exclude` 把它重新暴露，适配器在角色配置之后追加
+`-c shell_environment_policy.ignore_default_excludes=false` 与 `-c shell_environment_policy.exclude=[…]`：
+固定排除项为上述三项加 `RAINDOWN_LEASE_TOKEN_FILE`，角色自己的 `exclude`（可解析的字符串数组）合并保留。
+
+**只有创建并拥有任务分支的适配器报告分支。** 适配器只能报告自己为本任务创建的分支：codex-orca 在创建 worktree 与专用分支后、
+启动 worker 前等待 `ctx.reportBranch({branch, worktree, repo})`，供节点采集仓库快照并经续约写入 `task.branch_reported`。
+codex-exec 与 claude-sdk 在给定工作目录中运行、不创建分支，当前分支通常是 `main` 或用户自己的检出，**不报告分支**；
+中枢只接受拥有分支的执行器（当前为 codex-orca）写入 `task.branch_reported`，新适配器只有在自己创建分支时才能加入。
+
+策略含义：任务分支一经记录不可改写，并且是 `push_to: task_branch` 与 `gh_scope --head` 放行推送、开 PR 的依据，
+也是交付物核对、"交付物已存在"判定、PR 订阅与合并资格的依据。若把用户检出的无关分支（甚至默认分支）当作任务分支，
+worker 就能向它推送或以它开 PR；worker 新建分支开出的 PR 又因 head 不一致永远无法 `ready`。因此宁可留空：
+`ready` 的交付物核对在缺少任务分支时返回 `branch_unknown`，PR 不是从登记分支开出时返回 `deliverable_branch_mismatch`
+（提示中给出登记分支）；两种情况下 worker 都不应反复提交 ready，应改用 `blocked` 写明分支情况与已尝试的办法。
+detached HEAD 或其他无法确定分支的情况同样不伪造报告，也不能用任务 id 代替。
+
+节点在续约中缓存最近一次未消费的上报。适配器报告 idle 时，question/blocked 上报优先，卡住来源为 `basis: reported`，
+问题、选项、推荐项与 missing/tried 原样保留；没有可用上报时调用适配器分类并标为 `basis: inferred`。
+任务已经 blocked（含推断判定期间）或在验收时到达的非终态上报针对的是当前这一轮：节点随下一次续约以 `report_seq`
+立即确认消费，不缓存、不启动两分钟计时；worker 从 blocked 恢复运行时，节点丢弃并确认消费仍未使用的旧上报，
+它不会在恢复后以旧问题再次转 blocked，也不会接管之后真正的 idle。
+question/blocked 上报后 harness 仍忙超过两分钟时，也进入 reported blocked，并写 `task.report_conflict`；
+progress 与超过阈值的空闲观察矛盾时，按适配器观察处理并记录冲突。ready/failed/dropped 直接结束派工，
+其中 dropped 为带标记的 done；节点按 report_seq 确认消费，重试不重复生效。
+
 适配器必须隔离 harness 的用户级及全局自动放行规则、自动审批器、hooks、额外 MCP 服务器与项目信任记录，
 不得让这些配置削弱 Raindown 的授权。需要的配置只能来自角色配置与 Raindown 生成的配置。
 登录凭证可通过符号链接共享，适配器不读取、复制或输出凭证内容。可见会话应有统一标识和任务 id，
@@ -76,10 +112,18 @@ Orca 在任务状态中记录启动时的隔离目录，只重挂接使用同一
 句柄失效后的替换终端还须匹配已记录的 pty/incarnation 身份；
 缺少原身份时持续重试，交给节点的无进展检测处理，避免误接用户另开的 Codex。用户目录中的旧会话不会复制到隔离目录。
 
-每次启动前，Raindown 原子覆盖隔离目录中的 `config.toml`（只有注释，不含 MCP、notify、hooks、信任记录或 `auto_review`），
+每次启动前，Raindown 原子覆盖隔离目录中的 `config.toml`（基础文件只有注释，不含用户 MCP、notify、hooks、信任记录或 `auto_review`），
 并清除其中的 `rules/` 和 Raindown 不生成的扩展。清除而非保留的原因是：这里属于 Raindown 的运行状态，
 上次任务积累的“总是允许”规则不能授权下个任务。`approvals_reviewer=user` 的命令行默认行为保持不变，
 角色显式配置仍优先。
+
+`codex-home.ts` 为每次启动生成独立的 `-c mcp_servers.raindown=...` 配置层，只配置一个任务绑定的 Raindown MCP。
+任务 id、角色与凭证路径不写入共享 `config.toml`，避免并发任务覆盖彼此的绑定，原 CODEX_HOME 会话目录仍可恢复。
+codex-orca 重新挂接存活终端时还核对启动时的派工凭证路径；新派工路径不同或旧记录没有绑定时，
+先关闭已核实身份的旧终端，再保留原 worktree 与分支启动 worker，避免继续使用已失效的旧派工 MCP。
+`codex-read-home` 同样注入：只读 worker 也需要提问、说明受阻或报告无需处理；任务绑定工具集不授予知识写入或建任务权限。
+该服务器设置 `default_tools_approval_mode = "approve"`，防止上报再次触发 Codex MCP 审批；
+不修改其他工具、shell 的 approval_policy、approvals_reviewer 或沙箱配置。配置语义见官方 [MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。
 
 唯一共享的用户文件是 `auth.json`：来源取节点/worker 环境的 `CODEX_HOME`，缺省 `~/.codex`。
 Raindown 通过临时符号链接加 rename 原子替换，避免并发启动时短暂丢失链接；不读取、复制或输出凭证内容。

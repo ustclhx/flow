@@ -1474,6 +1474,16 @@
                       ],
                       "additionalProperties": false
                     },
+                    "missing": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 8192
+                    },
+                    "tried": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 8192
+                    },
                     "decision_id": {
                       "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",
                       "type": "integer",

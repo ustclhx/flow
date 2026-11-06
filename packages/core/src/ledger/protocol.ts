@@ -110,6 +110,8 @@ export const PROTOCOL_ERRORS = {
   forbidden: { status: 403, kind: 'failure' },
   deliverable_not_found: { status: 422, kind: 'failure' },
   deliverable_check_failed: { status: 502, kind: 'failure' },
+  branch_unknown: { status: 409, kind: 'failure' },
+  deliverable_branch_mismatch: { status: 409, kind: 'failure' },
   report_busy: { status: 429, kind: 'retryable' },
   report_rate_limited: { status: 429, kind: 'retryable' },
   not_blocked: { status: 409, kind: 'failure' },
@@ -805,6 +807,21 @@ export type AcquireLeaseData = z.infer<typeof acquireLeaseData>
 export const renewLeaseRequest = z
   .strictObject({
     lease_token: z.string().min(16),
+    dispatch_token_sha256: z
+      .string()
+      .regex(/^[a-f0-9]{16}$/)
+      .optional()
+      .meta({
+        description:
+          '节点当前派工凭证的 SHA-256 前 16 位；不匹配、或中枢没有当前凭证时重新下发；缺失且中枢已有当前凭证时不轮换',
+      }),
+    report_conflict: z
+      .strictObject({
+        report_seq: z.number().int().positive(),
+        observed: z.enum(['idle', 'busy', 'no_progress']),
+      })
+      .optional()
+      .meta({ description: '上报与观察矛盾；须与同批 report_seq 相同' }),
     activity: z.array(activity).max(500).default([]).meta({ description: '自上次续约以来的活动' }),
     report_seq: z
       .number()
@@ -852,8 +869,12 @@ export const renewLeaseRequest = z
       .optional()
       .meta({
         description:
-          '执行器创建的任务分支与 worktree，以及节点在任务首次上报时对执行器解析出的登记仓库的快照（D15，codex-orca 开始时）：中枢在续约生效后写入 task.branch_reported（每个任务一次；worktree 缺失的旧任务可补报一次 worktree，不补快照），结果见响应的 branch_report',
+          '执行器创建的任务分支与 worktree，以及节点在任务首次上报时对执行器解析出的登记仓库的快照（D15，写类适配器启动前）：中枢在续约生效后写入 task.branch_reported（每个任务一次；worktree 缺失的旧任务可补报一次 worktree，不补快照），结果见响应的 branch_report',
       }),
+  })
+  .refine((r) => !r.report_conflict || r.report_seq === r.report_conflict.report_seq, {
+    message: 'report_conflict 必须与同批 report_seq 引用同一上报',
+    path: ['report_conflict'],
   })
   .refine((r) => r.blocked === undefined || r.resumed === undefined, {
     message: 'blocked 与 resumed 不能同时出现',
@@ -867,7 +888,7 @@ export const renewLeaseData = z
     lease_id: leaseId,
     expires_at: timestamp,
     dispatch_token: z.string().min(16).optional().meta({
-      description: '中枢没有当前派工凭证记录时重新签发；节点须更新同一凭证文件',
+      description: '节点凭证指纹与中枢当前记录不一致时重新签发；节点须更新同一凭证文件',
     }),
     cancel_requested: z
       .boolean()

@@ -58,11 +58,17 @@ export async function verifyReportDeliverable(
     if (
       !samePrUrl(pr.url, ref.replace(/\/$/, '')) ||
       pr.isCrossRepository ||
-      pr.headRefName !== task.branch ||
       !head ||
       !sameRepo(repo, head)
     )
       return rejected()
+    // 其余核对都通过、只有分支不一致：单独给出错误码与处理办法，避免 worker 反复提交 ready。
+    if (pr.headRefName !== task.branch)
+      return fail(
+        'failure',
+        'deliverable_branch_mismatch',
+        `PR 不是从本任务登记的分支 ${task.branch} 开出；登记分支不可更改。请在该分支上提交并开 PR，否则改用 blocked 说明情况，不要反复提交 ready`,
+      )
     return ok(null)
   } catch {
     return rejected()
@@ -205,6 +211,16 @@ export function createWorkerReportRoutes({
         )
       const report: WorkerReport = parsed.data
       if (report.status === 'ready') {
+        if (!task.branch)
+          return respond(
+            c,
+            fail(
+              'failure',
+              'branch_unknown',
+              '尚未登记本任务分支；请先上报 blocked，说明缺少的分支信息与已尝试的办法',
+            ),
+            workerReportData,
+          )
         for (const ref of report.deliverables ?? []) {
           const checked = await verifyDeliverable(ref, task)
           if (!checked.ok) return respond(c, checked, workerReportData)

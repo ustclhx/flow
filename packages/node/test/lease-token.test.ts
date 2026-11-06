@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -268,6 +269,7 @@ test.each([false, true])(
     const inner = createFakeExecutor()
     const warnings: string[] = []
     let path: string | undefined
+    const fingerprints: (string | undefined)[] = []
     let forward: ((input: string, init?: RequestInit) => Promise<Response>) | undefined
     let refreshToken: string | undefined
     let ready: () => void = () => {}
@@ -294,6 +296,10 @@ test.each([false, true])(
       fetch: async (input, init) => {
         await initialized
         if (!forward) throw new Error('测试中枢未就绪')
+        if (input.endsWith('/renew')) {
+          const request = JSON.parse(String(init?.body)) as { dispatch_token_sha256?: string }
+          fingerprints.push(request.dispatch_token_sha256)
+        }
         const response = await forward(input, init)
         if (!input.endsWith('/v1/leases') && !input.endsWith('/renew')) return response
         const body = (await response.json()) as {
@@ -319,6 +325,9 @@ test.each([false, true])(
       }
       expect((await readFile(path as string, 'utf8')).trim()).toBe('renewed-secret-token')
       expect((await stat(path as string)).mode & 0o777).toBe(0o600)
+      expect(fingerprints.find((value) => value !== undefined)).toBe(
+        createHash('sha256').update('initial-secret-token').digest('hex').slice(0, 16),
+      )
       // 让原凭证目录变成符号链接，触发真实的刷新写入失败。
       const dir = leaseTokenDir(b.home, id)
       await rm(path as string)
@@ -326,6 +335,9 @@ test.each([false, true])(
       await symlink(b.home, dir)
       refreshToken = 'failed-refresh-secret'
       await b.clock.advance(20_000)
+      expect(fingerprints.at(-1)).toBe(
+        createHash('sha256').update('renewed-secret-token').digest('hex').slice(0, 16),
+      )
       if (mcp) {
         const task = await b.until(id, (task) => task.status === 'failed')
         expect(task.result?.reason).toBe('lease_token_write_failed')

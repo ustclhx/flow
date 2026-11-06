@@ -225,6 +225,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
     attempt: number,
     seq: number,
   ): EventOf<'task.reported'> | null
+  /** 本次派工的指定上报是否已记录观察矛盾。 */
+  workerReportConflict(taskId: string, leaseId: string, attempt: number, seq: number): boolean
   /** 本次派工最近一次上报。 */
   latestWorkerReport(
     taskId: string,
@@ -576,6 +578,13 @@ const ESCALATION_BY_USER: ReadonlySet<string> = new Set(['user_replied', 'user_d
 
 /** supervisor 保留身份（与 core 的 SUPERVISOR_ACTOR 相同）。 */
 const SUPERVISOR = 'supervisor'
+
+/**
+ * 自己创建专用分支与 worktree、因而拥有任务分支的执行器（D15；docs/executors.md 适配器契约）。
+ * claude-sdk、codex-exec 在给定 cwd 中运行，当前分支通常是 main 或用户的检出，不在此列；
+ * 新适配器只有在自己创建分支时才能加入。
+ */
+const BRANCH_OWNING_EXECUTORS: ReadonlySet<string> = new Set(['codex-orca'])
 
 const invalidEvent = (message: string, details?: unknown) =>
   fail('failure', 'invalid_event', message, details)
@@ -953,7 +962,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
-      case 'task.report_consumed': {
+      case 'task.report_consumed':
+      case 'task.report_conflict': {
         const report = workerReport(
           draft.task_id ?? '',
           draft.payload.lease_id,
@@ -1183,8 +1193,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         return ok(null)
       }
       case 'task.branch_reported': {
-        // D15：只有自己创建任务分支的执行器（codex-orca）上报；只接受持有该任务活动租约的节点写入；
-        // 每个任务只写一次、不可更改。
+        // D15：只有自己创建并拥有任务分支的适配器上报（push_to: task_branch、gh_scope --head 据此放行，
+        // 不能把工作目录里用户检出的分支当成任务分支）；只接受当前租约持有节点写入，且不可改写。
         const row = get<{
           contract_json: string
           branch: string | null
@@ -1193,8 +1203,10 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         const executor = row
           ? (JSON.parse(row.contract_json) as { executor?: string }).executor
           : null
-        if (executor !== 'codex-orca') {
-          return invalidEvent(`只有 codex-orca 任务上报任务分支（该任务执行器为 ${executor}）`)
+        if (!executor || !BRANCH_OWNING_EXECUTORS.has(executor)) {
+          return invalidEvent(
+            `只有创建任务分支的执行器（${[...BRANCH_OWNING_EXECUTORS].join('、')}）上报任务分支（该任务执行器为 ${executor}）`,
+          )
         }
         const lease = get<{ node_id: string }>(
           "SELECT node_id FROM leases WHERE task_id = ? AND state = 'active'",
@@ -1686,6 +1698,18 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     },
     attemptEnded,
     workerReport,
+    workerReportConflict(taskId, leaseId, attempt, seq) {
+      return !!get(
+        `SELECT 1 FROM events WHERE task_id = ? AND type = 'task.report_conflict'
+           AND json_extract(payload_json, '$.lease_id') = ?
+           AND json_extract(payload_json, '$.attempt') = ?
+           AND json_extract(payload_json, '$.report_seq') = ? LIMIT 1`,
+        taskId,
+        leaseId,
+        attempt,
+        seq,
+      )
+    },
     latestWorkerReport(taskId, leaseId, attempt) {
       const row = get<EventRow>(
         `SELECT * FROM events WHERE task_id = ? AND type = 'task.reported'

@@ -91,7 +91,7 @@ import { resolveContractCwd } from './workdir.ts'
  * - 流式输入：首条用户消息是任务说明，运行中的文字回复再作为用户消息推入；
  * - 角色提示词追加在 `claude_code` 预设之后；设置来源由角色的 `setting_sources` 决定（默认 `['project']`，
  *   为 `[]` 时改为追加 cwd 下 CLAUDE.md / AGENTS.md 的纯文本）；权限模式默认 `default`；
- * - 注入 `raindown mcp --actor <角色名>`（stdio），只放行 RAINDOWN_MCP_AUTO_ALLOWED 中的 raindown 工具，其余走审批；
+ * - 注入任务绑定的 Raindown MCP（stdio），worker 只放行派工受限工具，supervisor 沿用唤醒工具清单；
  * - 工具审批：`canUseTool` 先做策略预检（add-m1-inbox 2.3，`claudePrecheckRequest`），中枢判定 auto /
  *   auto-report 时直接放行；否则挂起，经 idle 信号上报 `blocked(awaiting_approval)`，
  *   approve / deny 经 `deliver` 送达后 resolve 对应的 Promise；超过角色设定的时限则任务失败；
@@ -132,6 +132,23 @@ export const RAINDOWN_MCP_AUTO_ALLOWED = [
 ] as const
 /** 只在中枢凭证已校验的 task / wake 绑定会话中自动放行的读取工具。 */
 export const BOUND_MCP_AUTO_ALLOWED = ['event_get'] as const
+/**
+ * 派工绑定只暴露这些受限工具；supervisor 沿用自己的唤醒工具清单。
+ * `event_get` 不在这里：它按 BOUND_MCP_AUTO_ALLOWED 的规则处理（中枢限制本任务），
+ * worker 会话中写角色仍经审批，只读角色由 readRoleMayUse 按绑定放行。
+ */
+export const WORKER_MCP_AUTO_ALLOWED = [
+  'raindown_report',
+  'task_show',
+  'kb_search',
+  'kb_get',
+  'kb_query',
+] as const
+
+const WORKER_REPORT_CONVENTION =
+  '优先使用 raindown_report，每次必填 status 和 summary：question 填 question 问题、2–8 个 options（label、description）及 recommended 推荐标签；blocked 说明 missing/tried；' +
+  '交付就绪时 ready 用 deliverables 填 PR 地址；branch_unknown 或 deliverable_branch_mismatch 时不要反复提交 ready，改用 blocked 说明分支情况及已尝试的操作；无需继续时 dropped 说明 reason；失败用 failed 说明 reason。' +
+  'question/blocked 后停下等待，progress 后继续工作，ready/failed/dropped 后结束本轮；上报不可用时才以文字说明状态。'
 
 /**
  * 只在 supervisor 会话（`kind: supervisor`）中自动放行的 raindown MCP 工具（design D7；tasks 4.1）：
@@ -176,7 +193,9 @@ export function readRoleMayUse(
   if (mcpServer !== undefined && !isRaindownMcp(toolName, mcpServer)) return false
   const name = toolName.slice(RAINDOWN_MCP_TOOL_PREFIX.length)
   return (
-    (RAINDOWN_MCP_AUTO_ALLOWED as readonly string[]).includes(name) ||
+    ([...RAINDOWN_MCP_AUTO_ALLOWED, ...WORKER_MCP_AUTO_ALLOWED] as readonly string[]).includes(
+      name,
+    ) ||
     (binding !== undefined && (BOUND_MCP_AUTO_ALLOWED as readonly string[]).includes(name))
   )
 }
@@ -527,8 +546,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
       approval_requests: 'structured',
       inject_while_running: true,
       resume_session: true,
-      // 第 3 阶段完成任务绑定与 raindown_report 后再改为 true。
-      raindown_mcp: false,
+      raindown_mcp: true,
       out_of_band_detection: false,
     },
     classify: classifyClaudeSdk,
@@ -1029,6 +1047,9 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           )
           return
         }
+        // 不上报任务分支：本适配器不创建专用分支或 worktree，工作目录当前分支通常是 main 或用户的检出，
+        // 不是本任务拥有的分支（push_to: task_branch、gh_scope --head 会据此放行；见 docs/executors.md）。
+        if (finished) return
         // 不加载项目设置时，把项目约定文件的纯文本追加到系统提示词（不含 hooks 与权限规则）。
         // 审查任务从登记仓库读取（不是 PR 的检出），PR 不能借 CLAUDE.md / AGENTS.md 改写系统提示词。
         const instructions = perms.data.setting_sources.includes('project')
@@ -1336,7 +1357,7 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
             sup.taskId,
             ...(sup.replyOnly ? ['--reply-only'] : []),
           ]
-        : []),
+        : ['--task', i.ctx.taskId]),
     ],
     env: {
       ...dualRaindownEnv({ RAINDOWN_HOME: i.home, RAINDOWN_ACTOR: i.role.name }),
@@ -1348,7 +1369,9 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
               [HUB_TOKEN_FILE_ENV]: sup.wakeTokenFile,
             }),
           }
-        : {}),
+        : i.ctx.leaseTokenFile
+          ? { RAINDOWN_LEASE_TOKEN_FILE: i.ctx.leaseTokenFile }
+          : {}),
     },
   }
   const kind = i.kind ?? effectiveRoleKind(i.role)
@@ -1373,7 +1396,9 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
   const allowedTools = [
     ...new Set([
       ...roleAllowed,
-      ...RAINDOWN_MCP_AUTO_ALLOWED.map((name) => `${RAINDOWN_MCP_TOOL_PREFIX}${name}`),
+      ...(sup ? RAINDOWN_MCP_AUTO_ALLOWED : WORKER_MCP_AUTO_ALLOWED).map(
+        (name) => `${RAINDOWN_MCP_TOOL_PREFIX}${name}`,
+      ),
       ...(sup
         ? [...BOUND_MCP_AUTO_ALLOWED, ...SUPERVISOR_MCP_AUTO_ALLOWED].map(
             (name) => `${RAINDOWN_MCP_TOOL_PREFIX}${name}`,
@@ -1383,9 +1408,9 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
       ...(i.outputFormat ? [STRUCTURED_OUTPUT_TOOL] : []),
     ]),
   ]
-  const append = i.projectInstructions
-    ? `${i.role.prompt}\n\n${i.projectInstructions}`
-    : i.role.prompt
+  const append = [i.role.prompt, i.projectInstructions, ...(sup ? [] : [WORKER_REPORT_CONVENTION])]
+    .filter(Boolean)
+    .join('\n\n')
   return {
     cwd: i.ctx.cwd,
     // SDK 默认把 process.env 整个传给 Claude Code 子进程；改用去掉中枢凭证的 env（design D9）。
