@@ -508,17 +508,24 @@ export function classifyCodexOrca(snapshot: StuckSnapshot): StuckVerdict | null 
  * 任何会敲进文字的送达（PR 输入、恢复提示、文字回复）都先过这一关，避免把文字敲进 shell。
  */
 const BARE_PROMPT_RE = /[$%#❯]\s*$/
+/** Codex 输入框下方的状态与页脚行（快捷键提示、发送提示、上下文余量等）。 */
+const CODEX_STATUS_RE = /\? for shortcuts|⏎|context left|tab to |esc to |ctrl\+|·/
 
 export function composerReady(tail: readonly string[]): boolean {
   const lines = tail.map((l) => l.trimEnd()).filter((l) => l.trim() !== '')
   const last = lines.at(-1)
   if (last === undefined || SHELL_PROMPT_RE.test(last.trim())) return false
-  // 只剩提示符的末行（`$`、`%`、`#`、`❯` 结尾，例如精简主题的 shell）：同样不是 Codex 输入框。
-  if (BARE_PROMPT_RE.test(last)) return false
   const tailLines = lines.slice(-3)
   const at = tailLines.findLastIndex((l) => /^›(?:\s|$)/.test(l.trim()))
   if (at < 0) return false
-  return tailLines.slice(at + 1).every((l) => !SHELL_PROMPT_RE.test(l.trim()))
+  // 输入框之后的行：shell 提示符，或不是 Codex 状态行、只剩裸提示符（`$`、`%`、`#`、`❯` 结尾）的行都不行。
+  // 输入框本身与状态行不做裸提示符判断（例如输入了"fix #"，或状态行以百分比结尾）。
+  return tailLines
+    .slice(at + 1)
+    .every(
+      (l) =>
+        !SHELL_PROMPT_RE.test(l.trim()) && (CODEX_STATUS_RE.test(l) || !BARE_PROMPT_RE.test(l)),
+    )
 }
 
 /** 最后一行是否为 shell 提示符（Codex 已退出）：此时不发送任何按键。 */

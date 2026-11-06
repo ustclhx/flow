@@ -755,5 +755,9 @@ describe('composerReady：只有最后几行是 Codex 输入框才能敲入文�
     expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', '$ '])).toBe(false)
     expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', '  ❯'])).toBe(false)
     expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', 'repo %'])).toBe(false)
+    // 输入框本身与 Codex 状态行不按裸提示符判断。
+    expect(composerReady(['› Ask Codex', '  ⏎ send … · 3%'])).toBe(true)
+    expect(composerReady(['› fix #'])).toBe(true)
+    expect(composerReady(['› Ask Codex', '$ '])).toBe(false)
   })
 })

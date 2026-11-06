@@ -13,6 +13,7 @@ import { createTaskRoutes } from '../src/ledger/routes.ts'
 import { createTaskService, type WorkspaceInfo } from '../src/ledger/tasks.ts'
 import { createNodeService } from '../src/nodes/service.ts'
 import { createPrPassthrough } from '../src/pr/passthrough.ts'
+import { prSourcedTask } from '../src/supervisor/observe.ts'
 import { WakeProjection } from '../src/supervisor/projection.ts'
 import { createWorkerReportRoutes } from '../src/worker-report/routes.ts'
 import { anyRole, contractInput, must, tempLedger, WS } from './ledger-helpers.ts'
@@ -382,8 +383,10 @@ describe('已结束任务因名单内用户评论恢复', () => {
     const requeued = s.ledger.taskEvents(id).findLast((e) => e.type === 'task.requeued')
     expect(requeued).toMatchObject({
       actor: 'hub',
-      payload: { reason: 'input', pr_event_seq: c.seq },
+      payload: { reason: 'input', pr_event_seq: c.seq, pr_sourced: true },
     })
+    // 因 PR 评论恢复的任务带 PR 来源污染：下游不自动合并。
+    expect(prSourcedTask(s.ledger, s.ledger.getTask(id))).toBe(true)
     // 直通只是上下文：授权依据与合同都不变。
     expect(task?.mandate).toEqual(before?.mandate)
     expect(task?.contract).toEqual(before?.contract)

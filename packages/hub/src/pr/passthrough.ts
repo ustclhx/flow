@@ -261,6 +261,8 @@ export function createPrPassthrough(o: PrPassthroughOptions) {
               payload: {
                 reason: 'input',
                 pr_event_seq: event.seq,
+                // 因 PR 评论恢复的任务带 PR 来源污染（中枢计算）：下游不自动合并。
+                pr_sourced: true,
                 note: `PR ${p.pr} 上名单内用户 ${p.actor} 的评论`,
               },
             },
