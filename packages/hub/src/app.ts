@@ -7,7 +7,7 @@ import {
   redactSecrets,
   toJsonDocument,
   VERSION,
-} from '@flow/core'
+} from '@raindown/core'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
@@ -27,7 +27,7 @@ import type { WakeTokenAuthority } from './server/wake-tokens.ts'
  */
 
 export interface HubDeps {
-  /** 中枢版本，默认 `@flow/core` 的 VERSION。 */
+  /** 中枢版本，默认 `@raindown/core` 的 VERSION。 */
   version?: string
   /** user token（`state/hub.token`）。不提供时，只有绑定 token 能访问受保护路由。 */
   token?: string

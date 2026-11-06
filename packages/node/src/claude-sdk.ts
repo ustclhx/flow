@@ -15,12 +15,11 @@ import type {
 import {
   BLOCKED_REASONS,
   type BlockedReason,
-  FLOW_MCP_TOOL_PREFIX as CORE_FLOW_MCP_TOOL_PREFIX,
+  RAINDOWN_MCP_TOOL_PREFIX as CORE_RAINDOWN_MCP_TOOL_PREFIX,
   clipText,
   type DeliveredReply,
   effectiveRoleKind,
   fail,
-  HUB_TOKEN_ENV,
   HUB_TOKEN_FILE_ENV,
   loadRoles,
   loadWorkspaces,
@@ -42,18 +41,18 @@ import {
   type TaskCost,
   type TaskResult,
   writablePaths,
-} from '@flow/core'
+} from '@raindown/core'
 import { z } from 'zod'
 import {
   checkReadScope,
-  isFlowMcp,
+  isRaindownMcp,
   READ_SCOPE_ENV,
   type ReadScopeCall,
   type ReadScopeContext,
 } from './claude-read-scope.ts'
 import { CLAUDE_FILE_WRITE_MATCHER, checkWritableTool } from './claude-writable-paths.ts'
 import { type NodeClock, systemClock } from './clock.ts'
-import { executorRoleEnv } from './env.ts'
+import { CHILD_ENV_DENYLIST, dualRaindownEnv, executorRoleEnv } from './env.ts'
 import {
   ActivityQueue,
   type DeliverResult,
@@ -90,7 +89,7 @@ import { resolveContractCwd } from './workdir.ts'
  * - 流式输入：首条用户消息是任务说明，运行中的文字回复再作为用户消息推入；
  * - 角色提示词追加在 `claude_code` 预设之后；设置来源由角色的 `setting_sources` 决定（默认 `['project']`，
  *   为 `[]` 时改为追加 cwd 下 CLAUDE.md / AGENTS.md 的纯文本）；权限模式默认 `default`；
- * - 注入 `flow mcp --actor <角色名>`（stdio），只放行 FLOW_MCP_AUTO_ALLOWED 中的 flow 工具，其余走审批；
+ * - 注入 `raindown mcp --actor <角色名>`（stdio），只放行 RAINDOWN_MCP_AUTO_ALLOWED 中的 raindown 工具，其余走审批；
  * - 工具审批：`canUseTool` 先做策略预检（add-m1-inbox 2.3，`claudePrecheckRequest`），中枢判定 auto /
  *   auto-report 时直接放行；否则挂起，经 idle 信号上报 `blocked(awaiting_approval)`，
  *   approve / deny 经 `deliver` 送达后 resolve 对应的 Promise；超过角色设定的时限则任务失败；
@@ -106,7 +105,7 @@ export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5'
 export const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 24 * 60
 
 /**
- * 不经审批即放行的 flow MCP 工具（工具名 = `packages/core/src/ops` 中的操作名）。
+ * 不经审批即放行的 raindown MCP 工具（工具名 = `packages/core/src/ops` 中的操作名）。
  *
  * 只放行读知识库、写 journal / capture、提交提案（提案仍需用户接受）和只读查看任务：
  * 这些操作都落在 AI 写入边界之内，不会让 worker 获得比自身角色更大的权限。
@@ -114,9 +113,9 @@ export const DEFAULT_APPROVAL_TIMEOUT_MINUTES = 24 * 60
  * - `task_create`：只读的 reviewer 可以借此创建一个 `role: dev`（codex-orca + danger-full-access）的任务，等于提权；
  * - `task_cancel`、`task_reply`：可以干预其他任务（包括替用户答复审批）；
  * - `kb_proposals_accept` / `reject`、`resource_transfer`：属于用户的决定；
- * - 以后新增的 flow 工具：默认不在清单里，需要审批，评估后再加入。
+ * - 以后新增的 raindown 工具：默认不在清单里，需要审批，评估后再加入。
  */
-export const FLOW_MCP_AUTO_ALLOWED = [
+export const RAINDOWN_MCP_AUTO_ALLOWED = [
   'kb_search',
   'kb_get',
   'kb_query',
@@ -130,7 +129,7 @@ export const FLOW_MCP_AUTO_ALLOWED = [
   'task_show',
 ] as const
 /**
- * 只在 supervisor 会话（`kind: supervisor`）中自动放行的 flow MCP 工具（design D7；tasks 4.1）：
+ * 只在 supervisor 会话（`kind: supervisor`）中自动放行的 raindown MCP 工具（design D7；tasks 4.1）：
  * `ask_user`、`task_propose`、`decision_review` 只产生等待用户处理的内容；`patrol_report` 只写 journal 与
  * Digest 条目（中枢只接受巡检唤醒，D13）；`task_respond` 的权限由中枢按
  * D15 核对（不再经策略审批，否则会自我阻塞）。其他角色不放行它们（readRoleMayUse 也不认），
@@ -147,18 +146,18 @@ export const SUPERVISOR_MCP_AUTO_ALLOWED = [
  * 已登记在 supervisor 放行清单、但 `packages/core/src/ops` 中尚未实现的操作名（4.4、4.6、4.7、4.9
  * 实现时必须从这里删除，测试会核对）。没有对应工具时清单项不起作用。
  */
-export const FLOW_MCP_AUTO_ALLOWED_PENDING: readonly string[] = []
-/** SDK 中 flow MCP 工具的全名前缀（服务名 flow），与 core 的动作识别共用。 */
-export const FLOW_MCP_TOOL_PREFIX = CORE_FLOW_MCP_TOOL_PREFIX
+export const RAINDOWN_MCP_AUTO_ALLOWED_PENDING: readonly string[] = []
+/** SDK 中 raindown MCP 工具的全名前缀（服务名 raindown），与 core 的动作识别共用。 */
+export const RAINDOWN_MCP_TOOL_PREFIX = CORE_RAINDOWN_MCP_TOOL_PREFIX
 /**
  * 有效类别为 read 的角色（design D9；tasks 5.7）可用的内置工具：SDK `tools` 选项只提供这些，
- * canUseTool 对其余工具一律拒绝、不进审批。ToolSearch 与 WaitForMcpServers 用于加载 Flow MCP 工具；
+ * canUseTool 对其余工具一律拒绝、不进审批。ToolSearch 与 WaitForMcpServers 用于加载 Raindown MCP 工具；
  * StructuredOutput 只在配置了结构化输出（审查任务）时可用，它不是内置工具，不放进 `tools`。
  */
 export const READ_ROLE_TOOLS = ['Read', 'Grep', 'Glob', 'ToolSearch', 'WaitForMcpServers'] as const
 export const STRUCTURED_OUTPUT_TOOL = 'StructuredOutput'
 
-/** 只读角色能否使用该工具：白名单内置工具、结构化输出（已配置时）与自动放行的 Flow MCP 工具。 */
+/** 只读角色能否使用该工具：白名单内置工具、结构化输出（已配置时）与自动放行的 Raindown MCP 工具。 */
 export function readRoleMayUse(
   toolName: string,
   structuredOutput: boolean,
@@ -166,11 +165,11 @@ export function readRoleMayUse(
 ): boolean {
   if ((READ_ROLE_TOOLS as readonly string[]).includes(toolName)) return true
   if (toolName === STRUCTURED_OUTPUT_TOOL) return structuredOutput
-  if (!toolName.startsWith(FLOW_MCP_TOOL_PREFIX)) return false
-  // SDK 没有给出来源时按名字判断（只读角色不加载其他 MCP 来源：setting_sources 必须为 []）；给出时必须是 flow。
-  if (mcpServer !== undefined && !isFlowMcp(toolName, mcpServer)) return false
-  return (FLOW_MCP_AUTO_ALLOWED as readonly string[]).includes(
-    toolName.slice(FLOW_MCP_TOOL_PREFIX.length),
+  if (!toolName.startsWith(RAINDOWN_MCP_TOOL_PREFIX)) return false
+  // SDK 没有给出来源时按名字判断（只读角色不加载其他 MCP 来源：setting_sources 必须为 []）；给出时必须是 raindown。
+  if (mcpServer !== undefined && !isRaindownMcp(toolName, mcpServer)) return false
+  return (RAINDOWN_MCP_AUTO_ALLOWED as readonly string[]).includes(
+    toolName.slice(RAINDOWN_MCP_TOOL_PREFIX.length),
   )
 }
 
@@ -196,7 +195,7 @@ export const REVIEW_OUTPUT_INVALID = 'review_output_invalid'
 /** 项目约定文件（setting_sources 为 [] 时作为纯文本追加到系统提示词）。 */
 export const PROJECT_INSTRUCTION_FILES = ['CLAUDE.md', 'AGENTS.md'] as const
 const PROJECT_INSTRUCTION_MAX = 16_000
-/** 取消时等 SDK 子进程（及其 flow MCP 孙进程）退出的时限。 */
+/** 取消时等 SDK 子进程（及其 raindown MCP 孙进程）退出的时限。 */
 export const CANCEL_GRACE_MS = 10_000
 
 const PERMISSION_MODES = [
@@ -220,10 +219,10 @@ const SETTING_SOURCES = ['user', 'project', 'local'] as const satisfies readonly
 /**
  * 角色 `permissions` 在 claude-sdk 执行器下的形态（这里细化执行器专用配置）。
  *
- * - `permissionMode` 默认 `default`：每一次未被允许列表放行的调用都进 canUseTool、交给 Flow 审批。
+ * - `permissionMode` 默认 `default`：每一次未被允许列表放行的调用都进 canUseTool、交给 Raindown 审批。
  *   `auto` 下分类器有把握的调用根本不会进 canUseTool，等于让模型自己决定，只有角色显式写出才使用；
  * - `setting_sources` 默认 `['project']`。注意被操作仓库的 `.claude/settings.json` 会随之生效：
- *   其中的 hooks 会直接执行命令，`permissions.allow` 会在 canUseTool 之前放行，绕过 Flow 的审批。
+ *   其中的 hooks 会直接执行命令，`permissions.allow` 会在 canUseTool 之前放行，绕过 Raindown 的审批。
  *   审查他人仓库的角色（reviewer 模板）应设为 `[]`，此时执行器改为把 cwd 下 CLAUDE.md / AGENTS.md
  *   的纯文本追加到系统提示词，保留项目约定但不加载 hooks 与权限规则。
  */
@@ -284,15 +283,15 @@ export function claudePrecheckRequest(
 }
 
 export interface ClaudeSdkExecutorOptions {
-  /** flow-home：读取角色，并作为 flow MCP 的 FLOW_HOME。 */
+  /** raindown-home：读取角色，并作为 raindown MCP 的 RAINDOWN_HOME。 */
   home: string
   clock?: NodeClock
   /** 注入的 `query`；缺省时动态加载 `@anthropic-ai/claude-agent-sdk`。 */
   query?: ClaudeQueryFn
   /** 按名字解析角色；缺省读取 `config/roles/`。 */
   resolveRole?: (name: string) => Promise<Result<Role>>
-  /** 启动 flow 的命令（argv 前缀），缺省 `['flow']`。 */
-  flowCommand?: readonly string[]
+  /** 启动 raindown 的命令（argv 前缀），缺省 `['raindown']`。 */
+  raindownCommand?: readonly string[]
   /** 待审批请求重新上报的初始间隔（之后指数退避到 10 分钟），缺省 1 秒。 */
   reannounceMs?: number
   /** 两条 SDK 消息间隔超过这么久时附带 resumed 信号（让 no_progress 之后恢复），缺省 60 秒。 */
@@ -360,20 +359,20 @@ export function renderTaskPrompt(contract: TaskContract, cwd: string): string {
   const lines = ['# 任务', '', contract.goal.trim(), '', `工作目录：${cwd}`]
   if (contract.context?.length) {
     lines.push('', '## 上下文引用', ...contract.context.map((c) => `- ${c}`))
-    lines.push('（brain 条目可以通过 flow MCP 的 kb 工具检索。）')
+    lines.push('（brain 条目可以通过 raindown MCP 的 kb 工具检索。）')
   }
   if (contract.verify?.length) {
     lines.push(
       '',
       '## 验收命令',
-      '你结束后 Flow 会依次运行：',
+      '你结束后 Raindown 会依次运行：',
       ...contract.verify.map((v) => `- \`${v.cmd.join(' ')}\`${v.cwd ? `（目录 ${v.cwd}）` : ''}`),
     )
   }
   lines.push(
     '',
     '## 约定',
-    '- 需要的工具权限会由 Flow 转给用户审批，被拒绝时请按理由调整做法。',
+    '- 需要的工具权限会由 Raindown 转给用户审批，被拒绝时请按理由调整做法。',
     '- 完成后用简短的文字总结结果，最后一段文字会作为任务结果摘要。',
   )
   return lines.join('\n')
@@ -499,7 +498,7 @@ async function loadSdkQuery(): Promise<ClaudeQueryFn> {
 export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): ExecutorPlugin {
   const clock = options.clock ?? systemClock
   const resolveRole = options.resolveRole ?? ((name) => defaultResolveRole(options.home, name))
-  const flowCommand = options.flowCommand ?? ['flow']
+  const raindownCommand = options.raindownCommand ?? ['raindown']
   const reannounceMs = options.reannounceMs ?? 1000
   const resumeGapMs = options.resumeGapMs ?? 60_000
   const cancelGraceMs = options.cancelGraceMs ?? CANCEL_GRACE_MS
@@ -582,7 +581,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
       })
 
       /**
-       * 结束：拒绝全部待决审批、关闭输入、中止查询，等 SDK 子进程（连同它启动的 flow MCP 孙进程）
+       * 结束：拒绝全部待决审批、关闭输入、中止查询，等 SDK 子进程（连同它启动的 raindown MCP 孙进程）
        * 随 abort 退出，最多 cancelGraceMs，之后 close() 强制结束，再结束活动流、给出结果。
        */
       const finish = (r: Result<ExecutorOutcome>) => {
@@ -674,7 +673,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           ) {
             return {
               behavior: 'deny',
-              message: `只读角色不能使用 ${toolName}（只允许 Read、Grep、Glob 与只读的 Flow 工具）`,
+              message: `只读角色不能使用 ${toolName}（只允许 Read、Grep、Glob 与只读的 Raindown 工具）`,
             }
           }
           // 结构化输出只产生结论、不访问文件：配置了 outputFormat 时直接放行，不进审批（否则审查会卡在审批上）。
@@ -1029,7 +1028,7 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           kind,
           ctx: sessionCtx,
           home: options.home,
-          flowCommand,
+          raindownCommand,
           ...(supervisor.data ? { supervisor: supervisor.data } : {}),
           ...(review
             ? {
@@ -1195,7 +1194,7 @@ export interface SupervisorSession {
   /** 规范化的 workspace（`ws/<id>`）。 */
   workspace: string
   taskId: string
-  /** 唤醒绑定 token 文件：只以 `FLOW_HUB_TOKEN_FILE` 交给 flow MCP 进程，token 本身不进 argv 与 env。 */
+  /** 唤醒绑定 token 文件：只以 `RAINDOWN_HUB_TOKEN_FILE` 交给 raindown MCP 进程，token 本身不进 argv 与 env。 */
   wakeTokenFile: string
   /** reply 唤醒：MCP 本地只放行只读操作（`--reply-only`）。 */
   replyOnly: boolean
@@ -1285,7 +1284,7 @@ interface BuildOptionsInput {
   reviewGitConfig?: readonly GitConfigPair[]
   ctx: ExecutorContext
   home: string
-  flowCommand: readonly string[]
+  raindownCommand: readonly string[]
   canUseTool: CanUseTool
   abortController: AbortController
   stderr: (data: string) => void
@@ -1297,11 +1296,11 @@ interface BuildOptionsInput {
 
 /** 由角色与任务上下文拼出 SDK 的 `query()` 选项。 */
 export function buildOptions(i: BuildOptionsInput): Options & { model: string } {
-  const [command = 'flow', ...prefix] = i.flowCommand
+  const [command = 'raindown', ...prefix] = i.raindownCommand
   const sup = i.supervisor
   // supervisor 会话：MCP 绑定 workspace 与唤醒任务（写类只作用于该 workspace、task_create 自动填 parent），
-  // MCP 进程经 FLOW_HUB_TOKEN_FILE 读取唤醒 token：token 不进 argv（--mcp-config）与任何 env（D6）。
-  const flowMcp: McpStdioServerConfig = {
+  // MCP 进程经 RAINDOWN_HUB_TOKEN_FILE 读取唤醒 token：token 不进 argv（--mcp-config）与任何 env（D6）。
+  const raindownMcp: McpStdioServerConfig = {
     type: 'stdio',
     command,
     args: [
@@ -1320,19 +1319,21 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
         : []),
     ],
     env: {
-      FLOW_HOME: i.home,
+      ...dualRaindownEnv({ RAINDOWN_HOME: i.home, RAINDOWN_ACTOR: i.role.name }),
       ...(sup
         ? {
-            FLOW_WORKSPACE: sup.workspace,
-            FLOW_TASK_ID: sup.taskId,
-            [HUB_TOKEN_FILE_ENV]: sup.wakeTokenFile,
+            ...dualRaindownEnv({
+              RAINDOWN_WORKSPACE: sup.workspace,
+              RAINDOWN_TASK_ID: sup.taskId,
+              [HUB_TOKEN_FILE_ENV]: sup.wakeTokenFile,
+            }),
           }
         : {}),
     },
   }
   const kind = i.kind ?? effectiveRoleKind(i.role)
   const readOnly = kind === 'read'
-  // supervisor 会话与只读角色一样：只用注入的 Flow MCP、不加载 claude.ai connector、内置工具只有白名单。
+  // supervisor 会话与只读角色一样：只用注入的 Raindown MCP、不加载 claude.ai connector、内置工具只有白名单。
   const lockedDown = readOnly || sup !== undefined
   const review = i.reviewGitConfig !== undefined
   const structured = i.outputFormat !== undefined
@@ -1343,12 +1344,14 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
         readRoleMayUse(rule.split('(', 1)[0]?.trim() ?? '', structured),
       )
     : i.perms.allowedTools
-  // 只放行清单中的 flow 工具（见 FLOW_MCP_AUTO_ALLOWED），其余 flow 工具走 canUseTool 审批。
+  // 只放行清单中的 raindown 工具（见 RAINDOWN_MCP_AUTO_ALLOWED），其余 raindown 工具走 canUseTool 审批。
   const allowedTools = [
     ...new Set([
       ...roleAllowed,
-      ...FLOW_MCP_AUTO_ALLOWED.map((name) => `${FLOW_MCP_TOOL_PREFIX}${name}`),
-      ...(sup ? SUPERVISOR_MCP_AUTO_ALLOWED.map((name) => `${FLOW_MCP_TOOL_PREFIX}${name}`) : []),
+      ...RAINDOWN_MCP_AUTO_ALLOWED.map((name) => `${RAINDOWN_MCP_TOOL_PREFIX}${name}`),
+      ...(sup
+        ? SUPERVISOR_MCP_AUTO_ALLOWED.map((name) => `${RAINDOWN_MCP_TOOL_PREFIX}${name}`)
+        : []),
       // 结构化输出（审查任务）只产生结论，不经审批。
       ...(i.outputFormat ? [STRUCTURED_OUTPUT_TOOL] : []),
     ]),
@@ -1371,11 +1374,12 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
           ? { ...gitConfigEnv(i.reviewGitConfig, i.env), ...UNTRUSTED_CHECKOUT_ENV }
           : {}),
         // supervisor 会话的绑定信息（不是凭证）。
-        ...(sup ? { FLOW_WORKSPACE: sup.workspace, FLOW_TASK_ID: sup.taskId } : {}),
+        ...(sup
+          ? dualRaindownEnv({ RAINDOWN_WORKSPACE: sup.workspace, RAINDOWN_TASK_ID: sup.taskId })
+          : {}),
       }
       // 防御：会话进程的 env 绝不带中枢凭证（执行器 env 已去掉，这里再删一次；token 文件路径只给 MCP）。
-      delete env[HUB_TOKEN_ENV]
-      delete env[HUB_TOKEN_FILE_ENV]
+      for (const name of CHILD_ENV_DENYLIST) delete env[name]
       return env
     })(),
     model: i.role.model ?? DEFAULT_CLAUDE_MODEL,
@@ -1383,15 +1387,15 @@ export function buildOptions(i: BuildOptionsInput): Options & { model: string } 
     systemPrompt: { type: 'preset', preset: 'claude_code', append },
     // 审查会话无条件不加载任何设置来源（角色配置已核对，这里再兜底）。
     settingSources: review ? [] : [...i.perms.setting_sources],
-    mcpServers: { flow: flowMcp },
-    // 只读角色与审查会话只用注入的 Flow MCP：忽略 .mcp.json、用户设置、插件中的 MCP 服务器。
+    mcpServers: { raindown: raindownMcp },
+    // 只读角色与审查会话只用注入的 Raindown MCP：忽略 .mcp.json、用户设置、插件中的 MCP 服务器。
     ...(lockedDown || review ? { strictMcpConfig: true } : {}),
     // 角色显式写 auto / bypassPermissions 时照原样传递；缺省为 default（见 claudeSdkPermissions）。
     permissionMode: i.perms.permissionMode,
     ...(i.perms.permissionMode === 'bypassPermissions'
       ? { allowDangerouslySkipPermissions: true }
       : {}),
-    // 有效类别为 read：可用的内置工具只有白名单（Flow MCP 不受 tools 影响）。
+    // 有效类别为 read：可用的内置工具只有白名单（Raindown MCP 不受 tools 影响）。
     ...(lockedDown ? { tools: [...READ_ROLE_TOOLS] } : {}),
     ...(i.outputFormat ? { outputFormat: i.outputFormat } : {}),
     allowedTools,
@@ -1568,7 +1572,7 @@ export async function projectInstructions(
   }
   if (parts.length === 0) return undefined
   return [
-    '# 项目约定（Flow 读取的纯文本，未加载该仓库的 Claude Code 设置、hooks 与权限规则）',
+    '# 项目约定（Raindown 读取的纯文本，未加载该仓库的 Claude Code 设置、hooks 与权限规则）',
     '',
     ...parts,
   ].join('\n')

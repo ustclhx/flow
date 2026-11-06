@@ -2,7 +2,13 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { flowPaths, type InboxItemView, initFlowHome, ok, registerKnownSecrets } from '@flow/core'
+import {
+  type InboxItemView,
+  initRaindownHome,
+  ok,
+  raindownPaths,
+  registerKnownSecrets,
+} from '@raindown/core'
 import {
   ChannelError,
   type ChannelMessage,
@@ -500,7 +506,7 @@ describe('缺少密钥', () => {
     const ch = new MemoryChannel('telegram')
     const values = new Map<string, string>()
     const secrets = createHubSecrets({
-      home: join(tmpdir(), 'flow-sec-unused'),
+      home: join(tmpdir(), 'raindown-sec-unused'),
       load: async () => ok(values),
     })
     const created: unknown[] = []
@@ -611,9 +617,9 @@ describe('runHub 端到端', () => {
   })
 
   async function home() {
-    const h = join(mkdtempSync(join(tmpdir(), 'flow-channels-hub-')), 'home')
+    const h = join(mkdtempSync(join(tmpdir(), 'raindown-channels-hub-')), 'home')
     cleanups.push(() => rmSync(join(h, '..'), { recursive: true, force: true }))
-    must(await initFlowHome(h))
+    must(await initRaindownHome(h))
     mkdirSync(join(h, 'config', 'workspaces'), { recursive: true })
     writeFileSync(
       join(h, 'config', 'workspaces', 'demo.yaml'),
@@ -635,7 +641,7 @@ describe('runHub 端到端', () => {
   test('卡住的任务推送到渠道；在渠道里回复 → 以 user 身份 task_reply（via=telegram）→ 条目关闭、消息改为已处理', async () => {
     const h = await home()
     // 中枢启动前账本里已有一个卡住（未持有租约）的任务
-    const ledger = await openLedger(flowPaths(h).ledgerDb)
+    const ledger = await openLedger(raindownPaths(h).ledgerDb)
     const d = drafts('t-e2e', { ws: 'ws/demo' })
     must(ledger.append(d['task.created'] as EventInput, { actor: 'user' }))
     must(
@@ -680,7 +686,7 @@ describe('runHub 端到端', () => {
     expect(done.actions).toEqual([])
 
     // 状态接口报告渠道
-    const token = readFileSync(flowPaths(h).hubToken, 'utf8').trim()
+    const token = readFileSync(raindownPaths(h).hubToken, 'utf8').trim()
     const status = (await (
       await fetch(`${hub.url}/v1/hub/status`, { headers: { Authorization: `Bearer ${token}` } })
     ).json()) as { data: { channels: { id: string; state: string }[] } }
@@ -690,7 +696,7 @@ describe('runHub 端到端', () => {
 
     await hub.stop()
     hub = undefined
-    const after = await openLedger(flowPaths(h).ledgerDb)
+    const after = await openLedger(raindownPaths(h).ledgerDb)
     cleanups.push(() => after.close())
     expect(after.taskReplies('t-e2e')[0]).toMatchObject({
       kind: 'text',
@@ -711,7 +717,7 @@ describe('runHub 端到端', () => {
       join(h, 'config', 'inbox.yaml'),
       'quiet_hours: false\nlevels:\n  - source: proposal\n    level: interrupt\n',
     )
-    const dir = join(flowPaths(h).state, 'proposals')
+    const dir = join(raindownPaths(h).state, 'proposals')
     mkdirSync(dir, { recursive: true })
     const id = '1761292800000-aaaaaaaaaaaa'
     writeFileSync(
@@ -739,8 +745,8 @@ describe('runHub 端到端', () => {
     await until(() => ch.sent.length === 1)
     const pushed = itemOf(ch.sent[0]?.message)
     expect(pushed.id).toBe(`prop.${id}`)
-    const token = readFileSync(flowPaths(h).hubToken, 'utf8').trim()
-    const auth = { Authorization: `Bearer ${token}`, 'X-Flow-Actor': 'user' }
+    const token = readFileSync(raindownPaths(h).hubToken, 'utf8').trim()
+    const auth = { Authorization: `Bearer ${token}`, 'X-Raindown-Actor': 'user' }
     const res = await fetch(`${hub.url}/v1/inbox/${pushed.id}/act`, {
       method: 'POST',
       headers: { ...auth, 'Content-Type': 'application/json' },
@@ -751,7 +757,7 @@ describe('runHub 端到端', () => {
     expect(itemOf(ch.updates[0]?.message).closed?.label).toBe('已忽略（来自 网页）')
   })
 
-  test('缺少密钥的渠道不启动，flow hub status 报告缺少的路径', async () => {
+  test('缺少密钥的渠道不启动，raindown hub status 报告缺少的路径', async () => {
     const h = await home()
     const ch = new MemoryChannel('telegram')
     hub = must(
@@ -768,7 +774,7 @@ describe('runHub 端到端', () => {
         secrets: { load: async () => ok(new Map()), watch: false },
       }),
     )
-    const token = readFileSync(flowPaths(h).hubToken, 'utf8').trim()
+    const token = readFileSync(raindownPaths(h).hubToken, 'utf8').trim()
     const status = (await (
       await fetch(`${hub.url}/v1/hub/status`, { headers: { Authorization: `Bearer ${token}` } })
     ).json()) as { data: { channels: { id: string; state: string; missing_secrets: string[] }[] } }

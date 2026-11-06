@@ -6,21 +6,21 @@
 ## Requirements
 
 ### Requirement: 两种接口等价
-每个知识访问操作 SHALL 同时以 CLI 子命令（`flow kb ...`）和 MCP 工具（经由 `flow mcp`，使用 stdio 传输）的形式提供，二者的输入、输出和权限规则 MUST 一致。MCP 调用方 MUST 声明一个操作者标识（角色名或 harness 名），用于提交记录与权限判断；CLI 默认的操作者是用户本人。
+每个知识访问操作 SHALL 同时以 CLI 子命令（`raindown kb ...`）和 MCP 工具（经由 `raindown mcp`，使用 stdio 传输）的形式提供，二者的输入、输出和权限规则 MUST 一致。MCP 调用方 MUST 声明一个操作者标识（角色名或 harness 名），用于提交记录与权限判断；CLI 默认的操作者是用户本人。
 
 #### Scenario: CLI 与 MCP 结果一致
-- **WHEN** 用同一个查询词分别调用 `flow kb search` 和 MCP 工具 `kb_search`
+- **WHEN** 用同一个查询词分别调用 `raindown kb search` 和 MCP 工具 `kb_search`
 - **THEN** 两者返回同样的条目，顺序也相同
 
 ### Requirement: 机器可读输出
-所有 `flow` CLI 子命令 SHALL 支持 `--json` 参数，输出结构与该操作对应的 MCP 工具返回值一致，并由仓库中的 JSON Schema 描述。退出码 MUST 遵循固定约定：`0` 表示成功，`1` 表示操作失败或校验未通过，`2` 表示用法错误，`3` 表示可重试的错误（比如写锁超时）。
+所有 `raindown` CLI 子命令 SHALL 支持 `--json` 参数，输出结构与该操作对应的 MCP 工具返回值一致，并由仓库中的 JSON Schema 描述。退出码 MUST 遵循固定约定：`0` 表示成功，`1` 表示操作失败或校验未通过，`2` 表示用法错误，`3` 表示可重试的错误（比如写锁超时）。
 
 #### Scenario: 脚本调用检索
-- **WHEN** 运行 `flow kb search 干支日 --json`
+- **WHEN** 运行 `raindown kb search 干支日 --json`
 - **THEN** 标准输出只有一个符合检索结果 schema 的 JSON 文档，退出码为 0
 
 #### Scenario: 写锁超时
-- **WHEN** 写锁被长时间占用，此时运行 `flow kb journal "..." --json`
+- **WHEN** 写锁被长时间占用，此时运行 `raindown kb journal "..." --json`
 - **THEN** 退出码为 3，输出的 JSON 中注明这个错误可以重试
 
 ### Requirement: 检索
@@ -55,7 +55,7 @@
 任何操作者 SHALL 能把一段文字写入 `raw/inbox/`，作为一个只追加、不修改的原始资料文件，并附带时间与来源（比如 `cli`、`mcp:claude`）。随手记 MUST NOT 直接写入 brain。
 
 #### Scenario: 用户随手记
-- **WHEN** 用户运行 `flow capture "考虑给东方站加日语"`
+- **WHEN** 用户运行 `raindown capture "考虑给东方站加日语"`
 - **THEN** `raw/inbox/` 下新增一个包含这段文字和元数据的文件，`brain/` 没有任何变化
 
 ### Requirement: 修改提案
@@ -69,7 +69,7 @@ AI 操作者对事实类条目（资源、`product`、`project-card`）的新增
 用户 SHALL 能列出待确认的提案、查看与当前内容的差异，并逐个或批量接受、拒绝；拒绝时可以附一句理由。接受后系统写入 brain、生成提交、更新 index 与 log；拒绝时提案和理由会被保留，以供日后回顾。
 
 #### Scenario: 批量接受
-- **WHEN** 用户运行 `flow kb proposals accept --all`
+- **WHEN** 用户运行 `raindown kb proposals accept --all`
 - **THEN** 所有待确认的提案依次写入 brain，每个提案对应 `log.md` 中的一条 `apply` 记录
 
 #### Scenario: 目标条目已被改动
@@ -88,7 +88,7 @@ AI 操作者 MUST NOT 直接修改 `decision` 条目和 `scope: personal` 的条
 - **THEN** 修改直接写入并提交，`log.md` 中记录该操作
 
 ### Requirement: 依赖中枢的操作
-操作注册表 SHALL 包含任务操作：`task_create`、`task_list`、`task_show`、`task_cancel`，CLI 与 MCP 都自动获得对应入口。这些操作通过本机中枢的 API 执行；中枢不可用时 MUST 返回可重试的错误 `hub_unavailable`（CLI 退出码 3），并提示用 `flow daemon status` 检查。知识库操作不依赖中枢，行为不变。
+操作注册表 SHALL 包含任务操作：`task_create`、`task_list`、`task_show`、`task_cancel`，CLI 与 MCP 都自动获得对应入口。这些操作通过本机中枢的 API 执行；中枢不可用时 MUST 返回可重试的错误 `hub_unavailable`（CLI 退出码 3），并提示用 `raindown daemon status` 检查。知识库操作不依赖中枢，行为不变。
 
 #### Scenario: 中枢未运行时建任务
 - **WHEN** 中枢未运行，此时 agent 调用 `task_create`

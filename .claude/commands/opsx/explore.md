@@ -103,7 +103,7 @@ Depending on what the user brings, you might:
 |   [State C]                              |
 |                                          |
 |   System diagrams, state machines,       |
-|   data flows, architecture sketches,     |
+|   data raindowns, architecture sketches,     |
 |   dependency graphs, comparison tables   |
 |                                          |
 +------------------------------------------+
@@ -217,7 +217,7 @@ If the user mentions a change or you detect one is relevant:
 
 There's no required ending. Discovery might:
 
-- **Flow into a proposal**: "Ready to start? Run `/opsx:propose` and this becomes a change."
+- **Raindown into a proposal**: "Ready to start? Run `/opsx:propose` and this becomes a change."
 - **Result in artifact updates**: "Updated design.md with these decisions"
 - **Just provide clarity**: User has what they need, moves on
 - **Continue later**: "We can pick this up anytime"

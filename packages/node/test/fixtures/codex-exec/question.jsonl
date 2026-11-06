@@ -2,6 +2,6 @@
 {"type":"turn.started"}
 {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll check the working directory once, then calculate 1 + 1."}}
 {"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc pwd","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc pwd","aggregated_output":"/Users/user/flow-codex-fixture/work\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Working directory: `/Users/user/flow-codex-fixture/work`\n\n1 + 1 = 2.\n\nWhich number should I add next?"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc pwd","aggregated_output":"/Users/user/raindown-codex-fixture/work\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Working directory: `/Users/user/raindown-codex-fixture/work`\n\n1 + 1 = 2.\n\nWhich number should I add next?"}}
 {"type":"turn.completed","usage":{"input_tokens":36255,"cached_input_tokens":30208,"cache_write_input_tokens":0,"output_tokens":115,"reasoning_output_tokens":0}}

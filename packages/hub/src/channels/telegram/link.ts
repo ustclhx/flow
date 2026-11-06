@@ -2,7 +2,7 @@ import { createHash, randomInt } from 'node:crypto'
 
 /**
  * Telegram 绑定码（add-m1-inbox 5.1，design D4；telegram-channel "绑定用户本人"）：
- * - `flow telegram link` 经 `/v1/telegram/link-code`（仅 user）申请；已绑定时必须加 `--rebind`；
+ * - `raindown telegram link` 经 `/v1/telegram/link-code`（仅 user）申请；已绑定时必须加 `--rebind`；
  * - 16 个字符，取自去掉易混字符的 31 个小写字母与数字，约 79 位随机（≥ 64 位）；
  * - 只在中枢内存中保存 sha256 摘要，10 分钟内有效，只能使用一次；中枢重启后全部失效；
  * - **按 chat 限流**：同一个 chat 每分钟最多 5 次错误尝试，超出后忽略该 chat 10 分钟。

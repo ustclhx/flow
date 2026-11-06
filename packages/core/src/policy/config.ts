@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { formatZodIssues, type ValidationIssue } from '../validation-issue.ts'
+import { normalizePolicyAction } from './actions.ts'
 
 /** `supervisor`：委托给本 workspace 的 supervisor 判断（D15）；节点对它不放行，按卡住上报。 */
 export const policyLevelSchema = z.enum([
@@ -52,7 +53,7 @@ export const policyRuleSchema = z
 
 export const policiesConfigSchema = z
   .array(policyRuleSchema)
-  .meta({ title: 'Flow policies config', description: 'config/policies.yaml：策略规则数组' })
+  .meta({ title: 'Raindown policies config', description: 'config/policies.yaml：策略规则数组' })
 
 export type PolicyRule = z.infer<typeof policyRuleSchema>
 export interface IndexedPolicyRule {
@@ -63,6 +64,7 @@ export interface IndexedPolicyRule {
 export interface PolicyConfig {
   rules: IndexedPolicyRule[]
   errors: (ValidationIssue & { rule_index: number })[]
+  warnings: (ValidationIssue & { rule_index: number })[]
 }
 
 /** 文件级错误返回失败；单条规则错误只排除该条，供调用方集中报告。 */
@@ -70,9 +72,10 @@ export async function loadPoliciesConfig(home: string): Promise<Result<PolicyCon
   const file = 'config/policies.yaml'
   let text: string
   try {
-    text = await readFile(flowPaths(home).policiesConfig, 'utf8')
+    text = await readFile(raindownPaths(home).policiesConfig, 'utf8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ok({ rules: [], errors: [] })
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT')
+      return ok({ rules: [], errors: [], warnings: [] })
     return fail('failure', 'read_failed', `无法读取 ${file}：${String(err)}`)
   }
   let input: unknown
@@ -85,10 +88,22 @@ export async function loadPoliciesConfig(home: string): Promise<Result<PolicyCon
   if (!list.success) return fail('failure', 'invalid_config', `${file} 必须是规则数组`)
   const rules: IndexedPolicyRule[] = []
   const errors: PolicyConfig['errors'] = []
+  const warnings: PolicyConfig['warnings'] = []
   list.data.forEach((raw, rule_index) => {
     const parsed = policyRuleSchema.safeParse(raw)
-    if (parsed.success) rules.push({ rule_index, rule: parsed.data })
-    else {
+    if (parsed.success) {
+      const action = normalizePolicyAction(parsed.data.action)
+      rules.push({ rule_index, rule: { ...parsed.data, action } })
+      if (action !== parsed.data.action) {
+        warnings.push({
+          file,
+          rule_index,
+          field: 'action',
+          code: 'legacy_policy_action',
+          message: `第 ${rule_index + 1} 条规则：旧动作 ${parsed.data.action} 已按 ${action} 匹配，请更新配置`,
+        })
+      }
+    } else {
       // strictObject 的未知键 issue 位于父对象，展开后才能精确报告拼错的字段。
       const issues = parsed.error.issues.flatMap<z.core.$ZodIssue>((issue) =>
         issue.code === 'unrecognized_keys'
@@ -105,5 +120,5 @@ export async function loadPoliciesConfig(home: string): Promise<Result<PolicyCon
       )
     }
   })
-  return ok({ rules, errors })
+  return ok({ rules, errors, warnings })
 }

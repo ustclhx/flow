@@ -13,7 +13,7 @@ export interface OpContext {
   /** 调用入口，用于记录来源，例如随手记的 `source`。 */
   via: 'cli' | 'mcp'
   /**
-   * MCP 会话绑定（add-m1-supervisor D6；tasks 4.1）：`flow mcp --workspace <ws> --task <id>`。
+   * MCP 会话绑定（add-m1-supervisor D6；tasks 4.1）：`raindown mcp --workspace <ws> --task <id>`。
    * 只是本地预检，经中枢的写操作最终以中枢的唤醒绑定 token 为准；见 `applyBinding`。
    */
   binding?: OpBinding
@@ -41,7 +41,7 @@ export interface Operation<I = Record<string, unknown>, O = unknown> {
   input: z.ZodObject
   /**
    * CLI 位置参数依次映射到的字段。最后一个字段若为数组则吸收全部剩余参数；
-   * 若为字符串则把剩余参数以空格连接（便于 `flow capture 一句话不用加引号`）。
+   * 若为字符串则把剩余参数以空格连接（便于 `raindown capture 一句话不用加引号`）。
    */
   positional?: readonly string[]
   /** CLI 可从 --file 读取完整 JSON 输入；不改变 MCP 输入合同。 */

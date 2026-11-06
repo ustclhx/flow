@@ -9,7 +9,7 @@ const patterns = DEFAULT_REVIEWER_WRITABLE_PATHS
 let temp: string
 let cwd: string
 beforeEach(() => {
-  temp = realpathSync(mkdtempSync(join(tmpdir(), 'flow-writable-')))
+  temp = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-writable-')))
   cwd = join(temp, 'repo')
   mkdirSync(join(cwd, 'docs'), { recursive: true })
   mkdirSync(join(cwd, 'src'))

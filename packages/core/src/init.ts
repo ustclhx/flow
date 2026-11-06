@@ -2,15 +2,15 @@ import { existsSync } from 'node:fs'
 import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, sep } from 'node:path'
 import {
-  flowAuthor,
   type GitOptions,
   git,
   gitCommit,
   gitInit,
   hasCommits,
   isRepoRoot,
+  raindownAuthor,
 } from './git.ts'
-import { flowPaths, GIT_REPOS, type RepoName } from './home.ts'
+import { GIT_REPOS, type RepoName, raindownPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import { DEFAULT_ROLE_FILES } from './role-templates.ts'
 import {
@@ -26,7 +26,7 @@ import {
 
 export interface InitReport {
   home: string
-  /** 本次补齐的目录与文件（相对 flow-home，目录以 `/` 结尾）。 */
+  /** 本次补齐的目录与文件（相对 raindown-home，目录以 `/` 结尾）。 */
   created: string[]
   /** 本次产生了提交的仓库。 */
   committed: RepoName[]
@@ -83,16 +83,16 @@ async function ensureDir(path: string): Promise<boolean> {
 }
 
 /**
- * 初始化 flow-home（flow-home spec）。幂等：已有文件绝不覆盖或删除，只补齐缺失项并报告。
+ * 初始化 raindown-home（raindown-home spec）。幂等：已有文件绝不覆盖或删除，只补齐缺失项并报告。
  * - 创建 config/、brain/、raw/、state/；前三者各自 `git init`，state/ 不进 git。
  * - 写入各仓库的 `.gitleaks.toml` 与提交前钩子，以及 brain 的 AGENTS.md、index.md、log.md。
- * - 把本次新建的被跟踪文件提交一次，作者 `Flow (init)`。
+ * - 把本次新建的被跟踪文件提交一次，作者 `Raindown (init)`。
  */
-export async function initFlowHome(
+export async function initRaindownHome(
   home: string,
   opts: GitOptions = {},
 ): Promise<Result<InitReport>> {
-  const paths = flowPaths(home)
+  const paths = raindownPaths(home)
   const created: string[] = []
   const committed: RepoName[] = []
   const rel = (p: string) => toPosix(relative(home, p))
@@ -129,8 +129,8 @@ export async function initFlowHome(
         // 只提交本次由模板生成的文件；内容不含密钥，因此跳过钩子（此时 gitleaks 可能尚未安装）。
         const c = await gitCommit(dir, {
           ...opts,
-          message: fresh ? 'init: 初始化 flow-home 仓库' : `init: 补齐 ${toCommit.join(', ')}`,
-          author: flowAuthor('init'),
+          message: fresh ? 'init: 初始化 raindown-home 仓库' : `init: 补齐 ${toCommit.join(', ')}`,
+          author: raindownAuthor('init'),
           paths: toCommit,
           allowEmpty: toCommit.length === 0,
           noVerify: true,
@@ -139,7 +139,7 @@ export async function initFlowHome(
         committed.push(repo)
       }
 
-      // 钩子不被 git 跟踪，放在提交之后安装。用户已有的钩子不覆盖，由 flow doctor 检查。
+      // 钩子不被 git 跟踪，放在提交之后安装。用户已有的钩子不覆盖，由 raindown doctor 检查。
       const hook = join(dir, '.git', 'hooks', 'pre-commit')
       if (await createIfMissing(hook, PRE_COMMIT_HOOK, 0o755)) created.push(rel(hook))
     }
@@ -151,6 +151,8 @@ export async function initFlowHome(
 }
 
 export function formatInitReport(r: InitReport): string {
-  if (r.complete) return `flow-home：${r.home}\n无缺失项`
-  return [`flow-home：${r.home}`, '补齐了以下项：', ...r.created.map((c) => `  + ${c}`)].join('\n')
+  if (r.complete) return `raindown-home：${r.home}\n无缺失项`
+  return [`raindown-home：${r.home}`, '补齐了以下项：', ...r.created.map((c) => `  + ${c}`)].join(
+    '\n',
+  )
 }

@@ -1,13 +1,13 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, normalize } from 'node:path'
-import { flowPaths, parseFrontmatter, type TaskContract, type TaskResume } from '@flow/core'
+import { parseFrontmatter, raindownPaths, type TaskContract, type TaskResume } from '@raindown/core'
 
 /**
  * 任务说明的渲染与存档（add-m1-executors 2.2；executor-codex-orca "任务说明"）。
  *
  * 任务说明是交给 Codex 的第一条消息，同时存到 `state/tasks/<id>/spec.md` 便于事后回看。
- * 内容：目标、角色提示词、上下文（brain 条目内联摘要并给出 `flow kb get`）、范围、验收命令、
+ * 内容：目标、角色提示词、上下文（brain 条目内联摘要并给出 `raindown kb get`）、范围、验收命令、
  * 完成标准（提交、推送、开 PR、不合并），以及"无法判断时写明问题后停下"的约定。
  * 渲染是纯函数，快照测试固定它的格式。
  */
@@ -36,7 +36,7 @@ export interface TaskSpecInput {
 
 /** 本任务在节点上的状态目录：`state/tasks/<id>/`。 */
 export const taskStateDir = (home: string, taskId: string) =>
-  join(flowPaths(home).state, 'tasks', taskId)
+  join(raindownPaths(home).state, 'tasks', taskId)
 
 /** 把 argv 拼成便于阅读、可以直接复制执行的命令行。 */
 export function shellQuote(argv: readonly string[]): string {
@@ -72,12 +72,12 @@ function contextLines(items: readonly ContextItem[]): string[] {
     if (c.kind === 'entry') {
       const summary = `${c.title ? `${c.title}：` : ''}${c.summary ?? '（无摘要）'}`
       return [
-        `- \`${inline(c.ref)}\`，完整内容：\`flow kb get ${inline(c.ref)}\``,
+        `- \`${inline(c.ref)}\`，完整内容：\`raindown kb get ${inline(c.ref)}\``,
         ...untrusted('summary', summary).map((l) => `  ${l}`),
       ]
     }
     if (c.kind === 'file') return [`- 文件 \`${inline(c.ref)}\``]
-    return [`- \`${inline(c.ref)}\`（brain 中没有找到这个条目，可以试试 \`flow kb search\`）`]
+    return [`- \`${inline(c.ref)}\`（brain 中没有找到这个条目，可以试试 \`raindown kb search\`）`]
   })
 }
 
@@ -95,7 +95,7 @@ export function renderTaskSpec(input: TaskSpecInput): string {
         )
       : ['（合同没有指定验收命令；请运行仓库约定的检查）']
   const out = [
-    `# Flow 任务 ${input.taskId}`,
+    `# Raindown 任务 ${input.taskId}`,
     '',
     `- workspace：\`${contract.workspace}\``,
     `- 角色：\`${input.role.name}\``,
@@ -167,7 +167,7 @@ export async function resolveContext(
   home: string,
   refs: readonly string[] = [],
 ): Promise<ContextItem[]> {
-  const { brain } = flowPaths(home)
+  const { brain } = raindownPaths(home)
   const out: ContextItem[] = []
   for (const ref of refs) {
     const rel = normalize(ref)

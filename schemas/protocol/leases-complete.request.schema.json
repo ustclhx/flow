@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/protocol/leases-complete.request.schema.json",
+  "$id": "https://raindown.local/schemas/protocol/leases-complete.request.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
@@ -217,7 +217,7 @@
             "node_id"
           ],
           "additionalProperties": false,
-          "title": "Flow task result",
+          "title": "Raindown task result",
           "description": "任务结束（done / failed）时的结果"
         }
       },
@@ -443,7 +443,7 @@
             "node_id"
           ],
           "additionalProperties": false,
-          "title": "Flow task result",
+          "title": "Raindown task result",
           "description": "任务结束（done / failed）时的结果"
         }
       },
@@ -779,7 +779,7 @@
             "node_id"
           ],
           "additionalProperties": false,
-          "title": "Flow task result"
+          "title": "Raindown task result"
         }
       },
       "required": [

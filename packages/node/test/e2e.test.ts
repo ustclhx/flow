@@ -3,14 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  flowPaths,
-  initFlowHome,
+  initRaindownHome,
   type LedgerEvent,
   type NodeView,
+  raindownPaths,
   type TaskContractInput,
   type TaskView,
-} from '@flow/core'
-import { type RunningHub, runHub } from '@flow/hub'
+} from '@raindown/core'
+import { type RunningHub, runHub } from '@raindown/hub'
 import { type RunningNode, startNode } from '../src/index.ts'
 
 /**
@@ -46,21 +46,21 @@ let auth: Record<string, string>
 const extraNodes: RunningNode[] = []
 
 beforeAll(async () => {
-  home = join(mkdtempSync(join(tmpdir(), 'flow-node-e2e-')), 'home')
-  const init = await initFlowHome(home)
+  home = join(mkdtempSync(join(tmpdir(), 'raindown-node-e2e-')), 'home')
+  const init = await initRaindownHome(home)
   if (!init.ok) throw new Error(init.error.message)
   mkdirSync(join(home, 'config', 'workspaces'), { recursive: true })
   writeFileSync(
     join(home, 'config', 'workspaces', 'demo.yaml'),
     'id: demo\nkind: product\nname: Demo\ndescription: 测试\nrepos: []\n',
   )
-  writeFileSync(flowPaths(home).hubConfig, 'lease_ttl_s: 5\nlease_wait_max_s: 30\n')
+  writeFileSync(raindownPaths(home).hubConfig, 'lease_ttl_s: 5\nlease_wait_max_s: 30\n')
   const h = await runHub({ home, port: 0, clock, logger: quiet as never })
   if (!h.ok) throw new Error(h.error.message)
   hub = h.data
-  writeFileSync(flowPaths(home).nodeConfig, `hub_url: ${hub.url}\ncapabilities: [browser]\n`)
-  const token = readFileSync(flowPaths(home).hubToken, 'utf8').trim()
-  auth = { Authorization: `Bearer ${token}`, 'X-Flow-Actor': 'user' }
+  writeFileSync(raindownPaths(home).nodeConfig, `hub_url: ${hub.url}\ncapabilities: [browser]\n`)
+  const token = readFileSync(raindownPaths(home).hubToken, 'utf8').trim()
+  auth = { Authorization: `Bearer ${token}`, 'X-Raindown-Actor': 'user' }
   const n = await startNode({ home, clock, logger: quiet, hostname: 'e2e-host' })
   if (!n.ok) throw new Error(n.error.message)
   node = n.data
@@ -141,7 +141,7 @@ async function findEvent(after: number, type: string): Promise<LedgerEvent> {
 }
 
 describe('节点端到端（fake 执行器）', () => {
-  test('flow node list：节点已注册，带能力与最近活动', async () => {
+  test('raindown node list：节点已注册，带能力与最近活动', async () => {
     const { nodes } = await api<{ nodes: NodeView[] }>('GET', '/v1/nodes')
     const me = nodes.find((n) => n.node_id === node.nodeId)
     expect(me).toMatchObject({
@@ -151,7 +151,7 @@ describe('节点端到端（fake 执行器）', () => {
       concurrency: 1,
     })
     expect(me?.last_seen_at).not.toBeNull()
-    expect(node.nodeId).toBe(readFileSync(flowPaths(home).nodeId, 'utf8').trim())
+    expect(node.nodeId).toBe(readFileSync(raindownPaths(home).nodeId, 'utf8').trim())
   })
 
   test('done：活动随续约上报，结果带节点 id', async () => {
@@ -229,7 +229,7 @@ describe('节点端到端（fake 执行器）', () => {
   })
 
   test('允许重试：过期后 requeued，被另一个节点再次领取', async () => {
-    // 同一 flow-home 只能有一个节点（state/node.lock）：先停掉主节点（单独运行本用例时它还在运行）。
+    // 同一 raindown-home 只能有一个节点（state/node.lock）：先停掉主节点（单独运行本用例时它还在运行）。
     await node.stop()
     const start = async (nodeId: string) => {
       const n = await startNode({ home, clock, logger: quiet, nodeId })

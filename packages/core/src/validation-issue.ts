@@ -2,7 +2,7 @@ import type { z } from 'zod'
 
 /** 校验发现的一个问题。错误码稳定，供脚本与 agent 判断。 */
 export interface ValidationIssue {
-  /** 相对 flow-home 的文件路径，例如 `brain/resources/domains/x.md`。 */
+  /** 相对 raindown-home 的文件路径，例如 `brain/resources/domains/x.md`。 */
   file: string
   /** 条目标识（仅 brain 条目）。 */
   id?: string

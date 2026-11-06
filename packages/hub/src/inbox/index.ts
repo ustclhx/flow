@@ -2,12 +2,12 @@ import { type FSWatcher, watch } from 'node:fs'
 import { join } from 'node:path'
 import {
   EMPTY_INBOX_CONFIG,
-  flowPaths,
   type InboxConfig,
   type InboxItemView,
   inboxCadence,
   loadInboxConfig,
-} from '@flow/core'
+  raindownPaths,
+} from '@raindown/core'
 import { type ChannelManager, createChannelManager } from '../channels/manager.ts'
 import type { ChannelSpec, InboxActFn } from '../channels/types.ts'
 import type { LedgerStore } from '../ledger/store.ts'
@@ -88,7 +88,7 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
   const reactor = createInboxReactor({
     ledger: o.ledger,
     config,
-    cursorPath: join(flowPaths(o.home).state, 'inbox-reactor.json'),
+    cursorPath: join(raindownPaths(o.home).state, 'inbox-reactor.json'),
     ...(o.logger ? { logger: o.logger } : {}),
   })
   const proposals = createProposalWatcher({
@@ -129,7 +129,7 @@ export async function startInbox(o: InboxServiceOptions): Promise<InboxService> 
   if (o.watch !== false) {
     await proposals.start()
     try {
-      watcher = watch(flowPaths(o.home).config, (_event, name) => {
+      watcher = watch(raindownPaths(o.home).config, (_event, name) => {
         if (name && String(name) !== 'inbox.yaml') return
         if (timer) clearTimeout(timer)
         timer = setTimeout(() => {

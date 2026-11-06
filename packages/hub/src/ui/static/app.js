@@ -94,7 +94,7 @@
   function updateTitle() {
     const chip = board.querySelector('.chip.lvl-interrupt b')
     const n = chip ? Number(chip.textContent) : 0
-    document.title = n > 0 ? `(${n}) 需要我的 · Flow` : '需要我的 · Flow'
+    document.title = n > 0 ? `(${n}) 需要我的 · Raindown` : '需要我的 · Raindown'
   }
 
   async function refresh() {
@@ -164,7 +164,7 @@
       } else {
         const message =
           res.status === 401
-            ? '会话已失效，请在终端运行 flow ui 重新登录'
+            ? '会话已失效，请在终端运行 raindown ui 重新登录'
             : doc?.error?.message || `操作失败（HTTP ${res.status}）`
         setBusy(card, button, false)
         setStatus(card, message, 'error')

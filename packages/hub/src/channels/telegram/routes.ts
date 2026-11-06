@@ -6,7 +6,7 @@ import {
   telegramLinkCodeData,
   telegramLinkCodeRequest,
   telegramUnlinkData,
-} from '@flow/core'
+} from '@raindown/core'
 import { Hono } from 'hono'
 import { respond } from '../../ledger/routes.ts'
 import { userOnly } from '../../server/auth.ts'
@@ -16,7 +16,7 @@ import type { TelegramLinks } from './link.ts'
  * Telegram 绑定相关的路由（经 `/v1` 的 Bearer 鉴权，仅 user；user token 降级声明的 AI 身份同样被拒绝）：
  * - `POST /v1/telegram/link-code`：申请绑定码。渠道没有在运行时返回 `channel_unavailable`；
  *   已绑定时必须带 `rebind: true`，否则返回 `already_bound`（防止静默改绑）；
- * - `POST /v1/telegram/unlink`：解除绑定（`flow telegram unlink`）。
+ * - `POST /v1/telegram/unlink`：解除绑定（`raindown telegram unlink`）。
  *
  * 已知边界：本机能读 `state/hub.token` 的进程（包括 worker）都能以 user 身份申请改绑码，
  * 所以改绑成功前一定会通知原 chat（plugin.ts）。
@@ -46,7 +46,7 @@ export function createTelegramRoutes(o: {
         fail(
           'failure',
           'already_bound',
-          'Telegram 已绑定。要改绑到另一个账号请运行 flow telegram link --rebind（原账号会收到通知）',
+          'Telegram 已绑定。要改绑到另一个账号请运行 raindown telegram link --rebind（原账号会收到通知）',
         ),
         telegramLinkCodeData,
       )

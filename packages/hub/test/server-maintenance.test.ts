@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { flowPaths, hubConfigSchema, openDatabase } from '@flow/core'
+import { hubConfigSchema, openDatabase, raindownPaths } from '@raindown/core'
 import {
   type BackupInfo,
   createHubApp,
@@ -18,13 +18,13 @@ import { FakeClock } from './server-fixtures.ts'
 let home: string
 let previousHome: string | undefined
 beforeEach(async () => {
-  home = await mkdtemp(join(tmpdir(), 'flow-hub-maintenance-'))
-  previousHome = process.env.FLOW_HOME
-  process.env.FLOW_HOME = home
+  home = await mkdtemp(join(tmpdir(), 'raindown-hub-maintenance-'))
+  previousHome = process.env.RAINDOWN_HOME
+  process.env.RAINDOWN_HOME = home
 })
 afterEach(async () => {
-  if (previousHome === undefined) delete process.env.FLOW_HOME
-  else process.env.FLOW_HOME = previousHome
+  if (previousHome === undefined) delete process.env.RAINDOWN_HOME
+  else process.env.RAINDOWN_HOME = previousHome
   await rm(home, { recursive: true, force: true })
 })
 
@@ -175,10 +175,10 @@ describe('外部心跳', () => {
 describe('每日备份', () => {
   test('默认本地 03:30 触发，按文件时间保留最新份数，只删除备份文件', async () => {
     const clock = new FakeClock(new Date(2026, 9, 24, 3, 29, 59).getTime())
-    const backups = flowPaths(home).backups
+    const backups = raindownPaths(home).backups
     await mkdir(backups, { recursive: true })
     await Promise.all(
-      ['flow-20261022-033000.db', 'flow-20261023-033000.db', 'notes.txt'].map((name) =>
+      ['raindown-20261022-033000.db', 'flow-20261023-033000.db', 'notes.txt'].map((name) =>
         writeFile(join(backups, name), 'test'),
       ),
     )
@@ -199,7 +199,7 @@ describe('每日备份', () => {
       await clock.advance(1000)
       expect(done).toHaveLength(1)
       expect(done[0]).toEqual({
-        path: 'state/backups/flow-20261024-033000.db',
+        path: 'state/backups/raindown-20261024-033000.db',
         at: new Date(clock.now()).toISOString(),
         kept: 2,
         size_bytes: 2,
@@ -208,12 +208,12 @@ describe('每日备份', () => {
       })
       expect((await readdir(backups)).sort()).toEqual([
         'flow-20261023-033000.db',
-        'flow-20261024-033000.db',
         'notes.txt',
+        'raindown-20261024-033000.db',
       ])
       await clock.advance(86_400_000)
       expect(done).toHaveLength(2)
-      expect(paths[1]).toEndWith('flow-20261025-033000.db')
+      expect(paths[1]).toEndWith('raindown-20261025-033000.db')
     } finally {
       await job.stop()
     }
@@ -234,13 +234,16 @@ describe('每日备份', () => {
     const first = startMaintenance(options)
     await log.waitFor('info', 1)
     await first.stop()
-    const oldPath = join(flowPaths(home).backups, 'flow-20261023-080000.db')
+    const backups = raindownPaths(home).backups
+    await rm(join(backups, 'raindown-20261024-090000.db'))
+    await writeFile(join(backups, 'flow-20261024-090000.db'), '{}')
+    const oldPath = join(backups, 'raindown-20261023-080000.db')
     await writeFile(oldPath, '{}')
     const second = startMaintenance(options)
     await second.stop()
     expect(paths).toHaveLength(1)
     expect(log.infos).toHaveLength(1)
-    expect(await readdir(flowPaths(home).backups)).toEqual(['flow-20261024-090000.db'])
+    expect(await readdir(raindownPaths(home).backups)).toEqual(['flow-20261024-090000.db'])
   })
 
   test('备份失败后 API 可用，下一天仍会调度', async () => {
@@ -274,8 +277,8 @@ describe('每日备份', () => {
 
   test('在线 VACUUM INTO 副本可恢复，保留备份时刻数据', async () => {
     const clock = new FakeClock(new Date(2026, 9, 24, 4).getTime())
-    await mkdir(flowPaths(home).state, { recursive: true })
-    const db = await openDatabase(flowPaths(home).ledgerDb)
+    await mkdir(raindownPaths(home).state, { recursive: true })
+    const db = await openDatabase(raindownPaths(home).ledgerDb)
     db.exec('CREATE TABLE snapshot (value TEXT)')
     db.prepare('INSERT INTO snapshot VALUES (?)').run('before')
     const done: BackupInfo[] = []

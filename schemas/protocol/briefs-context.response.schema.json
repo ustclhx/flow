@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/protocol/briefs-context.response.schema.json",
+  "$id": "https://raindown.local/schemas/protocol/briefs-context.response.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {

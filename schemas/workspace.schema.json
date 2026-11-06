@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/workspace.schema.json",
+  "$id": "https://raindown.local/schemas/workspace.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
@@ -376,6 +376,6 @@
       "title": "function workspace"
     }
   ],
-  "title": "Flow workspace",
+  "title": "Raindown workspace",
   "description": "config/workspaces/<id>.yaml 的内容"
 }

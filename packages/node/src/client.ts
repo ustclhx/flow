@@ -13,7 +13,6 @@ import {
   ENDPOINTS,
   errorBody,
   fail,
-  flowPaths,
   HEADERS,
   HUB_TOKEN_ENV,
   HUB_UNAVAILABLE,
@@ -31,13 +30,15 @@ import {
   type RenewLeaseData,
   type RenewLeaseRequest,
   type Result,
+  raindownPaths,
+  readRaindownEnv,
   registerNodeData,
   renewLeaseData,
   resolveHubUrl,
   type ShowTaskData,
   showTaskData,
   type TaskStatus,
-} from '@flow/core'
+} from '@raindown/core'
 import type { z } from 'zod'
 
 /**
@@ -55,7 +56,7 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 export interface NodeHubClientOptions {
   url: string
   token: string
-  /** 写入 `X-Flow-Actor`，通常为 `node:<id>`。 */
+  /** 写入 `X-Raindown-Actor`，通常为 `node:<id>`。 */
   actor?: string
   fetch?: FetchLike
   /** 普通请求的超时毫秒，默认 10 秒；long-poll 额外加上等待时间。 */
@@ -102,7 +103,7 @@ export type RegisterRequest = Partial<RegisterNodeRequest> &
   Pick<RegisterNodeRequest, 'node_id' | 'hostname' | 'version' | 'capabilities'>
 
 /**
- * 按 flow-home 构造客户端：地址取 node.yaml 的 hub_url 或 hub.yaml 的端口，token 取 `state/hub.token`。
+ * 按 raindown-home 构造客户端：地址取 node.yaml 的 hub_url 或 hub.yaml 的端口，token 取 `state/hub.token`。
  * token 不存在时返回可重试的 `hub_unavailable`（中枢从未启动过）。
  */
 export async function nodeHubClientFromHome(
@@ -113,12 +114,16 @@ export async function nodeHubClientFromHome(
   if (!hub.ok) return hub
   const node = await loadNodeConfig(home)
   if (!node.ok) return node
-  // 本机节点用 user token 并声明 node:<id>；设置了 FLOW_HUB_TOKEN（绑定 token）时用它（design D9）。
-  let token = process.env[HUB_TOKEN_ENV]?.trim()
+  // 本机节点用 user token 并声明 node:<id>；设置了 RAINDOWN_HUB_TOKEN（绑定 token）时用它（design D9）。
+  let token = readRaindownEnv(HUB_TOKEN_ENV)
   if (!token) {
-    const path = flowPaths(home).hubToken
+    const path = raindownPaths(home).hubToken
     if (!existsSync(path)) {
-      return fail('retryable', HUB_UNAVAILABLE, `缺少 ${path}，中枢尚未启动过（flow hub start）`)
+      return fail(
+        'retryable',
+        HUB_UNAVAILABLE,
+        `缺少 ${path}，中枢尚未启动过（raindown hub start）`,
+      )
     }
     token = (await readFile(path, 'utf8')).trim()
   }

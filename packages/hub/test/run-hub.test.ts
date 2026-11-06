@@ -5,11 +5,12 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { flowPaths, initFlowHome } from '@flow/core'
+import { hubStatusData, initRaindownHome, raindownPaths } from '@raindown/core'
 import { type RunningHub, runHub } from '../src/index.ts'
 
 let hub: RunningHub | undefined
@@ -19,8 +20,8 @@ afterEach(async () => {
 })
 
 async function setupHome(): Promise<string> {
-  const home = join(mkdtempSync(join(tmpdir(), 'flow-run-hub-')), 'home')
-  const init = await initFlowHome(home)
+  const home = join(mkdtempSync(join(tmpdir(), 'raindown-run-hub-')), 'home')
+  const init = await initRaindownHome(home)
   if (!init.ok) throw new Error(init.error.message)
   mkdirSync(join(home, 'config', 'workspaces'), { recursive: true })
   writeFileSync(
@@ -34,7 +35,7 @@ const quiet = { info() {}, warn() {}, error() {} }
 
 /** 启动时若已过当天的备份时刻，会补做一次备份并写入 hub.backup_done。 */
 const backupEvents = (home: string) => {
-  const dir = flowPaths(home).backups
+  const dir = raindownPaths(home).backups
   return existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith('.db')).length : 0
 }
 
@@ -43,8 +44,8 @@ test('runHub：打开账本、挂载任务路由、写入 hub.started，认证�
   const started = await runHub({ home, port: 0, logger: quiet as never })
   if (!started.ok) throw new Error(started.error.message)
   hub = started.data
-  const token = readFileSync(flowPaths(home).hubToken, 'utf8').trim()
-  const auth = { Authorization: `Bearer ${token}`, 'X-Flow-Actor': 'user' }
+  const token = readFileSync(raindownPaths(home).hubToken, 'utf8').trim()
+  const auth = { Authorization: `Bearer ${token}`, 'X-Raindown-Actor': 'user' }
 
   expect((await fetch(`${hub.url}/v1/tasks`)).status).toBe(401)
 
@@ -94,7 +95,7 @@ test('runHub：停机超过一个 TTL 后重启，活动租约获得宽限，不
   const home = await setupHome()
   // 模拟 10 分钟前开始执行、之后中枢一直停机的任务
   const past = Date.now() - 10 * 60_000
-  const old = await openLedger(flowPaths(home).ledgerDb, { now: () => past })
+  const old = await openLedger(raindownPaths(home).ledgerDb, { now: () => past })
   must(old.append(drafts('t-grace')['task.created'], sys))
   startTask(old, 't-grace')
   const leaseId = old.activeLeases()[0]?.lease_id as string
@@ -107,7 +108,7 @@ test('runHub：停机超过一个 TTL 后重启，活动租约获得宽限，不
   const started = await runHub({ home, port: 0, logger: quiet as never })
   if (!started.ok) throw new Error(started.error.message)
   hub = started.data
-  const token = readFileSync(flowPaths(home).hubToken, 'utf8').trim()
+  const token = readFileSync(raindownPaths(home).hubToken, 'utf8').trim()
   const shown = (await (
     await fetch(`${hub.url}/v1/tasks/t-grace`, { headers: { Authorization: `Bearer ${token}` } })
   ).json()) as { data: { task: { status: string } } }
@@ -115,9 +116,39 @@ test('runHub：停机超过一个 TTL 后重启，活动租约获得宽限，不
   await hub.stop()
   hub = undefined
 
-  const after = await openLedger(flowPaths(home).ledgerDb)
+  const after = await openLedger(raindownPaths(home).ledgerDb)
   const lease = after.activeLeases()[0]
   after.close()
   expect(lease).toBeDefined()
   expect((lease?.expires_at ?? '') > restartedAt).toBe(true)
+})
+
+test('hub status 将旧策略动作报告为迁移警告，不作为无效规则', async () => {
+  const home = await setupHome()
+  try {
+    writeFileSync(
+      join(home, 'config/policies.yaml'),
+      `- scope: dev
+  action: tool:mcp__flow__kb_search
+  level: notify
+`,
+    )
+    const started = await runHub({ home, port: 0, logger: quiet as never })
+    if (!started.ok) throw new Error(started.error.message)
+    hub = started.data
+    const token = readFileSync(raindownPaths(home).hubToken, 'utf8').trim()
+    const response = await fetch(`${hub.url}/v1/hub/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const body = (await response.json()) as { data: unknown }
+    expect(hubStatusData.parse(body.data).policies).toMatchObject({
+      loaded: 1,
+      errors: [],
+      warnings: [{ file: 'config/policies.yaml', code: 'legacy_policy_action' }],
+    })
+  } finally {
+    await hub?.stop()
+    hub = undefined
+    rmSync(home, { recursive: true, force: true })
+  }
 })

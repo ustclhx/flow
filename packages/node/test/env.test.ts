@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { tmpdir } from 'node:os'
-import { HUB_TOKEN_ENV } from '@flow/core'
+import { HUB_TOKEN_ENV } from '@raindown/core'
 import { execRunner } from '../src/codex-orca/orca.ts'
 import { executorRoleEnv } from '../src/env.ts'
 import { createFakeExecutor, type ExecutorContext, executorEnv, systemClock } from '../src/index.ts'
@@ -17,18 +17,28 @@ afterEach(() => {
 const fakeToken = () => `fht_${'z'.repeat(43)}`
 
 describe('子进程环境不继承中枢凭证（design D9）', () => {
-  test('executorEnv 去掉 FLOW_HUB_TOKEN，保留其他变量，不修改原对象', () => {
-    const base = { [HUB_TOKEN_ENV]: fakeToken(), PATH: '/bin', KEEP: '1' }
+  test('executorEnv 去掉 RAINDOWN_HUB_TOKEN，保留其他变量，不修改原对象', () => {
+    const base = {
+      [HUB_TOKEN_ENV]: fakeToken(),
+      RAINDOWN_HUB_TOKEN_FILE: '/new',
+      FLOW_HUB_TOKEN: fakeToken(),
+      FLOW_HUB_TOKEN_FILE: '/old',
+      PATH: '/bin',
+      KEEP: '1',
+    }
     const env = executorEnv(base)
     expect(env[HUB_TOKEN_ENV]).toBeUndefined()
+    expect(env.RAINDOWN_HUB_TOKEN_FILE).toBeUndefined()
+    expect(env.FLOW_HUB_TOKEN).toBeUndefined()
+    expect(env.FLOW_HUB_TOKEN_FILE).toBeUndefined()
     expect(env).toMatchObject({ PATH: '/bin', KEEP: '1' })
     expect(base[HUB_TOKEN_ENV]).toBe(fakeToken())
   })
 
-  test('验收命令使用角色身份，且看不到 FLOW_HUB_TOKEN', async () => {
+  test('验收命令使用角色身份，且看不到 RAINDOWN_HUB_TOKEN', async () => {
     process.env[HUB_TOKEN_ENV] = fakeToken()
     const [outcome] = await verifyTask(
-      [{ cmd: ['sh', '-c', `echo "token=\${${HUB_TOKEN_ENV}:-absent} actor=$FLOW_ACTOR"`] }],
+      [{ cmd: ['sh', '-c', `echo "token=\${${HUB_TOKEN_ENV}:-absent} actor=$RAINDOWN_ACTOR"`] }],
       tmpdir(),
       systemClock,
       new AbortController().signal,
@@ -39,7 +49,7 @@ describe('子进程环境不继承中枢凭证（design D9）', () => {
   })
 })
 
-test('节点交给执行器的 ctx.env 不含 FLOW_HUB_TOKEN', async () => {
+test('节点交给执行器的 ctx.env 不含 RAINDOWN_HUB_TOKEN', async () => {
   const inner = createFakeExecutor()
   let seen: ExecutorContext['env']
   const spy = {
@@ -50,7 +60,7 @@ test('节点交给执行器的 ctx.env 不含 FLOW_HUB_TOKEN', async () => {
     },
   }
   process.env[HUB_TOKEN_ENV] = fakeToken()
-  // bench 显式传入 user token，FLOW_HUB_TOKEN 不会被节点使用，只检验子进程环境。
+  // bench 显式传入 user token，RAINDOWN_HUB_TOKEN 不会被节点使用，只检验子进程环境。
   const b = await bench({ executors: [spy] })
   try {
     const id = await b.create(fake({ delay_ms: 0 }))
@@ -63,7 +73,7 @@ test('节点交给执行器的 ctx.env 不含 FLOW_HUB_TOKEN', async () => {
   }
 })
 
-test('codex-orca 的命令执行（orca、gh）不继承 FLOW_HUB_TOKEN', async () => {
+test('codex-orca 的命令执行（orca、gh）不继承 RAINDOWN_HUB_TOKEN', async () => {
   process.env[HUB_TOKEN_ENV] = fakeToken()
   for (const env of [undefined, { ...process.env }]) {
     const out = await execRunner('sh', ['-c', `echo "token=\${${HUB_TOKEN_ENV}:-absent}"`], {
@@ -75,12 +85,12 @@ test('codex-orca 的命令执行（orca、gh）不继承 FLOW_HUB_TOKEN', async 
 })
 
 test('执行器身份覆盖继承值，并拒绝 user、保留身份与非法格式', () => {
-  const base = { FLOW_ACTOR: 'user', FLOW_HUB_TOKEN: fakeToken(), KEEP: '1' }
+  const base = { RAINDOWN_ACTOR: 'user', RAINDOWN_HUB_TOKEN: fakeToken(), KEEP: '1' }
   expect(executorRoleEnv('reviewer', base)).toEqual({
     ok: true,
-    data: { FLOW_ACTOR: 'reviewer', KEEP: '1' },
+    data: { RAINDOWN_ACTOR: 'reviewer', FLOW_ACTOR: 'reviewer', KEEP: '1' },
   })
-  expect(base.FLOW_ACTOR).toBe('user')
+  expect(base.RAINDOWN_ACTOR).toBe('user')
   for (const actor of [
     'user',
     'User',

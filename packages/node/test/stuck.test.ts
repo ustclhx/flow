@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { taskContract } from '@flow/core'
+import { taskContract } from '@raindown/core'
 import { classifyFake, noProgressMs, STUCK_TAIL_LINES } from '../src/index.ts'
 import { type Bench, bench, fake } from './harness.ts'
 

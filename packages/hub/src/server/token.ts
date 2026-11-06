@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { chmod, link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
-import { fail, flowPaths, ok, type Result } from '@flow/core'
+import { fail, ok, type Result, raindownPaths } from '@raindown/core'
 import { z } from 'zod'
 
 const tokenSchema = z
@@ -10,7 +10,7 @@ const tokenSchema = z
 
 /** 先完整写入 0600 临时文件，再原子发布，兼容同时进行的首次初始化。 */
 export async function ensureHubToken(home: string): Promise<Result<string>> {
-  const { state, hubToken: path } = flowPaths(home)
+  const { state, hubToken: path } = raindownPaths(home)
   try {
     let text: string
     try {

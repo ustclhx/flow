@@ -95,7 +95,7 @@ describe('分级覆盖', () => {
   })
 
   test('文件级错误返回失败；文件不存在等同空配置', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'flow-inbox-config-'))
+    const home = mkdtempSync(join(tmpdir(), 'raindown-inbox-config-'))
     expect(must(await loadInboxConfig(home))).toEqual({ levels: [], errors: [] })
     mkdirSync(join(home, 'config'))
     writeFileSync(join(home, 'config', 'inbox.yaml'), 'levels: [\n')

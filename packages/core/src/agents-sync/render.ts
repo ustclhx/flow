@@ -1,7 +1,7 @@
 import type { ManagedBlockInput } from './types.ts'
 
-export const BEGIN_MARKER = '<!-- BEGIN:flow-managed -->'
-export const END_MARKER = '<!-- END:flow-managed -->'
+export const BEGIN_MARKER = '<!-- BEGIN:raindown-managed -->'
+export const END_MARKER = '<!-- END:raindown-managed -->'
 
 /** 按类型、标识排序，避免系统区域设置影响渲染结果。 */
 function compareResources(
@@ -30,18 +30,18 @@ export function renderManagedBlock(
 
   const prefix = [
     BEGIN_MARKER,
-    '## Flow 工作区上下文',
+    '## Raindown 工作区上下文',
     '',
-    '> 由 `flow agents sync` 生成，请勿手动修改本区块。',
+    '> 由 `raindown agents sync` 生成，请勿手动修改本区块。',
     '',
     `- 所属 workspace：\`${workspace.id}\`（${workspace.name}，${workspace.kind === 'product' ? '产品' : '职能'}）`,
     projectCardId === null
       ? '- 项目卡片：尚未建立'
-      : `- 项目卡片：brain 条目 \`${projectCardId}\`（\`flow kb get ${projectCardId}\`）`,
+      : `- 项目卡片：brain 条目 \`${projectCardId}\`（\`raindown kb get ${projectCardId}\`）`,
     '- 关键资源：',
   ]
   const suffix = [
-    `- 访问知识库：MCP 工具 \`kb_search\`、\`kb_get\`、\`kb_query\`、\`ws_brief\`；或 CLI \`flow kb search <词>\`、\`flow ws brief ${workspace.id}\``,
+    `- 访问知识库：MCP 工具 \`kb_search\`、\`kb_get\`、\`kb_query\`、\`ws_brief\`；或 CLI \`raindown kb search <词>\`、\`raindown ws brief ${workspace.id}\``,
     '- 写入规则：工作日志用 `kb_journal`；随手记用 `capture`；事实类修改用 `kb_propose` 提交提案，必须附出处；不得直接修改 decision 和 personal 条目。',
     END_MARKER,
   ]
@@ -50,7 +50,7 @@ export function renderManagedBlock(
     Array.from(grouped, ([type, ids]) => `  - ${type}：${ids.map((id) => `\`${id}\``).join('、')}`),
     [
       ...Array.from(grouped, ([type, ids]) => `  - ${type}：${ids.length} 个`),
-      `  - 完整列表：flow ws resources ${workspace.id}`,
+      `  - 完整列表：raindown ws resources ${workspace.id}`,
     ],
   ]
 

@@ -1,5 +1,5 @@
 /** @jsxImportSource hono/jsx */
-import { INBOX_LEVELS, type InboxAction, type InboxItemView, type InboxLevel } from '@flow/core'
+import { INBOX_LEVELS, type InboxAction, type InboxItemView, type InboxLevel } from '@raindown/core'
 import type { Child, FC } from 'hono/jsx'
 
 /**
@@ -284,7 +284,7 @@ const Shell: FC<{ title: string; children?: Child }> = ({ title, children }) => 
 export const BoardPage: FC<{ model: BoardModel }> = ({ model }) => {
   const urgent = model.levels.interrupt.length
   return (
-    <Shell title={urgent > 0 ? `(${urgent}) 需要我的 · Flow` : '需要我的 · Flow'}>
+    <Shell title={urgent > 0 ? `(${urgent}) 需要我的 · Raindown` : '需要我的 · Raindown'}>
       <body>
         <header class="top">
           <div class="brand">
@@ -314,18 +314,18 @@ export const BoardPage: FC<{ model: BoardModel }> = ({ model }) => {
 
 /** 没有有效会话时的页面：只提示登录，不包含任何条目。 */
 export const LoginPage: FC<{ reason: 'missing' | 'invalid' }> = ({ reason }) => (
-  <Shell title="登录 · Flow">
+  <Shell title="登录 · Raindown">
     <body class="center">
       <main class="login">
         <span class="logo big" aria-hidden="true" />
-        <h1>{reason === 'invalid' ? '登录链接无效或已过期' : '请运行 flow ui 登录'}</h1>
+        <h1>{reason === 'invalid' ? '登录链接无效或已过期' : '请运行 raindown ui 登录'}</h1>
         <p>
           {reason === 'invalid'
             ? '登录链接只能使用一次，并在 60 秒后失效。'
             : '这个页面只对本机已登录的浏览器开放。'}
         </p>
         <p>在终端中运行下面的命令，它会生成一次性登录链接并在浏览器中打开：</p>
-        <pre class="cmd">flow ui</pre>
+        <pre class="cmd">raindown ui</pre>
         <p class="fine">中枢重启后需要重新登录。</p>
       </main>
     </body>

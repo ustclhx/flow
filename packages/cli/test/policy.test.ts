@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
-import { flowPaths, HUB_TOKEN_ENV, HubClient } from '@flow/core'
-import { type RunningHub, runHub } from '@flow/hub'
+import { HUB_TOKEN_ENV, HubClient, raindownPaths } from '@raindown/core'
+import { type RunningHub, runHub } from '@raindown/hub'
 import { initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
@@ -11,10 +11,11 @@ let hub: RunningHub | undefined
 let taskId: string
 const saved: Record<string, string | undefined> = {}
 beforeAll(async () => {
-  home = await initTempHome('flow-policy-cli-')
-  for (const key of ['FLOW_HOME', 'FLOW_ACTOR', HUB_TOKEN_ENV]) saved[key] = process.env[key]
-  process.env.FLOW_HOME = home
-  delete process.env.FLOW_ACTOR
+  home = await initTempHome('raindown-policy-cli-')
+  for (const key of ['RAINDOWN_HOME', 'RAINDOWN_ACTOR', HUB_TOKEN_ENV])
+    saved[key] = process.env[key]
+  process.env.RAINDOWN_HOME = home
+  delete process.env.RAINDOWN_ACTOR
   delete process.env[HUB_TOKEN_ENV]
   const started = await runHub({
     home,
@@ -24,9 +25,9 @@ beforeAll(async () => {
   })
   if (!started.ok) throw new Error(started.error.message)
   hub = started.data
-  await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
+  await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
   await writeFile(
-    flowPaths(home).policiesConfig,
+    raindownPaths(home).policiesConfig,
     '- scope: "*"\n  action: git.push\n  level: always\n- scope: ws/product-res\n  action: git.push\n  level: auto-report\n',
   )
   const created = await new HubClient({ home, actor: 'user' }).createTask({
@@ -94,9 +95,9 @@ test('policy check 默认只判定 auto-report，--record 才入账；支持重�
   expect(status.stdout).toContain('第 1 条规则')
 })
 
-test('缺少必需参数为用法错误；FLOW_ACTOR 不能通过 --actor user 绕过权限', async () => {
+test('缺少必需参数为用法错误；RAINDOWN_ACTOR 不能通过 --actor user 绕过权限', async () => {
   expect((await runCli(['policy', 'check', '--tool', 'Bash'], commands)).exitCode).toBe(2)
-  process.env.FLOW_ACTOR = 'codex'
+  process.env.RAINDOWN_ACTOR = 'codex'
   try {
     const denied = await runCli(
       ['policy', 'check', '--task', taskId, '--tool', 'Bash', '--actor', 'user', '--json'],
@@ -105,6 +106,6 @@ test('缺少必需参数为用法错误；FLOW_ACTOR 不能通过 --actor user �
     expect(denied.exitCode).toBe(1)
     expect(JSON.parse(denied.stdout)).toMatchObject({ ok: false, error: { code: 'scope_denied' } })
   } finally {
-    delete process.env.FLOW_ACTOR
+    delete process.env.RAINDOWN_ACTOR
   }
 })

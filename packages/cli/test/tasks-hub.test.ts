@@ -5,20 +5,20 @@ import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   ENDPOINTS,
-  flowPaths,
   HEADERS,
   HubClient,
   hubStatusData,
   invokeOperation,
   kbSearchOp,
   type Result,
+  raindownPaths,
   taskCancelOp,
   taskCreateOp,
   taskListOp,
   taskShowOp,
   toJsonDocument,
   VERSION,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   createTaskRoutes,
   createTaskService,
@@ -28,7 +28,7 @@ import {
   runHub,
   startHub,
   workspaceCheckFromHome,
-} from '@flow/hub'
+} from '@raindown/hub'
 import { callJson, connect, initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
@@ -51,26 +51,26 @@ const ctx = () => ({ home, actor: 'test-agent', via: 'cli' as const })
 const client = () => new HubClient(ctx())
 async function start() {
   hub = data(await runHub({ home, port: 0 }))
-  await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
+  await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
   return hub
 }
 
 beforeEach(async () => {
-  home = await initTempHome('flow-tasks-hub-')
+  home = await initTempHome('raindown-tasks-hub-')
   // 非默认角色必须显式定义，不能依赖 task_create 跳过角色校验。
   // 测试用 AI 身份（test-agent、cli-agent）创建，所以允许任意身份。
   await writeFile(
     join(home, 'config/roles/developer.yaml'),
     'name: developer\nexecutor: fake\nprompt: 完成测试任务\ncreatable_by: ["*"]\n',
   )
-  savedHome = process.env.FLOW_HOME
-  process.env.FLOW_HOME = home
+  savedHome = process.env.RAINDOWN_HOME
+  process.env.RAINDOWN_HOME = home
 })
 afterEach(async () => {
   await hub?.stop()
   hub = undefined
-  if (savedHome === undefined) delete process.env.FLOW_HOME
-  else process.env.FLOW_HOME = savedHome
+  if (savedHome === undefined) delete process.env.RAINDOWN_HOME
+  else process.env.RAINDOWN_HOME = savedHome
   await rm(home, { recursive: true, force: true })
 })
 
@@ -272,7 +272,7 @@ describe('任务操作与真实中枢', () => {
       ok: false,
       error: { code: 'hub_unavailable', kind: 'retryable', retryable: true },
     })
-    if (!result.ok) expect(result.error.message).toContain('运行 flow daemon status 检查')
+    if (!result.ok) expect(result.error.message).toContain('运行 raindown daemon status 检查')
     const cli = await runCli(
       [
         'task',
@@ -322,7 +322,7 @@ describe('HubClient 协议边界', () => {
 
   test('认证失败保留中枢错误类别和错误码', async () => {
     await start()
-    await writeFile(flowPaths(home).hubToken, randomUUID())
+    await writeFile(raindownPaths(home).hubToken, randomUUID())
     expect(toJsonDocument(await client().listTasks())).toMatchObject({
       ok: false,
       error: { kind: 'failure', code: 'unauthorized', retryable: false },
@@ -330,9 +330,9 @@ describe('HubClient 协议边界', () => {
   })
 
   test('每个请求传 token 与 actor；中枢错误的 details 和类别原样转换', async () => {
-    await mkdir(flowPaths(home).state, { recursive: true })
+    await mkdir(raindownPaths(home).state, { recursive: true })
     const token = randomUUID()
-    await writeFile(flowPaths(home).hubToken, token)
+    await writeFile(raindownPaths(home).hubToken, token)
     const error = {
       kind: 'retryable' as const,
       code: 'hub_busy',
@@ -352,8 +352,8 @@ describe('HubClient 协议边界', () => {
   })
 
   test('超时覆盖响应体读取，返回可重试错误', async () => {
-    await mkdir(flowPaths(home).state, { recursive: true })
-    await writeFile(flowPaths(home).hubToken, randomUUID())
+    await mkdir(raindownPaths(home).state, { recursive: true })
+    await writeFile(raindownPaths(home).hubToken, randomUUID())
     const probe = new HubClient({
       ...ctx(),
       timeoutMs: 10,
@@ -377,8 +377,8 @@ describe('HubClient 协议边界', () => {
   })
 
   test('非法 JSON 或不符合 schema 的响应不能当作成功', async () => {
-    await mkdir(flowPaths(home).state, { recursive: true })
-    await writeFile(flowPaths(home).hubToken, randomUUID())
+    await mkdir(raindownPaths(home).state, { recursive: true })
+    await writeFile(raindownPaths(home).hubToken, randomUUID())
     for (const response of [
       new Response('invalid'),
       Response.json({ ok: true, data: { tasks: [{}] } }),
@@ -392,8 +392,8 @@ describe('HubClient 协议边界', () => {
   })
 
   test('status 有端点时使用协议响应，并显示定时规则错误', async () => {
-    await mkdir(flowPaths(home).state, { recursive: true })
-    await writeFile(flowPaths(home).hubToken, randomUUID())
+    await mkdir(raindownPaths(home).state, { recursive: true })
+    await writeFile(raindownPaths(home).hubToken, randomUUID())
     const status = hubStatusData.parse({
       version: VERSION,
       uptime: 10,
@@ -424,7 +424,7 @@ describe('HubClient 协议边界', () => {
         home,
         port: 0,
         openLedger: async () => {
-          const ledger = await openLedger(flowPaths(home).ledgerDb)
+          const ledger = await openLedger(raindownPaths(home).ledgerDb)
           routes = createTaskRoutes({
             ledger,
             tasks: createTaskService({
@@ -438,9 +438,9 @@ describe('HubClient 协议边界', () => {
         routes: () => [{ path: '/', app: routes }],
       }),
     )
-    await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
+    await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
     await client().createTask(contract)
-    const backups = flowPaths(home).backups
+    const backups = raindownPaths(home).backups
     await mkdir(backups, { recursive: true })
     await writeFile(join(backups, 'old.db'), '')
     await utimes(join(backups, 'old.db'), new Date(0), new Date(0))
@@ -478,7 +478,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     const portProbe = data(await runHub({ home, port: 0 }))
     const port = portProbe.port
     await portProbe.stop()
-    await writeFile(flowPaths(home).hubConfig, `port: ${port}\n`)
+    await writeFile(raindownPaths(home).hubConfig, `port: ${port}\n`)
     const proc = Bun.spawn(
       [
         process.execPath,
@@ -489,7 +489,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       ],
       {
         cwd: join(import.meta.dir, '../../..'),
-        env: { ...process.env, FLOW_HOME: home },
+        env: { ...process.env, RAINDOWN_HOME: home },
         stdout: 'pipe',
         stderr: 'pipe',
       },
@@ -504,14 +504,14 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       }
       reader.releaseLock()
       expect(proc.exitCode).toBeNull()
-      const pid = JSON.parse(await readFile(flowPaths(home).hubPid, 'utf8')).pid
+      const pid = JSON.parse(await readFile(raindownPaths(home).hubPid, 'utf8')).pid
       expect(pid).toBe(proc.pid)
       const duplicate = await runCli(['hub', 'start', '--json'], commands)
       expect(duplicate.exitCode).toBe(1)
       expect(JSON.parse(duplicate.stdout).error.message).toContain(String(proc.pid))
       proc.kill(signal)
       expect(await proc.exited).toBe(0)
-      expect(existsSync(flowPaths(home).hubPid)).toBe(false)
+      expect(existsSync(raindownPaths(home).hubPid)).toBe(false)
       const stdout = await new Response(proc.stdout).text()
       if (signal === 'SIGTERM') expect(JSON.parse(stdout)).toMatchObject({ ok: true })
       else expect(stdout).toContain('中枢已停止')

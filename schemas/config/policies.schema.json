@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/config/policies.schema.json",
+  "$id": "https://raindown.local/schemas/config/policies.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "array",
   "items": {
@@ -74,6 +74,6 @@
     ],
     "additionalProperties": false
   },
-  "title": "Flow policies config",
+  "title": "Raindown policies config",
   "description": "config/policies.yaml：策略规则数组"
 }

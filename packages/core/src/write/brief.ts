@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { BRAIN_BRIEFS_DIR } from '../entries.ts'
 import { type GitOptions, git, headState } from '../git.ts'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { redactSecrets } from '../ledger/redact.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { WS_REF_RE } from '../schema/common.ts'
@@ -57,7 +57,7 @@ async function committedBrief(
   path: string,
   opts: GitOptions = {},
 ): Promise<Result<string | null>> {
-  const dir = flowPaths(home).brain
+  const dir = raindownPaths(home).brain
   // 还没有任何提交（unborn HEAD）：笔记一定没有提交过，按不存在处理；其他 git 失败报错。
   const head = await headState(dir, opts)
   if (head === 'unborn') return ok(null)
@@ -100,7 +100,7 @@ export interface BriefInput {
 
 export interface BriefReceipt {
   workspace: string
-  /** 相对 flow-home 的路径，例如 `brain/briefs/product-res.md`。 */
+  /** 相对 raindown-home 的路径，例如 `brain/briefs/product-res.md`。 */
   file: string
   /** 写入后的笔记哈希，下一次更新以它为 `base_hash`。 */
   hash: string
@@ -170,7 +170,7 @@ export async function writeBrief(
         summary: `${input.workspace} 简报笔记`,
         // 冲突已按已提交内容在锁内判定；工作区文件只决定是新建还是替换。
         files: [
-          existsSync(join(flowPaths(home).brain, path.data))
+          existsSync(join(raindownPaths(home).brain, path.data))
             ? { op: 'replace', path: path.data, content }
             : { op: 'create', path: path.data, content },
         ],

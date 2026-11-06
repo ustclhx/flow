@@ -2,15 +2,15 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { flowPaths, HUB_TOKEN_ENV, type Result } from '@flow/core'
-import { openLedger, type RunningHub, runHub } from '@flow/hub'
+import { HUB_TOKEN_ENV, type Result, raindownPaths } from '@raindown/core'
+import { openLedger, type RunningHub, runHub } from '@raindown/hub'
 import { initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
 
 /**
- * `flow ask`、`flow supervisor wake [--release]`、`flow supervisor status`（add-m1-supervisor 3.4）：
- * 真实中枢（随机端口、临时 FLOW_HOME，flow init 生成的 supervisor 角色），不启动节点。
+ * `raindown ask`、`raindown supervisor wake [--release]`、`raindown supervisor status`（add-m1-supervisor 3.4）：
+ * 真实中枢（随机端口、临时 RAINDOWN_HOME，raindown init 生成的 supervisor 角色），不启动节点。
  */
 
 let home: string
@@ -24,7 +24,7 @@ function data<T>(r: Result<T>): T {
 }
 
 beforeAll(async () => {
-  home = await initTempHome('flow-supervisor-cli-')
+  home = await initTempHome('raindown-supervisor-cli-')
   const repo = join(home, '..', 'repo')
   mkdirSync(repo, { recursive: true })
   const yaml = (id: string, extra = '') =>
@@ -34,12 +34,12 @@ beforeAll(async () => {
     join(home, 'config', 'workspaces', 'xuanxue-saas.yaml'),
     yaml('xuanxue-saas', 'supervisor:\n  enabled: false\n'),
   )
-  for (const k of ['FLOW_HOME', 'FLOW_ACTOR', HUB_TOKEN_ENV]) saved[k] = process.env[k]
-  process.env.FLOW_HOME = home
-  delete process.env.FLOW_ACTOR
+  for (const k of ['RAINDOWN_HOME', 'RAINDOWN_ACTOR', HUB_TOKEN_ENV]) saved[k] = process.env[k]
+  process.env.RAINDOWN_HOME = home
+  delete process.env.RAINDOWN_ACTOR
   delete process.env[HUB_TOKEN_ENV]
   hub = data(await runHub({ home, port: 0, logger: quiet, inbox: { watch: false, channels: [] } }))
-  await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
+  await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
 })
 
 afterAll(async () => {
@@ -51,8 +51,8 @@ afterAll(async () => {
   await rm(join(home, '..'), { recursive: true, force: true })
 })
 
-describe('flow ask / flow supervisor', () => {
-  test('flow ask 输出唤醒任务；再次唤醒已排队；status 显示当前唤醒与队列；--release；AI 身份 user_only；未启用', async () => {
+describe('raindown ask / raindown supervisor', () => {
+  test('raindown ask 输出唤醒任务；再次唤醒已排队；status 显示当前唤醒与队列；--release；AI 身份 user_only；未启用', async () => {
     const ask = await runCli(['ask', 'product-res', '修一下', 'README', '--json'], commands)
     expect(ask.exitCode).toBe(0)
     const asked = JSON.parse(ask.stdout).data
@@ -92,7 +92,7 @@ describe('flow ask / flow supervisor', () => {
     })
 
     await hub.stop()
-    const ledger = await openLedger(flowPaths(home).ledgerDb)
+    const ledger = await openLedger(raindownPaths(home).ledgerDb)
     const instr = ledger.eventsAfter(0, {}, 10_000).filter((e) => e.type === 'user.instruction')
     ledger.close()
     expect(instr).toHaveLength(2)

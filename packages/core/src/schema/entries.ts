@@ -176,6 +176,6 @@ export const entrySchema = z
     noteEntry,
     projectCardEntry,
   ])
-  .meta({ title: 'Flow brain entry', description: 'brain/ 下知识条目的 YAML frontmatter' })
+  .meta({ title: 'Raindown brain entry', description: 'brain/ 下知识条目的 YAML frontmatter' })
 
 export type EntryFrontmatter = z.infer<typeof entrySchema>

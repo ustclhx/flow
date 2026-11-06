@@ -7,12 +7,12 @@
       "status": "running",
       "tail": [
         "  >_ OpenAI Codex (v0.164.0)",
-        "     ~/orca/workspaces/flow/tmp-tui-capture",
+        "     ~/orca/workspaces/raindown/tmp-tui-capture",
         "› 请只读回答：这个仓库的 package.json 里 name 字段是什么？读完后不要做任何修改，然后问我一个关于下一步的问题并",
         "  停下等待回答。",
         "• Starting MCP servers (5/7): codex_apps, example (0s • esc to interrupt)",
         "› Ask Codex to do anything",
-        "  GPT-6-Astra high fast · ~/orca/workspaces/flow/tmp-tui-capture",
+        "  GPT-6-Astra high fast · ~/orca/workspaces/raindown/tmp-tui-capture",
         "  ? for shortcuts"
       ],
       "truncated": false,

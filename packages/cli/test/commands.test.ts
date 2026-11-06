@@ -2,23 +2,23 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { findExecutable } from '@flow/core'
+import { findExecutable } from '@raindown/core'
 import { doctorOptions } from '../../core/test/doctor-helpers.ts'
 import { createDoctorCommand } from '../src/commands/doctor.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
 
 /**
- * 命令通过 process.env 解析 FLOW_HOME；每个测试使用独立的临时目录，
- * 结束后恢复环境，绝不触碰真实的 ~/flow-home。
+ * 命令通过 process.env 解析 RAINDOWN_HOME；每个测试使用独立的临时目录，
+ * 结束后恢复环境，绝不触碰真实的 ~/raindown-home。
  */
-let saved: { FLOW_HOME: string | undefined; PATH: string | undefined }
+let saved: { RAINDOWN_HOME: string | undefined; PATH: string | undefined }
 let home: string
 
 beforeEach(() => {
-  saved = { FLOW_HOME: process.env.FLOW_HOME, PATH: process.env.PATH }
-  home = join(mkdtempSync(join(tmpdir(), 'flow-cli-')), 'home')
-  process.env.FLOW_HOME = home
+  saved = { RAINDOWN_HOME: process.env.RAINDOWN_HOME, PATH: process.env.PATH }
+  home = join(mkdtempSync(join(tmpdir(), 'raindown-cli-')), 'home')
+  process.env.RAINDOWN_HOME = home
 })
 
 afterEach(() => {
@@ -44,7 +44,7 @@ function write(rel: string, content: string) {
 
 const entry = (fields: string[]) => `---\n${fields.join('\n')}\n---\n正文\n`
 
-describe('flow init', () => {
+describe('raindown init', () => {
   test('初始化两次：第二次报告无缺失项', async () => {
     const first = await run('init')
     expect(first.exitCode).toBe(0)
@@ -57,7 +57,7 @@ describe('flow init', () => {
   })
 })
 
-describe('flow kb validate', () => {
+describe('raindown kb validate', () => {
   beforeEach(async () => {
     await run('init')
     write(
@@ -135,17 +135,17 @@ describe('flow kb validate', () => {
   })
 
   test('未初始化时失败', async () => {
-    process.env.FLOW_HOME = join(home, 'nowhere')
+    process.env.RAINDOWN_HOME = join(home, 'nowhere')
     const out = await run('kb', 'validate', '--json')
     expect(out.exitCode).toBe(1)
     expect(JSON.parse(out.stdout).error.code).toBe('not_initialized')
   })
 })
 
-describe('flow doctor', () => {
+describe('raindown doctor', () => {
   test('缺少 gitleaks：非零退出并给出安装提示', async () => {
     await run('init')
-    const bin = mkdtempSync(join(tmpdir(), 'flow-path-'))
+    const bin = mkdtempSync(join(tmpdir(), 'raindown-path-'))
     symlinkSync(findExecutable('git') as string, join(bin, 'git'))
     process.env.PATH = bin
     const out = await run('doctor')
@@ -154,7 +154,7 @@ describe('flow doctor', () => {
     expect(out.stderr).toContain('brew install gitleaks')
     const json = JSON.parse((await run('doctor', '--json')).stdout)
     expect(json.error.code).toBe('doctor_failed')
-    expect(json.error.details.homeSource).toBe('FLOW_HOME')
+    expect(json.error.details.homeSource).toBe('RAINDOWN_HOME')
   })
 
   test.skipIf(!findExecutable('gitleaks'))('初始化后全部通过', async () => {

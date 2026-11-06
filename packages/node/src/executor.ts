@@ -6,8 +6,8 @@ import type {
   TaskContract,
   TaskResult,
   TaskResume,
-} from '@flow/core'
-import { executorCapability } from '@flow/core'
+} from '@raindown/core'
+import { executorCapability } from '@raindown/core'
 import type { Precheck, PrecheckRequest } from './precheck.ts'
 
 /**
@@ -30,7 +30,7 @@ export interface ExecutorContext {
   /** 节点 id，写入结果的 node_id。 */
   nodeId: string
   /**
-   * 启动 worker 子进程时使用的环境变量，已去掉中枢凭证（`FLOW_HUB_TOKEN`）。执行器 spawn 时
+   * 启动 worker 子进程时使用的环境变量，已去掉中枢凭证（`RAINDOWN_HUB_TOKEN`）。执行器 spawn 时
    * 必须用它（或 `executorEnv()`），不要直接传 `process.env`。
    */
   env?: NodeJS.ProcessEnv
@@ -56,7 +56,7 @@ export interface ExecutorContext {
   /**
    * 唤醒绑定 token 文件（add-m1-supervisor D6；tasks 5.3）：只在领到 supervisor 唤醒任务时存在，节点把
    * 租约响应的 `lease.wake_token` 写进 `state/wake/<task>.token`（0600）并在执行结束后删除。执行器只能把
-   * 路径作为 `FLOW_HUB_TOKEN_FILE` 交给 Flow MCP 进程，不得读出 token 放进 argv、env、活动、结果或日志。
+   * 路径作为 `RAINDOWN_HUB_TOKEN_FILE` 交给 Raindown MCP 进程，不得读出 token 放进 argv、env、活动、结果或日志。
    */
   wakeTokenFile?: string
   /**

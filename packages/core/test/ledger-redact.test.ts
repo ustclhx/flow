@@ -75,7 +75,7 @@ describe('高 / 低置信度规则与合同检查', () => {
 describe('中枢绑定 token 与名单标签', () => {
   test('fht_ 前缀的绑定 token 被替换；[secret:<路径>] 标签不被正则再次改写', () => {
     const bound = `fht_${randomBytes(32).toString('base64url')}`
-    expect(redactSecrets(`token ${bound} end`)).toBe('token [REDACTED:flow-hub-token] end')
+    expect(redactSecrets(`token ${bound} end`)).toBe('token [REDACTED:raindown-hub-token] end')
     expect(redactSecrets('API_TOKEN=[secret:telegram/bot-token]')).toBe(
       'API_TOKEN=[secret:telegram/bot-token]',
     )

@@ -3,7 +3,6 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   execCommand,
-  flowAuthor,
   git,
   gitCommit,
   gitInit,
@@ -11,11 +10,12 @@ import {
   headState,
   hookPath,
   isRepoRoot,
+  raindownAuthor,
 } from '../src/git.ts'
 import { tempHome, writeText } from './helpers.ts'
 
-test('gitInit / gitCommit：作者为 Flow (<actor>)，只提交指定路径', async () => {
-  const dir = tempHome('flow-git-')
+test('gitInit / gitCommit：作者为 Raindown (<actor>)，只提交指定路径', async () => {
+  const dir = tempHome('raindown-git-')
   mkdirSync(dir, { recursive: true })
   expect(isRepoRoot(dir)).toBe(false)
   expect((await gitInit(dir)).ok).toBe(true)
@@ -25,40 +25,40 @@ test('gitInit / gitCommit：作者为 Flow (<actor>)，只提交指定路径', a
   writeText(join(dir, 'b.md'), 'b\n')
   const r = await gitCommit(dir, {
     message: 'journal: codex 追加',
-    author: flowAuthor('codex'),
+    author: raindownAuthor('codex'),
     paths: ['a.md'],
   })
   expect(r.ok && r.data.sha).toMatch(/^[0-9a-f]{40}$/)
   expect(await hasCommits(dir)).toBe(true)
   const log = await git(dir, ['log', '--format=%an <%ae>|%s'])
-  expect(log.stdout.trim()).toBe('Flow (codex) <flow@localhost>|journal: codex 追加')
+  expect(log.stdout.trim()).toBe('Raindown (codex) <raindown@localhost>|journal: codex 追加')
   expect((await git(dir, ['status', '--porcelain'])).stdout.trim()).toBe('?? b.md')
   expect(await hookPath(dir, 'pre-commit')).toBe(join(dir, '.git', 'hooks', 'pre-commit'))
 })
 
 test('gitCommit 失败时返回 git_commit_failed', async () => {
-  const dir = tempHome('flow-git-')
+  const dir = tempHome('raindown-git-')
   mkdirSync(dir, { recursive: true })
   await gitInit(dir)
-  const r = await gitCommit(dir, { message: 'empty', author: flowAuthor('user') })
+  const r = await gitCommit(dir, { message: 'empty', author: raindownAuthor('user') })
   expect(!r.ok && r.error.code).toBe('git_commit_failed')
 })
 
 test('execCommand：命令不存在时返回 127', async () => {
-  const r = await execCommand('flow-definitely-missing-binary', [])
+  const r = await execCommand('raindown-definitely-missing-binary', [])
   expect(r.code).toBe(127)
   const echo = await execCommand('cat', [], { input: '你好' })
   expect(echo).toEqual({ code: 0, stdout: '你好', stderr: '' })
 })
 
 test('headState 区分 unborn HEAD 与其他 git 失败', async () => {
-  const dir = tempHome('flow-git-')
+  const dir = tempHome('raindown-git-')
   mkdirSync(dir, { recursive: true })
   expect(await headState(dir)).toBe('error')
   expect((await gitInit(dir)).ok).toBe(true)
   expect(await headState(dir)).toBe('unborn')
   writeText(join(dir, 'a.md'), 'a\n')
-  await gitCommit(dir, { message: 'x', author: flowAuthor('codex'), paths: ['a.md'] })
+  await gitCommit(dir, { message: 'x', author: raindownAuthor('codex'), paths: ['a.md'] })
   expect(await headState(dir)).toBe('present')
   // 分支引用存在但指向不存在的对象：仓库损坏，不是 unborn。
   writeText(join(dir, '.git', 'refs', 'heads', 'main'), `${'0'.repeat(39)}1\n`)

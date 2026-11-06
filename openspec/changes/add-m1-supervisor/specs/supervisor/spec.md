@@ -10,8 +10,8 @@
 supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `supervisor.wake_started{task_id, workspace, origin, events, generation}`；系统判断"某任务是不是唤醒任务"MUST 以这条事件为准。`kind: supervisor` 角色的任务 MUST NOT 由其他任何身份（包括 user）通过建任务接口创建；`hub` 创建任务时跳过 `creatable_by`。`hub` 身份 MUST NOT 能由请求头或 MCP 声明。
 
 #### Scenario: 用户直接建唤醒任务
-- **WHEN** user 运行 `flow task create --role supervisor ...`
-- **THEN** 返回 `role_not_allowed`，提示改用 `flow supervisor wake`
+- **WHEN** user 运行 `raindown task create --role supervisor ...`
+- **THEN** 返回 `role_not_allowed`，提示改用 `raindown supervisor wake`
 
 #### Scenario: 冒充唤醒任务
 - **WHEN** 某个 AI 身份建了一个 `role: triage`、`inputs.wake` 伪造为指令的任务
@@ -40,7 +40,7 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 随后的唤醒 origin 为 instruction
 
 #### Scenario: 用户手动建的任务不入链
-- **WHEN** 用户 `flow task create` 一个没有 `parent` 的 dev 任务，它开出 PR 后结束
+- **WHEN** 用户 `raindown task create` 一个没有 `parent` 的 dev 任务，它开出 PR 后结束
 - **THEN** 不唤醒 supervisor，supervisor 对该 PR 的合并请求返回 `merge_not_eligible`
 
 #### Scenario: 接受提案后的后续工作
@@ -75,14 +75,14 @@ supervisor 唤醒任务 SHALL 由中枢以 `hub` 身份创建，并写入 `super
 - **THEN** 重启后为该事件创建且只创建一次唤醒任务
 
 ### Requirement: 唤醒失败与手动控制
-普通唤醒任务失败 SHALL 按重试设置重试一次（reply 唤醒失败不重试，直接转交它处理的委托，reply 队列不暂停）；仍失败 MUST 在收件箱生成 Interrupt 条目并暂停该队列：新事件继续排队但不触发唤醒，直到用户放行或退避时间到（首次 1 小时，每次失败翻倍，最长 24 小时）。用户 SHALL 能用 `flow supervisor wake <ws> <说明>` 下指令（写入 `user.instruction`），用 `flow supervisor wake <ws> --release <instruction|autonomous>` 放行指定队列（写入 `supervisor.release`，唤醒保持该队列的 origin，不计入每日上限），用 `flow supervisor status [<ws>]` 查看当前唤醒、各队列长度、今日唤醒次数和最近一次结果。一个 workspace 可用的 `kind: supervisor` 角色 MUST 恰好一个，多于一个时 doctor 报错且不唤醒。
+普通唤醒任务失败 SHALL 按重试设置重试一次（reply 唤醒失败不重试，直接转交它处理的委托，reply 队列不暂停）；仍失败 MUST 在收件箱生成 Interrupt 条目并暂停该队列：新事件继续排队但不触发唤醒，直到用户放行或退避时间到（首次 1 小时，每次失败翻倍，最长 24 小时）。用户 SHALL 能用 `raindown supervisor wake <ws> <说明>` 下指令（写入 `user.instruction`），用 `raindown supervisor wake <ws> --release <instruction|autonomous>` 放行指定队列（写入 `supervisor.release`，唤醒保持该队列的 origin，不计入每日上限），用 `raindown supervisor status [<ws>]` 查看当前唤醒、各队列长度、今日唤醒次数和最近一次结果。一个 workspace 可用的 `kind: supervisor` 角色 MUST 恰好一个，多于一个时 doctor 报错且不唤醒。
 
 #### Scenario: 重试用尽后恢复
-- **WHEN** autonomous 唤醒两次都 `failed`，之后用户运行 `flow supervisor wake product-res --release autonomous`
+- **WHEN** autonomous 唤醒两次都 `failed`，之后用户运行 `raindown supervisor wake product-res --release autonomous`
 - **THEN** 收件箱先出现 Interrupt 条目；放行后创建一个 origin 为 autonomous 的唤醒，包含该队列中的事件
 
 ### Requirement: 启用开关
-workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 `kind: supervisor` 角色时生效）。未启用时 MUST NOT 唤醒，`/ask`、`flow ask` 回复该 workspace 未启用 supervisor。 `ws/global` 的 supervisor MUST 固定不启用：不唤醒，也不代回复其中任务的卡住。
+workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 `kind: supervisor` 角色时生效）。未启用时 MUST NOT 唤醒，`/ask`、`raindown ask` 回复该 workspace 未启用 supervisor。 `ws/global` 的 supervisor MUST 固定不启用：不唤醒，也不代回复其中任务的卡住。
 
 #### Scenario: 关闭后不唤醒
 - **WHEN** `ws/xuanxue-saas` 配置 `supervisor.enabled: false`，用户发送 `/ask xuanxue-saas 看看支付`
@@ -107,8 +107,8 @@ workspace 配置 SHALL 支持 `supervisor.enabled`（缺省 true，仅在存在 
 - **WHEN** autonomous 唤醒中 supervisor 建 triage 任务
 - **THEN** 任务被创建
 
-#### Scenario: 指向 flow-home
-- **WHEN** supervisor 建的任务 `cwd` 为 `~/flow-home`
+#### Scenario: 指向 raindown-home
+- **WHEN** supervisor 建的任务 `cwd` 为 `~/raindown-home`
 - **THEN** 返回 `repo_not_in_workspace`
 
 #### Scenario: 借验收命令外传
@@ -210,14 +210,14 @@ supervisor 用 `task_respond{task_id, block_seq, decision, text?, reason}` 回�
 - **THEN** 不委托给 supervisor，条目直接推送给用户
 
 #### Scenario: 冒用 supervisor 身份
-- **WHEN** 一个名为 `supervisor` 但没有 `kind: supervisor` 的角色存在，或某请求用 user token 加 `X-Flow-Actor: supervisor` 调用 `task_respond`
+- **WHEN** 一个名为 `supervisor` 但没有 `kind: supervisor` 的角色存在，或某请求用 user token 加 `X-Raindown-Actor: supervisor` 调用 `task_respond`
 - **THEN** 角色加载报错、doctor 报 error；请求被拒绝
 
 ### Requirement: 用户指令入口
-用户 SHALL 能通过 Telegram `/ask <ws> <内容>` 和 CLI `flow ask <ws> <内容>` 下达指令；两者都只接受 user 身份，写入 `user.instruction`，并返回唤醒任务编号或排队说明。
+用户 SHALL 能通过 Telegram `/ask <ws> <内容>` 和 CLI `raindown ask <ws> <内容>` 下达指令；两者都只接受 user 身份，写入 `user.instruction`，并返回唤醒任务编号或排队说明。
 
 #### Scenario: CLI 下指令
-- **WHEN** 用户运行 `flow ask product-res 修一下 README`
+- **WHEN** 用户运行 `raindown ask product-res 修一下 README`
 - **THEN** 账本新增 actor 为 user 的 `user.instruction`，命令输出唤醒任务 id 或"已排队"
 
 #### Scenario: AI 不能下指令

@@ -16,9 +16,9 @@ afterEach(() => {
   for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true })
 })
 const home = () => {
-  const r = mkdtempSync(join(tmpdir(), 'flow-wake-file-'))
+  const r = mkdtempSync(join(tmpdir(), 'raindown-wake-file-'))
   roots.push(r)
-  return join(r, 'flow-home')
+  return join(r, 'raindown-home')
 }
 
 describe('唤醒 token 文件', () => {

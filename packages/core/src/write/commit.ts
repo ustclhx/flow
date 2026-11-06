@@ -4,8 +4,8 @@ import { mkdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promi
 import { dirname, join } from 'node:path'
 import { entryIdOf, readBrainEntries } from '../entries.ts'
 import { parseFrontmatter } from '../frontmatter.ts'
-import { flowAuthor, type GitOptions, git, gitCommit } from '../git.ts'
-import { flowPaths } from '../home.ts'
+import { type GitOptions, git, gitCommit, raindownAuthor } from '../git.ts'
+import { raindownPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { checkEntryFrontmatter, localDate } from '../validate.ts'
 import type { ValidationIssue } from '../validation-issue.ts'
@@ -29,7 +29,7 @@ import { type SecretFinding, scanForSecrets } from './secrets.ts'
  * `commitWrite`：
  *
  *   加锁 → 策略检查 → 校验 → 密钥扫描 → 写文件 → 重新生成 index.md → 追加 log.md
- *   → git 提交（作者 `Flow (<actor>)`）→ 释放锁
+ *   → git 提交（作者 `Raindown (<actor>)`）→ 释放锁
  *
  * 一次调用只写一个仓库、恰好产生一次提交。任一步失败都会把文件恢复到写入前的内容、
  * 撤销暂存，不留下半写入状态，也不产生提交。
@@ -74,7 +74,7 @@ export interface WriteReceipt {
   actor: string
   /** 新提交的 sha。 */
   sha: string
-  /** 本次提交涉及的文件（相对 flow-home，posix），含 index.md / log.md。 */
+  /** 本次提交涉及的文件（相对 raindown-home，posix），含 index.md / log.md。 */
   files: string[]
   /** 追加到 log.md 的行；raw 写入为 null。 */
   logLine: string | null
@@ -86,7 +86,7 @@ export interface WriteReceipt {
 export const hashContent = (content: string): string =>
   createHash('sha256').update(content, 'utf8').digest('hex')
 
-const repoDir = (home: string, repo: WriteRepo): string => flowPaths(home)[repo]
+const repoDir = (home: string, repo: WriteRepo): string => raindownPaths(home)[repo]
 
 /** 仓库内某文件当前内容的哈希；文件不存在返回 null。 */
 export async function currentHash(
@@ -170,7 +170,7 @@ function checkPreconditions(p: Planned): Result<never> | null {
   return null
 }
 
-/** brain 条目的 frontmatter 校验，与 `flow kb validate` 使用同一套规则。 */
+/** brain 条目的 frontmatter 校验，与 `raindown kb validate` 使用同一套规则。 */
 function validateEntry(
   p: Planned,
   workspaces: ReadonlyMap<string, Workspace>,
@@ -243,7 +243,7 @@ class Rollback {
       return
     }
     await this.ensureDir(dirname(abs))
-    const tmp = `${abs}.flow-${process.pid}-${Date.now()}.tmp`
+    const tmp = `${abs}.raindown-${process.pid}-${Date.now()}.tmp`
     await writeFile(tmp, content)
     await rename(tmp, abs)
   }
@@ -272,11 +272,11 @@ function describeIssues(issues: ValidationIssue[]): string {
   return `${shown.join('；')}${more}`
 }
 
-/** 目标仓库是否已由 `flow init` 初始化；未初始化返回 `not_initialized`。 */
+/** 目标仓库是否已由 `raindown init` 初始化；未初始化返回 `not_initialized`。 */
 export function checkRepoReady(home: string, repo: WriteRepo): Result<never> | null {
   const dir = repoDir(home, repo)
   if (existsSync(join(dir, '.git'))) return null
-  return fail('failure', 'not_initialized', `未找到 ${dir} 仓库，请先运行 flow init`)
+  return fail('failure', 'not_initialized', `未找到 ${dir} 仓库，请先运行 raindown init`)
 }
 
 /** 统一写入：见文件头说明。成功返回提交回执。 */
@@ -329,7 +329,7 @@ async function commitLocked(
   change: WriteChange,
   ctx: WriteContext,
 ): Promise<Result<WriteReceipt>> {
-  const paths = flowPaths(home)
+  const paths = raindownPaths(home)
   const dir = paths[change.repo]
   const brain = change.repo === 'brain'
   const now = ctx.now ?? new Date()
@@ -407,7 +407,7 @@ async function commitLocked(
 
     if (brain) {
       const read = await readBrainEntries(home)
-      if (!read.ok) throw new FlowWriteError(read.error.code, read.error.message)
+      if (!read.ok) throw new RaindownWriteError(read.error.code, read.error.message)
       const indexBefore = await readText(paths.brainIndex)
       const index = renderIndex(read.data.entries)
       if (index !== indexBefore) {
@@ -423,10 +423,10 @@ async function commitLocked(
     const c = await gitCommit(dir, {
       ...(ctx.git ?? {}),
       message: `${change.op}(${ctx.actor}): ${summary || change.op}`,
-      author: flowAuthor(ctx.actor),
+      author: raindownAuthor(ctx.actor),
       paths: committed,
     })
-    if (!c.ok) throw new FlowWriteError(c.error.code, c.error.message)
+    if (!c.ok) throw new RaindownWriteError(c.error.code, c.error.message)
     return ok({
       repo: change.repo,
       op: change.op,
@@ -440,12 +440,12 @@ async function commitLocked(
     await rollback.restore()
     // gitCommit 会先 git add；恢复内容后把这些路径的暂存区也恢复到 HEAD。
     await git(dir, ['reset', '-q', '--', ...committed], ctx.git ?? {})
-    if (err instanceof FlowWriteError) return fail('failure', err.code, err.message)
+    if (err instanceof RaindownWriteError) return fail('failure', err.code, err.message)
     throw err
   }
 }
 
-class FlowWriteError extends Error {
+class RaindownWriteError extends Error {
   constructor(
     readonly code: string,
     message: string,

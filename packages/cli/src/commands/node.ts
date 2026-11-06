@@ -1,13 +1,13 @@
 import { join } from 'node:path'
 import {
   fail,
-  flowPaths,
   type NodeView,
   ok,
+  raindownPaths,
   renderTable,
-  resolveFlowHome,
+  resolveRaindownHome,
   rotateLog,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   createClaudeSdkExecutor,
   createCodexExecExecutor,
@@ -16,22 +16,22 @@ import {
   createPrMergeExecutor,
   nodeHubClientFromHome,
   startNode,
-} from '@flow/node'
+} from '@raindown/node'
 import { defineCommand } from '../command.ts'
 
 /**
- * `flow node start`：前台运行执行节点，SIGINT / SIGTERM 时优雅退出（停止领取、取消执行器，
+ * `raindown node start`：前台运行执行节点，SIGINT / SIGTERM 时优雅退出（停止领取、取消执行器，
  * 不提交结果，租约到期后由中枢按合同处理）。日志写 stderr。
  */
 export const nodeStartCommand = defineCommand({
   name: 'node start',
   summary: '在前台运行执行节点：注册到中枢，领取并执行任务（Ctrl-C 退出）',
   run: async () => {
-    const home = resolveFlowHome(process.env)
-    const rotated = await rotateLog(join(flowPaths(home).logs, 'node.log'))
+    const home = resolveRaindownHome(process.env)
+    const rotated = await rotateLog(join(raindownPaths(home).logs, 'node.log'))
     if (!rotated.ok) return rotated
     // launchd 的标准流仍指向归档文件，退出后由 KeepAlive 重新打开当前日志。
-    if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.flow.node') {
+    if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.raindown.node') {
       return fail('retryable', 'log_rotated', '日志已轮转，等待 launchd 重新启动节点')
     }
     // fake 用于端到端测试；其余执行器调用本机的 Orca / Codex、Claude Agent SDK 与 gh。
@@ -63,12 +63,12 @@ export const nodeStartCommand = defineCommand({
 
 const lastSeen = (n: NodeView) => n.last_seen_at ?? '—'
 
-/** `flow node list`：列出已注册的节点（node-protocol "查看节点"）。 */
+/** `raindown node list`：列出已注册的节点（node-protocol "查看节点"）。 */
 export const nodeListCommand = defineCommand({
   name: 'node list',
   summary: '列出已注册的节点：id、主机、能力与最近活动时间',
   run: async ({ actor }) => {
-    const client = await nodeHubClientFromHome(resolveFlowHome(process.env), { actor })
+    const client = await nodeHubClientFromHome(resolveRaindownHome(process.env), { actor })
     if (!client.ok) return client
     return client.data.listNodes()
   },

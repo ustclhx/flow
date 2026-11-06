@@ -18,10 +18,10 @@ afterEach(async () => {
 })
 
 describe('acquireNodeLock', () => {
-  test('同一 flow-home 只有一个持有者；释放后可再次取得', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'flow-node-lock-'))
+  test('同一 raindown-home 只有一个持有者；释放后可再次取得', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'raindown-node-lock-'))
     roots.push(root)
-    const home = join(root, 'flow-home')
+    const home = join(root, 'raindown-home')
     const a = await acquireNodeLock(home)
     expect(a.ok).toBe(true)
     const b = await acquireNodeLock(home)

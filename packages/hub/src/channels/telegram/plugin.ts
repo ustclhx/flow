@@ -6,7 +6,7 @@ import {
   type SupervisorWakeData,
   type TelegramBinding,
   type TelegramChannelConfig,
-} from '@flow/core'
+} from '@raindown/core'
 import type { LedgerStore } from '../../ledger/store.ts'
 import { type OutboundFetch, proxiedFetch } from '../../serve.ts'
 import type { HubLogger } from '../../server/maintenance.ts'
@@ -47,11 +47,11 @@ import { botIdOf, loadTelegramState, saveTelegramState } from './state.ts'
  * **安全边界**（它是手机上的审批入口）：
  * - 只处理已绑定的那个**私聊**里、由绑定时记录的**那个用户**发来的消息和按钮：`chat.type` 必须是
  *   `private`，`chat.id` 与 `from.id` 都要和 `config/channels.yaml` 中的绑定一致；
- * - 其他一律忽略：不回复、不报错、不交给收件箱，只计数（`flow hub status` 的 ignored_inbound）并在日志中
+ * - 其他一律忽略：不回复、不报错、不交给收件箱，只计数（`raindown hub status` 的 ignored_inbound）并在日志中
  *   记一笔（日志限流）。唯一例外是私聊里的 `/link <绑定码>`（或 `/start <绑定码>`）：码正确才绑定；
  *   码错误时对未绑定的 chat 同样不回复，并按 chat 限流（见 link.ts）；
  * - **改绑**：已绑定时兑换新码，先给原 chat 发通知，再切换，并写 `channel.rebound`（只记 chat id 摘要）；
- *   `flow telegram link` 在已绑定时必须加 `--rebind` 才发码。持有 user token 的本机进程（包括 worker）
+ *   `raindown telegram link` 在已绑定时必须加 `--rebind` 才发码。持有 user token 的本机进程（包括 worker）
  *   能申请绑定码是已知边界，所以改绑一定通知原 chat；
  * - bot token 只存在于内存中的 API 客户端里，错误信息与日志都去掉了 token（见 api.ts）；
  * - 外发的所有文字都经过 `redact`（默认 core 的 `redactSecrets`）再 HTML 转义；
@@ -82,7 +82,7 @@ export const TOKEN_RETRY_MS = 30 * 60_000
 
 /** 改绑时发给原 chat 的通知。 */
 export const REBIND_NOTICE =
-  'Flow 的 Telegram 渠道已改绑到另一个 Telegram 账号。若非本人操作，请立即在电脑上运行 flow telegram unlink，并在 @BotFather 吊销 bot token。'
+  'Raindown 的 Telegram 渠道已改绑到另一个 Telegram 账号。若非本人操作，请立即在电脑上运行 raindown telegram unlink，并在 @BotFather 吊销 bot token。'
 
 /** 插件依赖中枢的能力（runHub 注入；测试可替换）。 */
 export interface TelegramDeps {
@@ -237,7 +237,7 @@ export class TelegramChannel implements ChannelPlugin {
     }
     await this.checkWebhook()
     if (this.binding === null) {
-      this.deps.logger?.info('Telegram 渠道已启动，尚未绑定 chat：运行 flow telegram link')
+      this.deps.logger?.info('Telegram 渠道已启动，尚未绑定 chat：运行 raindown telegram link')
     }
     this.loop = this.pollLoop()
   }
@@ -322,7 +322,7 @@ export class TelegramChannel implements ChannelPlugin {
   private ready(): TelegramBinding {
     if (this.disabled) throw new ChannelError(this.disabled, 'transport')
     if (!this.binding) {
-      throw new ChannelError('Telegram 尚未绑定 chat，请运行 flow telegram link', 'transport')
+      throw new ChannelError('Telegram 尚未绑定 chat，请运行 raindown telegram link', 'transport')
     }
     const wait = this.pausedUntil - this.now()
     if (wait > 0) {
@@ -542,7 +542,7 @@ export class TelegramChannel implements ChannelPlugin {
       if (outcome !== 'invalid' || !this.authorized(chat, from)) {
         return this.ignore(`绑定码${outcome === 'limited' ? '尝试过多' : '无效'}`, chat, from)
       }
-      await this.reply(chat.id, '绑定码无效或已过期，请在电脑上重新运行 flow telegram link。')
+      await this.reply(chat.id, '绑定码无效或已过期，请在电脑上重新运行 raindown telegram link。')
       return
     }
     if (!this.authorized(chat, from)) return this.ignore('未绑定的 chat 或用户', chat, from)

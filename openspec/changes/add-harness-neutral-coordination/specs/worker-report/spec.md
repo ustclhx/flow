@@ -1,19 +1,19 @@
 # Spec Delta
 
 ## Purpose
-让 worker 通过 Flow 自己的 MCP 工具结构化地说明当前状态和需要人决定的问题，不再只能由适配器从 harness 的输出里推断；并规定上报与推断结果如何合并。
+让 worker 通过 Raindown 自己的 MCP 工具结构化地说明当前状态和需要人决定的问题，不再只能由适配器从 harness 的输出里推断；并规定上报与推断结果如何合并。
 
 ## ADDED Requirements
 
 ### Requirement: 上报工具
-系统 SHALL 提供 worker 可调用的 `flow_report` 操作，输入为状态之一：`progress`、`question`、`ready`、`blocked`、`failed`、`dropped`，以及一句话摘要。调用者身份 MUST 绑定到当前持有租约的任务与派工，不能为其他任务上报；任务不在运行中时返回 `not_running`。
+系统 SHALL 提供 worker 可调用的 `raindown_report` 操作，输入为状态之一：`progress`、`question`、`ready`、`blocked`、`failed`、`dropped`，以及一句话摘要。调用者身份 MUST 绑定到当前持有租约的任务与派工，不能为其他任务上报；任务不在运行中时返回 `not_running`。
 
 #### Scenario: 为别的任务上报
-- **WHEN** 任务 A 的 worker 以任务 B 的 id 调用 `flow_report`
+- **WHEN** 任务 A 的 worker 以任务 B 的 id 调用 `raindown_report`
 - **THEN** 返回 `forbidden`，账本不新增事件
 
 #### Scenario: 普通进展
-- **WHEN** worker 调用 `flow_report progress "已完成数据层改动"`
+- **WHEN** worker 调用 `raindown_report progress "已完成数据层改动"`
 - **THEN** 账本记录一条上报事件，任务保持 `running`，不唤醒 supervisor，不产生收件箱条目
 
 ### Requirement: 结构化提问
@@ -34,7 +34,7 @@
 每次卡住都 MUST 记录来源 `basis`：worker 上报为 `reported`，适配器推断为 `inferred`。worker 停下前已有未处理的上报时以上报为准；没有上报时由适配器推断。上报的状态与适配器观察矛盾时（例如上报 `progress` 但 harness 已空闲超过阈值），系统 SHALL 记录矛盾并按适配器的观察处理。
 
 #### Scenario: 停下但没有上报
-- **WHEN** worker 终端空闲且未调用 `flow_report`
+- **WHEN** worker 终端空闲且未调用 `raindown_report`
 - **THEN** 适配器的推断结果生效，卡住记录 `basis: inferred`
 
 ### Requirement: 推断的提问不交给 supervisor 代答

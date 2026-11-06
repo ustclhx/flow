@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { flowPaths, initFlowHome } from '@flow/core'
+import { initRaindownHome, raindownPaths } from '@raindown/core'
 import { createProposalWatcher, openLedger, type RunningHub, runHub } from '../src/index.ts'
 import { must, tempLedger } from './ledger-helpers.ts'
 
@@ -36,7 +36,7 @@ const ID_C = '1761292800002-cccccccccccc'
 async function setup() {
   const l = await tempLedger()
   const home = join(l.dir, 'home')
-  const dir = join(flowPaths(home).state, 'proposals')
+  const dir = join(raindownPaths(home).state, 'proposals')
   mkdirSync(dir, { recursive: true })
   const put = (id: string, over: Record<string, unknown> = {}) =>
     writeFileSync(join(dir, `${id}.json`), `${JSON.stringify(proposal(id, over))}\n`)
@@ -189,15 +189,15 @@ describe('提案 → 收件箱条目', () => {
 
 describe('runHub 挂载收件箱', () => {
   test('启动时扫描已有提案；停机期间卡住的任务在重启后补开条目', async () => {
-    const home = join(mkdtempSync(join(tmpdir(), 'flow-inbox-hub-')), 'home')
+    const home = join(mkdtempSync(join(tmpdir(), 'raindown-inbox-hub-')), 'home')
     cleanups.push(() => rmSync(join(home, '..'), { recursive: true, force: true }))
-    must(await initFlowHome(home))
+    must(await initRaindownHome(home))
     mkdirSync(join(home, 'config', 'workspaces'), { recursive: true })
     writeFileSync(
       join(home, 'config', 'workspaces', 'demo.yaml'),
       'id: demo\nkind: product\nname: Demo\ndescription: 测试\nrepos: []\n',
     )
-    const dir = join(flowPaths(home).state, 'proposals')
+    const dir = join(raindownPaths(home).state, 'proposals')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, `${ID_A}.json`), JSON.stringify(proposal(ID_A)))
     const quiet = { info() {}, warn() {}, error() {} }
@@ -210,7 +210,7 @@ describe('runHub 挂载收件箱', () => {
     hub = undefined
 
     // 停机期间直接在账本里制造一个卡住的任务（模拟中枢崩溃前最后写入的事件）
-    const ledger = await openLedger(flowPaths(home).ledgerDb)
+    const ledger = await openLedger(raindownPaths(home).ledgerDb)
     expect(ledger.listInboxItems().map((i) => i.id)).toEqual([`prop.${ID_A}`])
     const base = { task_id: 't-1', workspace: 'ws/demo' }
     must(
@@ -239,7 +239,7 @@ describe('runHub 挂载收件箱', () => {
     hub = must(await runHub({ home, port: 0, logger: quiet as never, inbox: { watch: false } }))
     await hub.stop()
     hub = undefined
-    const after = await openLedger(flowPaths(home).ledgerDb)
+    const after = await openLedger(raindownPaths(home).ledgerDb)
     cleanups.push(() => after.close())
     expect(after.listInboxItems({ state: 'open' }).map((i) => [i.source, i.level])).toEqual([
       ['task', 'interrupt'],

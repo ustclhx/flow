@@ -34,6 +34,6 @@ export const functionWorkspace = z
 
 export const workspaceSchema = z
   .discriminatedUnion('kind', [productWorkspace, functionWorkspace])
-  .meta({ title: 'Flow workspace', description: 'config/workspaces/<id>.yaml 的内容' })
+  .meta({ title: 'Raindown workspace', description: 'config/workspaces/<id>.yaml 的内容' })
 
 export type WorkspaceConfig = z.infer<typeof workspaceSchema>

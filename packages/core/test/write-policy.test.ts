@@ -163,7 +163,7 @@ describe('AI 写入边界', () => {
     if (!r.ok) throw new Error(r.error.message)
     expect(await commitCount(brain)).toBe(commits + 1)
     const head = (await git(brain, ['log', '-1', '--format=%an|%s'])).stdout.trim()
-    expect(head).toBe('Flow (claude)|apply(claude): 更新 runbooks/rollback')
+    expect(head).toBe('Raindown (claude)|apply(claude): 更新 runbooks/rollback')
     const log = readFileSync(join(brain, 'log.md'), 'utf8').trimEnd().split('\n')
     expect(log.at(-1)).toMatch(/^\d{4}-\d{2}-\d{2} apply claude 更新 runbooks\/rollback$/)
     expect(readFileSync(join(brain, 'runbooks/rollback.md'), 'utf8')).toContain('jobs Worker')

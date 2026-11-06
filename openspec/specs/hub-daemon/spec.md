@@ -1,15 +1,15 @@
 # hub-daemon Specification
 
 ## Purpose
-规定中枢守护进程 `flowd` 的接口、认证、事件流、托管方式与自我保护，使任务账本有唯一、常驻、可被外部监控的持有者。
+规定中枢守护进程 `raindownd` 的接口、认证、事件流、托管方式与自我保护，使任务账本有唯一、常驻、可被外部监控的持有者。
 
 ## Requirements
 
 ### Requirement: 唯一持有者
-同一个 flow-home 在同一时刻 SHALL 只有一个中枢进程持有账本。第二个中枢启动时 MUST 失败退出，并指出已有进程的 pid。
+同一个 raindown-home 在同一时刻 SHALL 只有一个中枢进程持有账本。第二个中枢启动时 MUST 失败退出，并指出已有进程的 pid。
 
 #### Scenario: 重复启动
-- **WHEN** 中枢已在运行时再执行 `flow hub start`
+- **WHEN** 中枢已在运行时再执行 `raindown hub start`
 - **THEN** 新进程以非零状态退出，输出已有中枢的 pid，账本不受影响
 
 ### Requirement: 本机 HTTP API
@@ -21,20 +21,20 @@
 
 ### Requirement: Token 认证
 除健康检查外，所有 API 都 MUST 携带 `Authorization: Bearer <token>`。认证失败返回 401，且不泄露任何账本内容。请求的操作者身份 SHALL 由 token 决定：
-- `state/hub.token`（首次启动时生成，权限 0600）是 `user` 的 token；持有者可以用 `X-Flow-Actor` 声明一个非 `user` 的身份，不声明时身份为 `user`；
-- `flow hub token issue <actor>` 签发的 token 绑定一个非 `user` 的操作者，中枢只保存其摘要；使用这类 token 时身份固定为绑定的操作者，`X-Flow-Actor` 与之不一致时 MUST 返回 403，错误码为 `actor_mismatch`；
-- 被 `flow hub token revoke` 撤销的 token MUST 立即失效。
+- `state/hub.token`（首次启动时生成，权限 0600）是 `user` 的 token；持有者可以用 `X-Raindown-Actor` 声明一个非 `user` 的身份，不声明时身份为 `user`；
+- `raindown hub token issue <actor>` 签发的 token 绑定一个非 `user` 的操作者，中枢只保存其摘要；使用这类 token 时身份固定为绑定的操作者，`X-Raindown-Actor` 与之不一致时 MUST 返回 403，错误码为 `actor_mismatch`；
+- 被 `raindown hub token revoke` 撤销的 token MUST 立即失效。
 
 #### Scenario: 缺少 token
 - **WHEN** 不带 token 请求 `GET /v1/tasks`
 - **THEN** 返回 401，错误码为 `unauthorized`
 
 #### Scenario: 绑定 token 冒充用户
-- **WHEN** 使用签发给 `grok` 的 token 请求，并在请求头中声明 `X-Flow-Actor: user`
+- **WHEN** 使用签发给 `grok` 的 token 请求，并在请求头中声明 `X-Raindown-Actor: user`
 - **THEN** 返回 403，错误码为 `actor_mismatch`，不产生任何事件
 
 #### Scenario: 撤销后失效
-- **WHEN** 用户运行 `flow hub token revoke <id>` 之后，再用该 token 请求 `GET /v1/tasks`
+- **WHEN** 用户运行 `raindown hub token revoke <id>` 之后，再用该 token 请求 `GET /v1/tasks`
 - **THEN** 返回 401，错误码为 `unauthorized`
 
 ### Requirement: 事件流
@@ -45,7 +45,7 @@
 - **THEN** 客户端依次收到 11 与 12，之后继续接收新事件
 
 ### Requirement: launchd 托管
-`flow daemon install` SHALL 在 `~/Library/LaunchAgents/` 安装中枢与本机节点两个 launchd 任务，二者都设置为开机启动、崩溃后自动重启，日志写入 `state/logs/`。`flow daemon uninstall` MUST 停止并移除这两个任务，不触碰账本。`flow daemon status` 报告两个进程是否在运行、中枢健康状况，以及最近一次备份的时间。
+`raindown daemon install` SHALL 在 `~/Library/LaunchAgents/` 安装中枢与本机节点两个 launchd 任务，二者都设置为开机启动、崩溃后自动重启，日志写入 `state/logs/`。`raindown daemon uninstall` MUST 停止并移除这两个任务，不触碰账本。`raindown daemon status` 报告两个进程是否在运行、中枢健康状况，以及最近一次备份的时间。
 
 #### Scenario: 崩溃后自动恢复
 - **WHEN** 中枢进程被 `kill -9`
@@ -59,10 +59,10 @@
 - **THEN** 中枢记录警告日志，任务调度和 API 照常工作
 
 ### Requirement: 账本备份
-中枢 SHALL 每天对 `state/flow.db` 做一次在线一致性备份，保存到 `state/backups/`，保留最近 14 份（可配置）。备份过程中 MUST NOT 阻塞 API 写入超过 1 秒。
+中枢 SHALL 每天对 `state/raindown.db` 做一次在线一致性备份，保存到 `state/backups/`，保留最近 14 份（可配置）。备份过程中 MUST NOT 阻塞 API 写入超过 1 秒。
 
 #### Scenario: 备份可恢复
-- **WHEN** 把一份备份复制回 `state/flow.db` 后启动中枢
+- **WHEN** 把一份备份复制回 `state/raindown.db` 后启动中枢
 - **THEN** 中枢正常启动，任务状态与备份时刻一致
 
 ### Requirement: 只有用户能做的操作
@@ -71,3 +71,25 @@
 #### Scenario: AI 批准自己的审批请求
 - **WHEN** 一个以 `codex` 身份运行的 worker 调用 `POST /v1/tasks/<自己的任务>/reply`，内容为批准
 - **THEN** 返回 403，错误码为 `user_only`，任务仍处于 `blocked(awaiting_approval)`
+
+
+### Requirement: 改名兼容与显式账本迁移
+中枢 SHALL 只打开 `state/raindown.db`；如果它不存在但 `state/flow.db` 存在，MUST 以 `legacy_database_migration_required` 拒绝启动，提示停止服务后将主库及存在的 `-wal`、`-shm` 改名，不自动迁移。新备份使用 `raindown-*.db`，列出和轮转 MUST 同时识别旧 `flow-*.db`。
+
+#### Scenario: 仅存在旧账本
+- **WHEN** 启动时只有旧账本存在
+- **THEN** 启动失败，不创建新账本，错误提供停服务与三个文件的改名步骤
+
+### Requirement: 旧 actor 请求头兼容
+客户端 SHALL 只发送 `X-Raindown-Actor`；中枢 SHALL 以相同规则接受 `X-Flow-Actor`，两头同时出现且值不同时 MUST 返回 400。
+
+#### Scenario: 新旧头冲突
+- **WHEN** 同一请求的两套 actor 头分别为 user 与 codex
+- **THEN** 返回 400，不产生账本事件
+
+### Requirement: launchd 旧标签迁移
+install SHALL 检测旧 `dev.flow.hub`、`dev.flow.node` plist，先 bootout 再删除，报告清理结果，再安装新标签；status、uninstall SHALL 同时识别旧标签。新 plist SHALL 使用 RAINDOWN_HOME。
+
+#### Scenario: 旧服务重装
+- **WHEN** 安装前存在旧标签的 plist
+- **THEN** 旧服务停止、旧 plist 删除，输出说明；新服务使用 dev.raindown 标签

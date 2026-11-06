@@ -7,6 +7,12 @@ export function spliceManagedBlock(
 ): Result<{ content: string; changed: boolean }> {
   if (existing === null) return ok({ content: `${block}\n`, changed: true })
 
+  // 旧安装的受管区块原位升级，保留区块之外的用户内容。
+  const original = existing
+  existing = existing
+    .replaceAll('<!-- BEGIN:flow-managed -->', BEGIN_MARKER)
+    .replaceAll('<!-- END:flow-managed -->', END_MARKER)
+
   const beginCount = existing.split(BEGIN_MARKER).length - 1
   const endCount = existing.split(END_MARKER).length - 1
   if (beginCount > 1 || endCount > 1) {
@@ -32,5 +38,5 @@ export function spliceManagedBlock(
     }
     content = existing.slice(0, begin) + block + existing.slice(end + END_MARKER.length)
   }
-  return ok({ content, changed: content !== existing })
+  return ok({ content, changed: content !== original })
 }

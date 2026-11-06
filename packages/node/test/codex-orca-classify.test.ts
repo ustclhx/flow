@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { taskContract } from '@flow/core'
+import { taskContract } from '@raindown/core'
 import { analyzeTail, classifyCodexOrca, isBusy, lastMessage } from '../src/codex-orca/classify.ts'
 import { TUI_FIXTURES, tuiFixture } from './codex-orca-helpers.ts'
 
@@ -92,13 +92,14 @@ describe('analyzeTail', () => {
     const t = tuiFixture('question').tail
     expect(isBusy(t)).toBe(false)
     expect(lastMessage(t)).toEqual([
-      '• 根目录 package.json 的 name 字段是 flow。未做任何修改。',
+      '• 根目录 package.json 的 name 字段是 raindown。未做任何修改。',
       '  下一步你希望我查看什么？',
     ])
     const a = analyzeTail(t)
     expect(a).toMatchObject({
       kind: 'question',
-      message: '根目录 package.json 的 name 字段是 flow。未做任何修改。 下一步你希望我查看什么？',
+      message:
+        '根目录 package.json 的 name 字段是 raindown。未做任何修改。 下一步你希望我查看什么？',
     })
   })
 
@@ -285,7 +286,7 @@ describe('analyzeTail', () => {
     ['已按你的要求完成修复。\n根因是什么？\n1. 配置缺失\n2. 缓存未清理', 'other'],
     ['我比较了哪种方案更快。\n结论是什么？\n1. 甲\n2. 乙', 'other'],
     [
-      '已按你的要求开 PR https://github.com/u/flow/pull/3 。改了什么？\n1. 加重试\n2. 加测试',
+      '已按你的要求开 PR https://github.com/u/raindown/pull/3 。改了什么？\n1. 加重试\n2. 加测试',
       'pr_opened',
     ],
   ] as const)('背景中的选择信号不影响当前问句：%s', (text, kind) => {
@@ -392,15 +393,15 @@ describe('analyzeTail', () => {
     expect(isBusy(t)).toBe(false)
     const a = analyzeTail(t)
     expect(a.kind).toBe('awaiting_approval')
-    expect(a.command).toBe('mkdir -p /tmp/flow-tui-probe-dir2')
-    expect(a.message).toContain('mkdir -p /tmp/flow-tui-probe-dir2')
+    expect(a.command).toBe('mkdir -p /tmp/raindown-tui-probe-dir2')
+    expect(a.message).toContain('mkdir -p /tmp/raindown-tui-probe-dir2')
   })
 
   test('开完 PR：最后一条消息中的 PR 链接', () => {
     const a = analyzeTail(tuiFixture('pr-opened').tail)
     expect(a).toMatchObject({
       kind: 'pr_opened',
-      pr_url: 'https://github.com/example-user/flow/pull/20',
+      pr_url: 'https://github.com/example-user/raindown/pull/20',
     })
   })
 
@@ -413,7 +414,7 @@ describe('analyzeTail', () => {
   test('其他：普通的陈述、被拒绝后中断、回到 shell', () => {
     expect(analyzeTail(tuiFixture('stopped-statement').tail)).toMatchObject({
       kind: 'other',
-      message: '已执行 mkdir -p /tmp/flow-tui-probe-dir，命令成功，退出码为 0。',
+      message: '已执行 mkdir -p /tmp/raindown-tui-probe-dir，命令成功，退出码为 0。',
     })
     expect(analyzeTail(tuiFixture('approval-denied').tail).kind).toBe('other')
     const exited = analyzeTail(tuiFixture('codex-exited').tail)
@@ -522,7 +523,7 @@ describe('对抗与顺序（PR #24 审查第 1、2、5 条）', () => {
 
   test('提问排在 PR 链接之前', () => {
     const t = [
-      '• 已开 PR https://github.com/example-user/flow/pull/20，要我顺便合并吗？',
+      '• 已开 PR https://github.com/example-user/raindown/pull/20，要我顺便合并吗？',
       '› Ask Codex to do anything',
     ]
     expect(analyzeTail(t).kind).toBe('question')
@@ -556,7 +557,7 @@ describe('基础提问规则兼容 origin/main', () => {
     [
       'PR 链接中的提问',
       [
-        '• 已开 PR https://github.com/example-user/flow/pull/20，要我顺便合并吗？',
+        '• 已开 PR https://github.com/example-user/raindown/pull/20，要我顺便合并吗？',
         '› Ask Codex to do anything',
       ],
     ],
@@ -572,7 +573,7 @@ describe('基础提问规则兼容 origin/main', () => {
       '基础关键词位于 PR 总结前文',
       [
         '• 此前是否需要调整方案？',
-        '已开 PR https://github.com/example-user/flow/pull/20。',
+        '已开 PR https://github.com/example-user/raindown/pull/20。',
         '- 已完成修改。',
       ],
     ],
@@ -590,13 +591,14 @@ describe('classifyCodexOrca', () => {
   test('授权请求 → awaiting_approval，说明包含命令', () => {
     const v = classifyCodexOrca(snapshot('approval'))
     expect(v?.reason).toBe('awaiting_approval')
-    expect(v?.message).toContain('mkdir -p /tmp/flow-tui-probe-dir2')
+    expect(v?.message).toContain('mkdir -p /tmp/raindown-tui-probe-dir2')
   })
 
   test('提问 → question', () => {
     expect(classifyCodexOrca(snapshot('question'))).toEqual({
       reason: 'question',
-      message: '根目录 package.json 的 name 字段是 flow。未做任何修改。 下一步你希望我查看什么？',
+      message:
+        '根目录 package.json 的 name 字段是 raindown。未做任何修改。 下一步你希望我查看什么？',
     })
   })
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { createProposal, type InboxItemView, renderEntry } from '@flow/core'
+import { createProposal, type InboxItemView, renderEntry } from '@raindown/core'
 import { initTempHome } from '../../core/test/helpers.ts'
 import {
   createHubApp,
@@ -48,7 +48,7 @@ async function setup() {
   const act = (id: string, body: unknown, actor = 'user') =>
     app.request(`/v1/inbox/${id}/act`, {
       method: 'POST',
-      headers: { ...authHeaders, 'X-Flow-Actor': actor, 'Content-Type': 'application/json' },
+      headers: { ...authHeaders, 'X-Raindown-Actor': actor, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
   const createBlocked = async (reason: 'question' | 'awaiting_approval' = 'question') => {
@@ -302,7 +302,7 @@ describe('收件箱操作与查询（3.2）', () => {
   test.each(['accept', 'reject'] as const)(
     '手机上 %s 提案：以 user 写日志、归档后由扫描器关闭并保留 telegram 来源',
     async (action) => {
-      const home = await initTempHome('flow-inbox-proposal-act-')
+      const home = await initTempHome('raindown-inbox-proposal-act-')
       cleanups.push(() => rmSync(join(home, '..'), { recursive: true, force: true }))
       const ctx = await setup()
       const proposal = must(

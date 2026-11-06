@@ -100,7 +100,7 @@ Depending on what the user brings, you might:
 |   [State C]                              |
 |                                          |
 |   System diagrams, state machines,       |
-|   data flows, architecture sketches,     |
+|   data raindowns, architecture sketches,     |
 |   dependency graphs, comparison tables   |
 |                                          |
 +------------------------------------------+
@@ -240,7 +240,7 @@ User: The auth system is a mess
 You: [reads codebase]
 
      +---------------------------------------------+
-     |              CURRENT AUTH FLOW              |
+     |              CURRENT AUTH RAINDOWN              |
      +---------------------------------------------+
                         |
           +-------------+-------------+
@@ -271,7 +271,7 @@ User: /opsx:explore add-auth-system
 
 You: [reads change artifacts]
 
-     You're on task 4: "Implement OAuth flow"
+     You're on task 4: "Implement OAuth raindown"
 
      Let me trace what's involved...
 
@@ -316,7 +316,7 @@ You: That changes everything.
 
 There's no required ending. Discovery might:
 
-- **Flow into a proposal**: "Ready to start? Run `/opsx:propose` and this becomes a change."
+- **Raindown into a proposal**: "Ready to start? Run `/opsx:propose` and this becomes a change."
 - **Result in artifact updates**: "Updated design.md with these decisions"
 - **Just provide clarity**: User has what they need, moves on
 - **Continue later**: "We can pick this up anytime"

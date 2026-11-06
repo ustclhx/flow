@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { isSqliteBusy, openDatabase } from '../src/sqlite.ts'
 
 test('薄封装支持 exec / prepare / transaction，且开启 WAL', async () => {
-  const db = await openDatabase(join(mkdtempSync(join(tmpdir(), 'flow-sqlite-')), 't.db'))
+  const db = await openDatabase(join(mkdtempSync(join(tmpdir(), 'raindown-sqlite-')), 't.db'))
   db.exec('CREATE TABLE t (k TEXT PRIMARY KEY, v INTEGER)')
   db.transaction(() => {
     db.prepare('INSERT INTO t VALUES (?, ?)').run('a', 1)
@@ -25,7 +25,7 @@ test('薄封装支持 exec / prepare / transaction，且开启 WAL', async () =>
 })
 
 test('可关闭 WAL 并设置 busy_timeout=0；排他锁被占用时立即报 SQLITE_BUSY', async () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'flow-sqlite-')), 'lock.db')
+  const path = join(mkdtempSync(join(tmpdir(), 'raindown-sqlite-')), 'lock.db')
   const options = { wal: false, busyTimeoutMs: 0 }
   const first = await openDatabase(path, options)
   const second = await openDatabase(path, options)

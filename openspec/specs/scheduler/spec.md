@@ -10,7 +10,7 @@
 
 #### Scenario: 一条规则写错
 - **WHEN** `schedules.yaml` 中有两条规则，其中一条的 cron 表达式不合法
-- **THEN** 合法的那条照常触发，`flow hub status` 中报告另一条的错误
+- **THEN** 合法的那条照常触发，`raindown hub status` 中报告另一条的错误
 
 ### Requirement: 到点写入事件
 规则到点时，中枢 SHALL 向账本写入一条 `schedule.fired` 事件，其中包含规则 id、计划时间和载荷。同一规则的同一个计划时间 MUST 只触发一次，即使中枢在这期间重启。

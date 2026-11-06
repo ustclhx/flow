@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { fail, invokeOperation, type Operation, resolveFlowHome } from '@flow/core'
+import { fail, invokeOperation, type Operation, resolveRaindownHome } from '@raindown/core'
 import type { z } from 'zod'
 import { type Command, defineCommand, type OptionSpec } from './command.ts'
 
@@ -87,7 +87,7 @@ export function commandFromOperation(op: Operation<never, unknown>): Command<unk
         raw[key] = fieldKind(shape[key] as z.ZodType) === 'number' ? Number(value) : value
       }
       return invokeOperation(op, raw, {
-        home: resolveFlowHome(process.env),
+        home: resolveRaindownHome(process.env),
         actor,
         via: 'cli',
       })

@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { TAIL_LINE_MAX, TAIL_TOTAL_MAX_BYTES, taskContract } from '@flow/core'
+import { TAIL_LINE_MAX, TAIL_TOTAL_MAX_BYTES, taskContract } from '@raindown/core'
 import { type Bench, bench, fake } from './harness.ts'
 import { processStopped } from './process.ts'
 import { waitFor as waitForCondition } from './wait.ts'
@@ -316,7 +316,7 @@ test('验收超时字段拒绝非正数', () => {
 
 test('节点把合同角色身份传给验收命令', async () => {
   const b = await open()
-  const cmd = command(b, 'actor', 'console.log(process.env.FLOW_ACTOR)')
+  const cmd = command(b, 'actor', 'console.log(process.env.RAINDOWN_ACTOR)')
   const id = await b.create({
     ...fake({ delay_ms: 0 }),
     role: 'reviewer',

@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net'
 
 /** 不像真实 token 的测试 token（运行时拼出，源码中没有 token 形态的字面量）。 */
 export const fakeBotToken = () =>
-  ['424242', ['FLOWFAKE', 'TGTOKEN', 'q'.repeat(12)].join('_')].join(':')
+  ['424242', ['RAINDOWNFAKE', 'TGTOKEN', 'q'.repeat(12)].join('_')].join(':')
 
 export const BOT_ID = 424242
 export const USER_ID = 7001
@@ -161,7 +161,12 @@ export class FakeTelegram {
       case 'getWebhookInfo':
         return ok({ url: this.webhookUrl, pending_update_count: 0 })
       case 'getMe':
-        return ok({ id: BOT_ID, is_bot: true, username: 'flow_test_bot', first_name: 'Flow' })
+        return ok({
+          id: BOT_ID,
+          is_bot: true,
+          username: 'raindown_test_bot',
+          first_name: 'Raindown',
+        })
       case 'getUpdates': {
         const offset = Number(params.offset ?? 0)
         this.offsets.push(offset)

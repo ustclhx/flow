@@ -3,15 +3,15 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   clipText,
-  flowPaths,
   INBOX_BODY_MAX,
   INBOX_TITLE_MAX,
   type InboxCloseReason,
   type InboxConfig,
   type Proposal,
   proposalSchema,
+  raindownPaths,
   resolveInboxLevel,
-} from '@flow/core'
+} from '@raindown/core'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { HubClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
@@ -56,7 +56,7 @@ export function createProposalWatcher(o: ProposalWatcherOptions): ProposalWatche
   const { ledger } = o
   const actor = o.actor ?? 'hub'
   const config = o.config ?? (() => ({ levels: [] }))
-  const dir = join(flowPaths(o.home).state, 'proposals')
+  const dir = join(raindownPaths(o.home).state, 'proposals')
   let chain: Promise<void> = Promise.resolve()
   let watcher: FSWatcher | undefined
   let debounce: ReturnType<typeof setTimeout> | undefined

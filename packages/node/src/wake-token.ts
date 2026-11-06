@@ -1,19 +1,19 @@
 import { chmod, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { flowPaths } from '@flow/core'
+import { raindownPaths } from '@raindown/core'
 
 /**
  * 唤醒绑定 token 文件（add-m1-supervisor D6；tasks 5.3）。
  *
  * 节点领到唤醒租约时把 `lease.wake_token` 写进 `state/wake/<task>.<lease_id>.token`（目录 0700、文件 0600），
- * 只把路径作为 `FLOW_HUB_TOKEN_FILE` 交给 Flow MCP 进程：token 本身不进任何进程的 argv 与 env
+ * 只把路径作为 `RAINDOWN_HUB_TOKEN_FILE` 交给 Raindown MCP 进程：token 本身不进任何进程的 argv 与 env
  * （Agent SDK 会把 MCP 配置以 `--mcp-config` 参数传给 Claude Code，`ps` 对所有用户可见）。
  * 任务结束（含失败、取消、放弃租约）时删除；节点启动时清理残留。
- * `state/` 在 flow-home 下，不在任何任务的 cwd 或私有目录中，`read_scope: cwd` 的会话读不到。
+ * `state/` 在 raindown-home 下，不在任何任务的 cwd 或私有目录中，`read_scope: cwd` 的会话读不到。
  */
 
 /** 唤醒 token 文件目录。 */
-export const wakeTokenDir = (home: string) => join(flowPaths(home).state, 'wake')
+export const wakeTokenDir = (home: string) => join(raindownPaths(home).state, 'wake')
 
 const SAFE_SEGMENT = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/
 

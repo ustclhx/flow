@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fail, ok, type Result } from '@flow/core'
+import { fail, ok, type Result } from '@raindown/core'
 import type { GhCheck, GhPrView, GhRun, GitHubCli, PrSnapshot, RepoRef } from '../src/index.ts'
 
 /**
@@ -21,9 +21,9 @@ export const gitEnv = {
   ...process.env,
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_AUTHOR_NAME: 'Flow Test',
+  GIT_AUTHOR_NAME: 'Raindown Test',
   GIT_AUTHOR_EMAIL: 'test@example.invalid',
-  GIT_COMMITTER_NAME: 'Flow Test',
+  GIT_COMMITTER_NAME: 'Raindown Test',
   GIT_COMMITTER_EMAIL: 'test@example.invalid',
 }
 
@@ -48,9 +48,9 @@ export interface TempRepo {
   pushToPr(): string
 }
 
-/** 临时 flow-home（workspace ws/demo 登记 repo）与本地仓库。 */
+/** 临时 raindown-home（workspace ws/demo 登记 repo）与本地仓库。 */
 export function tempRepo(workspaceExtra = ''): TempRepo {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-gh-')))
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-gh-')))
   const home = join(root, 'home')
   const repo = join(root, 'repo')
   const bare = join(root, 'origin.git')
@@ -122,7 +122,7 @@ export interface FakeGhState {
 }
 
 /** 开出 PR 的任务分支（fake PR 的 head 分支，merger 合同 inputs.merge.branch）。 */
-export const TASK_BRANCH = 'flow/t-dev'
+export const TASK_BRANCH = 'raindown/t-dev'
 
 export function fakeGh(over: Partial<FakeGhState> = {}): { gh: GitHubCli; state: FakeGhState } {
   const state: FakeGhState = {

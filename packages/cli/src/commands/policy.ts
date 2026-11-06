@@ -1,4 +1,4 @@
-import { fail, HubClient, policyCheckRequest, resolveFlowHome } from '@flow/core'
+import { fail, HubClient, policyCheckRequest, resolveRaindownHome } from '@raindown/core'
 import { defineCommand } from '../command.ts'
 
 /** 策略预检属于管理调试命令，不是知识访问操作。 */
@@ -25,9 +25,11 @@ export const policyCheckCommand = defineCommand({
       return fail(
         'usage',
         'invalid_arguments',
-        '用法：flow policy check --task <id> --tool <工具名> [--command <命令>] [--path <路径>…] [--record]',
+        '用法：raindown policy check --task <id> --tool <工具名> [--command <命令>] [--path <路径>…] [--record]',
       )
     }
-    return new HubClient({ home: resolveFlowHome(process.env), actor }).checkPolicy(request.data)
+    return new HubClient({ home: resolveRaindownHome(process.env), actor }).checkPolicy(
+      request.data,
+    )
   },
 })

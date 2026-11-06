@@ -1,4 +1,4 @@
-import type { LedgerEvent } from '@flow/core'
+import type { LedgerEvent } from '@raindown/core'
 import type { EventFilter, LedgerReader } from '../src/ledger/port.ts'
 import type { HubClock } from '../src/server/clock.ts'
 

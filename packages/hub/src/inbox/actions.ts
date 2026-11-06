@@ -9,7 +9,7 @@ import {
   type Result,
   rejectProposals,
   SUPERVISOR_ACTOR,
-} from '@flow/core'
+} from '@raindown/core'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { TaskService } from '../ledger/tasks.ts'
 import { answerQuestion, isQuestionItem } from '../supervisor-tools/questions.ts'

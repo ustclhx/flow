@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
-import { flowPaths, HUB_TOKEN_ENV, ok, type Result } from '@flow/core'
-import { type RunningHub, runHub } from '@flow/hub'
+import { HUB_TOKEN_ENV, ok, type Result, raindownPaths } from '@raindown/core'
+import { type RunningHub, runHub } from '@raindown/hub'
 import { initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { createUiCommand } from '../src/commands/ui.ts'
 import { runCli } from '../src/run.ts'
 
 /**
- * `flow ui`（add-m1-inbox 6.1）：真实中枢（随机端口）、临时 FLOW_HOME；打开浏览器的动作被注入替换。
+ * `raindown ui`（add-m1-inbox 6.1）：真实中枢（随机端口）、临时 RAINDOWN_HOME；打开浏览器的动作被注入替换。
  */
 
 let home: string
@@ -22,10 +22,10 @@ function data<T>(r: Result<T>): T {
 }
 
 beforeAll(async () => {
-  home = await initTempHome('flow-ui-cli-')
-  for (const k of ['FLOW_HOME', 'FLOW_ACTOR', HUB_TOKEN_ENV]) saved[k] = process.env[k]
-  process.env.FLOW_HOME = home
-  delete process.env.FLOW_ACTOR
+  home = await initTempHome('raindown-ui-cli-')
+  for (const k of ['RAINDOWN_HOME', 'RAINDOWN_ACTOR', HUB_TOKEN_ENV]) saved[k] = process.env[k]
+  process.env.RAINDOWN_HOME = home
+  delete process.env.RAINDOWN_ACTOR
   delete process.env[HUB_TOKEN_ENV]
   hub = data(
     await runHub({
@@ -36,7 +36,7 @@ beforeAll(async () => {
       inbox: { watch: false },
     }),
   )
-  await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
+  await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
 })
 
 afterAll(async () => {
@@ -48,7 +48,7 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true })
 })
 
-describe('flow ui', () => {
+describe('raindown ui', () => {
   test('打开一次性登录链接；链接换到会话 cookie 后进入页面，再次使用失效', async () => {
     const opened: string[] = []
     const ui = createUiCommand(async (url) => {
@@ -65,7 +65,7 @@ describe('flow ui', () => {
 
     const login = await fetch(url, { redirect: 'manual' })
     expect(login.status).toBe(303)
-    const cookie = /flow_ui_session=[^;]+/.exec(login.headers.get('set-cookie') ?? '')?.[0]
+    const cookie = /raindown_ui_session=[^;]+/.exec(login.headers.get('set-cookie') ?? '')?.[0]
     expect(cookie).toBeDefined()
     const page = await fetch(`${hub.url}/ui`, { headers: { Cookie: cookie ?? '' } })
     expect(page.status).toBe(200)
@@ -74,7 +74,7 @@ describe('flow ui', () => {
     // 没有会话直接访问：只提示登录。
     const direct = await fetch(`${hub.url}/ui`)
     expect(direct.status).toBe(401)
-    expect(await direct.text()).toContain('请运行 flow ui 登录')
+    expect(await direct.text()).toContain('请运行 raindown ui 登录')
   })
 
   test('--print 只输出链接；AI 身份不能申请登录码', async () => {

@@ -25,8 +25,8 @@ import {
 const homes: string[] = []
 const restores: (() => void)[] = []
 async function home() {
-  const h = await initTempHome('flow-brief-')
-  // 不连真实中枢：端口不可达、清除 FLOW_HUB_TOKEN；需要中枢数据的用例注入 fetch。
+  const h = await initTempHome('raindown-brief-')
+  // 不连真实中枢：端口不可达、清除 RAINDOWN_HUB_TOKEN；需要中枢数据的用例注入 fetch。
   restores.push(isolateHub(h))
   homes.push(h)
   return h
@@ -73,7 +73,7 @@ describe('简报笔记路径（design D8）', () => {
     const log = readFileSync(join(h, 'brain', 'log.md'), 'utf8')
     expect(log).toContain('brief supervisor ws/product-res 简报笔记')
     const author = await git(join(h, 'brain'), ['log', '-1', '--format=%an'])
-    expect(author.stdout.trim()).toBe('Flow (supervisor)')
+    expect(author.stdout.trim()).toBe('Raindown (supervisor)')
     const note = data(await readBrief(h, WS))
     expect(note).toEqual({
       workspace: WS,

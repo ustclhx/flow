@@ -5,7 +5,7 @@ import { ENTRY_TYPES } from '../schema/entries.ts'
  * `brain/index.md` 与 `brain/log.md` 的确定性渲染（knowledge-base：索引维护、变更日志）。
  */
 
-const INDEX_HEADER = '# 索引\n\n> 由 Flow 自动生成，请勿手动编辑。\n'
+const INDEX_HEADER = '# 索引\n\n> 由 Raindown 自动生成，请勿手动编辑。\n'
 /** 类型未知或缺失的条目归入最后的这个分组。 */
 export const INDEX_OTHER_GROUP = '其他'
 

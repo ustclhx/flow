@@ -10,7 +10,7 @@ import {
   redactSecrets,
   toJsonDocument,
   uiLoginCodeData,
-} from '@flow/core'
+} from '@raindown/core'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
@@ -36,7 +36,7 @@ import { SESSION_TTL_MS, type UiSessions } from './sessions.ts'
  *   再以 `user` 身份、`via: web` 调用收件箱的内部操作。
  */
 
-export const SESSION_COOKIE = 'flow_ui_session'
+export const SESSION_COOKIE = 'raindown_ui_session'
 /** 输出片段的长度上限（字符），与渠道默认的截断长度一致（notify-channel spec）。 */
 export const SNIPPET_MAX = 1500
 
@@ -201,7 +201,7 @@ export function createUiApp(deps: UiAppDeps): Hono {
 
   /** 局部刷新用的片段。 */
   app.get('/items', (c) => {
-    if (!authed(c)) return uiError(c, 401, 'unauthorized', '会话无效，请运行 flow ui 重新登录')
+    if (!authed(c)) return uiError(c, 401, 'unauthorized', '会话无效，请运行 raindown ui 重新登录')
     return c.html(<Board model={boardModel(deps.inbox, now())} />)
   })
 
@@ -210,7 +210,7 @@ export function createUiApp(deps: UiAppDeps): Hono {
     if (port === undefined || !sameOrigin(c, port)) {
       return uiError(c, 403, 'origin_denied', '请求来源不被允许')
     }
-    if (!authed(c)) return uiError(c, 401, 'unauthorized', '会话无效，请运行 flow ui 重新登录')
+    if (!authed(c)) return uiError(c, 401, 'unauthorized', '会话无效，请运行 raindown ui 重新登录')
     let body: unknown
     try {
       body = await c.req.json()
@@ -244,7 +244,7 @@ export function createUiApp(deps: UiAppDeps): Hono {
   return app
 }
 
-/** `POST /v1/ui/login-code`：经 `/v1` 的 Bearer 鉴权，仅 user（`flow ui` 调用）。 */
+/** `POST /v1/ui/login-code`：经 `/v1` 的 Bearer 鉴权，仅 user（`raindown ui` 调用）。 */
 export function createUiLoginCodeRoutes(sessions: UiSessions): Hono {
   const app = new Hono()
   app.post(ENDPOINTS['ui-login-code'].path, userOnly('申请 Web 页面登录码'), (c) => {

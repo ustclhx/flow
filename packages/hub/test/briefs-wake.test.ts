@@ -8,7 +8,7 @@ import {
   ok,
   type WakeOrigin,
   wsBriefOp,
-} from '@flow/core'
+} from '@raindown/core'
 import { initTempHome, isolateHub } from '../../core/test/helpers.ts'
 import {
   createBriefRoutes,
@@ -54,7 +54,7 @@ const roles: RoleLookup = async (name) =>
   )
 
 async function setup() {
-  const home = await initTempHome('flow-brief-wake-')
+  const home = await initTempHome('raindown-brief-wake-')
   const restore = isolateHub(home)
   const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
   const l = await tempLedger({ now: clock.now })

@@ -4,4 +4,4 @@
  * 其他写入路径拿不到它。带上它时策略只放行"追加回看一节、只改 status 与 last_verified"的整体替换
  * （`checkDecisionReview`），其余一律拒绝。
  */
-export const DECISION_REVIEW: unique symbol = Symbol('flow.decisionReview')
+export const DECISION_REVIEW: unique symbol = Symbol('raindown.decisionReview')

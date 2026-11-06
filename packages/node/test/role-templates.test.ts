@@ -20,7 +20,7 @@ test('core 推断认识的 claude-sdk 权限键与节点 claudeSdkPermissions �
 })
 
 test('模板 supervisor、pr-reviewer（及全部 claude-sdk 模板）能通过节点 claudeSdkPermissions 校验', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'flow-role-templates-'))
+  const home = mkdtempSync(join(tmpdir(), 'raindown-role-templates-'))
   const dir = join(home, 'config', 'roles')
   mkdirSync(dir, { recursive: true })
   for (const [name, text] of Object.entries(DEFAULT_ROLE_FILES))

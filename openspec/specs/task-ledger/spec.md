@@ -1,12 +1,12 @@
 # task-ledger Specification
 
 ## Purpose
-规定 Flow 任务账本的事件模型、任务合同、状态机与投影，使任务的每一次变化都可追溯、可重放，并在进程崩溃后不丢失。
+规定 Raindown 任务账本的事件模型、任务合同、状态机与投影，使任务的每一次变化都可追溯、可重放，并在进程崩溃后不丢失。
 
 ## Requirements
 
 ### Requirement: 只追加的事件账本
-系统 SHALL 把所有任务相关的变化记录为事件，写入 `state/flow.db`。每个事件包含：单调递增的序号、时间、类型、所属 workspace、关联任务、操作者，以及载荷。已写入的事件 MUST NOT 被修改或删除。
+系统 SHALL 把所有任务相关的变化记录为事件，写入 `state/raindown.db`。每个事件包含：单调递增的序号、时间、类型、所属 workspace、关联任务、操作者，以及载荷。已写入的事件 MUST NOT 被修改或删除。
 
 #### Scenario: 状态变化留下事件
 - **WHEN** 一个任务从 `queued` 变为 `running`
@@ -16,7 +16,7 @@
 任务的当前状态 SHALL 由事件投影得到。系统 MUST 能从事件流完整重建全部投影，重建结果与增量维护的结果一致。
 
 #### Scenario: 删除投影后重建
-- **WHEN** 投影表被清空后运行 `flow hub rebuild`
+- **WHEN** 投影表被清空后运行 `raindown hub rebuild`
 - **THEN** 每个任务的状态、尝试次数和时间戳与清空前完全一致
 
 ### Requirement: 任务合同
@@ -49,7 +49,7 @@
 任务结束（`done` 或 `failed`）时 SHALL 附带结果，包括：摘要、产物列表（文件路径、PR 链接等）、验收命令的执行结果，以及执行者。结果格式由 JSON Schema 描述。
 
 #### Scenario: 查看已完成任务的结果
-- **WHEN** 用户运行 `flow task show <id>`，而该任务已完成
+- **WHEN** 用户运行 `raindown task show <id>`，而该任务已完成
 - **THEN** 输出包含结果摘要、产物和每条验收命令的退出码
 
 ### Requirement: 幂等创建

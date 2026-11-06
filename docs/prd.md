@@ -1,14 +1,14 @@
-# Flow 产品定义（PRD）v0.7
+# Raindown 产品定义（PRD）v0.7
 
 > 状态：讨论定稿草案 · 2026-10-24
-> 项目名 `flow` 为临时名。
+> 项目正式名为 **Raindown**，标识符为 `raindown`。
 > 本文是后续 OpenSpec proposal 的输入。标记为【待定】的条目尚未讨论。
 
 ---
 
 ## 1. 定位
 
-Flow 是一个**个人 AI 运营中心**。它把不同的模型和 harness 串联起来，让已经上线的东西自己运转：
+Raindown 是一个**个人 AI 运营中心**。它把不同的模型和 harness 串联起来，让已经上线的东西自己运转：
 
 - 现有服务的维护与迭代；
 - 数据与运行监控；
@@ -347,14 +347,14 @@ policy:
 
 ## 14. 待定与未覆盖
 
-1. **Grok Bot 作为聊天入口**：需要实测 Grok Bot 能否调用外部工具或 webhook，把消息转给 Flow。如果不能，聊天入口要另选通道（比如 Telegram），Grok Bot 只做 X 的读取执行器。
+1. **Grok Bot 作为聊天入口**：需要实测 Grok Bot 能否调用外部工具或 webhook，把消息转给 Raindown。如果不能，聊天入口要另选通道（比如 Telegram），Grok Bot 只做 X 的读取执行器。
 2. **X API**：Grok Bot 连接 X 时会创建开发者账号，需要实测这个账号能否复用，以及 X API 的费用档位。
 3. **平台自身的可靠性**：谁来监控这个监控系统（外部心跳，比如 healthchecks.io）；账本和知识库的备份与恢复。
 4. **安全**：密钥方案已定（§18）；节点和中枢之间的认证待定。
 5. **预算**：已定，不做预算上限（harness 都走订阅），只记录费用供查看。
 6. **技术选型**：已定（§17）；开源许可证待定，倾向 Apache-2.0。
 7. **MVP 范围与里程碑**：已定（§16）。
-8. **项目正式名称。**
+8. **项目正式名称：Raindown（已定）。**
 
 ---
 
@@ -389,7 +389,7 @@ policy:
 
 | 阶段 | 内容 | 体感目标 |
 |---|---|---|
-| **M0 地基** | monorepo 脚手架；`~/flow-home` 布局；brain 和 raw 仓库及 schema；资源注册表（录入两个产品）；知识库 MCP server；AGENTS.md 受管区块；密钥扫描 | 所有 harness 共享同一份背景 |
+| **M0 地基** | monorepo 脚手架；`~/raindown-home` 布局；brain 和 raw 仓库及 schema；资源注册表（录入两个产品）；知识库 MCP server；AGENTS.md 受管区块；密钥扫描 | 所有 harness 共享同一份背景 |
 | **M1 内核 v0** | 账本、事件、调度；执行器插件：Claude Code、Codex（经 Orca）；卡住检测；supervisor 和 workspace 简报；最小策略引擎；sops + age 密钥提供器；收件箱（Telegram Bot，加 Web 版"需要我的"） | 不用再盯 Codex 终端 |
 | **M2 运维闭环** | 能力插件：Gatus、Cloudflare、域名到期（Sentry、Stripe 待产品启用后再接）；Metric；运维分诊工作流；runbook 回写；Decision 和回看；Web 版"全局健康" | 不用再手动查看网站状态 |
 | M3 | 知识 ingest 和 lint；随手记；热点雷达 | |
@@ -423,7 +423,7 @@ policy:
 | Web | React + Vite + TanStack Router/Query + Tailwind + shadcn/ui，做成 PWA |
 | 插件 | TS 模块，manifest 由 zod 校验；MVP 阶段在主进程里加载 |
 | 执行器 | Claude Agent SDK（用 `canUseTool` 接入策略引擎）；`codex exec --json` 或 Codex SDK，交互场景走 Orca CLI；pi / oh-my-pi 的 SDK 或 RPC |
-| Flow MCP server | 向所有 harness 暴露知识库检索、提交任务、写 journal、提问用户等能力 |
+| Raindown MCP server | 向所有 harness 暴露知识库检索、提交任务、写 journal、提问用户等能力 |
 | 直接调用模型 | Vercel AI SDK，费用记进账本 |
 | 知识库 | Markdown + frontmatter（zod 校验）；qmd 检索；frontmatter 索引进 SQLite |
 | 通知 | Telegram Bot，加 Web 收件箱 |
@@ -439,11 +439,11 @@ policy:
 **用户数据目录布局**：
 
 ```
-~/flow-home/
+~/raindown-home/
   ├─ config/        # 角色、工作流、策略、插件配置，以及 sops 加密的密钥（git）
   ├─ brain/         # 主知识库（git）
   ├─ raw/           # 原始资料（git，大文件用 LFS）
-  └─ state/flow.db  # 账本（不进 git，定期备份）
+  └─ state/raindown.db  # 账本（不进 git，定期备份）
 ```
 
 ---
@@ -456,9 +456,9 @@ policy:
 
 1. **配置里只存引用**，比如 `secret://cloudflare/zone-ezarouter`，由 SecretProvider 在运行时解析。
 2. **Agent 碰不到明文**。密钥只在插件动作执行时注入；必须通过环境变量注入给 harness 时，只给这个任务需要的最小集合。
-3. **最小权限的 token**。Flow 自己使用的凭据单独申请只读或限定范围的版本，比如 Stripe restricted key 和按 zone 限定的 Cloudflare token，不复用部署用的主密钥。
+3. **最小权限的 token**。Raindown 自己使用的凭据单独申请只读或限定范围的版本，比如 Stripe restricted key 和按 zone 限定的 Cloudflare token，不复用部署用的主密钥。
 4. **输出脱敏**。账本、journal、日志写入前，先匹配已知密钥值，再做 gitleaks 扫描。
-5. **两类密钥分开管理**。Flow 自己的凭据由 Flow 管理；产品部署用的密钥（wrangler secrets、`.env.production-*`）仍由各产品自己的流程管理。Flow 的 agent 执行任务时不得读取这些文件：worktree 不复制它们，harness 也禁止读取这类路径。
+5. **两类密钥分开管理**。Raindown 自己的凭据由 Raindown 管理；产品部署用的密钥（wrangler secrets、`.env.production-*`）仍由各产品自己的流程管理。Raindown 的 agent 执行任务时不得读取这些文件：worktree 不复制它们，harness 也禁止读取这类路径。
 
 **age 私钥必须离线备份。** 私钥丢失意味着所有密钥都丢失。
 
@@ -466,7 +466,7 @@ policy:
 
 ## 19. M1 内核设计（2026-10-24 确认）
 
-1. **进程形态**：中枢 `flowd` 是 launchd 托管的守护进程，带外部心跳。节点是独立进程，用"租约 + long-poll"**主动向中枢拉取任务**。中枢和节点之间用 HTTP + JSON 通信，带 token 认证，协议用 JSON Schema 定义。
+1. **进程形态**：中枢 `raindownd` 是 launchd 托管的守护进程，带外部心跳。节点是独立进程，用"租约 + long-poll"**主动向中枢拉取任务**。中枢和节点之间用 HTTP + JSON 通信，带 token 认证，协议用 JSON Schema 定义。
 2. **账本**：只追加事件，任务、收件箱等由事件投影得到。任务状态为 `queued → running → verifying → done / failed / blocked / cancelled`。任务是一份合同（目标、上下文引用、workspace、角色、工作目录、验收命令、策略），结束时产出 `result.json`。
 3. **执行器**：
    - **交互模式**：Codex 经由 Orca 运行，把现有的 dispatch 和 watch 脚本插件化，用于长时间的开发任务；
@@ -474,7 +474,7 @@ policy:
 4. **卡住检测**：执行器持续上报活动信号，内核据此区分卡住的原因：等审批、提问、无输出、崩溃。卡住后任务转为 `blocked`，收件箱生成一条附带终端末尾输出的消息；用户的回复会被送回 worker。
 5. **Supervisor**：每个 workspace 一个，被事件、任务结束或卡住、定时巡检唤醒。每次唤醒都是新会话，靠 workspace 简报恢复记忆。它只能通过 MCP 工具行动：建任务、提提案、问用户、写 journal。M1 的巡检是每天一次，输出报告。
 6. **收件箱**：分 Interrupt、Decide、Digest 三级，推送渠道做成插件。
-   - **首个渠道是 Telegram Bot**：Flow 主动向 Telegram 拉取消息（long polling），中枢不需要被公网访问；
+   - **首个渠道是 Telegram Bot**：Raindown 主动向 Telegram 拉取消息（long polling），中枢不需要被公网访问；
    - 通知里用内联按钮完成审批，回复消息就是给 worker 的答复；
    - 只接受用户本人的 chat id。
 

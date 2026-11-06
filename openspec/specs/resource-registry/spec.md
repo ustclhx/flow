@@ -9,7 +9,7 @@
 每个 workspace SHALL 由 `config/workspaces/<id>.yaml` 定义，至少包含 `id`、`kind`（`product`、`function` 之一）、`name` 与 `description`；`product` 类型的 workspace SHALL 列出所关联项目仓库的本地路径。系统 SHALL 隐式提供一个 `global` workspace，它不需要定义文件。workspace 的标识写作 `ws/<id>`。
 
 #### Scenario: 列出 workspace
-- **WHEN** `config/workspaces/` 下有 `product-res.yaml` 与 `xuanxue-saas.yaml`，用户运行 `flow ws list`
+- **WHEN** `config/workspaces/` 下有 `product-res.yaml` 与 `xuanxue-saas.yaml`，用户运行 `raindown ws list`
 - **THEN** 输出 `ws/global`、`ws/product-res`、`ws/xuanxue-saas` 及其类型与名称
 
 ### Requirement: 资源单一归属
@@ -17,24 +17,24 @@
 
 #### Scenario: owner 指向不存在的 workspace
 - **WHEN** 某个域名条目的 `owner: ws/unknown`
-- **THEN** `flow kb validate` 报告该错误
+- **THEN** `raindown kb validate` 报告该错误
 
 #### Scenario: owner 为职能 workspace
 - **WHEN** 某个账号条目的 `owner` 是一个 `kind: function` 的 workspace
-- **THEN** `flow kb validate` 报告"职能 workspace 不能拥有资源"
+- **THEN** `raindown kb validate` 报告"职能 workspace 不能拥有资源"
 
 ### Requirement: 按归属查询资源
 系统 SHALL 支持按 workspace 列出其拥有的资源，并且可以按资源类型过滤。
 
 #### Scenario: 列出某产品的域名
-- **WHEN** 用户运行 `flow ws resources xuanxue-saas --type domain`
+- **WHEN** 用户运行 `raindown ws resources xuanxue-saas --type domain`
 - **THEN** 输出 `arcanumber.com` 与 `ganjiday.com` 两个条目
 
 ### Requirement: 归属变更
-资源的 `owner` 只能通过 `flow resource transfer <资源> <目标 workspace>` 或经过确认的修改提案来更改。每次更改 SHALL 在 `log.md` 中留下 `owner-change` 记录，写明原 owner 和新 owner。本能力 MUST NOT 迁移任务或订阅（这部分由后续的内核能力负责）。
+资源的 `owner` 只能通过 `raindown resource transfer <资源> <目标 workspace>` 或经过确认的修改提案来更改。每次更改 SHALL 在 `log.md` 中留下 `owner-change` 记录，写明原 owner 和新 owner。本能力 MUST NOT 迁移任务或订阅（这部分由后续的内核能力负责）。
 
 #### Scenario: 转移域名
-- **WHEN** 用户运行 `flow resource transfer resources/domains/ganjiday.com product-res`
+- **WHEN** 用户运行 `raindown resource transfer resources/domains/ganjiday.com product-res`
 - **THEN** 该条目的 `owner` 变为 `ws/product-res`，`log.md` 新增一条 `owner-change` 记录，注明原 owner `ws/xuanxue-saas`
 
 ### Requirement: 首批资源
@@ -42,4 +42,4 @@
 
 #### Scenario: 到期日未知
 - **WHEN** 录入 `arcanumber.com`，但仓库中没有它的注册到期日
-- **THEN** 该条目的 `expires` 为空、`last_verified` 为空，`flow kb validate` 把它列为"从未核实"
+- **THEN** 该条目的 `expires` 为空、`last_verified` 为空，`raindown kb validate` 把它列为"从未核实"

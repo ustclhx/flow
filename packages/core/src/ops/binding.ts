@@ -5,7 +5,7 @@ import type { OpBinding, Operation } from './operation.ts'
 /**
  * MCP 会话绑定（add-m1-supervisor D6；tasks 4.1；knowledge-access "MCP 会话按 workspace 绑定"）。
  *
- * `flow mcp --workspace <ws> --task <id>` 启动的会话：
+ * `raindown mcp --workspace <ws> --task <id>` 启动的会话：
  * - 写类操作只能作用于绑定的 workspace，否则 `workspace_mismatch`（各操作的 `bind` 负责）；
  * - `task_create` 未写 `parent` 时自动以绑定的任务为 parent（MCP 填写，中枢不代填）；
  * - reply 唤醒（`replyOnly`）只放行只读操作与 `replyAllowed` 的操作，其余 `reply_only_wake`。

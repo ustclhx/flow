@@ -36,7 +36,7 @@ const request: PolicyRequest = {
 describe('策略配置', () => {
   const homes: string[] = []
   const home = () => {
-    const value = tempHome('flow-policy-')
+    const value = tempHome('raindown-policy-')
     homes.push(value)
     return value
   }
@@ -80,9 +80,9 @@ describe('策略配置', () => {
   test('不存在或空文件返回空配置；读取、YAML、顶层类型错误返回稳定错误码', async () => {
     const root = home()
     const path = join(root, 'config/policies.yaml')
-    expect(data(await loadPoliciesConfig(root))).toEqual({ rules: [], errors: [] })
+    expect(data(await loadPoliciesConfig(root))).toEqual({ rules: [], errors: [], warnings: [] })
     writeText(path, '')
-    expect(data(await loadPoliciesConfig(root))).toEqual({ rules: [], errors: [] })
+    expect(data(await loadPoliciesConfig(root))).toEqual({ rules: [], errors: [], warnings: [] })
     for (const text of ['[\n', 'rules: []\n']) {
       writeText(path, text)
       expect(await loadPoliciesConfig(root)).toMatchObject({
@@ -96,6 +96,43 @@ describe('策略配置', () => {
       ok: false,
       error: { code: 'read_failed' },
     })
+  })
+
+  test('旧 MCP 与管理动作规范化后保留限制，并仅报告迁移警告', async () => {
+    const root = home()
+    writeText(
+      join(root, 'config/policies.yaml'),
+      stringify([
+        rule('dev', 'tool:mcp__flow__task_create', 'notify'),
+        rule('dev', 'flow.*', 'notify'),
+        rule('dev', 'task.create', 'auto'),
+      ]),
+    )
+    const loaded = data(await loadPoliciesConfig(root))
+    expect(loaded.errors).toEqual([])
+    expect(loaded.warnings).toMatchObject([
+      { rule_index: 0, field: 'action', code: 'legacy_policy_action' },
+      { rule_index: 1, field: 'action', code: 'legacy_policy_action' },
+    ])
+    expect(loaded.rules.map(({ rule }) => rule.action)).toEqual([
+      'tool:mcp__raindown__task_create',
+      'raindown.*',
+      'task.create',
+    ])
+    for (const tool of ['mcp__flow__task_create', 'mcp__raindown__task_create']) {
+      expect(decide(loaded.rules, { ...request, actions: classifyAction({ tool }) }).level).toBe(
+        'notify',
+      )
+    }
+    for (const command of ['flow hub token issue node:x', 'raindown hub token issue node:x']) {
+      expect(
+        decide(loaded.rules, {
+          ...request,
+          command,
+          actions: classifyAction({ tool: 'Bash', command }),
+        }).level,
+      ).toBe('notify')
+    }
   })
 
   test('schema 拒绝拼错字段、部分 scope 通配和无效条件，导出整个配置的 JSON Schema', () => {
@@ -393,7 +430,7 @@ describe('动作识别', () => {
     ['gh pr merge 42', ['pr.merge']],
     ['wrangler deploy', ['deploy']],
     ['wrangler pages deploy dist', ['deploy']],
-    ['flow secrets list', ['secrets']],
+    ['raindown secrets list', ['secrets']],
     ['git  push origin x', ['git.push']],
     ['git\tpush', ['git.push']],
     ['/usr/bin/git push', ['git.push']],
@@ -441,7 +478,7 @@ describe('动作识别', () => {
       './config/policies.yaml',
       '/tmp/home/config/policies.yaml',
       'config/sub/../policies.yaml',
-      'C:\\flow\\config\\policies.yaml',
+      'C:\\raindown\\config\\policies.yaml',
     ]) {
       expect(classifyAction({ tool: 'Edit', paths: [path] })).toEqual(['tool:Edit', 'policy.edit'])
     }
@@ -451,7 +488,7 @@ describe('动作识别', () => {
     expect(
       classifyAction({
         tool: 'Bash',
-        command: 'flow secrets list',
+        command: 'raindown secrets list',
         paths: ['config/policies.yaml'],
       }),
     ).toEqual(['tool:Bash', 'secrets', 'policy.edit'])
@@ -679,9 +716,9 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
   const judge = (
     rules: PolicyRule[],
     req: { tool: string; command?: string; paths?: string[] },
-    flowHomes?: string[],
+    raindownHomes?: string[],
   ) => {
-    const actions = classifyAction(req, undefined, flowHomes ? { flowHomes } : {})
+    const actions = classifyAction(req, undefined, raindownHomes ? { raindownHomes } : {})
     return { ...decide(indexed(...rules), { ...request, ...req, actions }), ids: actions }
   }
   const WILDCARDS = [
@@ -691,9 +728,9 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
     [rule('ws/xuanxue-saas', '*')],
   ]
 
-  test('mcp__flow__task_create：识别为 task.create，tool:* 不能放行；显式 task.create 规则可以', () => {
-    const req = { tool: 'mcp__flow__task_create' }
-    expect(classifyAction(req)).toEqual(['tool:mcp__flow__task_create', 'task.create'])
+  test('mcp__raindown__task_create：识别为 task.create，tool:* 不能放行；显式 task.create 规则可以', () => {
+    const req = { tool: 'mcp__raindown__task_create' }
+    expect(classifyAction(req)).toEqual(['tool:mcp__raindown__task_create', 'task.create'])
     for (const rules of [...WILDCARDS, [rule('dev', 'tool:mcp__*')], [rule('*', 'task.create')]]) {
       expect(judge(rules, req).level).not.toMatch(/^auto/)
     }
@@ -701,17 +738,23 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
     expect(judge([rule('dev', 'tool:*')], req).level).toBe('user')
     expect(judge([rule('dev', '*')], req).level).toBe('draft-approve')
     expect(judge([rule('dev', 'task.create')], req).level).toBe('auto')
-    expect(judge([rule('dev', 'tool:mcp__flow__task_create')], req).level).toBe('user')
+    expect(judge([rule('dev', 'tool:mcp__raindown__task_create')], req).level).toBe('user')
   })
 
-  test('其他会扩大权限的 flow 工具同样识别为具体动作', () => {
-    expect(classifyAction({ tool: 'mcp__flow__inbox_act' })).toContain('inbox.act')
-    expect(judge([rule('*', '*')], { tool: 'mcp__flow__inbox_act' }).level).not.toMatch(/^auto/)
-    expect(classifyAction({ tool: 'mcp__flow__task_cancel' })).toContain('task.cancel')
-    expect(classifyAction({ tool: 'mcp__flow__kb_proposals_accept' })).toContain('proposal.decide')
-    expect(classifyAction({ tool: 'mcp__flow__kb_proposals_reject' })).toContain('proposal.decide')
-    expect(classifyAction({ tool: 'mcp__flow__kb_search' })).toEqual(['tool:mcp__flow__kb_search'])
-    expect(judge([rule('dev', '*')], { tool: 'mcp__flow__kb_proposals_accept' }).level).toBe(
+  test('其他会扩大权限的 raindown 工具同样识别为具体动作', () => {
+    expect(classifyAction({ tool: 'mcp__raindown__inbox_act' })).toContain('inbox.act')
+    expect(judge([rule('*', '*')], { tool: 'mcp__raindown__inbox_act' }).level).not.toMatch(/^auto/)
+    expect(classifyAction({ tool: 'mcp__raindown__task_cancel' })).toContain('task.cancel')
+    expect(classifyAction({ tool: 'mcp__raindown__kb_proposals_accept' })).toContain(
+      'proposal.decide',
+    )
+    expect(classifyAction({ tool: 'mcp__raindown__kb_proposals_reject' })).toContain(
+      'proposal.decide',
+    )
+    expect(classifyAction({ tool: 'mcp__raindown__kb_search' })).toEqual([
+      'tool:mcp__raindown__kb_search',
+    ])
+    expect(judge([rule('dev', '*')], { tool: 'mcp__raindown__kb_proposals_accept' }).level).toBe(
       'draft-approve',
     )
   })
@@ -727,13 +770,13 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
   })
 
   test.each([
-    'sed -i s/draft-approve/auto/ ~/flow-home/config/polic*.yaml',
+    'sed -i s/draft-approve/auto/ ~/raindown-home/config/polic*.yaml',
     // 字面的 ${p}（shell 变量展开），拼接以免被当作模板字符串。
-    'p=polic; sed -i s/x/y/ ~/flow-home/config/$' + '{p}ies.yaml',
-    'cp /tmp/evil ~/flow-home/config/policies.yam?',
-    'cp /tmp/evil ~/flow-home/config/[p]olicies.yaml',
-    'cat /tmp/evil > $HOME/flow-home/config/policies.yaml',
-    'cp /tmp/evil ~/flow-home/CONFIG/Policies.YAML',
+    'p=polic; sed -i s/x/y/ ~/raindown-home/config/$' + '{p}ies.yaml',
+    'cp /tmp/evil ~/raindown-home/config/policies.yam?',
+    'cp /tmp/evil ~/raindown-home/config/[p]olicies.yaml',
+    'cat /tmp/evil > $HOME/raindown-home/config/policies.yaml',
+    'cp /tmp/evil ~/raindown-home/CONFIG/Policies.YAML',
   ])('策略文件的动态或大小写变体写法不能被通配规则放行：%s', (command) => {
     const { ids } = judge([], { tool: 'Bash', command })
     expect(ids).toContain('policy.edit')
@@ -742,27 +785,29 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
     }
   })
 
-  test('路径不区分大小写：Write /Users/u/flow-home/CONFIG/Policies.yaml', () => {
-    const req = { tool: 'Write', paths: ['/Users/u/flow-home/CONFIG/Policies.yaml'] }
+  test('路径不区分大小写：Write /Users/u/raindown-home/CONFIG/Policies.yaml', () => {
+    const req = { tool: 'Write', paths: ['/Users/u/raindown-home/CONFIG/Policies.yaml'] }
     expect(classifyAction(req)).toContain('policy.edit')
-    const r = judge([rule('dev', 'tool:*'), rule('dev', 'tool:Write')], req, ['/Users/u/flow-home'])
+    const r = judge([rule('dev', 'tool:*'), rule('dev', 'tool:Write')], req, [
+      '/Users/u/raindown-home',
+    ])
     expect(r.ids).toContain('config.edit')
     expect(r.level).toBe('user')
   })
 
-  test('flow-home 的 config/ 下任何路径或命令都识别为 config.edit，必须显式授权', () => {
-    const home = '/Users/u/flow-home'
+  test('raindown-home 的 config/ 下任何路径或命令都识别为 config.edit，必须显式授权', () => {
+    const home = '/Users/u/raindown-home'
     for (const req of [
       { tool: 'Edit', paths: [`${home}/config/roles/dev.yaml`] },
       { tool: 'Write', paths: [`${home}/Config/remote.yaml`] },
       { tool: 'Bash', command: `echo x >> ${home}/config/roles/dev.yaml` },
-      { tool: 'Bash', command: 'tee ~/flow-home/config/remote.yaml < /tmp/x' },
+      { tool: 'Bash', command: 'tee ~/raindown-home/config/remote.yaml < /tmp/x' },
     ]) {
       const r = judge([rule('*', '*'), rule('dev', 'tool:*')], req, [home])
       expect(r.ids).toContain('config.edit')
       expect(r.level).not.toMatch(/^auto/)
     }
-    // 不在 flow-home 下的普通 config 目录不受影响。
+    // 不在 raindown-home 下的普通 config 目录不受影响。
     expect(
       judge([rule('dev', 'tool:Edit')], { tool: 'Edit', paths: ['/repo/config/app.ts'] }, [home])
         .level,
@@ -813,10 +858,10 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
   })
 })
 
-describe('Bash 调 flow CLI、直接访问中枢与 config.edit 词法变体（PR #29 复核）', () => {
+describe('Bash 调 raindown CLI、直接访问中枢与 config.edit 词法变体（PR #29 复核）', () => {
   const HOME = '/Users/u'
-  const FLOW_HOME = '/Users/u/flow-home'
-  const opts = { flowHomes: [FLOW_HOME], userHome: HOME }
+  const RAINDOWN_HOME = '/Users/u/raindown-home'
+  const opts = { raindownHomes: [RAINDOWN_HOME], userHome: HOME }
   const judge = (rules: PolicyRule[], command: string, o: Record<string, unknown> = opts) => {
     const actions = classifyAction({ tool: 'Bash', command }, undefined, o)
     return { ...decide(indexed(...rules), { ...request, command, actions }), ids: actions }
@@ -824,37 +869,91 @@ describe('Bash 调 flow CLI、直接访问中枢与 config.edit 词法变体（P
   const BASH_AUTO = [rule('*', 'tool:Bash'), rule('dev', 'tool:*'), rule('*', '*')]
 
   test.each([
-    ['flow task create --role admin --goal x', 'task.create'],
-    ['flow task reply t-1 --approve', 'task.reply'],
-    ['flow task cancel t-1', 'task.cancel'],
-    ['flow inbox act blk.42 approve', 'inbox.act'],
-    ['flow kb proposals accept p-1', 'proposal.decide'],
-    ['flow kb proposals reject p-1', 'proposal.decide'],
-    ['flow resource transfer r-1 --to ws/b', 'resource.transfer'],
-    ['flow hub token issue node:x', 'flow.admin'],
-    ['flow policy check --task t-1 --tool Bash', 'flow.admin'],
-    ['flow daemon install', 'flow.admin'],
-    ['flow --json --actor user task create --role admin', 'task.create'],
-    ['/Users/x/.bun/bin/flow task create --role admin', 'task.create'],
-    ['bunx flow task reply t-1 --approve', 'task.reply'],
-    ['npx flow kb proposals accept p-1', 'proposal.decide'],
-    ['bun /Users/x/flow/packages/cli/src/main.ts task create --role admin', 'task.create'],
-    ['bun run packages/cli/src/main.ts hub token issue node:x', 'flow.admin'],
-    ['bun x flow hub token issue node:x', 'flow.admin'],
-  ])('flow CLI：%s → %s，tool:Bash 的 auto 不能放行', (command, action) => {
+    ['raindown task create --role admin --goal x', 'task.create'],
+    ['raindown task reply t-1 --approve', 'task.reply'],
+    ['raindown task cancel t-1', 'task.cancel'],
+    ['raindown inbox act blk.42 approve', 'inbox.act'],
+    ['raindown kb proposals accept p-1', 'proposal.decide'],
+    ['raindown kb proposals reject p-1', 'proposal.decide'],
+    ['raindown resource transfer r-1 --to ws/b', 'resource.transfer'],
+    ['raindown hub token issue node:x', 'raindown.admin'],
+    ['raindown policy check --task t-1 --tool Bash', 'raindown.admin'],
+    ['raindown daemon install', 'raindown.admin'],
+    ['raindown --json --actor user task create --role admin', 'task.create'],
+    ['/Users/x/.bun/bin/raindown task create --role admin', 'task.create'],
+    ['bunx raindown task reply t-1 --approve', 'task.reply'],
+    ['npx raindown kb proposals accept p-1', 'proposal.decide'],
+    ['bun /Users/x/raindown/packages/cli/src/main.ts task create --role admin', 'task.create'],
+    ['bun run packages/cli/src/main.ts hub token issue node:x', 'raindown.admin'],
+    ['bun x raindown hub token issue node:x', 'raindown.admin'],
+  ])('raindown CLI：%s → %s，tool:Bash 的 auto 不能放行', (command, action) => {
     const r = judge([], command)
     expect(r.ids).toContain(action)
     for (const rules of [...BASH_AUTO.map((x) => [x])]) {
       expect(judge(rules, command).level).not.toMatch(/^auto/)
     }
-    // 显式规则仍可放行（flow.admin 与 flow 工具动作一样需要具体 scope 加精确 action）。
+    // 显式规则仍可放行（raindown.admin 与 raindown 工具动作一样需要具体 scope 加精确 action）。
     const explicit = judge([rule('dev', action), rule('dev', 'tool:Bash')], command)
     expect(explicit.ids.filter((a) => a !== 'tool:Bash' && a !== action)).toEqual([])
     expect(explicit.level).toBe('auto')
   })
 
+  test('新旧 CLI 的受保护调用在包装、runner、路径和 shell 内等价识别', () => {
+    const invocations = [
+      (cli: string) => cli,
+      (cli: string) => `/Users/u/.bun/bin/${cli}`,
+      (cli: string) => `sudo -u root env CI=1 command /usr/local/bin/${cli}`,
+      (cli: string) => `bunx ${cli}`,
+      (cli: string) => `npx @${cli}/cli`,
+      (cli: string) => `pnpx ${cli}`,
+      (cli: string) => `bun x ${cli}`,
+      (cli: string) => `bun run ${cli}`,
+      (cli: string) => `npm exec ${cli}`,
+      (cli: string) => `pnpm dlx ${cli}`,
+      (cli: string) => `yarn ${cli}`,
+    ]
+    for (const cli of ['flow', 'raindown']) {
+      for (const invocation of invocations) {
+        for (const [suffix, action] of [
+          ['secrets get token', 'secrets'],
+          ['hub token issue node:x', 'raindown.admin'],
+        ] as const) {
+          const command = `${invocation(cli)} ${suffix}`
+          const result = judge([rule('dev', 'tool:Bash')], command)
+          expect(result.ids).toContain(action)
+          expect(result.level).not.toMatch(/^auto/)
+        }
+      }
+      expect(judge([], `sh -c '${cli} hub token issue node:x'`).ids).toContain('raindown.admin')
+      expect(judge([], `sh -c '${cli} secrets get token'`).ids).toContain('secrets')
+    }
+  })
+
+  test('旧自定义命令映射同样覆盖新旧 CLI，管理动作使用新名称', () => {
+    const mappings = [{ prefix: ['flow', 'custom'], action: 'flow.admin' }]
+    for (const command of ['flow custom', 'raindown custom', 'npx raindown custom']) {
+      expect(classifyAction({ tool: 'Bash', command }, mappings)).toEqual([
+        'tool:Bash',
+        'raindown.admin',
+      ])
+    }
+  })
+
+  test('旧 flow-home 的配置目录继续受保护', () => {
+    for (const command of [
+      'cd ~/flow-home && echo x > config/roles/dev.yaml',
+      'echo x > $HOME/flow-home/config/remote.yaml',
+      'rm ~/flow-home/*',
+    ]) {
+      expect(judge([rule('dev', 'tool:Bash')], command).ids).toContain('config.edit')
+    }
+    expect(
+      classifyAction({ tool: 'Write', paths: ['/Users/u/flow-home/config/roles/dev.yaml'] }),
+    ).toContain('config.edit')
+  })
+
   test('白名单之外的环境变量赋值：照常识别动作，整段按不透明处理', () => {
-    const r = judge([], 'cd /repo && FLOW_ACTOR=user flow task create --role admin')
+    const r = judge([], 'cd /repo && RAINDOWN_ACTOR=user raindown task create --role admin')
     expect(r.ids).toContain('task.create')
     expect(r.ids).toContain('shell.opaque')
   })
@@ -885,21 +984,21 @@ describe('Bash 调 flow CLI、直接访问中枢与 config.edit 词法变体（P
   })
 
   test.each([
-    'cd ~/flow-home && echo x > config/roles/dev.yaml',
-    "echo x > ~/flow-home/'config'/roles/dev.yaml",
-    'echo x > "/Users/u/flow-home"/config/remote.yaml',
-    'echo x > /Users/u//flow-home/./config/remote.yaml',
-    'echo x > $HOME/flow-home/config/remote.yaml',
-    'echo x > $' + '{HOME}/flow-home/config/remote.yaml',
-    'cp x /Users/u/Flow-Home/config/roles/dev.yaml',
+    'cd ~/raindown-home && echo x > config/roles/dev.yaml',
+    "echo x > ~/raindown-home/'config'/roles/dev.yaml",
+    'echo x > "/Users/u/raindown-home"/config/remote.yaml',
+    'echo x > /Users/u//raindown-home/./config/remote.yaml',
+    'echo x > $HOME/raindown-home/config/remote.yaml',
+    'echo x > $' + '{HOME}/raindown-home/config/remote.yaml',
+    'cp x /Users/u/Raindown-Home/config/roles/dev.yaml',
   ])('config.edit 的相对路径与词法变体：%s', (command) => {
     const r = judge([], command)
     expect(r.ids).toContain('config.edit')
     for (const x of BASH_AUTO) expect(judge([x], command).level).not.toMatch(/^auto/)
   })
 
-  test('非默认 flow-home 的 ~ 写法与 basename 路径段', () => {
-    const o = { flowHomes: ['/Users/u/work/fh-prod'], userHome: HOME }
+  test('非默认 raindown-home 的 ~ 写法与 basename 路径段', () => {
+    const o = { raindownHomes: ['/Users/u/work/fh-prod'], userHome: HOME }
     for (const command of [
       'echo x > ~/work/fh-prod/config/roles/dev.yaml',
       'cd ~/work/fh-prod && echo x > config/remote.yaml',
@@ -921,8 +1020,8 @@ describe('Bash 调 flow CLI、直接访问中枢与 config.edit 词法变体（P
       expect(r.ids).not.toContain('shell.opaque')
       expect(r.level).toBe('auto')
     }
-    // 但 glob 加 /config/ 或 flow-home 仍按不透明处理。
+    // 但 glob 加 /config/ 或 raindown-home 仍按不透明处理。
     expect(judge([], 'sed -i x /repo/config/*.yaml').ids).toContain('shell.opaque')
-    expect(judge([], 'rm ~/flow-home/*').ids).toContain('shell.opaque')
+    expect(judge([], 'rm ~/raindown-home/*').ids).toContain('shell.opaque')
   })
 })

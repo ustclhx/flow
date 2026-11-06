@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { type PolicyCheckData, type PolicyDecisionLevel, redactSecrets } from '@flow/core'
+import { type PolicyCheckData, type PolicyDecisionLevel, redactSecrets } from '@raindown/core'
 import type { NodeHubClient } from './client.ts'
 import { type NodeClock, systemClock } from './clock.ts'
 import type { NodeEnvReport } from './push-env.ts'

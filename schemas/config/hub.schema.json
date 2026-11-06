@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/config/hub.schema.json",
+  "$id": "https://raindown.local/schemas/config/hub.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -51,6 +51,6 @@
     }
   },
   "additionalProperties": false,
-  "title": "Flow hub config",
+  "title": "Raindown hub config",
   "description": "config/hub.yaml"
 }

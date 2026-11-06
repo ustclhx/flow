@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { BLOCKED_REASONS } from '../ledger/task.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { workspaceRef } from '../schema/common.ts'
@@ -113,7 +113,7 @@ export const inboxConfigSchema = z
     digest: digestSchema.optional(),
     snippet_max_chars: snippetMaxSchema.optional(),
   })
-  .meta({ title: 'Flow inbox config', description: 'config/inbox.yaml：收件箱配置' })
+  .meta({ title: 'Raindown inbox config', description: 'config/inbox.yaml：收件箱配置' })
 
 export interface InboxLevelRule {
   /** `levels` 数组中的原始索引，从 0 开始。 */
@@ -254,7 +254,7 @@ function parseCadence(obj: Record<string, unknown>, errors: InboxConfig['errors'
 export async function loadInboxConfig(home: string): Promise<Result<InboxConfig>> {
   let text: string
   try {
-    text = await readFile(flowPaths(home).inboxConfig, 'utf8')
+    text = await readFile(raindownPaths(home).inboxConfig, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ok({ levels: [], errors: [] })
     return fail('failure', 'read_failed', `无法读取 ${FILE}：${String(err)}`)

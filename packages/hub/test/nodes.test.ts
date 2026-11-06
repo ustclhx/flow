@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { TaskContractInput } from '@flow/core'
+import type { TaskContractInput } from '@raindown/core'
 import {
   createNodeProtocol,
   createTaskService,

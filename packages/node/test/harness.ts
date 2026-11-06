@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { LedgerEvent, TaskContractInput, TaskView } from '@flow/core'
+import type { LedgerEvent, TaskContractInput, TaskView } from '@raindown/core'
 import {
   createHubApp,
   createNodeProtocol,
@@ -12,8 +12,8 @@ import {
   type NodeProtocol,
   openLedger,
   type TaskService,
-} from '@flow/hub'
-// 策略路由未从 @flow/hub 的入口导出；测试直接引用源文件（不改动中枢包）。
+} from '@raindown/hub'
+// 策略路由未从 @raindown/hub 的入口导出；测试直接引用源文件（不改动中枢包）。
 import { createPolicyRoutes } from '../../hub/src/policy/routes.ts'
 import { type RunningNode, type StartNodeOptions, startNode } from '../src/index.ts'
 
@@ -92,7 +92,7 @@ export async function bench(
     readRoles?: boolean
     /** 写入 `config/policies.yaml` 的规则；提供时挂载真实的 `POST /v1/policy/check`。 */
     policies?: unknown[]
-    /** 原样写入 `config/policies.yaml` 的文本（例如 flow init 的模板）；与 policies 二选一。 */
+    /** 原样写入 `config/policies.yaml` 的文本（例如 raindown init 的模板）；与 policies 二选一。 */
     policiesYaml?: string
     /** 绑定 token 的存储（测试节点身份的鉴权）。 */
     tokens?: HubTokenStore
@@ -103,7 +103,7 @@ export async function bench(
   const { readRoles, policies: rules, policiesYaml, tokens, ...startOptions } = nodeOptions
   const policies = rules ?? (policiesYaml === undefined ? undefined : [])
   const clock = new ManualClock()
-  const home = join(mkdtempSync(join(tmpdir(), 'flow-node-bench-')), 'flow-home')
+  const home = join(mkdtempSync(join(tmpdir(), 'raindown-node-bench-')), 'raindown-home')
   if (policies) {
     mkdirSync(join(home, 'config'), { recursive: true })
     writeFileSync(join(home, 'config', 'policies.yaml'), policiesYaml ?? JSON.stringify(policies))
@@ -174,7 +174,7 @@ export async function bench(
         method,
         headers: {
           Authorization: `Bearer ${TOKEN}`,
-          'X-Flow-Actor': actor,
+          'X-Raindown-Actor': actor,
           ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),

@@ -60,7 +60,7 @@ export interface PolicyContext {
 }
 export interface ActionDecision {
   action: string
-  /** 已识别出具体动作时，工具动作仅留作来源明细，不参与判定。 */
+  /** 已识别出具体动作时，工具动作仅留作来源；Raindown MCP 的显式限制仍参与判定。 */
   level: PolicyDecisionLevel | 'skipped'
   /** 最高具体程度的全部规则；按保守档位、原始序号排序，首条决定档位。 */
   matched_rules: IndexedPolicyRule[]
@@ -181,15 +181,24 @@ export function decide(
   // 请求涉及受保护的工具时，每个参与判定的动作都必须由精确 action 的规则放行。
   const viaGuardedTool = uniqueActions.some(isGuardedTool)
   const actions = uniqueActions.map((action): ActionDecision => {
-    if (hasSpecificAction && action.startsWith('tool:')) {
-      return { action, level: 'skipped', matched_rules: [], guarded: false }
-    }
-    const candidates = rules.filter(
+    let candidates = rules.filter(
       ({ rule }) =>
         scopeRank(rule.scope, request) >= 0 &&
         globMatch(rule.action, action) &&
         conditionsMatch(rule, request, action, context),
     )
+    if (hasSpecificAction && action.startsWith('tool:')) {
+      // 改名兼容中的工具限制不能因具体动作映射而失效；工具规则仍不能扩大权限。
+      candidates = action.startsWith('tool:mcp__raindown__')
+        ? candidates.filter(
+            ({ rule }) =>
+              rule.action.startsWith('tool:mcp__raindown__') && !AUTOMATIC_LEVELS.has(rule.level),
+          )
+        : []
+      if (!candidates.length) {
+        return { action, level: 'skipped', matched_rules: [], guarded: false }
+      }
+    }
     const bestScope = Math.max(-1, ...candidates.map(({ rule }) => scopeRank(rule.scope, request)))
     const scoped = candidates.filter(({ rule }) => scopeRank(rule.scope, request) === bestScope)
     const exact = scoped.filter(({ rule }) => !rule.action.includes('*'))

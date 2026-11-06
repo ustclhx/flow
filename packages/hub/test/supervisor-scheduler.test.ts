@@ -10,7 +10,7 @@ import {
   type Role,
   type SupervisorConfig,
   type TaskOrigin,
-} from '@flow/core'
+} from '@raindown/core'
 import { Hono } from 'hono'
 import {
   actOnInbox,
@@ -87,7 +87,7 @@ async function setup(o: SetupOptions = {}) {
     cleanups.push(l.cleanup)
     store = l.store
   }
-  const root = mkdtempSync(join(tmpdir(), 'flow-sup-sched-'))
+  const root = mkdtempSync(join(tmpdir(), 'raindown-sup-sched-'))
   const repo = join(root, 'repo')
   mkdirSync(repo, { recursive: true })
   cleanups.push(() => rmSync(root, { recursive: true, force: true }))
@@ -697,7 +697,7 @@ describe('用户接口（3.4）', () => {
       headers: { 'Content-Type': 'application/json' },
     })
 
-  test('flow ask：写入 actor 为 user、via cli 的指令并返回唤醒任务；第二条返回已排队', async () => {
+  test('raindown ask：写入 actor 为 user、via cli 的指令并返回唤醒任务；第二条返回已排队', async () => {
     const env = await setup()
     const a = app(env.scheduler, 'user')
     const r1 = await post(a, { workspace: WS, text: '修一下 README' })
@@ -1023,7 +1023,7 @@ describe('经 hubAuth 的身份检查', () => {
     const wakeTokens = createWakeTokenAuthority({ ledger: () => env.store, now: env.clock.now })
     const wakeSecret = wakeTokens.issue({ lease_id: `l-${wakeId}-1`, task_id: wakeId }) ?? ''
     expect(wakeSecret).not.toBe('')
-    const root = mkdtempSync(join(tmpdir(), 'flow-sup-auth-'))
+    const root = mkdtempSync(join(tmpdir(), 'raindown-sup-auth-'))
     mkdirSync(join(root, 'state'), { recursive: true })
     cleanups.push(() => rmSync(root, { recursive: true, force: true }))
     const tokens = must(await openTokenStore(root))
@@ -1347,7 +1347,7 @@ describe('第四轮审查', () => {
     const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
     const l = await tempLedger({ now: clock.now })
     cleanups.push(l.cleanup)
-    const home = mkdtempSync(join(tmpdir(), 'flow-sup-wsstate-'))
+    const home = mkdtempSync(join(tmpdir(), 'raindown-sup-wsstate-'))
     cleanups.push(() => rmSync(home, { recursive: true, force: true }))
     const repo = join(home, 'repo')
     mkdirSync(repo, { recursive: true })
@@ -1467,7 +1467,7 @@ describe('巡检唤醒与今日花费（D13；tasks 6.2）', () => {
     expect(inputs?.events[0]?.summary).toContain('定时巡检（规则 patrol')
   })
 
-  test('flow supervisor status 显示今日结束的唤醒花费：只计唤醒任务，未上报的单独计数', async () => {
+  test('raindown supervisor status 显示今日结束的唤醒花费：只计唤醒任务，未上报的单独计数', async () => {
     const env = await setup()
     instruction(env.store)
     await env.settle()

@@ -31,7 +31,7 @@ import {
   type TaskContract,
   type TaskView,
   taskContract,
-} from '@flow/core'
+} from '@raindown/core'
 import type { EventInput } from '../ledger/store.ts'
 import {
   checkRepoInWorkspace,
@@ -141,7 +141,7 @@ export function repoOriginFromGit(opts: { homedir?: () => string } = {}): RepoOr
 /** 一次资格核对最多读取的同 PR 相关任务数；达到上限时无法确认，判不合格。 */
 export const PR_RELATED_LIMIT = 1000
 
-/** 全部角色（`config/roles/`），供按有效类别查找 merger 角色；缺省按 flow-home 读取。 */
+/** 全部角色（`config/roles/`），供按有效类别查找 merger 角色；缺省按 raindown-home 读取。 */
 export function mergeRolesFromHome(home: string): () => Promise<Result<RoleForKind[]>> {
   return async () => {
     const loaded = await loadRoles(home)
@@ -402,7 +402,7 @@ async function mergeRole(deps: SupervisorToolsDeps): Promise<Result<RoleForKind>
   if (merges.length !== 1) {
     return notEligible([
       merges.length === 0
-        ? '没有有效类别为 merge 的角色（运行 flow init 补齐 merger 模板）'
+        ? '没有有效类别为 merge 的角色（运行 raindown init 补齐 merger 模板）'
         : `有多个有效类别为 merge 的角色（${merges.map((r) => r.name).join('、')}），无法确定`,
     ])
   }

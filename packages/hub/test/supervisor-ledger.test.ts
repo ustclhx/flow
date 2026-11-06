@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDatabase, policyDecisionSchema, taskView } from '@flow/core'
+import { openDatabase, policyDecisionSchema, taskView } from '@raindown/core'
 import {
   completionDrafts,
   createNodeProtocol,
@@ -615,9 +615,9 @@ describe('scrub', () => {
 
 describe('旧账本迁移：origin、branch 列', () => {
   test('有 resume_json 但缺 origin、branch 的旧库打开后补列，可写入 origin 与分支', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'flow-ledger-migrate-sup-'))
+    const dir = mkdtempSync(join(tmpdir(), 'raindown-ledger-migrate-sup-'))
     try {
-      const path = join(dir, 'flow.db')
+      const path = join(dir, 'raindown.db')
       const db = await openDatabase(path)
       db.exec(
         LEDGER_DDL.replace(

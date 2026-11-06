@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fail, ok, type Result } from '@flow/core'
+import { fail, ok, type Result } from '@raindown/core'
 import {
   type GhCli,
   type GhPr,
@@ -16,7 +16,7 @@ import {
 } from '../src/codex-orca/orca.ts'
 
 /**
- * codex-orca 测试的公共部分：真实终端片段 fixture 的读取、内存中的假 Orca / gh、临时 flow-home。
+ * codex-orca 测试的公共部分：真实终端片段 fixture 的读取、内存中的假 Orca / gh、临时 raindown-home。
  * 测试绝不调用真实的 orca、codex 或 gh。
  */
 
@@ -164,9 +164,9 @@ export interface OrcaHome {
   worktree: string
 }
 
-/** 临时 flow-home：一个 product workspace（仓库 repo）、dev 角色、一个 brain 条目。 */
+/** 临时 raindown-home：一个 product workspace（仓库 repo）、dev 角色、一个 brain 条目。 */
 export function orcaHome(): OrcaHome {
-  const root = mkdtempSync(join(tmpdir(), 'flow-codex-orca-'))
+  const root = mkdtempSync(join(tmpdir(), 'raindown-codex-orca-'))
   const home = join(root, 'home')
   const repo = join(root, 'repos', 'product-res')
   const worktree = join(root, 'orca', 'workspaces', 'product-res', 't-orca-1')

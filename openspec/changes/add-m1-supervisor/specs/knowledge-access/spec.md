@@ -10,7 +10,7 @@
 - **THEN** 返回 403 `role_not_allowed`
 
 ### Requirement: MCP 会话按 workspace 绑定
-`flow mcp` SHALL 接受 `--workspace <ws>` 与 `--task <id>`。绑定后写类操作只能作用于该 workspace（否则 `workspace_mismatch`），建任务时自动以绑定的任务为 `parent`。经中枢执行的写操作 MUST 由中枢独立校验；本地执行的 `kb_journal` 只受 MCP 绑定约束。
+`raindown mcp` SHALL 接受 `--workspace <ws>` 与 `--task <id>`。绑定后写类操作只能作用于该 workspace（否则 `workspace_mismatch`），建任务时自动以绑定的任务为 `parent`。经中枢执行的写操作 MUST 由中枢独立校验；本地执行的 `kb_journal` 只受 MCP 绑定约束。
 
 #### Scenario: 自动填 parent
 - **WHEN** 绑定 `--task t-1` 的会话调用 `task_create` 未写 `parent`

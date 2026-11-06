@@ -3,7 +3,7 @@ import { closeSync, existsSync, openSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkDaemonPlists, type DaemonOptions, ok } from '@flow/core'
+import { checkDaemonPlists, type DaemonOptions, ok } from '@raindown/core'
 import { createDaemonCommands } from '../src/commands/daemon.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
@@ -17,10 +17,10 @@ const printed = await readFile(
   'utf8',
 )
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'flow-cli-daemon-'))
+  root = await mkdtemp(join(tmpdir(), 'raindown-cli-daemon-'))
   calls = []
   options = {
-    home: join(root, 'flow-home'),
+    home: join(root, 'raindown-home'),
     launchAgentsDir: join(root, 'LaunchAgents'),
     uid: 123,
     launchctl: async (args) => {
@@ -47,8 +47,8 @@ test('注册三个命令；安装解析当前 bun 和 CLI 入口，并以表格�
   for (const field of [
     '项目',
     '状态',
-    'dev.flow.hub',
-    'dev.flow.node',
+    'dev.raindown.hub',
+    'dev.raindown.node',
     'PID 749',
     '中枢版本',
     '0.1.0',
@@ -67,6 +67,10 @@ test('注册三个命令；安装解析当前 bun 和 CLI 入口，并以表格�
     'bootstrap',
     'print',
     'print',
+    'print',
+    'print',
+    'bootout',
+    'bootout',
     'bootout',
     'bootout',
   ])
@@ -117,7 +121,11 @@ for (const service of ['hub', 'node']) {
     const child = Bun.spawn(
       [process.execPath, join(import.meta.dir, '../src/main.ts'), service, 'start'],
       {
-        env: { ...process.env, FLOW_HOME: options.home, XPC_SERVICE_NAME: `dev.flow.${service}` },
+        env: {
+          ...process.env,
+          RAINDOWN_HOME: options.home,
+          XPC_SERVICE_NAME: `dev.raindown.${service}`,
+        },
         stdout: fd,
         stderr: fd,
       },

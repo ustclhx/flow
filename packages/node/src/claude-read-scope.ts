@@ -1,16 +1,16 @@
 import { realpath } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { FLOW_MCP_TOOL_PREFIX } from '@flow/core'
+import { RAINDOWN_MCP_TOOL_PREFIX } from '@raindown/core'
 import { scopedPath } from './claude-path-scope.ts'
 
 /**
  * claude-sdk 读边界 `read_scope: cwd`（add-m1-supervisor D6、executor-claude-sdk spec）。
  *
  * 设置后由全工具 PreToolUse 钩子（以及 canUseTool）调用：只允许读合同 cwd 与任务私有目录内的路径。
- * 这一层只会拒绝或改写输入，从不放行：通过检查的调用仍走 SDK 权限、Flow 策略与审批。
+ * 这一层只会拒绝或改写输入，从不放行：通过检查的调用仍走 SDK 权限、Raindown 策略与审批。
  *
- * - Flow MCP 工具不受影响：工具名为 `mcp__flow__*`，且 MCP 来源为本执行器注入的 `flow`（见 isFlowMcp）；
- * - 只认白名单中的内置工具，并按字段白名单校验输入；其他工具（含非 Flow 的 MCP 工具、WebFetch、WebSearch、
+ * - Raindown MCP 工具不受影响：工具名为 `mcp__raindown__*`，且 MCP 来源为本执行器注入的 `raindown`（见 isRaindownMcp）；
+ * - 只认白名单中的内置工具，并按字段白名单校验输入；其他工具（含非 Raindown 的 MCP 工具、WebFetch、WebSearch、
  *   Bash、Agent 等）一律拒绝；
  * - 路径字段按共用路径判定（`~`、首尾空白、`..`、隐藏段、越界与符号链接越界都拒绝），读取类目标必须已存在；
  *   通过后改写为校验过的真实绝对路径，保证 CLI 使用的就是检查过的路径；
@@ -120,20 +120,20 @@ const TOOL_FIELDS: Record<string, Record<string, FieldKind>> = {
  */
 const OPAQUE_OUTPUT_TOOLS = new Set(['StructuredOutput'])
 
-/** 注入的 Flow MCP 是 stdio 进程服务器，SDK 文档中其来源为 `dynamic`；`sdk` 只能由宿主注册。 */
-const FLOW_MCP_SOURCES = new Set(['dynamic', 'sdk'])
+/** 注入的 Raindown MCP 是 stdio 进程服务器，SDK 文档中其来源为 `dynamic`；`sdk` 只能由宿主注册。 */
+const RAINDOWN_MCP_SOURCES = new Set(['dynamic', 'sdk'])
 
 function deny(message: string): ReadScopeDecision {
   return { behavior: 'deny', message: `read_scope: cwd 拒绝：${message}` }
 }
 
-/** 只有工具名前缀、来源名与来源类别都对得上时才视为 Flow MCP；缺少来源信息时不豁免。 */
-export function isFlowMcp(toolName: string, mcpServer: ReadScopeCall['mcpServer']): boolean {
+/** 只有工具名前缀、来源名与来源类别都对得上时才视为 Raindown MCP；缺少来源信息时不豁免。 */
+export function isRaindownMcp(toolName: string, mcpServer: ReadScopeCall['mcpServer']): boolean {
   return (
-    toolName.startsWith(FLOW_MCP_TOOL_PREFIX) &&
+    toolName.startsWith(RAINDOWN_MCP_TOOL_PREFIX) &&
     mcpServer !== undefined &&
-    mcpServer.name === 'flow' &&
-    FLOW_MCP_SOURCES.has(mcpServer.source)
+    mcpServer.name === 'raindown' &&
+    RAINDOWN_MCP_SOURCES.has(mcpServer.source)
   )
 }
 
@@ -225,7 +225,7 @@ async function sameDir(a: string, b: string): Promise<boolean> {
 }
 
 /**
- * 读边界判定：返回拒绝，或带改写后输入的通过（不代表放行）；Flow MCP 返回 undefined（不处理）。
+ * 读边界判定：返回拒绝，或带改写后输入的通过（不代表放行）；Raindown MCP 返回 undefined（不处理）。
  *
  * `sessionCwd` 与合同 cwd 不同时，相对路径与缺省搜索目录无法确认，全部拒绝。
  */
@@ -235,7 +235,7 @@ export async function checkReadScope(
   scope: ReadScopeContext,
   call: ReadScopeCall = {},
 ): Promise<ReadScopeDecision | undefined> {
-  if (isFlowMcp(toolName, call.mcpServer)) return undefined
+  if (isRaindownMcp(toolName, call.mcpServer)) return undefined
   if (input === null || typeof input !== 'object' || Array.isArray(input))
     return deny('工具输入不是对象')
   const record = input as Record<string, unknown>

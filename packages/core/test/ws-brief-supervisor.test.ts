@@ -12,8 +12,8 @@ import { writeEntry as fixtureEntry, initTempHome, isolateHub, writeText } from 
 const homes: string[] = []
 const restores: (() => void)[] = []
 async function home() {
-  const h = await initTempHome('flow-wsbrief-')
-  // 不连真实中枢：端口不可达、清除 FLOW_HUB_TOKEN；需要中枢数据的用例注入 fetch。
+  const h = await initTempHome('raindown-wsbrief-')
+  // 不连真实中枢：端口不可达、清除 RAINDOWN_HUB_TOKEN；需要中枢数据的用例注入 fetch。
   restores.push(isolateHub(h))
   homes.push(h)
   return h

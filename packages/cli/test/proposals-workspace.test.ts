@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { renderEntry } from '@flow/core'
+import { renderEntry } from '@raindown/core'
 import { initTempHome, writeText } from '../../core/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
@@ -12,13 +12,13 @@ describe('提案与 workspace 自动生成的 CLI', () => {
   let home: string
   let previous: string | undefined
   beforeEach(async () => {
-    home = await initTempHome('flow-proposals-cli-')
-    previous = process.env.FLOW_HOME
-    process.env.FLOW_HOME = home
+    home = await initTempHome('raindown-proposals-cli-')
+    previous = process.env.RAINDOWN_HOME
+    process.env.RAINDOWN_HOME = home
   })
   afterEach(() => {
-    if (previous === undefined) delete process.env.FLOW_HOME
-    else process.env.FLOW_HOME = previous
+    if (previous === undefined) delete process.env.RAINDOWN_HOME
+    else process.env.RAINDOWN_HOME = previous
     rmSync(join(home, '..'), { recursive: true, force: true })
   })
 

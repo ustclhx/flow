@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { defineOperation, initFlowHome, ok } from '@flow/core'
+import { defineOperation, initRaindownHome, ok } from '@raindown/core'
 import { z } from 'zod'
 import { commands } from '../src/commands/index.ts'
 import { commandFromOperation } from '../src/from-operation.ts'
@@ -49,25 +49,25 @@ describe('kb journal 与 capture', () => {
   let home: string
   let prev: string | undefined
   beforeEach(async () => {
-    home = join(mkdtempSync(join(tmpdir(), 'flow-ops-cli-')), 'home')
-    const r = await initFlowHome(home)
+    home = join(mkdtempSync(join(tmpdir(), 'raindown-ops-cli-')), 'home')
+    const r = await initRaindownHome(home)
     if (!r.ok) throw new Error(r.error.message)
-    prev = process.env.FLOW_HOME
-    process.env.FLOW_HOME = home
+    prev = process.env.RAINDOWN_HOME
+    process.env.RAINDOWN_HOME = home
   })
   afterEach(() => {
-    if (prev === undefined) delete process.env.FLOW_HOME
-    else process.env.FLOW_HOME = prev
+    if (prev === undefined) delete process.env.RAINDOWN_HOME
+    else process.env.RAINDOWN_HOME = prev
   })
 
-  test('flow kb journal 写入当天的 journal 文件', async () => {
+  test('raindown kb journal 写入当天的 journal 文件', async () => {
     const out = await runCli(['kb', 'journal', '部署完成', '--json', '--actor', 'codex'], commands)
     expect(out.exitCode).toBe(0)
     const { file } = JSON.parse(out.stdout).data
     expect(readFileSync(join(home, file), 'utf8')).toContain('部署完成')
   })
 
-  test('flow capture 不加引号的多个词连成一句，只写 raw/inbox/，brain 不变', async () => {
+  test('raindown capture 不加引号的多个词连成一句，只写 raw/inbox/，brain 不变', async () => {
     const brainBefore = readdirSync(join(home, 'brain')).sort()
     const out = await runCli(['capture', '考虑给东方站', '加日语', '--json'], commands)
     expect(out.exitCode).toBe(0)

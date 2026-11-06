@@ -18,7 +18,7 @@ import {
   type TaskResult,
   type TaskView,
   taskKind,
-} from '@flow/core'
+} from '@raindown/core'
 import type { NodeHubClient } from './client.ts'
 import { nodeHubClientFromHome } from './client.ts'
 import { type NodeClock, sleep, systemClock } from './clock.ts'
@@ -101,7 +101,7 @@ export interface PrMergeOptions {
   /** 注入的 gh；缺省调用本机 gh。测试绝不调用真实 gh。 */
   gh?: GitHubCli
   git?: GitOptions
-  /** 读取任务的中枢客户端；缺省按 flow-home 构造。 */
+  /** 读取任务的中枢客户端；缺省按 raindown-home 构造。 */
   hub?: HubReader
   /** 读取 workspace 的 supervisor 配置；缺省读 `config/workspaces/`，没有该 workspace 时返回 undefined。 */
   resolveSupervisor?: (workspace: string) => Promise<Result<SupervisorConfig | undefined>>

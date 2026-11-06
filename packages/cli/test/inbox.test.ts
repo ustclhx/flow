@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { flowPaths, HubClient } from '@flow/core'
-import { openLedger, type RunningHub, runHub } from '@flow/hub'
+import { HubClient, raindownPaths } from '@raindown/core'
+import { openLedger, type RunningHub, runHub } from '@raindown/hub'
 import { must } from '../../hub/test/ledger-helpers.ts'
 import { callJson, connect, initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
@@ -10,20 +10,20 @@ import { runCli } from '../src/run.ts'
 
 let home: string | undefined
 let hub: RunningHub | undefined
-const savedHome = process.env.FLOW_HOME
+const savedHome = process.env.RAINDOWN_HOME
 afterEach(async () => {
   await hub?.stop()
   hub = undefined
   if (home) rmSync(join(home, '..'), { recursive: true, force: true })
   home = undefined
-  if (savedHome === undefined) delete process.env.FLOW_HOME
-  else process.env.FLOW_HOME = savedHome
+  if (savedHome === undefined) delete process.env.RAINDOWN_HOME
+  else process.env.RAINDOWN_HOME = savedHome
 })
 
-test('flow inbox 默认 list、CJK 表格、短 id act、CLI 固定渠道；MCP 共用中枢身份规则', async () => {
-  home = await initTempHome('flow-inbox-cli-')
-  process.env.FLOW_HOME = home
-  const ledger = await openLedger(flowPaths(home).ledgerDb)
+test('raindown inbox 默认 list、CJK 表格、短 id act、CLI 固定渠道；MCP 共用中枢身份规则', async () => {
+  home = await initTempHome('raindown-inbox-cli-')
+  process.env.RAINDOWN_HOME = home
+  const ledger = await openLedger(raindownPaths(home).ledgerDb)
   try {
     for (const [id, level, title] of [
       ['digest', 'digest', '每日摘要'],
@@ -60,7 +60,7 @@ test('flow inbox 默认 list、CJK 表格、短 id act、CLI 固定渠道；MCP 
       inbox: { watch: false },
     }),
   )
-  writeFileSync(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
+  writeFileSync(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
   const client = new HubClient({ home, actor: 'user' })
   const items = must(await client.listInbox()).items
   const table = await runCli(['inbox'], commands)

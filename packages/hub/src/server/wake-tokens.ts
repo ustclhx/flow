@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { SUPERVISOR_ACTOR, type WakeOrigin } from '@flow/core'
+import { SUPERVISOR_ACTOR, type WakeOrigin } from '@raindown/core'
 import type { LedgerStore } from '../ledger/store.ts'
 
 /**
@@ -11,7 +11,7 @@ import type { LedgerStore } from '../ledger/store.ts'
  * - 每次鉴权都重新核对账本：租约仍是 active 且未过期、属于该唤醒任务，任务未结束——租约结束或任务结束即失效；
  * - 明文不入账本、不落盘，内存中只按 sha256 摘要保存；**中枢重启后全部失效**（失效方向安全：之后该唤醒的
  *   MCP 调用得到 401，唤醒按普通任务结束或失败）；
- * - 中枢据此认定调用方是哪个唤醒及其 origin，不信任 `--task`、`FLOW_TASK_ID`、`X-Flow-Actor`。
+ * - 中枢据此认定调用方是哪个唤醒及其 origin，不信任 `--task`、`RAINDOWN_TASK_ID`、`X-Raindown-Actor`。
  */
 
 export const WAKE_TOKEN_PREFIX = 'fwk_'

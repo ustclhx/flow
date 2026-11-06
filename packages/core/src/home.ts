@@ -1,23 +1,29 @@
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { readRaindownEnv } from './env.ts'
 
 /**
- * 用户数据目录（flow-home）的位置与布局。所有命令都必须从这里解析路径，
- * 不得在平台代码仓库内写入用户数据（flow-home spec）。
+ * 用户数据目录（raindown-home）的位置与布局。所有命令都必须从这里解析路径，
+ * 不得在平台代码仓库内写入用户数据（raindown-home spec）。
  */
 
 export type Env = Record<string, string | undefined>
 
-/** `FLOW_HOME` 优先（空串视为未设置），否则使用 `~/flow-home`。返回绝对路径。 */
-export function resolveFlowHome(env: Env = process.env, home: string = homedir()): string {
-  const raw = env.FLOW_HOME?.trim()
-  if (!raw) return join(home, 'flow-home')
+/** 优先新旧环境变量；默认用新目录，只有旧默认目录存在时兼容它。返回绝对路径。 */
+export function resolveRaindownHome(env: Env = process.env, home: string = homedir()): string {
+  const raw = readRaindownEnv('RAINDOWN_HOME', env)
+  if (!raw)
+    return join(
+      home,
+      raindownHomeSource(env, home) === 'legacy-default' ? 'flow-home' : 'raindown-home',
+    )
   if (raw === '~') return home
   if (raw.startsWith('~/')) return join(home, raw.slice(2))
   return resolve(raw)
 }
 
-export interface FlowPaths {
+export interface RaindownPaths {
   home: string
   config: string
   brain: string
@@ -47,7 +53,7 @@ export interface FlowPaths {
   channelsConfig: string
   /** `state/telegram.json`：Telegram 长轮询的处理进度（offset）。 */
   telegramState: string
-  /** 任务账本 `state/flow.db`，只由中枢打开（design D1）。 */
+  /** 任务账本 `state/raindown.db`，只由中枢打开（design D1）。 */
   ledgerDb: string
   /** 中枢 token（0600）。 */
   hubToken: string
@@ -67,7 +73,7 @@ export interface FlowPaths {
 export const GIT_REPOS = ['config', 'brain', 'raw'] as const
 export type RepoName = (typeof GIT_REPOS)[number]
 
-export function flowPaths(home: string): FlowPaths {
+export function raindownPaths(home: string): RaindownPaths {
   const config = join(home, 'config')
   const brain = join(home, 'brain')
   const raw = join(home, 'raw')
@@ -92,7 +98,7 @@ export function flowPaths(home: string): FlowPaths {
     inboxConfig: join(config, 'inbox.yaml'),
     channelsConfig: join(config, 'channels.yaml'),
     telegramState: join(state, 'telegram.json'),
-    ledgerDb: join(state, 'flow.db'),
+    ledgerDb: join(state, 'raindown.db'),
     hubToken: join(state, 'hub.token'),
     hubLock: join(state, 'hub.lock'),
     hubPid: join(state, 'hub.pid'),
@@ -102,6 +108,16 @@ export function flowPaths(home: string): FlowPaths {
   }
 }
 
-/** flow-home 位置的来源：`FLOW_HOME` 环境变量或默认值。 */
-export const flowHomeSource = (env: Env = process.env): 'FLOW_HOME' | 'default' =>
-  env.FLOW_HOME?.trim() ? 'FLOW_HOME' : 'default'
+/** 数据目录来源；旧目录只被继续使用，不做自动移动或复制。 */
+export type RaindownHomeSource = 'RAINDOWN_HOME' | 'FLOW_HOME' | 'default' | 'legacy-default'
+
+export function raindownHomeSource(
+  env: Env = process.env,
+  home: string = homedir(),
+): RaindownHomeSource {
+  if (env.RAINDOWN_HOME?.trim()) return 'RAINDOWN_HOME'
+  if (env.FLOW_HOME?.trim()) return 'FLOW_HOME'
+  return !existsSync(join(home, 'raindown-home')) && existsSync(join(home, 'flow-home'))
+    ? 'legacy-default'
+    : 'default'
+}

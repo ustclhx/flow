@@ -7,7 +7,7 @@ import {
   type InboxConfig,
   type LedgerEvent,
   parseInboxConfig,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   createInboxReactor,
   type EventInput,

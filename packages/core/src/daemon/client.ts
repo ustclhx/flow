@@ -1,7 +1,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { flowPaths } from '../home.ts'
+import { readRaindownEnv } from '../env.ts'
+import { raindownPaths } from '../home.ts'
 import type { InboxActRequest, inboxListQuery } from '../inbox/schema.ts'
 import {
   type AskUserRequest,
@@ -33,11 +34,11 @@ import { loadHubConfig, resolveHubUrl } from './config.ts'
 
 export interface HubClientOptions {
   home: string
-  /** 写入 `X-Flow-Actor`。user token 可以借此降级；绑定 token 必须与绑定身份一致。 */
+  /** 写入 `X-Raindown-Actor`。user token 可以借此降级；绑定 token 必须与绑定身份一致。 */
   actor: string
   /**
-   * 显式的中枢 token。缺省时依次取环境变量 `FLOW_HUB_TOKEN_FILE` 指向的文件（supervisor 唤醒的
-   * MCP 进程，见 add-m1-supervisor D6）、`FLOW_HUB_TOKEN`（例如签发给某个 AI 的绑定 token），
+   * 显式的中枢 token。缺省时依次取环境变量 `RAINDOWN_HUB_TOKEN_FILE` 指向的文件（supervisor 唤醒的
+   * MCP 进程，见 add-m1-supervisor D6）、`RAINDOWN_HUB_TOKEN`（例如签发给某个 AI 的绑定 token），
    * 最后取 `state/hub.token`（user token）。
    */
   token?: string
@@ -58,15 +59,15 @@ export type HubStatus = HealthData & {
 type JsonEndpoint = Exclude<EndpointName, 'events'>
 type ResponseData<N extends JsonEndpoint> = z.infer<(typeof ENDPOINTS)[N]['response']>
 /** 进程以绑定 token 访问中枢时设置的环境变量（design D9）。 */
-export const HUB_TOKEN_ENV = 'FLOW_HUB_TOKEN'
+export const HUB_TOKEN_ENV = 'RAINDOWN_HUB_TOKEN'
 /**
- * 进程从文件读取中枢 token 时设置的环境变量（add-m1-supervisor D6；优先于 `FLOW_HUB_TOKEN`）：
+ * 进程从文件读取中枢 token 时设置的环境变量（add-m1-supervisor D6；优先于 `RAINDOWN_HUB_TOKEN`）：
  * 节点把唤醒绑定 token 写进 `state/wake/<task>.token`，只把路径交给 MCP 进程，token 本身不进 argv 与 env。
  */
-export const HUB_TOKEN_FILE_ENV = 'FLOW_HUB_TOKEN_FILE'
+export const HUB_TOKEN_FILE_ENV = 'RAINDOWN_HUB_TOKEN_FILE'
 
 const unavailable = () =>
-  fail('retryable', HUB_UNAVAILABLE, '无法连接中枢，请运行 flow daemon status 检查')
+  fail('retryable', HUB_UNAVAILABLE, '无法连接中枢，请运行 raindown daemon status 检查')
 const invalidResponse = () => fail('failure', 'invalid_hub_response', '中枢响应不符合协议')
 const isMissing = (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT'
 
@@ -85,7 +86,7 @@ export class HubClient {
     let token: string | undefined
     if (endpoint.auth) {
       token = this.options.token?.trim() || undefined
-      const tokenFile = process.env[HUB_TOKEN_FILE_ENV]?.trim()
+      const tokenFile = readRaindownEnv(HUB_TOKEN_FILE_ENV)
       if (token === undefined && tokenFile) {
         // 指定了 token 文件就只用它：读不到时失败，不回退到 user token。
         try {
@@ -97,10 +98,10 @@ export class HubClient {
         }
         if (!token) return fail('failure', 'token_file_missing', '中枢 token 文件为空')
       }
-      token ??= process.env[HUB_TOKEN_ENV]?.trim() || undefined
+      token ??= readRaindownEnv(HUB_TOKEN_ENV)
       if (token === undefined) {
         try {
-          token = (await readFile(flowPaths(this.options.home).hubToken, 'utf8')).trim()
+          token = (await readFile(raindownPaths(this.options.home).hubToken, 'utf8')).trim()
         } catch (err) {
           if (isMissing(err)) return unavailable()
           return fail('failure', 'read_failed', '无法读取中枢 token 文件')
@@ -224,11 +225,11 @@ export class HubClient {
   telegramUnlink() {
     return this.request('telegram-unlink', {})
   }
-  /** `flow ask` / `flow supervisor wake`（仅 user）。 */
+  /** `raindown ask` / `raindown supervisor wake`（仅 user）。 */
   supervisorWake(input: SupervisorWakeRequest) {
     return this.request('supervisor-wake', input)
   }
-  /** `flow supervisor status`（仅 user）。 */
+  /** `raindown supervisor status`（仅 user）。 */
   supervisorStatus(input: { workspace?: string } = {}) {
     return this.request('supervisor-status', input)
   }
@@ -239,7 +240,7 @@ export class HubClient {
     if (status.ok || status.error.code !== 'not_found') return status
     const health = await this.health()
     if (!health.ok) return health
-    const paths = flowPaths(this.options.home)
+    const paths = raindownPaths(this.options.home)
     try {
       let pid: number | null = null
       try {

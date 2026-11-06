@@ -32,7 +32,7 @@
 底层状态已经不再需要用户时，条目 SHALL 自动关闭并注明原因：任务回到 `running` 或进入终态、提案已被接受或拒绝、提问已被答复。已推送的消息 MUST 同步更新为"已处理"。
 
 #### Scenario: 在电脑上处理后手机消息同步
-- **WHEN** 用户在终端用 `flow task reply` 答复了一个已经推送到 Telegram 的任务
+- **WHEN** 用户在终端用 `raindown task reply` 答复了一个已经推送到 Telegram 的任务
 - **THEN** 该条目关闭，Telegram 上的原消息被改为"已处理（来自 CLI）"，按钮消失
 
 ### Requirement: 操作
@@ -55,5 +55,5 @@
 系统 SHALL 提供 `inbox_list` 操作，按状态、级别、workspace 过滤；提供 `inbox_act` 操作执行条目上的操作。CLI 和 MCP 自动获得对应入口。
 
 #### Scenario: 列出待处理条目
-- **WHEN** 用户运行 `flow inbox`
+- **WHEN** 用户运行 `raindown inbox`
 - **THEN** 以表格列出所有未关闭的条目，按级别和时间排序

@@ -14,7 +14,7 @@ import {
   SUPERVISOR_ACTOR,
   type TaskRespondData,
   type TaskRespondRequest,
-} from '@flow/core'
+} from '@raindown/core'
 import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import { HUB_ACTOR, taskKind } from '../ledger/supervisor-checks.ts'
 import { generateReplyId, type RoleLookup, type WorkspaceLookup } from '../ledger/tasks.ts'

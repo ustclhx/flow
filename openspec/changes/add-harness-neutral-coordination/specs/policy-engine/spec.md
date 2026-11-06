@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: 策略版本
-系统 SHALL 为每次加载的 `policies.yaml` 计算版本哈希（对规范化后的有效规则计算，注释与空白不影响哈希），并在 `policy.decided`、代回复委托与 supervisor 的代批代答记录中写入该哈希。`flow hub status` 与 `flow doctor` MUST 显示当前策略版本。
+系统 SHALL 为每次加载的 `policies.yaml` 计算版本哈希（对规范化后的有效规则计算，注释与空白不影响哈希），并在 `policy.decided`、代回复委托与 supervisor 的代批代答记录中写入该哈希。`raindown hub status` 与 `raindown doctor` MUST 显示当前策略版本。
 
 #### Scenario: 只改了注释
 - **WHEN** 用户只修改了 `policies.yaml` 里的注释

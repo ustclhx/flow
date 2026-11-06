@@ -10,7 +10,7 @@ import {
   type TaskView,
   taskContract,
   taskResult,
-} from '@flow/core'
+} from '@raindown/core'
 import { DEFAULT_ROLE_FILES } from '../../core/src/role-templates.ts'
 import {
   createPrMergeExecutor,
@@ -402,7 +402,7 @@ describe('合并前的条件核对', () => {
         s.dev = { ...s.dev, status: 'failed' }
       },
       (s) => {
-        s.dev = { ...s.dev, branch: 'flow/other' }
+        s.dev = { ...s.dev, branch: 'raindown/other' }
       },
       (s) => {
         s.dev = { ...s.dev, repo_snapshot: null }

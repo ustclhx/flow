@@ -16,8 +16,8 @@
 ## 约定
 
 - TypeScript strict；跨边界的数据（frontmatter、配置、提案、MCP 输入）一律用 zod 校验。
-- 不直接引用 `bun:sqlite` 或其他 Bun 专有 API，SQLite 通过 `@flow/core` 的 `openDatabase`。
+- 不直接引用 `bun:sqlite` 或其他 Bun 专有 API，SQLite 通过 `@raindown/core` 的 `openDatabase`。
 - 错误用稳定的机器可读错误码；退出码约定：0 成功，1 失败，2 用法错误，3 可重试。
-- 测试用 `bun test`，放在各包的 `test/` 下；涉及文件系统的测试一律使用临时目录与临时 `FLOW_HOME`，绝不读写真实的 `~/flow-home`。
-- 提交前必须通过：`bun test`、`bun run lint`、`bun run typecheck`。
+- 测试用 `bun test`，放在各包的 `test/` 下；涉及文件系统的测试一律使用临时目录与临时 `RAINDOWN_HOME`，绝不读写真实的 `~/raindown-home`。
+- 提交前必须通过：`bun test`、`bun run lint`、`bun run typecheck`、`bun run schemas:check`。
 - 注释和文档用中文，代码标识符用英文。

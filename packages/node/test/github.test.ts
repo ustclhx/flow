@@ -166,7 +166,7 @@ describe('prSnapshot（GraphQL）', () => {
             isDraft: false,
             baseRefName: 'main',
             headRefOid: HEAD,
-            headRefName: 'flow/t-dev',
+            headRefName: 'raindown/t-dev',
             isCrossRepository: false,
             mergeable: 'MERGEABLE',
             mergeStateStatus: 'CLEAN',
@@ -202,7 +202,7 @@ describe('prSnapshot（GraphQL）', () => {
     expect(query).toContain('isCrossRepository')
     expect(query).toContain('headRefName')
     if (!r.ok) throw new Error(r.error.message)
-    expect(r.data).toMatchObject({ isCrossRepository: false, headRefName: 'flow/t-dev' })
+    expect(r.data).toMatchObject({ isCrossRepository: false, headRefName: 'raindown/t-dev' })
   })
 
   test('bucket 映射：CheckRun 与 StatusContext', async () => {

@@ -11,16 +11,18 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import {
   defaultSupervisorConfig,
-  flowPaths,
   HUB_TOKEN_FILE_ENV,
-  initFlowHome,
+  initRaindownHome,
   ok,
   type Role,
+  raindownPaths,
   type TaskView,
   type WakeOrigin,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   createHubApp,
   createNodeProtocol,
@@ -32,25 +34,23 @@ import {
   type RoleLookup,
   serve,
   systemClock,
-} from '@flow/hub'
+} from '@raindown/hub'
 import {
   type ClaudeQueryFn,
   createClaudeSdkExecutor,
   type RunningNode,
   startNode,
   wakeTokenDir,
-} from '@flow/node'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-// 策略路由未从 @flow/hub 的入口导出；与节点测试台一样直接引用源文件。
+} from '@raindown/node'
+// 策略路由未从 @raindown/hub 的入口导出；与节点测试台一样直接引用源文件。
 import { createPolicyRoutes } from '../../hub/src/policy/routes.ts'
 
 /**
  * add-m1-supervisor 2.6 后一半、4.1、5.3 的端到端测试：
  * 真实中枢路由（任务、策略、节点协议、唤醒绑定 token）经 HTTP 提供服务 + 真实节点 + claude-sdk 执行器
  * （SDK 的 `query` 换成桩，绝不调用真实的 Claude）。桩按 SDK 的方式先经 canUseTool 申请 `task_create`，
- * 放行后按执行器给出的 MCP 配置（命令、参数、环境）**真实启动** `flow mcp` 子进程并调用 `task_create`，
- * 子进程从 `FLOW_HUB_TOKEN_FILE` 读取唤醒 token 访问中枢建出子任务。
+ * 放行后按执行器给出的 MCP 配置（命令、参数、环境）**真实启动** `raindown mcp` 子进程并调用 `task_create`，
+ * 子进程从 `RAINDOWN_HUB_TOKEN_FILE` 读取唤醒 token 访问中枢建出子任务。
  */
 
 const MAIN = join(import.meta.dir, '..', 'src', 'main.ts')
@@ -110,15 +110,15 @@ interface McpCall {
 
 /**
  * SDK `query` 的桩。`approve: true` 时按 SDK 的方式先经 canUseTool 申请 task_create；
- * 放行（或 reply 唤醒直接调用）后真实启动 flow mcp 子进程调用它。
+ * 放行（或 reply 唤醒直接调用）后真实启动 raindown mcp 子进程调用它。
  */
 function stubQuery(repo: string, calls: McpCall[], hubUrl: () => string): ClaudeQueryFn {
   return ({ prompt, options }) => {
     const gen = (async function* () {
       await prompt[Symbol.asyncIterator]().next()
-      const reply = (options.mcpServers?.flow as { args?: string[] } | undefined)?.args?.includes(
-        '--reply-only',
-      )
+      const reply = (
+        options.mcpServers?.raindown as { args?: string[] } | undefined
+      )?.args?.includes('--reply-only')
       const input = {
         goal: '收集证据',
         workspace: WS,
@@ -130,16 +130,16 @@ function stubQuery(repo: string, calls: McpCall[], hubUrl: () => string): Claude
       if (!reply) {
         const canUseTool = options.canUseTool
         if (!canUseTool) throw new Error('没有 canUseTool')
-        const decision = await canUseTool('mcp__flow__task_create', input, {
+        const decision = await canUseTool('mcp__raindown__task_create', input, {
           signal: options.abortController?.signal ?? new AbortController().signal,
           toolUseID: 'tu-1',
           requestId: 'rq-1',
-          mcpServer: { name: 'flow', source: 'dynamic' },
+          mcpServer: { name: 'raindown', source: 'dynamic' },
         } as never)
         allowed = decision?.behavior === 'allow'
       }
       if (allowed) {
-        const flow = options.mcpServers?.flow as {
+        const raindown = options.mcpServers?.raindown as {
           command: string
           args: string[]
           env: Record<string, string>
@@ -150,18 +150,18 @@ function stubQuery(repo: string, calls: McpCall[], hubUrl: () => string): Claude
             (e): e is [string, string] => e[1] !== undefined,
           ),
         )
-        const tokenFile = flow.env[HUB_TOKEN_FILE_ENV] as string
+        const tokenFile = raindown.env[HUB_TOKEN_FILE_ENV] as string
         const call: McpCall = {
-          args: flow.args,
-          env: flow.env,
+          args: raindown.args,
+          env: raindown.env,
           sessionEnv: { ...options.env },
           fileMode: statSync(tokenFile).mode & 0o777,
           dirMode: statSync(dirname(tokenFile)).mode & 0o777,
         }
         const transport = new StdioClientTransport({
-          command: flow.command,
-          args: flow.args,
-          env: { ...base, ...flow.env },
+          command: raindown.command,
+          args: raindown.args,
+          env: { ...base, ...raindown.env },
           stderr: 'pipe',
         })
         const client = new Client({ name: 'stub-claude', version: '0.0.0' })
@@ -179,7 +179,7 @@ function stubQuery(repo: string, calls: McpCall[], hubUrl: () => string): Claude
             method: 'POST',
             headers: {
               Authorization: `Bearer ${token}`,
-              'X-Flow-Actor': 'supervisor',
+              'X-Raindown-Actor': 'supervisor',
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({ ...input, parent: undefined }),
@@ -220,14 +220,14 @@ async function setup(
   policiesYaml: (template: string) => string,
   origin: WakeOrigin = 'instruction',
 ) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-sup-e2e-')))
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-sup-e2e-')))
   cleanups.push(() => rmSync(root, { recursive: true, force: true }))
   const home = join(root, 'home')
   const repo = join(root, 'repo')
   mkdirSync(repo, { recursive: true })
-  const init = await initFlowHome(home)
+  const init = await initRaindownHome(home)
   if (!init.ok) throw new Error(init.error.message)
-  const paths = flowPaths(home)
+  const paths = raindownPaths(home)
   const policiesFile = join(paths.config, 'policies.yaml')
   writeFileSync(policiesFile, policiesYaml(readFileSync(policiesFile, 'utf8')))
   mkdirSync(paths.state, { recursive: true })
@@ -285,7 +285,7 @@ async function setup(
       name === 'supervisor'
         ? ok(SUPERVISOR)
         : { ok: false, error: { kind: 'failure', code: 'unknown_role', message: name } },
-    flowCommand: [process.execPath, MAIN],
+    raindownCommand: [process.execPath, MAIN],
     reannounceMs: 200,
   })
   const started = await startNode({
@@ -355,7 +355,7 @@ async function setup(
       method: 'POST',
       headers: {
         Authorization: `Bearer ${USER_TOKEN}`,
-        'X-Flow-Actor': 'user',
+        'X-Raindown-Actor': 'user',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -378,8 +378,8 @@ function checkSecrecy(s: Awaited<ReturnType<typeof setup>>, extraArgs: string[] 
     s.wakeId,
     ...extraArgs,
   ])
-  expect(call.env.FLOW_WORKSPACE).toBe(WS)
-  expect(call.env.FLOW_TASK_ID).toBe(s.wakeId)
+  expect(call.env.RAINDOWN_WORKSPACE).toBe(WS)
+  expect(call.env.RAINDOWN_TASK_ID).toBe(s.wakeId)
   const tokenFile = call.env[HUB_TOKEN_FILE_ENV] as string
   // `<task>.<lease_id>.token`：按租约区分文件。
   expect(dirname(tokenFile)).toBe(wakeTokenDir(s.home))
@@ -391,8 +391,8 @@ function checkSecrecy(s: Awaited<ReturnType<typeof setup>>, extraArgs: string[] 
   expect(existsSync(tokenFile)).toBe(false)
   // argv、MCP env、会话 env 都不含 token 与 token 变量。
   expect(JSON.stringify([call.args, call.env, call.sessionEnv])).not.toContain('fwk_')
-  expect(call.env).not.toHaveProperty('FLOW_HUB_TOKEN')
-  expect(call.sessionEnv).not.toHaveProperty('FLOW_HUB_TOKEN')
+  expect(call.env).not.toHaveProperty('RAINDOWN_HUB_TOKEN')
+  expect(call.sessionEnv).not.toHaveProperty('RAINDOWN_HUB_TOKEN')
   expect(call.sessionEnv).not.toHaveProperty(HUB_TOKEN_FILE_ENV)
   // 节点日志、唤醒任务的结果与活动（账本事件）都不含 token。
   expect(s.logs.join('\n')).not.toContain('fwk_')

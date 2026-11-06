@@ -3,18 +3,18 @@ import { join } from 'node:path'
 import {
   type Database,
   fail,
-  flowPaths,
   isSqliteBusy,
   ok,
   openDatabase,
   type Result,
-} from '@flow/core'
+  raindownPaths,
+} from '@raindown/core'
 
 /**
- * 节点单实例锁：同一个 flow-home 同时只能运行一个节点。
+ * 节点单实例锁：同一个 raindown-home 同时只能运行一个节点。
  *
  * 节点启动时会清理 `state/wake/` 中的唤醒 token 文件、执行器残留的审查 worktree 等"上次运行的残留"；
- * 若同一 flow-home 上并行跑着另一个节点，这些清理会误删对方正在使用的文件。因此清理之前先取得这把锁，
+ * 若同一 raindown-home 上并行跑着另一个节点，这些清理会误删对方正在使用的文件。因此清理之前先取得这把锁，
  * 取不到就拒绝启动。
  *
  * 做法与中枢单实例锁（`packages/hub/src/server/lock.ts`）相同：在 `state/node.lock` 这个 SQLite 文件上
@@ -22,7 +22,7 @@ import {
  * （launchd 开机拉起时 pid 可能与上次相同，按 pid 判断会误判）。进程内不要用其他方式打开该文件。
  */
 
-export const nodeLockPath = (home: string) => join(flowPaths(home).state, 'node.lock')
+export const nodeLockPath = (home: string) => join(raindownPaths(home).state, 'node.lock')
 
 export interface NodeLock {
   readonly path: string
@@ -68,7 +68,7 @@ export async function acquireNodeLock(home: string): Promise<Result<NodeLock>> {
   const path = nodeLockPath(home)
   let db: Database | null = null
   try {
-    await mkdir(flowPaths(home).state, { recursive: true })
+    await mkdir(raindownPaths(home).state, { recursive: true })
     const deadline = Date.now() + CONTENTION_WINDOW_MS
     for (;;) {
       db = await tryLockOnce(path)
@@ -82,7 +82,7 @@ export async function acquireNodeLock(home: string): Promise<Result<NodeLock>> {
     return fail(
       'failure',
       'node_already_running',
-      `同一 flow-home 上已有节点在运行（${path} 被占用）`,
+      `同一 raindown-home 上已有节点在运行（${path} 被占用）`,
     )
   }
   held.add(db)

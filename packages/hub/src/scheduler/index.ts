@@ -5,7 +5,7 @@ import {
   type Result,
   type ScheduleError,
   type ScheduleRule,
-} from '@flow/core'
+} from '@raindown/core'
 import { Cron } from 'croner'
 import type { LedgerStore } from '../ledger/store.ts'
 import { SLEEP_THRESHOLD_MS } from '../nodes/sleep.ts'

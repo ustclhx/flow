@@ -19,7 +19,7 @@ import { commitCount, fakeStripeKey, initTempHome, snapshot, writeText } from '.
 const homes: string[] = []
 setDefaultTimeout(20_000)
 async function home() {
-  const h = await initTempHome('flow-proposals-')
+  const h = await initTempHome('raindown-proposals-')
   homes.push(h)
   return h
 }
@@ -212,7 +212,9 @@ describe('修改提案', () => {
     const fixture = join(import.meta.dir, 'fixtures/proposal-writer.ts')
     const runs = await Promise.all(
       ['a', 'b'].map((id) =>
-        execCommand(process.execPath, [fixture, h, id], { env: { ...process.env, FLOW_HOME: h } }),
+        execCommand(process.execPath, [fixture, h, id], {
+          env: { ...process.env, RAINDOWN_HOME: h },
+        }),
       ),
     )
     for (const r of runs) expect(r.code).toBe(0)
@@ -248,7 +250,7 @@ describe('提案确认', () => {
       expect(readFileSync(join(brain, 'index.md'), 'utf8')).toContain(`${p.target}.md`)
       expect(archive(h, 'accepted', p.id).accepted_at).toBeString()
     }
-    expect((await git(brain, ['log', '-1', '--format=%an'])).stdout.trim()).toBe('Flow (user)')
+    expect((await git(brain, ['log', '-1', '--format=%an'])).stdout.trim()).toBe('Raindown (user)')
     expect(data(await listProposals(h)).proposals).toEqual([])
   })
 

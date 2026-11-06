@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { parse } from 'yaml'
-import { flowPaths } from './home.ts'
+import { raindownPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import { type Role, reviewerRoleProblem } from './roles.ts'
 import {
@@ -24,7 +24,7 @@ export interface Workspace {
   name: string
   description: string
   repos: string[]
-  /** 定义文件（相对 flow-home）；`ws/global` 为 null。 */
+  /** 定义文件（相对 raindown-home）；`ws/global` 为 null。 */
   file: string | null
   /** supervisor 设置（已补默认值；add-m1-supervisor 1.2）。 */
   supervisor: SupervisorConfig
@@ -56,7 +56,7 @@ export const GLOBAL_WORKSPACE: Workspace = {
  * 单个文件的格式问题记入 issues，不会让整体失败。
  */
 export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>> {
-  const dir = flowPaths(home).workspaces
+  const dir = raindownPaths(home).workspaces
   const workspaces: Workspace[] = []
   const issues: ValidationIssue[] = []
   const warnings: ValidationIssue[] = []
@@ -125,7 +125,7 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
 
 /**
  * `supervisor.reviewer_roles` 中已存在、但不是只读审查配置的角色（add-m1-supervisor D10，见 `reviewerRoleProblem`）。
- * 不存在的角色不报（默认值 `[pr-reviewer]` 在未运行 flow init 的 home 中也合法，任务会因没有角色而失败）。执行器对这类角色的审查任务一律 `failed(review_role_not_read)`；doctor 报 error。
+ * 不存在的角色不报（默认值 `[pr-reviewer]` 在未运行 raindown init 的 home 中也合法，任务会因没有角色而失败）。执行器对这类角色的审查任务一律 `failed(review_role_not_read)`；doctor 报 error。
  */
 export function reviewerRoleIssues(
   workspaces: readonly Workspace[],

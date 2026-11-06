@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { parseFrontmatter } from './frontmatter.ts'
-import { flowPaths } from './home.ts'
+import { raindownPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import type { ValidationIssue } from './validation-issue.ts'
 
@@ -35,7 +35,7 @@ export const isReservedBrainFile = (name: string): boolean => foldedFiles.has(fo
 export interface BrainEntry {
   /** 条目标识，例如 `resources/domains/arcanumber.com`。 */
   id: string
-  /** 相对 flow-home 的路径，例如 `brain/resources/domains/arcanumber.com.md`。 */
+  /** 相对 raindown-home 的路径，例如 `brain/resources/domains/arcanumber.com.md`。 */
   file: string
   absPath: string
   /** 未经 schema 校验的 frontmatter。 */
@@ -94,9 +94,9 @@ export const entryIdOf = (brainDir: string, absPath: string): string =>
 export async function readBrainEntries(
   home: string,
 ): Promise<Result<{ entries: BrainEntry[]; issues: ValidationIssue[] }>> {
-  const { brain } = flowPaths(home)
+  const { brain } = raindownPaths(home)
   if (!existsSync(brain)) {
-    return fail('failure', 'not_initialized', `未找到 ${brain}，请先运行 flow init`)
+    return fail('failure', 'not_initialized', `未找到 ${brain}，请先运行 raindown init`)
   }
   const entries: BrainEntry[] = []
   const issues: ValidationIssue[] = []

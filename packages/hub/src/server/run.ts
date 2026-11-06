@@ -4,7 +4,6 @@ import {
   EMPTY_INBOX_CONFIG,
   fail,
   findSupervisorRole,
-  flowPaths,
   type HubConfig,
   type HubStatusData,
   inboxActRequest,
@@ -15,13 +14,14 @@ import {
   loadWorkspaces,
   ok,
   type Result,
+  raindownPaths,
   redactSecrets,
   registerKnownSecrets,
   saveTelegramBinding,
   type TelegramChannelConfig,
   telegramChannelConfigSchema,
   VERSION,
-} from '@flow/core'
+} from '@raindown/core'
 import { Hono } from 'hono'
 import { createBriefRoutes, wakeBinding } from '../briefs/index.ts'
 import { buildStatusSnapshot } from '../channels/telegram/commands.ts'
@@ -107,7 +107,7 @@ export interface RunHubOptions
 }
 
 /**
- * 生产用的中枢组合：取得锁后打开 `state/flow.db`，挂载任务路由与节点协议路由，
+ * 生产用的中枢组合：取得锁后打开 `state/raindown.db`，挂载任务路由与节点协议路由，
  * 启动租约过期扫描、睡眠检测与定时调度，把每日备份写成 `hub.backup_done`，启动成功后写入 `hub.started`，
  * 然后启动收件箱（反应器、提案目录监听、推送节奏与渠道管理器）。
  * 注入的 clock 同时用于账本的事件时间戳，保证租约到期时间与扫描用同一个时钟。
@@ -178,7 +178,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       const token = await ensureHubToken(options.home)
       if (token.ok) redactor.add('state/hub.token', token.data)
       await secrets.reload()
-      ledger = await openLedger(flowPaths(options.home).ledgerDb, {
+      ledger = await openLedger(raindownPaths(options.home).ledgerDb, {
         now: () => clock.now(),
         redact: redactor.redact,
       })
@@ -276,7 +276,11 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
               : null,
           secrets: secrets.status(),
           policies: policies.ok
-            ? { loaded: policies.data.rules.length, errors: policies.data.errors }
+            ? {
+                loaded: policies.data.rules.length,
+                errors: policies.data.errors,
+                ...(policies.data.warnings.length ? { warnings: policies.data.warnings } : {}),
+              }
             : {
                 loaded: 0,
                 errors: [
@@ -486,7 +490,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   return started
 }
 
-/** `flow telegram unlink`：删掉 channels.yaml 中的绑定并提交，插件立即停止接受原 chat，记 `channel.unlinked`。 */
+/** `raindown telegram unlink`：删掉 channels.yaml 中的绑定并提交，插件立即停止接受原 chat，记 `channel.unlinked`。 */
 async function unlinkTelegram(
   home: string,
   ledger: LedgerStore,
@@ -531,7 +535,7 @@ function telegramUnavailable(
   if (s.state === 'stopped') return '中枢正在停止'
   if (s.state !== 'disabled') return null
   if (s.missing_secrets.length > 0) {
-    return `Telegram 渠道未启动：缺少 ${s.missing_secrets.map((p) => `secret://${p}`).join('、')}，先运行 flow secrets set telegram/bot-token`
+    return `Telegram 渠道未启动：缺少 ${s.missing_secrets.map((p) => `secret://${p}`).join('、')}，先运行 raindown secrets set telegram/bot-token`
   }
   return s.last_error ?? 'Telegram 渠道未启动'
 }
@@ -539,7 +543,7 @@ function telegramUnavailable(
 /**
  * 默认的推送渠道：按 `config/channels.yaml` 注册 Telegram（add-m1-inbox 5.1）。
  * - 文件不存在或没有 telegram 段时也注册（token 引用默认为 `secret://telegram/bot-token`）：
- *   没有设置 token 时渠道为 disabled，`flow hub status` 报告缺少的密钥路径；
+ *   没有设置 token 时渠道为 disabled，`raindown hub status` 报告缺少的密钥路径；
  * - `telegram.enabled: false` 时不注册；
  * - 配置写错时注册一个创建即失败的渠道，状态中报告错误，中枢其他功能照常。
  */
@@ -570,7 +574,7 @@ async function defaultChannels(o: {
     links: o.links,
     ...(o.logger ? { logger: o.logger } : {}),
     redact: redactSecrets,
-    statePath: flowPaths(o.home).telegramState,
+    statePath: raindownPaths(o.home).telegramState,
     loadConfig: () => loadChannelsConfig(o.home),
     saveBinding: (binding) => saveTelegramBinding(o.home, binding),
     capture: async (text) => {

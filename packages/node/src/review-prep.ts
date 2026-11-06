@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fail, flowPaths, gitSha, ok, type Result, type TaskContract } from '@flow/core'
+import { fail, gitSha, ok, type Result, raindownPaths, type TaskContract } from '@raindown/core'
 import {
   type GitConfigPair,
   type GitHubCli,
@@ -22,12 +22,12 @@ import {
  * 1. PR 链接的仓库必须与登记仓库 `remote.origin.url` 的仓库一致，否则 `repo_not_in_workspace`；
  * 2. `gh pr view` 读 PR，核对编号，记录当前 `headRefOid`；
  * 3. `gh pr diff` 写入任务私有目录；
- * 4. `git fetch origin +pull/<n>/head:refs/flow/review/<task>`（任务专用 ref，不依赖 FETCH_HEAD），确认它就是记录的 head
+ * 4. `git fetch origin +pull/<n>/head:refs/raindown/review/<task>`（任务专用 ref，不依赖 FETCH_HEAD），确认它就是记录的 head
  *    （否则 `head_moved`），再 `git worktree add --detach` 检出到任务私有目录下的临时 worktree，作为会话 cwd；
  *    检出时中和 hook、fsmonitor 与全部已配置的 filter driver（`untrustedCheckoutConfig`），并设 `GIT_LFS_SKIP_SMUDGE=1`；
  * 5. 任务结束后移除 worktree、任务专用 ref 与私有目录；节点启动时清理本节点残留的私有目录并 `git worktree prune`。
  *
- * 私有目录：`<flow-home>/state/review/<node-id>/<task-id>/`，内含 `worktree/`、`pr.diff` 与 `meta.json`（登记仓库路径，
+ * 私有目录：`<raindown-home>/state/review/<node-id>/<task-id>/`，内含 `worktree/`、`pr.diff` 与 `meta.json`（登记仓库路径，
  * 供启动清理使用）。git 一律带 `-c core.hooksPath=/dev/null`，不运行仓库 hook。
  */
 
@@ -36,7 +36,7 @@ const META_FILE = 'meta.json'
 const WORKTREE_DIR = 'worktree'
 
 export const reviewRoot = (home: string, nodeId: string) =>
-  join(flowPaths(home).state, 'review', nodeId)
+  join(raindownPaths(home).state, 'review', nodeId)
 
 export interface PreparedReview {
   pr: PrRef
@@ -66,7 +66,7 @@ export interface PrepareReviewInput {
 }
 
 /** 审查任务专用 ref 的命名空间（fetch 的目标，清理时删除）。 */
-export const REVIEW_REF_PREFIX = 'refs/flow/review/'
+export const REVIEW_REF_PREFIX = 'refs/raindown/review/'
 export const reviewRef = (taskId: string) => `${REVIEW_REF_PREFIX}${taskId}`
 
 const safeName = (s: string) => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(s)
@@ -237,7 +237,7 @@ export async function cleanupStaleReviews(
 /** 审查任务的首条用户消息附加说明：PR、记录的 head、diff 位置与输出要求。 */
 export function reviewPromptSection(review: PreparedReview): string {
   return [
-    '## 审查准备（Flow 执行器已完成）',
+    '## 审查准备（Raindown 执行器已完成）',
     `- PR：${review.pr.url}`,
     `- 工作目录是该 PR head（${review.headSha}）的只读检出；.github/ 可读。`,
     `- 完整 diff：${review.diffPath}（用 Read 读取）。`,

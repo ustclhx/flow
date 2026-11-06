@@ -10,7 +10,7 @@ import {
   redactKnownSecrets,
   redactSecrets,
   sanitizeText,
-} from '@flow/core'
+} from '@raindown/core'
 import { redactDeep } from '../secrets/redactor.ts'
 
 /**

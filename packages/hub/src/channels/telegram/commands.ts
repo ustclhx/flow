@@ -1,4 +1,4 @@
-import type { InboxItemView } from '@flow/core'
+import type { InboxItemView } from '@raindown/core'
 import type { LedgerStore } from '../../ledger/store.ts'
 import type { ChannelStatus } from '../types.ts'
 
@@ -19,7 +19,7 @@ export function parseCommand(text: string): ParsedCommand | null {
 }
 
 export const HELP_TEXT = [
-  'Flow 可以这样用：',
+  'Raindown 可以这样用：',
   '· 直接回复一条条目消息：答复对应的任务',
   '· 点消息下的按钮：批准、驳回、接受、拒绝或忽略',
   '/inbox — 列出未关闭的条目',
@@ -38,7 +38,7 @@ export function inboxText(items: readonly InboxItemView[], total: number): strin
     return `#${i.short_id} [${LEVEL_TAG[i.level]}]${ws} ${i.title}`
   })
   const more =
-    total > items.length ? `\n…另有 ${total - items.length} 条，用 flow inbox 查看全部` : ''
+    total > items.length ? `\n…另有 ${total - items.length} 条，用 raindown inbox 查看全部` : ''
   return `未关闭的条目（${total} 条）：\n${lines.join('\n')}${more}`
 }
 

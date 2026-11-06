@@ -6,7 +6,7 @@ import {
   fail,
   type InboxItemAction,
   ok,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   ChannelError,
   type ChannelMessage,
@@ -288,7 +288,7 @@ describe('chat 白名单（telegram-channel "绑定用户本人"）', () => {
       .catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ChannelError)
     expect(channelErrorKind(err)).toBe('transport')
-    expect((err as Error).message).toContain('flow telegram link')
+    expect((err as Error).message).toContain('raindown telegram link')
   })
 })
 
@@ -547,7 +547,7 @@ describe('命令（telegram-channel "命令"）', () => {
     const r = await rig()
     createItem(r.ledger, 'sup.1', 'interrupt')
     const inbox = r.fake.say('/inbox')
-    const status = r.fake.say('/status@flow_test_bot')
+    const status = r.fake.say('/status@raindown_test_bot')
     const capture = r.fake.say('/capture 东方站可以加日语')
     const emptyCapture = r.fake.say('/capture')
     const ask = r.fake.say('/ask demo 看看昨天的部署')

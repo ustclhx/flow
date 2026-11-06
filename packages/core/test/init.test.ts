@@ -3,22 +3,22 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { findExecutable } from '../src/doctor.ts'
-import { flowAuthor, git, gitCommit } from '../src/git.ts'
-import { resolveFlowHome } from '../src/home.ts'
-import { formatInitReport, initFlowHome } from '../src/init.ts'
+import { git, gitCommit, raindownAuthor } from '../src/git.ts'
+import { resolveRaindownHome } from '../src/home.ts'
+import { formatInitReport, initRaindownHome } from '../src/init.ts'
 import { DEFAULT_REVIEWER_WRITABLE_PATHS } from '../src/role-templates.ts'
 import { loadRoles } from '../src/roles.ts'
 import { fakeStripeKey, snapshot, tempHome, writeText } from './helpers.ts'
 
 const init = async (home: string) => {
-  const r = await initFlowHome(home)
+  const r = await initRaindownHome(home)
   if (!r.ok) throw new Error(r.error.message)
   return r.data
 }
 
-describe('flow init', () => {
+describe('raindown init', () => {
   test('首次初始化：四个子目录、三个仓库各一次初始提交、brain 固定文件', async () => {
-    const home = tempHome('flow-init-')
+    const home = tempHome('raindown-init-')
     const r = await init(home)
     expect(r.complete).toBe(false)
     expect(r.committed).toEqual(['config', 'brain', 'raw'])
@@ -29,7 +29,7 @@ describe('flow init', () => {
       const dir = join(home, repo)
       const log = await git(dir, ['log', '--format=%an <%ae>|%s'])
       expect(log.stdout.trim().split('\n')).toEqual([
-        'Flow (init) <flow@localhost>|init: 初始化 flow-home 仓库',
+        'Raindown (init) <raindown@localhost>|init: 初始化 raindown-home 仓库',
       ])
       const files = (await git(dir, ['ls-files'])).stdout.trim().split('\n')
       expect(files).toContain('.gitleaks.toml')
@@ -43,7 +43,7 @@ describe('flow init', () => {
     expect((await git(join(home, 'brain'), ['ls-files'])).stdout.trim().split('\n').sort()).toEqual(
       ['.gitleaks.toml', 'AGENTS.md', 'index.md', 'log.md'],
     )
-    // state/ 与 flow-home 根都不进 git。
+    // state/ 与 raindown-home 根都不进 git。
     expect(existsSync(join(home, '.git'))).toBe(false)
     expect(existsSync(join(home, 'state', '.git'))).toBe(false)
     const agents = readFileSync(join(home, 'brain', 'AGENTS.md'), 'utf8')
@@ -53,7 +53,7 @@ describe('flow init', () => {
   })
 
   test('重复初始化：不改动任何已有文件，报告无缺失项', async () => {
-    const home = tempHome('flow-init-')
+    const home = tempHome('raindown-init-')
     await init(home)
     const before = snapshot(home)
     await Bun.sleep(20)
@@ -66,11 +66,15 @@ describe('flow init', () => {
   })
 
   test('旧 home 补齐六个默认角色及提示词，在 config 提交；已有角色和提示词不覆盖', async () => {
-    const home = tempHome('flow-init-roles-')
+    const home = tempHome('raindown-init-roles-')
     await init(home)
     const config = join(home, 'config')
     await git(config, ['rm', '-r', 'roles'])
-    await gitCommit(config, { message: '模拟旧 home', author: flowAuthor('test'), noVerify: true })
+    await gitCommit(config, {
+      message: '模拟旧 home',
+      author: raindownAuthor('test'),
+      noVerify: true,
+    })
     const report = await init(home)
     expect(report.committed).toEqual(['config'])
     const expected = [
@@ -181,14 +185,14 @@ describe('flow init', () => {
   })
 
   test('用户修改 AGENTS.md 后再次初始化：保持不变；缺失项被补齐并报告', async () => {
-    const home = tempHome('flow-init-')
+    const home = tempHome('raindown-init-')
     await init(home)
     const agents = join(home, 'brain', 'AGENTS.md')
     writeFileSync(agents, '# 我自己的约定\n')
     // brain：log.md 从仓库中删除并提交；index.md 只在工作区误删。
     const brain = join(home, 'brain')
     await git(brain, ['rm', '-q', 'log.md'])
-    await gitCommit(brain, { message: 'rm log', author: flowAuthor('user'), noVerify: true })
+    await gitCommit(brain, { message: 'rm log', author: raindownAuthor('user'), noVerify: true })
     rmSync(join(home, 'brain', 'index.md'))
     rmSync(join(home, 'raw', '.git', 'hooks', 'pre-commit'))
     const r = await init(home)
@@ -202,12 +206,12 @@ describe('flow init', () => {
     expect((await git(brain, ['status', '--porcelain'])).stdout.trim()).toBe('M AGENTS.md')
   })
 
-  test('覆盖位置：FLOW_HOME 指向临时目录时 ~/flow-home 不受影响', async () => {
-    const real = join(homedir(), 'flow-home')
+  test('覆盖位置：RAINDOWN_HOME 指向临时目录时 ~/raindown-home 不受影响', async () => {
+    const real = join(homedir(), 'raindown-home')
     const existed = existsSync(real)
     const mtime = existed ? statSync(real).mtimeMs : null
-    const home = tempHome('flow-init-')
-    await init(resolveFlowHome({ FLOW_HOME: home }))
+    const home = tempHome('raindown-init-')
+    await init(resolveRaindownHome({ RAINDOWN_HOME: home }))
     expect(existsSync(join(home, 'brain', 'AGENTS.md'))).toBe(true)
     expect(existsSync(real)).toBe(existed)
     if (existed) expect(statSync(real).mtimeMs).toBe(mtime as number)
@@ -216,7 +220,7 @@ describe('flow init', () => {
 
 describe.skipIf(!findExecutable('gitleaks'))('提交前钩子（需要 gitleaks）', () => {
   test('用户手动提交 Stripe 密钥：提交被阻止，指出文件与行号，不回显原文', async () => {
-    const home = tempHome('flow-hook-')
+    const home = tempHome('raindown-hook-')
     await init(home)
     const brain = join(home, 'brain')
     const key = fakeStripeKey()
@@ -226,7 +230,7 @@ describe.skipIf(!findExecutable('gitleaks'))('提交前钩子（需要 gitleaks�
     )
     const r = await gitCommit(brain, {
       message: 'test',
-      author: flowAuthor('test'),
+      author: raindownAuthor('test'),
       paths: ['notes/leak.md'],
     })
     expect(r.ok).toBe(false)
@@ -238,7 +242,7 @@ describe.skipIf(!findExecutable('gitleaks'))('提交前钩子（需要 gitleaks�
   })
 
   test('secret:// 引用不被当作密钥，提交通过', async () => {
-    const home = tempHome('flow-hook-')
+    const home = tempHome('raindown-hook-')
     await init(home)
     const brain = join(home, 'brain')
     writeText(
@@ -247,7 +251,7 @@ describe.skipIf(!findExecutable('gitleaks'))('提交前钩子（需要 gitleaks�
     )
     const r = await gitCommit(brain, {
       message: 'test',
-      author: flowAuthor('test'),
+      author: raindownAuthor('test'),
       paths: ['resources/data-sources/stripe.md'],
     })
     expect(r.ok ? 'ok' : r.error.message).toBe('ok')

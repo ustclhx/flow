@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { BLOCKED_REASONS, type TaskStatus } from '@flow/core'
+import { BLOCKED_REASONS, type TaskStatus } from '@raindown/core'
 import { type EventInput, type LedgerStore, openLedger } from '../src/index.ts'
 import { contract, result, SHA, stepClock } from './ledger-helpers.ts'
 

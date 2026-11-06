@@ -1,27 +1,27 @@
 import { join } from 'node:path'
 import {
   fail,
-  flowPaths,
   HubClient,
   type HubStatus,
   type HubTokenView,
   ok,
+  raindownPaths,
   renderTable,
-  resolveFlowHome,
+  resolveRaindownHome,
   rotateLog,
-} from '@flow/core'
-import { runHub } from '@flow/hub'
+} from '@raindown/core'
+import { runHub } from '@raindown/hub'
 import { defineCommand } from '../command.ts'
 
 export const hubStartCommand = defineCommand({
   name: 'hub start',
   summary: '在前台运行中枢，收到 SIGINT 或 SIGTERM 后退出',
   run: async () => {
-    const home = resolveFlowHome(process.env)
-    const rotated = await rotateLog(join(flowPaths(home).logs, 'hub.log'))
+    const home = resolveRaindownHome(process.env)
+    const rotated = await rotateLog(join(raindownPaths(home).logs, 'hub.log'))
     if (!rotated.ok) return rotated
     // launchd 已在启动前打开标准流；轮转后退出一次，让 KeepAlive 重新打开新的日志。
-    if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.flow.hub') {
+    if (rotated.data && process.env.XPC_SERVICE_NAME === 'dev.raindown.hub') {
       return fail('retryable', 'log_rotated', '日志已轮转，等待 launchd 重新启动中枢')
     }
     const started = await runHub({
@@ -80,7 +80,7 @@ function channelSummary(channels: NonNullable<HubStatus['channels']>): string {
 export const hubStatusCommand = defineCommand({
   name: 'hub status',
   summary: '查看中枢版本、运行时长、账本与备份状态',
-  run: ({ actor }) => new HubClient({ home: resolveFlowHome(process.env), actor }).status(),
+  run: ({ actor }) => new HubClient({ home: resolveRaindownHome(process.env), actor }).status(),
   human: (status) =>
     renderTable(
       [
@@ -94,6 +94,7 @@ export const hubStatusCommand = defineCommand({
             '（无）',
         ],
         ['策略规则错误', status.policies?.errors.map((e) => e.message).join('；') || '（无）'],
+        ['策略规则警告', status.policies?.warnings?.map((e) => e.message).join('；') || '（无）'],
         [
           '最近一次备份',
           status.last_backup ? `${status.last_backup.at} ${status.last_backup.path}` : '（无）',
@@ -117,13 +118,14 @@ export const hubStatusCommand = defineCommand({
 export const hubRebuildCommand = defineCommand({
   name: 'hub rebuild',
   summary: '请求中枢重放事件并重建投影',
-  run: ({ actor }) => new HubClient({ home: resolveFlowHome(process.env), actor }).rebuild(),
+  run: ({ actor }) => new HubClient({ home: resolveRaindownHome(process.env), actor }).rebuild(),
   human: (data) =>
     `已重放 ${data.events_replayed} 条事件，耗时 ${data.duration_ms} 毫秒（账本序号 ${data.ledger_seq}）`,
 })
 
-// FLOW_ACTOR 的降级规则已在 runCli 中统一处理（resolveActor）。
-const hubClient = (actor: string) => new HubClient({ home: resolveFlowHome(process.env), actor })
+// RAINDOWN_ACTOR 的降级规则已在 runCli 中统一处理（resolveActor）。
+const hubClient = (actor: string) =>
+  new HubClient({ home: resolveRaindownHome(process.env), actor })
 
 const tokenRows = (tokens: HubTokenView[]) =>
   renderTable(tokens, [
@@ -146,7 +148,11 @@ export const hubTokenIssueCommand = defineCommand({
   run: ({ args, options, actor }) => {
     if (args.length !== 1)
       return Promise.resolve(
-        fail('usage', 'invalid_arguments', '用法：flow hub token issue <actor> [--note <备注>]'),
+        fail(
+          'usage',
+          'invalid_arguments',
+          '用法：raindown hub token issue <actor> [--note <备注>]',
+        ),
       )
     return hubClient(actor).issueToken({
       actor: args[0] as string,
@@ -158,7 +164,7 @@ export const hubTokenIssueCommand = defineCommand({
     [
       `已签发 ${token.id}（身份 ${token.actor}）。token 只显示这一次，请立即妥善保存：`,
       secret,
-      '使用方式：设置环境变量 FLOW_HUB_TOKEN，或作为 Authorization: Bearer 头。',
+      '使用方式：设置环境变量 RAINDOWN_HUB_TOKEN，或作为 Authorization: Bearer 头。',
     ].join('\n'),
 })
 
@@ -178,7 +184,7 @@ export const hubTokenRevokeCommand = defineCommand({
   summary: '撤销一个绑定 token，立即生效（仅 user）',
   run: ({ args, actor }) =>
     args.length !== 1
-      ? Promise.resolve(fail('usage', 'invalid_arguments', '用法：flow hub token revoke <id>'))
+      ? Promise.resolve(fail('usage', 'invalid_arguments', '用法：raindown hub token revoke <id>'))
       : hubClient(actor).revokeToken(args[0] as string),
   human: ({ token }) => `已撤销 ${token.id}（身份 ${token.actor}）`,
 })

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync, statSync, unlinkSync, utimesSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { initFlowHome } from '../src/init.ts'
+import { initRaindownHome } from '../src/init.ts'
 import { kbGetOp, kbQueryOp, kbSearchOp } from '../src/ops/search.ts'
 import type { Result } from '../src/result.ts'
 import { kbGetOutput, kbQueryOutput, kbSearchOutput } from '../src/schema/search.ts'
@@ -22,10 +22,10 @@ describe('检索、读取与结构化查询', () => {
   const query = async (...filters: string[]) =>
     data(await kbQueryOp.run({ filters }, context())).results
   beforeEach(async () => {
-    home = tempHome('flow-search-')
-    previousHome = process.env.FLOW_HOME
-    process.env.FLOW_HOME = home
-    data(await initFlowHome(home))
+    home = tempHome('raindown-search-')
+    previousHome = process.env.RAINDOWN_HOME
+    process.env.RAINDOWN_HOME = home
+    data(await initRaindownHome(home))
     writeEntry(
       home,
       'products/east',
@@ -57,8 +57,8 @@ describe('检索、读取与结构化查询', () => {
     }
   })
   afterEach(() => {
-    if (previousHome === undefined) delete process.env.FLOW_HOME
-    else process.env.FLOW_HOME = previousHome
+    if (previousHome === undefined) delete process.env.RAINDOWN_HOME
+    else process.env.RAINDOWN_HOME = previousHome
     rmSync(dirname(home), { recursive: true, force: true })
   })
 

@@ -10,7 +10,7 @@ import {
   ok,
   type Result,
   resolveInboxLevel,
-} from '@flow/core'
+} from '@raindown/core'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
 import { oneLine, type SupervisorToolsDeps } from './common.ts'

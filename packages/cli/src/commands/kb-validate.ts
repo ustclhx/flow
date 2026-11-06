@@ -3,9 +3,9 @@ import {
   fail,
   formatValidationReport,
   ok,
-  resolveFlowHome,
+  resolveRaindownHome,
   validateBrain,
-} from '@flow/core'
+} from '@raindown/core'
 import { defineCommand } from '../command.ts'
 
 export const kbValidateCommand = defineCommand({
@@ -27,7 +27,7 @@ export const kbValidateCommand = defineCommand({
       }
       staleDays = Number.parseInt(raw, 10)
     }
-    const result = await validateBrain(resolveFlowHome(process.env), { staleDays })
+    const result = await validateBrain(resolveRaindownHome(process.env), { staleDays })
     if (!result.ok) return result
     const report = result.data
     // 有错误时以失败返回（退出码 1），完整报告放在 details 中。

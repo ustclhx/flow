@@ -1,4 +1,4 @@
-import type { InboxCadence, InboxItemView } from '@flow/core'
+import type { InboxCadence, InboxItemView } from '@raindown/core'
 
 /**
  * 推送节奏的纯函数（inbox spec "推送节奏"；add-m1-inbox 3.3）。时间都按系统本地时区。

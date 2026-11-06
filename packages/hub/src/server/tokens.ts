@@ -4,14 +4,14 @@ import { dirname, join } from 'node:path'
 import {
   actor,
   fail,
-  flowPaths,
   type HubTokenView,
   hubTokenId,
   type IssueTokenRequest,
   ok,
   type Result,
+  raindownPaths,
   timestamp,
-} from '@flow/core'
+} from '@raindown/core'
 import { z } from 'zod'
 
 /**
@@ -80,7 +80,7 @@ const view = (r: TokenRecord): HubTokenView => ({
   ...(r.remote === undefined ? {} : { remote: r.remote }),
 })
 
-export const hubTokensPath = (home: string) => join(flowPaths(home).state, 'hub-tokens.json')
+export const hubTokensPath = (home: string) => join(raindownPaths(home).state, 'hub-tokens.json')
 
 /** 先写 0600 临时文件再原子改名，最后再 chmod 一次（防止既有文件权限过宽）。 */
 async function writeAtomic(path: string, content: string): Promise<void> {

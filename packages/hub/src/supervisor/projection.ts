@@ -4,7 +4,7 @@ import {
   type LedgerEvent,
   type TaskOrigin,
   type WakeOrigin,
-} from '@flow/core'
+} from '@raindown/core'
 
 /**
  * supervisor 唤醒队列的投影（add-m1-supervisor D2、D3、D15；tasks 3.1、3.2）。

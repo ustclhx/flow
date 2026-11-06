@@ -18,9 +18,9 @@ const domain = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-/** 一个带两个产品 workspace 与一个职能 workspace 的 flow-home。 */
+/** 一个带两个产品 workspace 与一个职能 workspace 的 raindown-home。 */
 function fixture(): string {
-  const home = tempHome('flow-validate-')
+  const home = tempHome('raindown-validate-')
   writeWorkspace(home, 'xuanxue-saas', {
     id: 'xuanxue-saas',
     kind: 'product',
@@ -148,7 +148,7 @@ describe('资源归属', () => {
       type: 'account',
       owner: 'ws/marketing',
       platform: 'x',
-      handle: '@flow',
+      handle: '@raindown',
       sources: ['用户确认（2026-10-24）'],
     })
     const r = await validate(home)

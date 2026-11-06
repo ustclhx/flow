@@ -9,7 +9,7 @@
 系统 SHALL 提供 `task_reply` 操作。输入为任务 id，加上以下三者之一：回复文字、`approve`、`deny`（可以附带理由）。只有 `blocked` 状态的任务可以回复，对其他状态的任务回复返回 `not_blocked`。回复写入 `task.replied` 事件，记录回复者。
 
 #### Scenario: 对运行中的任务回复
-- **WHEN** 对一个 `running` 状态的任务执行 `flow task reply <id> 好的`
+- **WHEN** 对一个 `running` 状态的任务执行 `raindown task reply <id> 好的`
 - **THEN** 返回 `not_blocked`，账本不新增任何事件
 
 ### Requirement: 送达与恢复
@@ -27,5 +27,5 @@
 对 `blocked(question)` 的任务只接受文字回复，对 `blocked(awaiting_approval)` 的任务接受 `approve`、`deny` 或文字。不匹配时 MUST 返回 `reply_kind_mismatch`。
 
 #### Scenario: 对提问点了批准
-- **WHEN** 对一个 `blocked(question)` 的任务执行 `flow task reply <id> --approve`
+- **WHEN** 对一个 `blocked(question)` 的任务执行 `raindown task reply <id> --approve`
 - **THEN** 返回 `reply_kind_mismatch`

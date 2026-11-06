@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ok, type Result, type TaskView } from '@flow/core'
+import { ok, type Result, type TaskView } from '@raindown/core'
 import {
   ActivityQueue,
   type DeliverResult,

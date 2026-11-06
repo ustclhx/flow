@@ -20,7 +20,7 @@ import {
   taskView,
   validateBrain,
 } from '../src/index.ts'
-import { initFlowHome } from '../src/init.ts'
+import { initRaindownHome } from '../src/init.ts'
 import { doctorOptions } from './doctor-helpers.ts'
 import { tempHome, writeText } from './helpers.ts'
 
@@ -298,7 +298,7 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
   })
 
   test('loadWorkspaces 补默认值；supervisor 段非法时仍加载 workspace、supervisor 视为未启用；global 不启用', async () => {
-    const home = tempHome('flow-ws-supervisor-')
+    const home = tempHome('raindown-ws-supervisor-')
     const base = 'kind: product\nname: 测试\ndescription: 测试\nrepos: []\n'
     writeText(join(home, 'config/workspaces/plain.yaml'), `id: plain\n${base}`)
     writeText(
@@ -336,8 +336,8 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
   })
 
   test('validateBrain：supervisor 段问题按警告报告，不算错误', async () => {
-    const home = tempHome('flow-validate-supervisor-')
-    await initFlowHome(home)
+    const home = tempHome('raindown-validate-supervisor-')
+    await initRaindownHome(home)
     const base = 'kind: product\nname: 测试\ndescription: 测试\nrepos: []\n'
     writeText(
       join(home, 'config/workspaces/bad.yaml'),
@@ -356,8 +356,8 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
   })
 
   test('doctor 显示每个 workspace 的 supervisor 设置，并报告配置错误', async () => {
-    const home = tempHome('flow-doctor-supervisor-')
-    await initFlowHome(home)
+    const home = tempHome('raindown-doctor-supervisor-')
+    await initRaindownHome(home)
     const base = 'kind: product\nname: 测试\ndescription: 测试\nrepos: []\n'
     writeText(join(home, 'config/workspaces/on.yaml'), `id: on\n${base}`)
     writeText(
@@ -368,7 +368,7 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
       join(home, 'config/workspaces/bad.yaml'),
       `id: bad\n${base}supervisor:\n  limits:\n    chain_depth: -1\n`,
     )
-    const r = await actualDoctor(home, 'FLOW_HOME', doctorOptions(home))
+    const r = await actualDoctor(home, 'RAINDOWN_HOME', doctorOptions(home))
     const report = r.ok ? r.data : (r.error.details as DoctorReport)
     const find = (id: string) => report.checks.find((c) => c.id === id)
     expect(find('workspace.on.supervisor')).toMatchObject({ ok: true, severity: 'info' })

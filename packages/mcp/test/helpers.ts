@@ -1,19 +1,19 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { initFlowHome } from '@flow/core'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { initRaindownHome } from '@raindown/core'
 import { stringify } from 'yaml'
-import { createFlowMcpServer, type FlowMcpServerOptions } from '../src/index.ts'
+import { createRaindownMcpServer, type RaindownMcpServerOptions } from '../src/index.ts'
 
 /**
- * 新建并初始化一个临时 flow-home（绝不触碰真实的 ~/flow-home），
+ * 新建并初始化一个临时 raindown-home（绝不触碰真实的 ~/raindown-home），
  * 并定义 `ws/product-res` 与 `ws/xuanxue-saas` 两个产品 workspace。
  */
-export async function initTempHome(prefix = 'flow-mcp-'): Promise<string> {
+export async function initTempHome(prefix = 'raindown-mcp-'): Promise<string> {
   const home = join(mkdtempSync(join(tmpdir(), prefix)), 'home')
-  const r = await initFlowHome(home)
+  const r = await initRaindownHome(home)
   if (!r.ok) throw new Error(r.error.message)
   const dir = join(home, 'config', 'workspaces')
   mkdirSync(dir, { recursive: true })
@@ -24,11 +24,11 @@ export async function initTempHome(prefix = 'flow-mcp-'): Promise<string> {
   return home
 }
 
-/** 用 SDK 的 Client 经内存传输连接一个 Flow MCP 服务。 */
-export async function connect(opts: FlowMcpServerOptions): Promise<Client> {
-  const server = createFlowMcpServer(opts)
+/** 用 SDK 的 Client 经内存传输连接一个 Raindown MCP 服务。 */
+export async function connect(opts: RaindownMcpServerOptions): Promise<Client> {
+  const server = createRaindownMcpServer(opts)
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
-  const client = new Client({ name: 'flow-test', version: '0.0.0' })
+  const client = new Client({ name: 'raindown-test', version: '0.0.0' })
   await Promise.all([server.connect(serverSide), client.connect(clientSide)])
   return client
 }

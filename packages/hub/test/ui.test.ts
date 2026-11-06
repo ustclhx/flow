@@ -73,7 +73,7 @@ async function setup() {
       headers: {
         ...authHeaders,
         'Content-Type': 'application/json',
-        ...(actor ? { 'X-Flow-Actor': actor } : {}),
+        ...(actor ? { 'X-Raindown-Actor': actor } : {}),
       },
       body: '{}',
     })
@@ -84,7 +84,7 @@ async function setup() {
     const { doc } = await issueCode()
     const res = await get(doc.data.login_path)
     expect(res.status).toBe(303)
-    const cookie = /flow_ui_session=([^;]+)/.exec(res.headers.get('set-cookie') ?? '')?.[1]
+    const cookie = /raindown_ui_session=([^;]+)/.exec(res.headers.get('set-cookie') ?? '')?.[1]
     if (!cookie) throw new Error('没有会话 cookie')
     return `${SESSION_COOKIE}=${cookie}`
   }
@@ -167,13 +167,13 @@ async function setup() {
 }
 
 describe('直接访问页面', () => {
-  test('没有会话：提示运行 flow ui 登录，不显示任何条目，片段与操作被拒绝', async () => {
+  test('没有会话：提示运行 raindown ui 登录，不显示任何条目，片段与操作被拒绝', async () => {
     const ctx = await setup()
     const { item } = await ctx.createBlocked()
     const page = await ctx.get('/ui')
     expect(page.status).toBe(401)
     const text = await page.text()
-    expect(text).toContain('请运行 flow ui 登录')
+    expect(text).toContain('请运行 raindown ui 登录')
     expect(text).not.toContain(item.title)
     expect(text).not.toContain(item.id)
     expect((await ctx.get('/ui/items')).status).toBe(401)

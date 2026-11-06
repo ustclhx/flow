@@ -1,11 +1,11 @@
 import { mkdir, readdir, stat, unlink } from 'node:fs/promises'
 import { join, relative } from 'node:path'
-import { flowPaths, type HubConfig } from '@flow/core'
+import { type HubConfig, raindownPaths } from '@raindown/core'
 import type { LedgerMaintenance } from '../ledger/port.ts'
 import { type HubClock, systemClock } from './clock.ts'
 
 export interface BackupInfo {
-  /** 相对 flow-home 的备份路径。 */
+  /** 相对 raindown-home 的备份路径。 */
   path: string
   at: string
   kept: number
@@ -42,8 +42,14 @@ const pad = (n: number) => String(n).padStart(2, '0')
 const dateStamp = (date: Date) =>
   `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
 const backupName = (date: Date) =>
-  `flow-${dateStamp(date)}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}.db`
-const BACKUP_NAME = /^flow-\d{8}-\d{6}\.db$/
+  `raindown-${dateStamp(date)}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}.db`
+const BACKUP_NAME = /^(?:raindown|flow)-(\d{8}-\d{6})\.db$/
+const sortBackups = (names: string[]) =>
+  names.sort(
+    (a, b) =>
+      (BACKUP_NAME.exec(a)?.[1] ?? '').localeCompare(BACKUP_NAME.exec(b)?.[1] ?? '') ||
+      a.localeCompare(b),
+  )
 
 /** 外部心跳和每日备份互相独立；stop 会取消定时器与进行中的 HTTP 请求。 */
 export function startMaintenance(options: MaintenanceOptions): { stop(): Promise<void> } {
@@ -51,7 +57,7 @@ export function startMaintenance(options: MaintenanceOptions): { stop(): Promise
   const clock = options.clock ?? systemClock
   const logger = options.logger ?? consoleLogger
   const request = options.fetch ?? globalThis.fetch
-  const backups = flowPaths(options.home).backups
+  const backups = raindownPaths(options.home).backups
   let stopped = false
   let cancelHeartbeat = () => {}
   let cancelBackup = () => {}
@@ -104,16 +110,18 @@ export function startMaintenance(options: MaintenanceOptions): { stop(): Promise
     if (!ledger || stopped) return
     const now = new Date(clock.now())
     await mkdir(backups, { recursive: true })
-    const names = (await readdir(backups)).filter((name) => BACKUP_NAME.test(name)).sort()
+    const names = sortBackups((await readdir(backups)).filter((name) => BACKUP_NAME.test(name)))
     // 当天已有任意一份完整备份，就不再重复补做。
-    const alreadyBackedUp = names.some((name) => name.startsWith(`flow-${dateStamp(now)}-`))
+    const alreadyBackedUp = names.some((name) =>
+      BACKUP_NAME.exec(name)?.[1]?.startsWith(`${dateStamp(now)}-`),
+    )
     const path = join(backups, backupName(now))
     const startedAt = clock.now()
     if (!alreadyBackedUp) {
       ledger.backupTo(path)
       names.push(backupName(now))
     }
-    names.sort()
+    sortBackups(names)
     const removed = names.splice(0, Math.max(0, names.length - config.backup_keep))
     for (const name of removed) await unlink(join(backups, name))
     if (alreadyBackedUp) return

@@ -11,7 +11,7 @@ const expandHome = (p: string) =>
   p === '~' || p.startsWith('~/') ? join(homedir(), p.slice(1)) : p
 
 /**
- * 由 flow-home 构造受管区块的同步目标：每个产品 workspace 的每个关联仓库一个目标。
+ * 由 raindown-home 构造受管区块的同步目标：每个产品 workspace 的每个关联仓库一个目标。
  */
 export async function loadSyncTargets(home: string): Promise<Result<SyncTarget[]>> {
   // 先整体校验：workspace 定义或条目有错误时拒绝同步，避免把半残的数据写进项目 AGENTS.md。
@@ -20,8 +20,8 @@ export async function loadSyncTargets(home: string): Promise<Result<SyncTarget[]
   if (report.data.errors.length > 0) {
     return fail(
       'failure',
-      'invalid_flow_home',
-      '存在格式错误的 workspace 定义或条目，请先运行 flow kb validate 修复',
+      'invalid_raindown_home',
+      '存在格式错误的 workspace 定义或条目，请先运行 raindown kb validate 修复',
       report.data.errors,
     )
   }

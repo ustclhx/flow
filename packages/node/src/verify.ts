@@ -7,7 +7,7 @@ import {
   TAIL_LINE_MAX,
   type VerifyOutcome,
   type VerifyStep,
-} from '@flow/core'
+} from '@raindown/core'
 import type { NodeClock } from './clock.ts'
 import { executorRoleEnv } from './env.ts'
 

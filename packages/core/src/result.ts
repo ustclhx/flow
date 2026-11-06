@@ -6,7 +6,7 @@
 /** 错误类别，决定 CLI 退出码：failure→1，usage→2，retryable→3。 */
 export type ErrorKind = 'failure' | 'usage' | 'retryable'
 
-export interface FlowError {
+export interface RaindownError {
   kind: ErrorKind
   /** 稳定的机器可读错误码，例如 `lock_timeout`、`validation_failed`。 */
   code: string
@@ -14,7 +14,7 @@ export interface FlowError {
   details?: unknown
 }
 
-export type Result<T> = { ok: true; data: T } | { ok: false; error: FlowError }
+export type Result<T> = { ok: true; data: T } | { ok: false; error: RaindownError }
 
 export const ok = <T>(data: T): Result<T> => ({ ok: true, data })
 

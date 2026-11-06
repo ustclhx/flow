@@ -49,7 +49,7 @@ describe('renderIndex', () => {
       [
         '# 索引',
         '',
-        '> 由 Flow 自动生成，请勿手动编辑。',
+        '> 由 Raindown 自动生成，请勿手动编辑。',
         '',
         '## product',
         '',
@@ -132,7 +132,7 @@ describe('统一写入', () => {
     expect(r.data.files).toEqual(['brain/runbooks/rollback.md', 'brain/index.md', 'brain/log.md'])
     expect(await commitCount(brain)).toBe(before + 1)
     expect(await lastCommit(brain)).toBe(
-      'Flow (user) <flow@localhost>|apply(user): 新增 runbooks/rollback',
+      'Raindown (user) <raindown@localhost>|apply(user): 新增 runbooks/rollback',
     )
     const index = readFileSync(join(brain, 'index.md'), 'utf8')
     expect(index).toContain(
@@ -199,7 +199,7 @@ describe('统一写入', () => {
     )
     expect(await commitCount(brain)).toBe(before + 2)
     const subjects = (await git(brain, ['log', '-2', '--format=%an|%s'])).stdout.trim().split('\n')
-    expect(subjects[1]).toBe('Flow (codex)|journal(codex): ws/product-res 修好了登录页')
+    expect(subjects[1]).toBe('Raindown (codex)|journal(codex): ws/product-res 修好了登录页')
     const log = readFileSync(join(brain, 'log.md'), 'utf8')
     expect(log).toContain('2026-10-24 journal codex ws/product-res 修好了登录页\n')
     // journal 不是条目，不进入 index。
@@ -239,7 +239,7 @@ describe('统一写入', () => {
     expect(await commitCount(brain)).toBe(brainCommits)
     expect(await commitCount(raw)).toBe(rawCommits + 1)
     expect(await lastCommit(raw)).toBe(
-      'Flow (user) <flow@localhost>|capture(user): 考虑给东方站加日语',
+      'Raindown (user) <raindown@localhost>|capture(user): 考虑给东方站加日语',
     )
     expect(readdirSync(join(raw, 'inbox'))).toHaveLength(1)
   })
@@ -460,8 +460,8 @@ describe('统一写入', () => {
     }
   })
 
-  test('未初始化的 flow-home 返回 not_initialized', async () => {
-    const r = await appendJournal('/nonexistent/flow-home', { text: 'x' }, { actor: 'user' })
+  test('未初始化的 raindown-home 返回 not_initialized', async () => {
+    const r = await appendJournal('/nonexistent/raindown-home', { text: 'x' }, { actor: 'user' })
     expect(!r.ok && r.error.code).toBe('not_initialized')
   })
 

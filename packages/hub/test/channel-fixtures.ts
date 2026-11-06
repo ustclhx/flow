@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { InboxItemAction, InboxLevel, InboxVia } from '@flow/core'
+import type { InboxItemAction, InboxLevel, InboxVia } from '@raindown/core'
 import type {
   ChannelCallOptions,
   ChannelHealth,
@@ -195,10 +195,10 @@ export async function inboxRig(
     backoff?: { baseMs?: number; maxMs?: number }
   } = {},
 ) {
-  const dir = mkdtempSync(join(tmpdir(), 'flow-inbox-push-'))
+  const dir = mkdtempSync(join(tmpdir(), 'raindown-inbox-push-'))
   const home = join(dir, 'home')
   const clock = new FakeClock(o.start ?? new Date(2026, 9, 26, 10, 0).getTime())
-  const ledger = await openLedger(join(dir, 'flow.db'), { now: clock.now })
+  const ledger = await openLedger(join(dir, 'raindown.db'), { now: clock.now })
   const { warns, logger } = quietLogger()
   const scheduler = await createScheduler({ ledger, clock, home, logger })
   const inbox = await startInbox({

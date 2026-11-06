@@ -3,8 +3,9 @@ import { existsSync } from 'node:fs'
 import { readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parse } from 'yaml'
+import { readRaindownEnv } from '../src/env.ts'
 import { type ExecOptions, execCommand, git } from '../src/git.ts'
-import { initFlowHome } from '../src/init.ts'
+import { initRaindownHome } from '../src/init.ts'
 import { initSecrets, loadSecrets, type SecretsOptions, setSecret } from '../src/secrets.ts'
 import { GITLEAKS_TOML } from '../src/templates.ts'
 import { scanForSecrets } from '../src/write/secrets.ts'
@@ -15,9 +16,9 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((p) => rm(p, { recursive: true, force: true })))
 })
 async function setup() {
-  const home = tempHome('flow-secret-provider-')
+  const home = tempHome('raindown-secret-provider-')
   roots.push(dirname(home))
-  expect((await initFlowHome(home)).ok).toBe(true)
+  expect((await initRaindownHome(home)).ok).toBe(true)
   return { home, config: join(home, 'config'), ageKeyFile: join(dirname(home), 'age/keys.txt') }
 }
 function fakeSops(ageKeyFile: string) {
@@ -191,7 +192,7 @@ describe('密钥提供器（注入 sops）', () => {
 const sopsVersion = await execCommand('sops', ['--version'])
 const hasSops = sopsVersion.code === 0
 if (!hasSops) console.info('跳过真实 sops 测试：PATH 中未找到 sops（注入命令测试照常运行）')
-if (process.env.FLOW_REQUIRE_SOPS_TESTS === '1' && !hasSops)
+if (readRaindownEnv('RAINDOWN_REQUIRE_SOPS_TESTS') === '1' && !hasSops)
   throw new Error('CI 必须安装 sops 并运行真实密钥测试')
 
 describe('真实 sops + age', () => {

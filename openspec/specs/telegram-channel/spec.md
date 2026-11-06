@@ -1,12 +1,12 @@
 # telegram-channel Specification
 
 ## Purpose
-用 Telegram Bot 作为 Flow 的首个手机渠道：推送、审批和回复都在同一个对话里完成，而且不需要中枢暴露公网端口。
+用 Telegram Bot 作为 Raindown 的首个手机渠道：推送、审批和回复都在同一个对话里完成，而且不需要中枢暴露公网端口。
 
 ## Requirements
 
 ### Requirement: 绑定用户本人
-`flow telegram link` SHALL 生成一个 10 分钟内有效的一次性绑定码。用户在 Telegram 中向 bot 发送 `/start <绑定码>` 后，该 chat 被记录为唯一的用户 chat。来自其他 chat 的任何消息和按钮操作 MUST 被忽略，并记入日志。
+`raindown telegram link` SHALL 生成一个 10 分钟内有效的一次性绑定码。用户在 Telegram 中向 bot 发送 `/start <绑定码>` 后，该 chat 被记录为唯一的用户 chat。来自其他 chat 的任何消息和按钮操作 MUST 被忽略，并记入日志。
 
 #### Scenario: 陌生人给 bot 发消息
 - **WHEN** 一个未绑定的 Telegram 账号向 bot 发送 `/inbox`

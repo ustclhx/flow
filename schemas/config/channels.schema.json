@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/config/channels.schema.json",
+  "$id": "https://raindown.local/schemas/config/channels.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -41,6 +41,6 @@
     }
   },
   "additionalProperties": false,
-  "title": "Flow channels config",
+  "title": "Raindown channels config",
   "description": "config/channels.yaml：推送渠道配置"
 }

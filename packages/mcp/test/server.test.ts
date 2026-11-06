@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { defineOperation, fail, ok, operations, writeEntry } from '@flow/core'
+import { defineOperation, fail, ok, operations, writeEntry } from '@raindown/core'
 import { z } from 'zod'
-import { createFlowMcpServer, FlowMcpConfigError, toolInputSchema } from '../src/index.ts'
+import { createRaindownMcpServer, RaindownMcpConfigError, toolInputSchema } from '../src/index.ts'
 import { callJson, connect, initTempHome } from './helpers.ts'
 
 const decision = {
@@ -51,10 +51,10 @@ describe('actor 规则', () => {
   test('缺少、格式非法或为 user 时启动即失败', () => {
     const codeOf = (actor: string) => {
       try {
-        createFlowMcpServer({ actor })
+        createRaindownMcpServer({ actor })
       } catch (err) {
-        expect(err).toBeInstanceOf(FlowMcpConfigError)
-        return (err as FlowMcpConfigError).error
+        expect(err).toBeInstanceOf(RaindownMcpConfigError)
+        return (err as RaindownMcpConfigError).error
       }
       throw new Error('应当抛出')
     }
@@ -66,7 +66,7 @@ describe('actor 规则', () => {
       expect(codeOf(reserved)).toMatchObject({ kind: 'usage', code: 'invalid_actor' })
     }
     expect(codeOf('user').message).toContain('不能是 user')
-    expect(() => createFlowMcpServer({ actor: 'claude' })).not.toThrow()
+    expect(() => createRaindownMcpServer({ actor: 'claude' })).not.toThrow()
   })
 })
 
@@ -184,17 +184,17 @@ describe('调用', () => {
     expect(thrown.doc).toMatchObject({ ok: false, error: { code: 'internal_error' } })
   })
 
-  test('未给 home 时按 FLOW_HOME 解析', async () => {
+  test('未给 home 时按 RAINDOWN_HOME 解析', async () => {
     const home = await initTempHome()
-    const prev = process.env.FLOW_HOME
-    process.env.FLOW_HOME = home
+    const prev = process.env.RAINDOWN_HOME
+    process.env.RAINDOWN_HOME = home
     try {
       const client = await connect({ actor: 'pi', operations: fixtures })
       const echo = await callJson(client, 'test_echo', { mode: 'echo' })
       expect((echo.doc.data as { home: string }).home).toBe(home)
     } finally {
-      if (prev === undefined) delete process.env.FLOW_HOME
-      else process.env.FLOW_HOME = prev
+      if (prev === undefined) delete process.env.RAINDOWN_HOME
+      else process.env.RAINDOWN_HOME = prev
     }
   })
 })

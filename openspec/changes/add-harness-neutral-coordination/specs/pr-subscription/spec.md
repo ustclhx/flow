@@ -10,7 +10,7 @@
 
 #### Scenario: 开出 PR 即订阅
 - **WHEN** 开发任务在任务分支上开出 PR #40
-- **THEN** 该任务订阅 PR #40，`flow task show` 显示这条订阅
+- **THEN** 该任务订阅 PR #40，`raindown task show` 显示这条订阅
 
 ### Requirement: PR 事件采集
 中枢 SHALL 对有订阅的 PR 定期查询 CI 检查结果、审查结论与评论，按 PR 记录读取位置，重启后不重复送达。查询失败只记在该 PR 上并在下次重试，连续失败才报告为系统问题。机器人与 CI 的消息只作为上下文送达，不恢复已结束的任务。
@@ -34,7 +34,7 @@ PR 事件 SHALL 直接作为输入送给订阅的任务，不唤醒 supervisor�
 - **THEN** 失败摘要作为输入送到该任务，supervisor 不被唤醒
 
 ### Requirement: 交回超范围的请求
-worker 收到名单内用户超出任务范围或属于另一件工作的请求时，SHALL 通过 `flow_report` 交回该事件并写明理由；交回的事件进入 supervisor 的唤醒队列，并附 worker 的理由。没有任何订阅任务的名单内用户 PR 评论同样进入 supervisor 的唤醒队列。
+worker 收到名单内用户超出任务范围或属于另一件工作的请求时，SHALL 通过 `raindown_report` 交回该事件并写明理由；交回的事件进入 supervisor 的唤醒队列，并附 worker 的理由。没有任何订阅任务的名单内用户 PR 评论同样进入 supervisor 的唤醒队列。
 
 #### Scenario: 评论要求做别的功能
 - **WHEN** PR 上的人类评论要求顺带加一个新功能，worker 判断超出范围并交回

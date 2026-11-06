@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Activity, ok, type Result, type TaskResume, taskContract } from '@flow/core'
+import { type Activity, ok, type Result, type TaskResume, taskContract } from '@raindown/core'
 import { createCodexOrcaExecutor } from '../src/codex-orca/executor.ts'
 import {
   ActivityQueue,
@@ -132,11 +132,11 @@ describe('启动', () => {
       name: 't-orca-1',
       baseBranch: 'origin/main',
       setup: 'run',
-      comment: 'flow 任务 t-orca-1',
+      comment: 'raindown 任务 t-orca-1',
     })
     const specPath = join(h?.home ?? '', 'state/tasks/t-orca-1/spec.md')
     const spec = readFileSync(specPath, 'utf8')
-    expect(spec).toContain('`flow kb get projects/product-res`')
+    expect(spec).toContain('`raindown kb get projects/product-res`')
     expect(spec).toContain('example-user/t-orca-1')
     const created = s.orca.ops('terminalCreate')[0]?.input as {
       command: string
@@ -144,7 +144,11 @@ describe('启动', () => {
     }
     expect(created.worktreePath).toBe(h?.worktree ?? '')
     expect(created.command).toContain(
-      `exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev CODEX_HOME=${join(h?.home ?? '', 'state/codex-work-home')} codex`,
+      `RAINDOWN_ACTOR=dev FLOW_ACTOR=dev CODEX_HOME=${join(h?.home ?? '', 'state/codex-work-home')} codex`,
+    )
+    expect(created.command).toContain('RAINDOWN_TASK_ID=t-orca-1 FLOW_TASK_ID=t-orca-1')
+    expect(created.command).toContain(
+      'RAINDOWN_WORKSPACE=ws/product-res FLOW_WORKSPACE=ws/product-res',
     )
     expect(created.command).toContain('--dangerously-bypass-approvals-and-sandbox')
     expect(created.command).toContain(`"$(cat ${specPath})"`)
@@ -297,7 +301,7 @@ describe('监控循环', () => {
     await s.poll(3)
     const [idle] = idles(s)
     expect(idle?.text).toBe(
-      '根目录 package.json 的 name 字段是 flow。未做任何修改。 下一步你希望我查看什么？',
+      '根目录 package.json 的 name 字段是 raindown。未做任何修改。 下一步你希望我查看什么？',
     )
     const hint = idle?.data?.hint as { kind: string; tail: string[] }
     expect(hint.kind).toBe('question')
@@ -312,7 +316,7 @@ describe('监控循环', () => {
     const s = await start({}, (o) => o.show('working', 'pr-opened'))
     s.gh.prs = [
       {
-        url: 'https://github.com/example-user/flow/pull/20',
+        url: 'https://github.com/example-user/raindown/pull/20',
         number: 20,
         state: 'OPEN',
         isCrossRepository: false,
@@ -327,7 +331,7 @@ describe('监控循环', () => {
     if (o?.ok && o.data.outcome === 'done') {
       expect(o.data.result.artifacts[0]).toEqual({
         kind: 'pr',
-        ref: 'https://github.com/example-user/flow/pull/20',
+        ref: 'https://github.com/example-user/raindown/pull/20',
       })
       expect(o.data.result.executor).toBe('codex-orca')
     }
@@ -338,14 +342,14 @@ describe('监控循环', () => {
     const s = await start({}, (o) => o.show('pr-opened'))
     s.gh.prs = [
       {
-        url: 'https://github.com/example-user/flow/pull/21',
+        url: 'https://github.com/example-user/raindown/pull/21',
         number: 21,
         state: 'OPEN',
         isCrossRepository: true,
         headRefName: 'example-user/t-orca-1',
       },
       {
-        url: 'https://github.com/example-user/flow/pull/22',
+        url: 'https://github.com/example-user/raindown/pull/22',
         number: 22,
         state: 'OPEN',
         isCrossRepository: false,
@@ -363,7 +367,7 @@ describe('监控循环', () => {
     const s = await start({}, (o) => o.show('pr-opened'))
     s.gh.prs = [
       {
-        url: 'https://github.com/example-user/flow/pull/20',
+        url: 'https://github.com/example-user/raindown/pull/20',
         number: 20,
         state: 'OPEN',
         isCrossRepository: false,
@@ -879,7 +883,8 @@ describe('经节点与中枢的完整流程', () => {
       const blocked = await b.until(id, (t) => t.status === 'blocked', 600_000)
       expect(blocked.blocked).toMatchObject({
         reason: 'question',
-        message: '根目录 package.json 的 name 字段是 flow。未做任何修改。 下一步你希望我查看什么？',
+        message:
+          '根目录 package.json 的 name 字段是 raindown。未做任何修改。 下一步你希望我查看什么？',
         lease_held: true,
       })
       expect(blocked.blocked?.tail?.join('\n')).toContain('下一步你希望我查看什么？')
@@ -888,7 +893,7 @@ describe('经节点与中枢的完整流程', () => {
       orca.show('working', 'pr-opened')
       gh.prs = [
         {
-          url: 'https://github.com/example-user/flow/pull/20',
+          url: 'https://github.com/example-user/raindown/pull/20',
           number: 20,
           state: 'OPEN',
           isCrossRepository: false,
@@ -899,7 +904,7 @@ describe('经节点与中枢的完整流程', () => {
       const done = await b.until(id, (t) => t.status === 'done', 600_000)
       expect(done.result?.artifacts[0]).toEqual({
         kind: 'pr',
-        ref: 'https://github.com/example-user/flow/pull/20',
+        ref: 'https://github.com/example-user/raindown/pull/20',
       })
       const texts = (orca.ops('terminalSend') as Array<{ input: { text?: string } }>).map(
         (c) => c.input.text,

@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/protocol/tasks-create.response.schema.json",
+  "$id": "https://raindown.local/schemas/protocol/tasks-create.response.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -829,7 +829,7 @@
                 "timeout_s"
               ],
               "additionalProperties": false,
-              "title": "Flow task contract",
+              "title": "Raindown task contract",
               "description": "创建任务时提交的合同"
             },
             "attempt": {
@@ -1241,7 +1241,7 @@
                     "node_id"
                   ],
                   "additionalProperties": false,
-                  "title": "Flow task result",
+                  "title": "Raindown task result",
                   "description": "任务结束（done / failed）时的结果"
                 },
                 {
@@ -1366,7 +1366,7 @@
             "last_activity_at"
           ],
           "additionalProperties": false,
-          "title": "Flow task",
+          "title": "Raindown task",
           "description": "任务的当前状态（由事件投影得到）"
         },
         "created": {

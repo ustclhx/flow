@@ -1,5 +1,5 @@
 import type { AddressInfo } from 'node:net'
-import { HUB_HOSTNAME } from '@flow/core'
+import { HUB_HOSTNAME } from '@raindown/core'
 
 /**
  * 运行时隔离层（design D3）：全仓库只有这里区分 Bun 与 Node。

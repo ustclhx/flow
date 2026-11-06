@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseFrontmatter } from '../frontmatter.ts'
 import { execCommand } from '../git.ts'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import type { InboxVia } from '../inbox/schema.ts'
-import { type FlowError, fail, ok, type Result } from '../result.ts'
+import { fail, ok, type RaindownError, type Result } from '../result.ts'
 import { isFactType } from '../schema/entries.ts'
 import { checkEntryFrontmatter } from '../validate.ts'
 import { loadWorkspaces } from '../workspaces.ts'
@@ -40,10 +40,10 @@ export interface ProposalSummary {
 export interface ProposalOutcome {
   id: string
   status: 'accepted' | 'rejected' | 'conflict' | 'error'
-  error?: FlowError
+  error?: RaindownError
 }
 
-const proposalDir = (home: string) => join(flowPaths(home).state, 'proposals')
+const proposalDir = (home: string) => join(raindownPaths(home).state, 'proposals')
 const pendingPath = (home: string, id: string) => join(proposalDir(home), `${id}.json`)
 
 async function readOptional(path: string): Promise<string | null> {
@@ -119,7 +119,7 @@ async function scanProposal(
 ): Promise<Result<void>> {
   // 扫描原始字符串，不能只扫 JSON：转义后的换行可能改变密钥规则的匹配边界。
   const scan = await scanForSecrets(Object.values(proposal).flat().join('\n'), {
-    configPath: join(flowPaths(home).brain, '.gitleaks.toml'),
+    configPath: join(raindownPaths(home).brain, '.gitleaks.toml'),
     ...(ctx.gitleaksBin === undefined ? {} : { gitleaksBin: ctx.gitleaksBin }),
   })
   if (!scan.ok) return scan
@@ -165,7 +165,7 @@ export async function createProposal(
       ) {
         return fail('failure', 'sources_required', '事实类条目需要出处（sources 为空）')
       }
-      const before = await readOptional(join(flowPaths(home).brain, path.data))
+      const before = await readOptional(join(raindownPaths(home).brain, path.data))
       if (before !== null) {
         const ordinary = checkOrdinary(before)
         if (!ordinary.ok) return ordinary
@@ -217,9 +217,9 @@ export async function diffProposal(
     if (!p.ok) return p
     const path = entryPath(p.data.target)
     if (!path.ok) return path
-    const dir = await mkdtemp(join(tmpdir(), 'flow-proposal-diff-'))
+    const dir = await mkdtemp(join(tmpdir(), 'raindown-proposal-diff-'))
     try {
-      const before = await readOptional(join(flowPaths(home).brain, path.data))
+      const before = await readOptional(join(raindownPaths(home).brain, path.data))
       await writeFile(join(dir, 'current'), before ?? '')
       await writeFile(join(dir, 'proposed'), p.data.content)
       const r = await execCommand(

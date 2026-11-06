@@ -19,7 +19,7 @@ export * from './workspace.ts'
 
 type JsonSchema = Record<string, unknown>
 
-const SCHEMA_BASE = 'https://flow.local/schemas/'
+const SCHEMA_BASE = 'https://raindown.local/schemas/'
 
 function toJson(schema: z.ZodType, file: string, io: 'input' | 'output' = 'output'): JsonSchema {
   const json = z.toJSONSchema(schema, { io }) as JsonSchema

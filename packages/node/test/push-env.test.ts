@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DIFF_STAT_MAX } from '@flow/core'
+import { DIFF_STAT_MAX } from '@raindown/core'
 import {
   checkGhEnv,
   checkPushEnv,
@@ -391,7 +391,7 @@ describe('改动摘要与上报字段', () => {
 
   test('computeDiffStat：不是 git 目录或不属于登记仓库时省略', async () => {
     const g = fixture()
-    const plain = mkdtempSync(join(tmpdir(), 'flow-not-git-'))
+    const plain = mkdtempSync(join(tmpdir(), 'raindown-not-git-'))
     try {
       expect(await computeDiffStat(plain, opts(g))).toBeUndefined()
     } finally {

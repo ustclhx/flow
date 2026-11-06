@@ -4,12 +4,12 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import {
   type Database,
   fail,
-  flowPaths,
   isSqliteBusy,
   ok,
   openDatabase,
   type Result,
-} from '@flow/core'
+  raindownPaths,
+} from '@raindown/core'
 import { z } from 'zod'
 
 /**
@@ -20,7 +20,7 @@ import { z } from 'zod'
  * 的 fcntl 字节范围锁），进程以任何方式退出（包括 kill -9）都会由内核释放，因此不存在需要"接管"
  * 的陈旧锁。同一进程内的多个连接由 SQLite 的 unix VFS 在进程内协调，同样只有一个能拿到锁。
  *
- * `state/hub.pid`（pid + token）在取得锁之后写入，只用于报错提示和 `flow daemon status`，
+ * `state/hub.pid`（pid + token）在取得锁之后写入，只用于报错提示和 `raindown daemon status`，
  * 不参与互斥；内容可能是崩溃遗留的旧值，读取方只能把它当作提示。
  *
  * 注意：POSIX 文件锁按进程归属，进程内任何对 hub.lock 的 open/close 都会让内核丢掉本进程在
@@ -129,9 +129,9 @@ async function tryLockOnce(path: string): Promise<Database | null> {
   return db
 }
 
-/** 同一个 flow-home 只能有一个中枢；锁被存活进程持有时失败，不等待持有者退出。 */
+/** 同一个 raindown-home 只能有一个中枢；锁被存活进程持有时失败，不等待持有者退出。 */
 export async function acquireHubLock(home: string): Promise<Result<HubLock>> {
-  const paths = flowPaths(home)
+  const paths = raindownPaths(home)
   const info: LockInfo = { pid: process.pid, token: randomBytes(16).toString('hex') }
   let db: Database | null = null
   try {

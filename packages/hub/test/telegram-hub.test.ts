@@ -12,21 +12,21 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  flowPaths,
   type HubStatusData,
-  initFlowHome,
+  initRaindownHome,
   ok,
+  raindownPaths,
   type ShowTaskData,
   type TelegramLinkCodeData,
   type TelegramUnlinkData,
-} from '@flow/core'
+} from '@raindown/core'
 import { type EventInput, openLedger, type RunningHub, runHub } from '../src/index.ts'
 import { drafts, must } from './ledger-helpers.ts'
 import { FakeTelegram, fakeBotToken, STRANGER_ID, USER_ID } from './telegram-fixtures.ts'
 
 /**
  * Telegram 渠道与中枢的端到端（add-m1-inbox 5.1、5.2；telegram-channel spec 全部场景）：
- * 真实的 runHub（随机端口、临时 FLOW_HOME），Telegram 是假的 HTTP 服务，bot token 是可识别的假值；
+ * 真实的 runHub（随机端口、临时 RAINDOWN_HOME），Telegram 是假的 HTTP 服务，bot token 是可识别的假值；
  * 每个场景结束后全文扫描日志、账本、状态文件与 config 仓库历史，确认 token 没有出现在任何地方。
  */
 
@@ -47,9 +47,9 @@ const until = async (cond: () => boolean, what = '条件', ms = 8000) => {
 const WS = 'ws/demo'
 
 async function makeHome(o: { bound?: boolean; channels?: string } = {}) {
-  const h = join(mkdtempSync(join(tmpdir(), 'flow-telegram-hub-')), 'home')
+  const h = join(mkdtempSync(join(tmpdir(), 'raindown-telegram-hub-')), 'home')
   cleanups.push(() => rmSync(join(h, '..'), { recursive: true, force: true }))
-  must(await initFlowHome(h))
+  must(await initRaindownHome(h))
   mkdirSync(join(h, 'config', 'workspaces'), { recursive: true })
   // supervisor 唤醒需要登记仓库作为工作目录（/ask 会真正创建唤醒任务）。
   const repo = join(h, '..', 'repo')
@@ -64,7 +64,7 @@ async function makeHome(o: { bound?: boolean; channels?: string } = {}) {
   const channels =
     o.channels ??
     (o.bound ? `telegram:\n  chat_id: ${USER_ID}\n  user_id: ${USER_ID}\n` : undefined)
-  if (channels !== undefined) writeFileSync(flowPaths(h).channelsConfig, channels)
+  if (channels !== undefined) writeFileSync(raindownPaths(h).channelsConfig, channels)
   return h
 }
 
@@ -102,7 +102,7 @@ async function startHub(
       },
     }),
   )
-  const userToken = readFileSync(flowPaths(h).hubToken, 'utf8').trim()
+  const userToken = readFileSync(raindownPaths(h).hubToken, 'utf8').trim()
   const running = hub
   const api = async (path: string, init: RequestInit & { actor?: string } = {}) => {
     const res = await fetch(`${running.url}${path}`, {
@@ -110,7 +110,7 @@ async function startHub(
       headers: {
         Authorization: `Bearer ${userToken}`,
         'Content-Type': 'application/json',
-        ...(init.actor ? { 'X-Flow-Actor': init.actor } : {}),
+        ...(init.actor ? { 'X-Raindown-Actor': init.actor } : {}),
       },
     })
     return { status: res.status, body: (await res.json()) as ApiBody }
@@ -133,14 +133,16 @@ async function expectNoToken(h: string, token: string, extra: unknown[]) {
   // 账本先关掉中枢再读（WAL 合并进主文件）
   await hub?.stop()
   hub = undefined
-  const ledger = await openLedger(flowPaths(h).ledgerDb)
+  const ledger = await openLedger(raindownPaths(h).ledgerDb)
   texts.push(JSON.stringify(ledger.eventsAfter(0, {}, 100_000)))
   ledger.close()
-  walk(flowPaths(h).state)
-  walk(flowPaths(h).config)
-  walk(flowPaths(h).raw)
-  texts.push(execFileSync('git', ['log', '-p', '--all'], { cwd: flowPaths(h).config }).toString())
-  texts.push(execFileSync('git', ['log', '-p', '--all'], { cwd: flowPaths(h).raw }).toString())
+  walk(raindownPaths(h).state)
+  walk(raindownPaths(h).config)
+  walk(raindownPaths(h).raw)
+  texts.push(
+    execFileSync('git', ['log', '-p', '--all'], { cwd: raindownPaths(h).config }).toString(),
+  )
+  texts.push(execFileSync('git', ['log', '-p', '--all'], { cwd: raindownPaths(h).raw }).toString())
   for (const t of texts) {
     expect(t.includes(token)).toBe(false)
     expect(t.includes(secretPart)).toBe(false)
@@ -148,12 +150,12 @@ async function expectNoToken(h: string, token: string, extra: unknown[]) {
 }
 
 describe('绑定与白名单（telegram-channel "绑定用户本人"）', () => {
-  test('flow telegram link 的绑定码 → /link → chat 写入 config/channels.yaml 并提交；陌生人被忽略；pending 条目随即补推', async () => {
+  test('raindown telegram link 的绑定码 → /link → chat 写入 config/channels.yaml 并提交；陌生人被忽略；pending 条目随即补推', async () => {
     const fake = await new FakeTelegram().start()
     cleanups.push(() => fake.close())
     const h = await makeHome()
     // 中枢启动前已有一个卡住的任务：未绑定时推不出去，保持 pending
-    const ledger = await openLedger(flowPaths(h).ledgerDb)
+    const ledger = await openLedger(raindownPaths(h).ledgerDb)
     const d = drafts('t-wait', { ws: WS })
     must(ledger.append(d['task.created'] as EventInput, { actor: 'user' }))
     must(
@@ -189,17 +191,17 @@ describe('绑定与白名单（telegram-channel "绑定用户本人"）', () => 
     const code = issued.body.data.code as string
     expect(code).toMatch(/^[a-z2-9]{16}$/)
     expect(issued.body.data.command).toBe(`/link ${code}`)
-    expect(issued.body.data.link_url).toBe(`https://t.me/flow_test_bot?start=${code}`)
+    expect(issued.body.data.link_url).toBe(`https://t.me/raindown_test_bot?start=${code}`)
 
     fake.say(`/link ${code}`)
     await until(() => fake.to(USER_ID).some((m) => m.text.includes('已绑定')), '绑定回复')
-    const yaml = readFileSync(flowPaths(h).channelsConfig, 'utf8')
+    const yaml = readFileSync(raindownPaths(h).channelsConfig, 'utf8')
     expect(yaml).toContain(`chat_id: ${USER_ID}`)
     expect(yaml).toContain(`user_id: ${USER_ID}`)
     const log = execFileSync('git', ['log', '-1', '--format=%an|%s'], {
-      cwd: flowPaths(h).config,
+      cwd: raindownPaths(h).config,
     }).toString()
-    expect(log.trim()).toBe('Flow (user)|channels: 绑定 Telegram chat')
+    expect(log.trim()).toBe('Raindown (user)|channels: 绑定 Telegram chat')
     // 绑定后立即补推 pending 的条目
     await until(() => fake.to(USER_ID).some((m) => m.text.includes('用哪个分支')), '补推条目')
 
@@ -207,7 +209,7 @@ describe('绑定与白名单（telegram-channel "绑定用户本人"）', () => 
     const reuse = fake.say(`/link ${code}`, { chat: STRANGER_ID })
     await until(() => fake.offsets.some((x) => x > reuse), '处理重复使用')
     expect(fake.to(STRANGER_ID)).toEqual([])
-    expect(readFileSync(flowPaths(h).channelsConfig, 'utf8')).toContain(`chat_id: ${USER_ID}`)
+    expect(readFileSync(raindownPaths(h).channelsConfig, 'utf8')).toContain(`chat_id: ${USER_ID}`)
 
     const status = await api('/v1/hub/status')
     expect(status.body.data.channels).toEqual([
@@ -222,7 +224,7 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
     const fake = await new FakeTelegram().start()
     cleanups.push(() => fake.close())
     const h = await makeHome({ bound: true })
-    const ledger = await openLedger(flowPaths(h).ledgerDb)
+    const ledger = await openLedger(raindownPaths(h).ledgerDb)
     for (const [id, reason, message] of [
       ['t-appr', 'awaiting_approval', '要执行 git push origin main'],
       ['t-q', 'question', '用方案 A 还是 B？'],
@@ -342,9 +344,9 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
     const { fake, h, logs } = await seeded()
     fake.say('/capture 东方站可以加日语')
     await until(() => fake.to(USER_ID).some((m) => m.text.startsWith('已记下')), '随手记确认')
-    const files = readdirSync(join(flowPaths(h).raw, 'inbox'))
+    const files = readdirSync(join(raindownPaths(h).raw, 'inbox'))
     expect(files).toHaveLength(1)
-    const capture = readFileSync(join(flowPaths(h).raw, 'inbox', files[0] ?? ''), 'utf8')
+    const capture = readFileSync(join(raindownPaths(h).raw, 'inbox', files[0] ?? ''), 'utf8')
     expect(capture).toContain('source: telegram')
     expect(capture).toContain('actor: user')
     expect(capture).toContain('东方站可以加日语')
@@ -370,7 +372,7 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
     const wakeId = askReply?.slice('已唤醒 supervisor，任务 '.length)
     await hub?.stop()
     hub = undefined
-    const ledger = await openLedger(flowPaths(h).ledgerDb)
+    const ledger = await openLedger(raindownPaths(h).ledgerDb)
     const all = ledger.eventsAfter(0, {}, 10_000)
     const asks = all.filter((e) => e.type === 'user.instruction')
     const wakes = all.filter((e) => e.type === 'supervisor.wake_started')
@@ -399,7 +401,7 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
     await until(() => fake.offsets.some((x) => x > u), '确认已处理')
     await hub?.stop()
     hub = undefined
-    const saved = JSON.parse(readFileSync(flowPaths(h).telegramState, 'utf8'))
+    const saved = JSON.parse(readFileSync(raindownPaths(h).telegramState, 'utf8'))
     expect(saved.offset).toBe(u + 1)
 
     fake.offsets = []
@@ -407,9 +409,9 @@ describe('交互与命令（telegram-channel "条目消息与交互"、"命令"�
     await startHub(h, fake)
     await until(() => fake.offsets.some((x) => x > next), '重启后处理新的更新')
     expect(fake.offsets[0]).toBe(u + 1)
-    await until(() => readdirSync(join(flowPaths(h).raw, 'inbox')).length === 2, '第二条随手记')
-    const texts = readdirSync(join(flowPaths(h).raw, 'inbox')).map((f) =>
-      readFileSync(join(flowPaths(h).raw, 'inbox', f), 'utf8'),
+    await until(() => readdirSync(join(raindownPaths(h).raw, 'inbox')).length === 2, '第二条随手记')
+    const texts = readdirSync(join(raindownPaths(h).raw, 'inbox')).map((f) =>
+      readFileSync(join(raindownPaths(h).raw, 'inbox', f), 'utf8'),
     )
     expect(texts.filter((t) => t.includes('只记一次'))).toHaveLength(1)
   })
@@ -422,7 +424,7 @@ describe('改绑与解除绑定（PR #34 审查）', () => {
   async function channelEvents(h: string) {
     await hub?.stop()
     hub = undefined
-    const ledger = await openLedger(flowPaths(h).ledgerDb)
+    const ledger = await openLedger(raindownPaths(h).ledgerDb)
     const events = ledger
       .eventsAfter(0, {}, 10_000)
       .filter((e) => e.type === 'channel.rebound' || e.type === 'channel.unlinked')
@@ -466,8 +468,8 @@ describe('改绑与解除绑定（PR #34 审查）', () => {
     const done = fake.sent.findIndex((m) => m.chat_id === OTHER_ID)
     expect(notice).toBeGreaterThanOrEqual(0)
     expect(notice).toBeLessThan(done)
-    expect(fake.sent[notice]?.text).toContain('flow telegram unlink')
-    expect(readFileSync(flowPaths(h).channelsConfig, 'utf8')).toContain(`chat_id: ${OTHER_ID}`)
+    expect(fake.sent[notice]?.text).toContain('raindown telegram unlink')
+    expect(readFileSync(raindownPaths(h).channelsConfig, 'utf8')).toContain(`chat_id: ${OTHER_ID}`)
     const status = await api('/v1/hub/status')
     expect(status.body.data.channels[0]?.last_rebound_at).not.toBeNull()
     // 原 chat 之后被忽略。
@@ -489,10 +491,10 @@ describe('改绑与解除绑定（PR #34 审查）', () => {
 
     const unlinked = await api('/v1/telegram/unlink', { method: 'POST', body: '{}' })
     expect(unlinked.body.data.unlinked).toBe(true)
-    const yaml = readFileSync(flowPaths(h).channelsConfig, 'utf8')
+    const yaml = readFileSync(raindownPaths(h).channelsConfig, 'utf8')
     expect(yaml).not.toContain('chat_id')
     expect(
-      execFileSync('git', ['log', '-1', '--format=%s'], { cwd: flowPaths(h).config })
+      execFileSync('git', ['log', '-1', '--format=%s'], { cwd: raindownPaths(h).config })
         .toString()
         .trim(),
     ).toBe('channels: 解除 Telegram 绑定')
@@ -515,8 +517,8 @@ describe('改绑与解除绑定（PR #34 审查）', () => {
     const leaked = ['ghp', '_', 'Z9y8X7w6'.repeat(5)].join('')
     fake.say(`/capture 新 token ${leaked}`)
     await until(() => fake.to(USER_ID).some((m) => m.text.startsWith('已记下')), '随手记确认')
-    const files = readdirSync(join(flowPaths(h).raw, 'inbox'))
-    const text = readFileSync(join(flowPaths(h).raw, 'inbox', files[0] ?? ''), 'utf8')
+    const files = readdirSync(join(raindownPaths(h).raw, 'inbox'))
+    const text = readFileSync(join(raindownPaths(h).raw, 'inbox', files[0] ?? ''), 'utf8')
     expect(text).toContain('新 token')
     expect(text).not.toContain(leaked)
   })
@@ -527,7 +529,7 @@ describe('渠道状态', () => {
     const fake = await new FakeTelegram().start()
     cleanups.push(() => fake.close())
     const h = await makeHome({ bound: true })
-    const wrong = ['31337', ['FLOWFAKE', 'WRONG', 'z'.repeat(10)].join('_')].join(':')
+    const wrong = ['31337', ['RAINDOWNFAKE', 'WRONG', 'z'.repeat(10)].join('_')].join(':')
     const { logs, api } = await startHub(h, fake, { token: wrong })
     await until(() => logs.some((l) => l.message.includes('渠道已停用')), '停用')
     const status = await api('/v1/hub/status')
@@ -562,7 +564,7 @@ describe('渠道状态', () => {
     ])
     const link = await api('/v1/telegram/link-code', { method: 'POST', body: '{}' })
     expect(link.body.error.code).toBe('channel_unavailable')
-    expect(link.body.error.message).toContain('flow secrets set telegram/bot-token')
+    expect(link.body.error.message).toContain('raindown secrets set telegram/bot-token')
     expect(fake.calls).toEqual([])
   })
 
