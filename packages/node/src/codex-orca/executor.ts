@@ -330,9 +330,11 @@ function isDirectory(
 
 /** 末尾输出用于比较时去掉计时（`Working (3m 00s • …`），计时变化不算新输出。 */
 const normLine = (l: string) => l.replace(/\(\d+[hms][^)]*\)/g, '()').replace(/\s+$/, '')
-/** 以识别出的整个弹窗绑定回合；严格命令解析仅用于代批与额外的执行证据。 */
+/** 弹窗指纹只忽略每行行尾空白，保留命令中的括号等内容；严格命令解析仅用于代批与执行证据。 */
 const approvalFingerprint = (a: TailAnalysis): string | undefined =>
-  a.kind === 'awaiting_approval' ? a.last_message.join('\n') : undefined
+  a.kind === 'awaiting_approval'
+    ? a.last_message.map((line) => line.trimEnd()).join('\n')
+    : undefined
 const fingerprintHash = (fingerprint: string): string =>
   createHash('sha256').update(fingerprint).digest('hex')
 
