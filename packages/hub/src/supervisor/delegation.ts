@@ -467,6 +467,14 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
 
   function onEvent(e: LedgerEvent) {
     if (stopped) return
+    if (e.type === 'task.reply_dropped' && e.task_id !== undefined) {
+      // 只清理确已结束的委托；旧回合迟到的拒收不能取消新回合的计时器或放开推送。
+      if (!ledger.activeDelegation(e.task_id)) {
+        clearTimer(e.task_id)
+        enqueue(() => release())
+      }
+      return
+    }
     if (e.type === 'task.reply_escalated' && e.task_id !== undefined) {
       // watcher 也可直接结束委托；立即清理旧计时器，并通知推送器重新处理条目。
       clearTimer(e.task_id)

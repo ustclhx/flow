@@ -1450,6 +1450,89 @@ describe('收件箱：委托期间不推送（inbox spec "委托给 supervisor �
     expect(escalationsOf(env, id)).toHaveLength(1)
   })
 
+  test('当前回合的 supervisor 回复拒收后释放委托，恢复条目并允许用户回复', async () => {
+    const { env, settle } = await withInbox()
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const blockSeq = blockQuestion(env, lease)
+    await settle()
+    const { caller } = await replyCaller(env)
+    const reply = must(respond(env, caller, { task_id: id, block_seq: blockSeq })).reply
+    const before = env.released()
+    must(
+      env.protocol.service.ackReply(lease.lease_id, {
+        lease_token: lease.lease_token,
+        reply_id: reply?.id ?? '',
+        outcome: 'dropped',
+        reason: 'round_closed',
+      }),
+    )
+    await settle()
+    expect(env.store.activeDelegation(id)).toBeNull()
+    expect(env.delegation.held({ id: `blk.${blockSeq}`, source: 'task', task_id: id })).toBe(false)
+    expect(env.released()).toBeGreaterThan(before)
+    expect(
+      env.store.getInboxItem(`blk.${blockSeq}`)?.title.startsWith(DELEGATED_TITLE_PREFIX),
+    ).toBe(false)
+    expect(
+      code(await env.tasks.replyTask(id, { kind: 'text', text: '用户来答' }, { actor: 'user' })),
+    ).toBe('ok')
+  })
+
+  test('旧回合的 supervisor 回复迟到拒收不影响新委托、条目或超时', async () => {
+    const { env, settle } = await withInbox()
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const { blockSeq: first } = blockApproval(env, lease)
+    await settle()
+    const { caller } = await replyCaller(env)
+    const reply = must(
+      respond(env, caller, { task_id: id, block_seq: first, decision: 'approve' }),
+    ).reply
+    must(
+      env.store.append(
+        {
+          type: 'task.reply_escalated',
+          task_id: id,
+          workspace: WS,
+          payload: {
+            reason: 'policy_changed',
+            block_seq: first,
+            dropped_reply_id: reply?.id ?? '',
+          },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    must(
+      env.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token, resumed: {} }),
+    )
+    const second = blockQuestion(env, lease)
+    await settle()
+    const before = env.released()
+    must(
+      env.protocol.service.ackReply(lease.lease_id, {
+        lease_token: lease.lease_token,
+        reply_id: reply?.id ?? '',
+        outcome: 'dropped',
+        reason: 'round_closed',
+      }),
+    )
+    await settle()
+    expect(env.store.activeDelegation(id)?.block_seq).toBe(second)
+    expect(env.delegation.held({ id: `blk.${second}`, source: 'task', task_id: id })).toBe(true)
+    expect(env.store.getInboxItem(`blk.${second}`)?.title.startsWith(DELEGATED_TITLE_PREFIX)).toBe(
+      true,
+    )
+    expect(env.released()).toBe(before)
+    await env.clock.advance(600_000)
+    await settle()
+    expect(escalationsOf(env, id).at(-1)?.payload).toMatchObject({
+      reason: 'timeout',
+      block_seq: second,
+    })
+  })
+
   test('supervisor escalate：按原级别推送，条目注明 supervisor 给出的理由', async () => {
     const { env, channel, settle } = await withInbox()
     const id = await create(env)
