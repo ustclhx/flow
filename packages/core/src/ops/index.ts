@@ -18,7 +18,14 @@ import {
   taskProposeOp,
   taskRespondOp,
 } from './supervisor.ts'
-import { taskCancelOp, taskCreateOp, taskListOp, taskReplyOp, taskShowOp } from './tasks.ts'
+import {
+  taskCancelOp,
+  taskCreateOp,
+  taskListOp,
+  taskReplyOp,
+  taskRetryOp,
+  taskShowOp,
+} from './tasks.ts'
 import { resourceTransferOp, wsBriefOp, wsListOp, wsResourcesOp } from './workspace.ts'
 
 export * from './binding.ts'
@@ -43,6 +50,7 @@ export const operations = [
   taskListOp,
   taskShowOp,
   taskCancelOp,
+  taskRetryOp,
   taskReplyOp,
   kbJournalOp,
   captureOp,

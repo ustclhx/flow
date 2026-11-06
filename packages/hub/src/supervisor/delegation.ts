@@ -605,6 +605,21 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
           },
           ...(requeue
             ? [
+                ...(task &&
+                task.attempt > 0 &&
+                !ledger
+                  .taskEvents(task.id)
+                  .some(
+                    (e) => e.type === 'task.attempt_ended' && e.payload.attempt === task.attempt,
+                  )
+                  ? [
+                      {
+                        ...base,
+                        type: 'task.attempt_ended' as const,
+                        payload: { attempt: task.attempt, reason: 'blocked' as const },
+                      },
+                    ]
+                  : []),
                 {
                   ...base,
                   type: 'task.requeued_with_reply' as const,

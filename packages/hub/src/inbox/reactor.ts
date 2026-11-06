@@ -4,6 +4,7 @@ import {
   type BlockedReason,
   clipText,
   type EventOf,
+  foldTaskAttempts,
   INBOX_BODY_MAX,
   INBOX_TITLE_MAX,
   type InboxCloseReason,
@@ -26,9 +27,10 @@ import type { HubLogger } from '../server/maintenance.ts'
  * 订阅账本事件，把底层事件转换成收件箱事件：
  * - `task.blocked` → 开条目（按卡住原因与 `config/inbox.yaml` 分级）；
  * - `task.unblocked`、`task.requeued*`、终态 → 关闭该任务未关闭的条目；
+ * - `task.requeued(manual)` → 独立重试通知（记录发起者与上一派工事实）；
  * - `policy.decided` 的 auto-report → Digest 条目（不随任务状态关闭，由每日摘要 3.3 处理）。
  *
- * **幂等**：条目 id 由源事件确定（`blk.<seq>`、`pol.<seq>`），账本拒绝重复创建（`duplicate_item`）
+ * **幂等**：条目 id 由源事件确定（`blk.<seq>`、`pol.<seq>`、`retry.<seq>`），账本拒绝重复创建（`duplicate_item`）
  * 与重复关闭（`item_closed`）。关闭只作用于"源事件 seq 小于关闭事件 seq"的条目，所以重放旧事件
  * 不会关掉之后新开的条目。开条目前还要求该事件仍是任务最近一次卡住且任务仍处于 blocked：
  * 卡住后立刻恢复（同一批写入）不会打扰用户，首次在旧账本上运行也不会为历史卡住补开条目。
@@ -103,6 +105,7 @@ const STATUS_CLOSE: Readonly<Record<TaskStatus, InboxCloseReason>> = {
 export const blockedItemId = (seq: number) => `blk.${seq}`
 export const policyItemId = (seq: number) => `pol.${seq}`
 export const outOfBandItemId = (seq: number) => `oob.${seq}`
+export const retryItemId = (seq: number) => `retry.${seq}`
 
 /** 条目上的操作：与 `task_reply` 接受的回复种类一致（text → reply）。 */
 export function blockedActions(reason: string, priorReason?: string): InboxItemAction[] {
@@ -309,6 +312,90 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     })
   }
 
+  /** 人或 supervisor 的主动重试是独立通知，正文只读取重试发生之前的派工事实。 */
+  function onRetry(e: EventOf<'task.requeued'>) {
+    if (e.payload.reason !== 'manual' || ledger.getInboxItem(retryItemId(e.seq))) return
+    const requestedBy =
+      e.payload.requested_by ??
+      (e.actor === 'user' || e.actor === 'supervisor' ? e.actor : undefined)
+    if (!requestedBy) return
+    const task = ledger.getTask(e.task_id ?? '')
+    if (!task) return
+    const history = ledger.taskEvents(task.id).filter((event) => event.seq < e.seq)
+    const previous = foldTaskAttempts(task, history).at(-1)
+    const started = previous
+      ? history.findLast(
+          (event) => event.type === 'task.started' && event.payload.attempt === previous.attempt,
+        )
+      : undefined
+    const priorEvents = started ? history.filter((event) => event.seq >= started.seq) : []
+    const blocked = priorEvents.findLast((event) => event.type === 'task.blocked')
+    const failed = priorEvents.findLast((event) => event.type === 'task.failed')
+    const lines = [
+      `第 ${(previous?.attempt ?? 0) + 1} 次派工：已重新排队，尚未开始`,
+      `发起者：${requestedBy}`,
+      previous
+        ? `上次派工：第 ${previous.attempt} 次；结束事实：${previous.reason ?? '未记录'}`
+        : '上次派工：未记录',
+      `重试理由：${clipText(e.payload.retry_reason ?? e.payload.note ?? '未提供', 1000)}`,
+    ]
+    // retry 结束事实不能覆盖原先的崩溃、目录丢失或失败说明。
+    if (blocked?.type === 'task.blocked') {
+      lines.push(
+        `上次卡住：${blocked.payload.reason}（${REASON_LABEL[blocked.payload.reason]}）；${clipText(blocked.payload.message, 800)}`,
+      )
+    }
+    if (failed?.type === 'task.failed') {
+      lines.push(
+        `上次失败：${clipText([failed.payload.result?.summary, failed.payload.message].filter(Boolean).join('；'), 800)}`,
+      )
+    }
+    if (previous?.last_report) lines.push(`上次上报：${clipText(previous.last_report, 800)}`)
+    write({
+      type: 'inbox.item_created',
+      task_id: task.id,
+      workspace: task.workspace,
+      payload: {
+        item_id: retryItemId(e.seq),
+        source: 'task_retry',
+        source_ref: task.id,
+        source_seq: e.seq,
+        reason: requestedBy,
+        level: resolveInboxLevel(config(), {
+          source: 'task_retry',
+          reason: requestedBy,
+          workspace: task.workspace,
+        }),
+        title: clipText(`任务 ${task.id} 被重试`, INBOX_TITLE_MAX),
+        body: clipText(lines.join('\n'), INBOX_BODY_MAX),
+        actions: [],
+      },
+    })
+  }
+
+  /** 终态结束此前重试通知的生命周期；后续重试不能被旧终态关闭。 */
+  function closeRetryDrafts(
+    task: TaskView,
+    e: LedgerEvent,
+    reason: InboxCloseReason,
+  ): EventInput[] {
+    return ledger
+      .listInboxItems({ task_id: task.id, source: 'task_retry', state: 'open', limit: 1000 })
+      .filter((item) => Number(item.id.slice('retry.'.length)) < e.seq)
+      .map((item) => ({
+        type: 'inbox.item_closed',
+        task_id: task.id,
+        workspace: task.workspace,
+        payload: {
+          item_id: item.id,
+          reason,
+          note: `任务进入 ${e.type.slice('task.'.length)} 终态，自动关闭重试通知`,
+          cause_seq: e.seq,
+          cause_actor: e.actor,
+        },
+      }))
+  }
+
   function onTaskLeft(e: LedgerEvent, reason: InboxCloseReason) {
     const task = ledger.getTask(e.task_id ?? '')
     if (!task) return
@@ -332,6 +419,9 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         // supervisor 代回复不是收件箱渠道：关闭记录只留 cause_actor（supervisor），不写 via。
         ...(via && via !== 'supervisor' ? { via } : {}),
       }),
+      ...(e.type === 'task.done' || e.type === 'task.failed' || e.type === 'task.cancelled'
+        ? closeRetryDrafts(task, e, reason)
+        : []),
     )
   }
 
@@ -440,6 +530,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
       else {
         const reason = CLOSING[e.type]
         if (reason !== undefined) onTaskLeft(e, reason)
+        if (e.type === 'task.requeued') onRetry(e)
       }
     } catch (err) {
       o.logger?.warn('收件箱反应器处理事件失败', { seq: e.seq, type: e.type, error: String(err) })
@@ -493,6 +584,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
    * - 未关闭的任务条目，若任务已不再因该事件卡住，按任务当前状态关闭；
    * - 仍处于 blocked、最近一次卡住还没有对应条目的任务，补开条目。条目已存在（包括已被用户
    *   忽略而关闭的）就不动：同一次卡住只开一次。
+   * - 带外、拒收与主动重试通知扫描源事件补齐；重试通知在其后的任务终态自动关闭。
    */
   function reconcile() {
     needsReconcile = false
@@ -503,6 +595,9 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     }
     for (const event of ledger.eventsByPayload('task.reply_dropped', 'reason', 'round_closed')) {
       if (event.type === 'task.reply_dropped') onReplyDropped(event)
+    }
+    for (const event of ledger.eventsByPayload('task.requeued', 'reason', 'manual')) {
+      if (event.type === 'task.requeued') onRetry(event)
     }
     for (const task of ledger.listTasks({ status: 'blocked', limit: 100_000 })) {
       const e = latestBlocked(task.id)
@@ -525,6 +620,28 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         workspace: task.workspace,
         payload: { item_id: item.id, reason: STATUS_CLOSE[task.status] },
       })
+    }
+    // 游标可能已越过终态，通知也可能在补齐历史时才创建，因此按源 seq 再核对一次。
+    for (const item of ledger.listInboxItems({
+      source: 'task_retry',
+      state: 'open',
+      limit: 10_000,
+    })) {
+      if (item.task_id === null) continue
+      const task = ledger.getTask(item.task_id)
+      if (!task) continue
+      const sourceSeq = Number(item.id.slice('retry.'.length))
+      const ended = ledger
+        .taskEvents(task.id)
+        .find(
+          (event) =>
+            event.seq > sourceSeq &&
+            (event.type === 'task.done' ||
+              event.type === 'task.failed' ||
+              event.type === 'task.cancelled'),
+        )
+      const reason = ended ? CLOSING[ended.type] : undefined
+      if (ended && reason !== undefined) write(...closeRetryDrafts(task, ended, reason))
     }
     // 这里的写入再失败时 needsReconcile 重新置位：下一轮 drain（有新事件时）或下次启动再试，不在此循环重试。
   }

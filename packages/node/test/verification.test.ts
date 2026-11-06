@@ -114,6 +114,7 @@ test('测试失败：保存退出码和合并输出，失败即停，第二条�
     'lease.granted',
     'task.verifying',
     'task.failed',
+    'task.attempt_ended',
   ])
 })
 
@@ -255,7 +256,11 @@ test('验收中取消：杀掉命令及子进程，保存已执行命令，任�
   expect(b.task(id).result?.reason).toBeUndefined()
   expect(existsSync(marker)).toBe(false)
   await waitForExit(pids)
-  expect(b.types(id).slice(-2)).toEqual(['task.cancel_requested', 'task.cancelled'])
+  expect(b.types(id).slice(-3)).toEqual([
+    'task.cancel_requested',
+    'task.cancelled',
+    'task.attempt_ended',
+  ])
   const result = b.task(id).result
   expect(b.ledger.rebuild().ok).toBe(true)
   expect(b.task(id)).toMatchObject({ status: 'cancelled', result })

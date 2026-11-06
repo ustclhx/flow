@@ -21,6 +21,7 @@ import {
   actOnInbox,
   approveMergeRequest,
   createHubApp,
+  createInboxReactor,
   createInboxRoutes,
   createNodeProtocol,
   createSupervisorToolRoutes,
@@ -212,6 +213,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       branch?: string
       /** 随分支上报的登记仓库快照的 origin 地址；null 表示不带快照。缺省为 acme/demo。 */
       remoteUrl?: string | null
+      actor?: 'user' | 'hub'
     } = {},
   ) => {
     clock.time += 1000
@@ -228,7 +230,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
             ...(opts.origin ? { origin: opts.origin } : {}),
           },
         } as unknown as EventInput,
-        { actor: 'user' },
+        { actor: opts.actor ?? 'user' },
       ),
     )
     const status = opts.status ?? 'done'
@@ -510,6 +512,126 @@ describe('合并请求的资格（D10 第 4 步）', () => {
       expect(code(r)).toBe('merge_not_eligible')
       expect(reasonsOf(r).join()).toContain(reason)
     }
+  })
+
+  test('审查崩溃后重试原任务，重跑完成即解除未结束审查的合并阻挡', async () => {
+    const s = await setup()
+    s.dev()
+    const w = await s.wake('instruction')
+    const rv = s.task(
+      {
+        role: 'pr-reviewer',
+        executor: 'claude-sdk',
+        parent: w.id,
+        inputs: { review: { pr: PR } },
+      },
+      null,
+      { origin: 'instruction', status: 'queued', actor: 'hub' },
+    )
+    const base = { task_id: rv, workspace: WS }
+    must(
+      s.ledger.appendMany(
+        [
+          {
+            ...base,
+            type: 'task.started',
+            payload: { node_id: 'nr', lease_id: 'l-review-1', attempt: 1 },
+          },
+          {
+            ...base,
+            type: 'task.blocked',
+            payload: { reason: 'crashed', message: '审查执行器崩溃' },
+          },
+          { ...base, type: 'task.attempt_ended', payload: { attempt: 1, reason: 'blocked' } },
+        ],
+        { actor: 'hub' },
+      ),
+    )
+    expect(reasonsOf(await s.request(w.token, rv)).join()).toContain('未结束的审查任务')
+
+    const reactor = createInboxReactor({ ledger: s.ledger })
+    reactor.start()
+    cleanups.push(() => reactor.stop())
+    await reactor.idle()
+    const beforeRetry = s.ledger.seq()
+    const missingReason = await s.post(`/v1/tasks/${rv}/retry`, {}, w.token)
+    expect(missingReason.status).toBe(400)
+    expect(await missingReason.json()).toMatchObject({
+      error: { kind: 'usage', code: 'invalid_arguments' },
+    })
+    expect(s.ledger.seq()).toBe(beforeRetry)
+    expect(s.ledger.listInboxItems({ source: 'task_retry' })).toHaveLength(0)
+    const response = await s.post(`/v1/tasks/${rv}/retry`, { reason: '重跑审查' }, w.token)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      data: { task: { id: rv, status: 'queued', attempt: 1 } },
+    })
+    await reactor.idle()
+    const notices = s.ledger.listInboxItems({ source: 'task_retry' })
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toMatchObject({
+      title: `任务 ${rv} 被重试`,
+      level: 'interrupt',
+      reason: 'supervisor',
+      task_id: rv,
+      state: 'open',
+    })
+    for (const text of ['第 2 次派工', 'supervisor', 'crashed', '重跑审查']) {
+      expect(notices[0]?.body).toContain(text)
+    }
+    const queued = await s.request(w.token, rv)
+    expect(code(queued)).toBe('merge_not_eligible')
+    expect(reasonsOf(queued).join()).toContain(`未结束的审查任务 ${rv}（queued）`)
+    must(
+      s.ledger.append(
+        {
+          ...base,
+          type: 'task.started',
+          payload: { node_id: 'nr', lease_id: 'l-review-2', attempt: 2 },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    const running = await s.request(w.token, rv)
+    expect(code(running)).toBe('merge_not_eligible')
+    expect(reasonsOf(running).join()).toContain(`未结束的审查任务 ${rv}（running）`)
+    must(
+      s.ledger.appendMany(
+        [
+          {
+            ...base,
+            type: 'task.done',
+            payload: {
+              result: {
+                summary: '审查通过',
+                executor: 'claude-sdk',
+                node_id: 'nr',
+                review: { verdict: 'approve', blocking: [], notes: '', reviewed_sha: SHA_A },
+              },
+            },
+          },
+          { ...base, type: 'task.attempt_ended', payload: { attempt: 2, reason: 'done' } },
+        ],
+        { actor: 'hub' },
+      ),
+    )
+    await reactor.idle()
+    const closedNotices = s.ledger.listInboxItems({ source: 'task_retry' })
+    expect(closedNotices).toHaveLength(1)
+    expect(closedNotices[0]).toMatchObject({
+      id: notices[0]?.id,
+      body: notices[0]?.body,
+      state: 'closed',
+      closed: { reason: 'task_done' },
+    })
+    const approved = must(await s.request(w.token, rv))
+    expect(approved.mode).toBe('approval')
+    expect(
+      s.ledger.prRelatedTasks(WS, 7, 100).filter((t) => t.contract.inputs?.review),
+    ).toHaveLength(1)
+    expect(s.ledger.getTask(rv)?.attempt).toBe(2)
+    must(s.ledger.rebuild())
+    expect(s.ledger.getTask(rv)).toMatchObject({ status: 'done', attempt: 2 })
   })
 
   test('必须是该 PR 最新一次可信审查；同一 PR 有未结束的审查任务时不合格', async () => {

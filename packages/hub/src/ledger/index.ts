@@ -41,6 +41,7 @@ export {
   generateReplyId,
   generateTaskId,
   type ReplyTaskOptions,
+  type RetryTaskOptions,
   type RoleLookup,
   roleLookupFromHome,
   type TaskService,

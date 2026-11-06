@@ -10,6 +10,7 @@ import {
 } from '../inbox/schema.ts'
 import { policyDecisionSchema } from '../policy/decide.ts'
 import { workspaceRef } from '../schema/common.ts'
+import { taskAttempt } from './attempts.ts'
 import { actor, capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import {
   decisionPath,
@@ -94,6 +95,9 @@ export const PROTOCOL_ERRORS = {
   unknown_role: { status: 422, kind: 'failure' },
   invalid_transition: { status: 409, kind: 'failure' },
   lease_expired: { status: 409, kind: 'failure' },
+  lease_active: { status: 409, kind: 'failure' },
+  cancel_requested: { status: 409, kind: 'failure' },
+  wake_retry_forbidden: { status: 409, kind: 'failure' },
   lease_not_found: { status: 404, kind: 'failure' },
   invalid_lease_token: { status: 403, kind: 'failure' },
   node_not_registered: { status: 409, kind: 'failure' },
@@ -500,6 +504,7 @@ export const showTaskData = z
     task: taskView,
     events: z.array(ledgerEvent).meta({ description: '该任务的全部事件' }),
     replies: z.array(replyView).default([]).meta({ description: '该任务收到的全部回复' }),
+    attempts: z.array(taskAttempt).default([]).meta({ description: '按开始时间排列的派工列表' }),
   })
   .meta({ title: 'GET /v1/tasks/:id' })
 export type ShowTaskData = z.infer<typeof showTaskData>
@@ -518,6 +523,17 @@ export const cancelTaskData = z.object({ task: taskView }).meta({
   description: 'queued/blocked 任务立即 cancelled；running/verifying 任务 cancel_requested=true',
 })
 export type CancelTaskData = z.infer<typeof cancelTaskData>
+
+/** 原任务重试：仅恢复可重试的 blocked 或 failed，不改任务合同与交付物。 */
+export const retryTaskRequest = z
+  .strictObject({ reason: z.string().trim().min(1).max(PROTOCOL_MESSAGE_MAX).optional() })
+  .meta({ title: 'POST /v1/tasks/:id/retry' })
+export type RetryTaskRequest = z.infer<typeof retryTaskRequest>
+export const retryTaskData = z.object({ task: taskView }).meta({
+  title: 'POST /v1/tasks/:id/retry 响应',
+  description: '原任务重新排队，下一次派工沿用原任务的工作目录、分支与 PR',
+})
+export type RetryTaskData = z.infer<typeof retryTaskData>
 
 /**
  * `POST /v1/tasks/:id/reply`（task-interaction spec）：只有 blocked 任务可以回复。
@@ -1201,6 +1217,13 @@ export const ENDPOINTS = {
     auth: true,
     request: cancelTaskRequest,
     response: cancelTaskData,
+  },
+  'tasks-retry': {
+    method: 'POST',
+    path: '/v1/tasks/:id/retry',
+    auth: true,
+    request: retryTaskRequest,
+    response: retryTaskData,
   },
   'tasks-reply': {
     method: 'POST',

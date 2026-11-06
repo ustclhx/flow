@@ -109,6 +109,68 @@ describe('append：事件与投影同事务写入', () => {
     expect(store.activeLease('t1')).toBeNull()
   })
 
+  test('同一 task/attempt 只接受一次派工结束，重复追加整批回滚', async () => {
+    const { store } = await ledger()
+    for (const id of ['a', 'b']) {
+      create(store, id)
+      startTask(store, id)
+      must(
+        store.append(
+          {
+            task_id: id,
+            workspace: WS,
+            type: 'task.attempt_ended',
+            payload: { attempt: 1, reason: 'blocked' },
+          },
+          sys,
+        ),
+      )
+    }
+    const before = store.seq()
+    const duplicate = store.appendMany(
+      [
+        drafts('a')['task.blocked'],
+        {
+          task_id: 'a',
+          workspace: WS,
+          type: 'task.attempt_ended',
+          payload: { attempt: 1, reason: 'retry' },
+        },
+      ],
+      sys,
+    )
+    expect(duplicate.ok ? 'ok' : duplicate.error.code).toBe('invalid_event')
+    expect(store.seq()).toBe(before)
+    expect(store.getTask('a')?.status).toBe('running')
+    must(store.append(drafts('a')['task.blocked'], sys))
+    must(store.append(drafts('a')['task.requeued:manual'], sys))
+    startTask(store, 'a', 2)
+    must(
+      store.append(
+        {
+          task_id: 'a',
+          workspace: WS,
+          type: 'task.attempt_ended',
+          payload: { attempt: 2, reason: 'done' },
+        },
+        sys,
+      ),
+    )
+    expect(store.rebuild().ok).toBe(true)
+  })
+
+  test('通用 requeue 保留已经提出的取消请求', async () => {
+    const { store } = await ledger()
+    create(store, 't')
+    const d = startTask(store, 't')
+    must(store.append(d['task.cancel_requested'], sys))
+    must(store.append(d['task.blocked'], sys))
+    must(store.append(d['task.requeued:manual'], sys))
+    expect(store.getTask('t')).toMatchObject({ status: 'queued', cancel_requested: true })
+    expect(store.rebuild().ok).toBe(true)
+    expect(store.getTask('t')?.cancel_requested).toBe(true)
+  })
+
   test('appendMany 的 actors 逐条覆盖身份：缺省项用 actor，每条仍按写入身份白名单校验', async () => {
     const { store } = await ledger()
     const instruction = {
@@ -252,7 +314,7 @@ const ALLOWED: Record<TaskStatus | 'none', DraftKey[]> = {
   // blocked → blocked（lease_held=false）表示本轮结束，例如卡住期间崩溃、节点掉线。
   blocked: ['task.failed', 'task.blocked', 'task.requeued:manual', 'task.cancelled'],
   done: [],
-  failed: [],
+  failed: ['task.requeued:manual'],
   cancelled: [],
 }
 const STATUS_AFTER: Partial<Record<DraftKey, TaskStatus>> = {
@@ -583,6 +645,37 @@ describe('rebuild（task-ledger "投影可重建"）', () => {
     expect(store.taskActivity('b')).toEqual([])
     // 活动租约到期时间 = 重建时刻 + ttl（60s）
     expect(Date.parse(b?.lease?.expires_at ?? '')).toBe(Date.parse(last?.ts ?? '') + 60_000)
+  })
+
+  test('重建只检查当前 seq 之前的派工结束，定位真正重复的后一条事件', async () => {
+    const { store, path } = await ledger()
+    create(store, 't')
+    startTask(store, 't')
+    const ended = must(
+      store.append(
+        {
+          task_id: 't',
+          workspace: WS,
+          type: 'task.attempt_ended',
+          payload: { attempt: 1, reason: 'blocked' },
+        },
+        sys,
+      ),
+    )
+    const db = await openDatabase(path)
+    db.prepare(
+      'INSERT INTO events (ts, type, workspace, task_id, actor, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(ended.ts, ended.type, WS, 't', 'hub', JSON.stringify({ attempt: 1, reason: 'retry' }))
+    db.close()
+    const snap = store.snapshot()
+    const rebuilt = store.rebuild()
+    expect(rebuilt.ok ? 'ok' : rebuilt.error.code).toBe('ledger_inconsistent')
+    if (!rebuilt.ok)
+      expect(rebuilt.error.details).toMatchObject({
+        seq: ended.seq + 1,
+        error: { code: 'invalid_event' },
+      })
+    expect(store.snapshot()).toEqual(snap)
   })
 
   test('账本自相矛盾时重建失败并保留原投影', async () => {

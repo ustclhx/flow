@@ -8,6 +8,7 @@ import {
   decideVerifySteps,
   defaultSupervisorConfig,
   fail,
+  foldTaskAttempts,
   formatZodIssues,
   type InboxVia,
   isKnownEventType,
@@ -16,11 +17,14 @@ import {
   loadRoles,
   loadWorkspaces,
   ok,
+  RETRYABLE_BLOCKED_REASONS,
   type ReplyKind,
   type ReplyTaskData,
   type Result,
+  type RetryTaskData,
   type Role,
   replyTaskRequest,
+  retryTaskRequest,
   reviewTaskGoal,
   type ShowTaskData,
   SUPERVISOR_ACTOR,
@@ -214,6 +218,13 @@ export interface CancelTaskOptions {
   reason?: string
 }
 
+export interface RetryTaskOptions {
+  actor: string
+  /** 只由鉴权中间件按有效唤醒 token 填入，不接受请求体传入。 */
+  wake?: { task_id: string }
+  reason?: string
+}
+
 export interface ReplyTaskOptions {
   actor: string
   via?: InboxVia
@@ -224,6 +235,7 @@ export interface TaskService {
   listTasks(filter?: unknown): Result<ListTasksData>
   getTask(id: string): Result<ShowTaskData>
   cancelTask(id: string, opts: CancelTaskOptions): Result<CancelTaskData>
+  retryTask(id: string, opts: RetryTaskOptions): Promise<Result<RetryTaskData>>
   replyTask(id: string, body: unknown, opts: ReplyTaskOptions): Result<ReplyTaskData>
 }
 
@@ -651,13 +663,14 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
 
     getTask(id) {
       const task = ledger.getTask(id)
-      return task
-        ? ok({
-            task,
-            events: ledger.taskEvents(id).filter((event) => isKnownEventType(event.type)),
-            replies: ledger.taskReplies(id),
-          })
-        : notFound(id)
+      if (!task) return notFound(id)
+      const events = ledger.taskEvents(id).filter((event) => isKnownEventType(event.type))
+      return ok({
+        task,
+        events,
+        replies: ledger.taskReplies(id),
+        attempts: foldTaskAttempts(task, events),
+      })
     },
 
     cancelTask(id, opts) {
@@ -712,6 +725,150 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
             { from: task.status, type: 'task.cancelled' },
           )
       }
+      const after = ledger.getTask(id)
+      return after ? ok({ task: after }) : notFound(id)
+    },
+
+    async retryTask(id, opts) {
+      if (opts.actor !== USER_ACTOR && opts.actor !== SUPERVISOR_ACTOR) {
+        return fail('failure', 'role_not_allowed', '只有用户或有效唤醒中的 supervisor 可以重试任务')
+      }
+      if (opts.wake && opts.actor !== SUPERVISOR_ACTOR) {
+        return fail('failure', 'actor_mismatch', '唤醒绑定只能用于 supervisor 身份')
+      }
+      const input = retryTaskRequest.safeParse({ reason: opts.reason })
+      if (!input.success || (opts.actor === SUPERVISOR_ACTOR && !input.data.reason)) {
+        return fail(
+          'usage',
+          'invalid_arguments',
+          '重试理由 reason 必须为非空且不超过 8192 字符的文字；supervisor 必填',
+          {
+            field: 'reason',
+          },
+        )
+      }
+      const reason = input.data.reason
+      const before = ledger.getTask(id)
+      if (!before) return notFound(id)
+      let role: RoleForKind | null = null
+      if (opts.actor === SUPERVISOR_ACTOR) {
+        const found = await o.roles(before.contract.role)
+        if (!found.ok) return found
+        if (!found.data) {
+          return fail('failure', 'unknown_role', `角色 ${before.contract.role} 未定义或加载失败`)
+        }
+        role = found.data
+      }
+      // 角色加载后重新读状态；此后的校验与写入之间不能 await，避免撤销并发取消或释放新租约。
+      const task = ledger.getTask(id)
+      if (!task) return notFound(id)
+      if (task.cancel_requested) {
+        return fail('failure', 'cancel_requested', '任务已请求取消，不能重试')
+      }
+      if (ledger.wakeOf(id)) {
+        return fail('failure', 'wake_retry_forbidden', '唤醒任务由调度器重新唤醒，不能直接重试')
+      }
+      if (ledger.activeLease(id) !== null) {
+        return fail('failure', 'lease_active', '任务仍持有活动租约，不能重试')
+      }
+      if (opts.actor === SUPERVISOR_ACTOR) {
+        const wake = opts.wake ? ledger.wakeOf(opts.wake.task_id) : null
+        const caller = wake ? ledger.getTask(wake.task_id) : null
+        if (!wake || !caller || isTerminal(caller)) {
+          return fail('failure', 'scope_denied', 'supervisor 只能经有效唤醒绑定 token 重试任务')
+        }
+        if (wake.origin === 'reply') {
+          return fail('failure', 'reply_only_wake', 'reply 唤醒只能调用 task_respond 与只读操作')
+        }
+        if (task.workspace !== wake.workspace) {
+          return fail(
+            'failure',
+            'workspace_mismatch',
+            `本次唤醒绑定 ${wake.workspace}，不能重试 ${task.workspace} 的任务`,
+          )
+        }
+        const kind = taskKind(role, task.contract, { actor: opts.actor })
+        if (kind === 'merge' || kind === 'supervisor') {
+          return fail('failure', 'role_not_allowed', `supervisor 不能重试 ${kind} 类任务`)
+        }
+        if (kind === 'write' && wake.origin === 'autonomous') {
+          return fail(
+            'failure',
+            'proposal_required',
+            '自发唤醒不能直接重试写类任务，请提交任务提案',
+          )
+        }
+        // 任务必须确实源自本 workspace 的普通唤醒；后续唤醒可以恢复前代唤醒的子孙任务。
+        // origin 由中枢固化，不能只凭用户可填写的 parent 借任意任务进入唤醒链。
+        const seen = new Set<string>()
+        let ancestor = task.origin ? task : null
+        let derived = false
+        while (ancestor?.contract.parent && !seen.has(ancestor.id)) {
+          seen.add(ancestor.id)
+          if (ancestor.created_by !== SUPERVISOR_ACTOR && ancestor.created_by !== HUB_ACTOR) break
+          const parent = ledger.getTask(ancestor.contract.parent)
+          if (!parent || parent.workspace !== wake.workspace) break
+          const parentWake = ledger.wakeOf(parent.id)
+          if (parentWake) {
+            derived =
+              parent.created_by === HUB_ACTOR &&
+              parentWake.workspace === wake.workspace &&
+              parentWake.origin !== 'reply'
+            break
+          }
+          if (!parent.origin) break
+          ancestor = parent
+        }
+        if (!derived) {
+          return fail('failure', 'scope_denied', 'supervisor 只能重试本 workspace 唤醒链派生的任务')
+        }
+      }
+      const retryable =
+        task.status === 'failed' ||
+        (task.status === 'blocked' &&
+          task.blocked !== null &&
+          RETRYABLE_BLOCKED_REASONS.some((reason) => reason === task.blocked?.reason))
+      if (!retryable) {
+        return fail(
+          'failure',
+          'invalid_transition',
+          `任务状态 ${task.status}${task.blocked ? `(${task.blocked.reason})` : ''} 不允许重试`,
+          {
+            from: task.status,
+            type: 'task.requeued',
+          },
+        )
+      }
+      const base = { task_id: id, workspace: task.workspace }
+      const written = ledger.appendMany(
+        [
+          ...(!ledger
+            .taskEvents(id)
+            .some(
+              (event) =>
+                event.type === 'task.attempt_ended' && event.payload.attempt === task.attempt,
+            )
+            ? [
+                {
+                  ...base,
+                  type: 'task.attempt_ended' as const,
+                  payload: { attempt: task.attempt, reason: 'retry' as const },
+                },
+              ]
+            : []),
+          {
+            ...base,
+            type: 'task.requeued',
+            payload: {
+              reason: 'manual',
+              requested_by: opts.actor,
+              ...(reason === undefined ? {} : { retry_reason: reason, note: reason }),
+            },
+          },
+        ],
+        { actor: opts.actor },
+      )
+      if (!written.ok) return written
       const after = ledger.getTask(id)
       return after ? ok({ task: after }) : notFound(id)
     },
@@ -784,6 +941,22 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
               ...(text === undefined ? {} : { text }),
             },
           },
+          ...(requeue &&
+          task.attempt > 0 &&
+          !ledger
+            .taskEvents(id)
+            .some(
+              (event) =>
+                event.type === 'task.attempt_ended' && event.payload.attempt === task.attempt,
+            )
+            ? [
+                {
+                  ...base,
+                  type: 'task.attempt_ended' as const,
+                  payload: { attempt: task.attempt, reason: 'blocked' as const },
+                },
+              ]
+            : []),
           ...(requeue
             ? [
                 {

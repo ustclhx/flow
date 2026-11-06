@@ -188,6 +188,11 @@ export function completionDrafts(
   pendingReply: ReplyView | null = null,
 ): EventInput[] {
   const base = { task_id: task.id, workspace: task.workspace }
+  const ended = (reason: 'done' | 'failed' | 'blocked' | 'cancelled'): EventInput => ({
+    ...base,
+    type: 'task.attempt_ended',
+    payload: { attempt: lease.attempt, reason },
+  })
   switch (req.outcome) {
     case 'done':
       return [
@@ -196,6 +201,7 @@ export function completionDrafts(
           type: 'task.done',
           payload: { result: stripUntrustedReview(task.contract, req.result, 'done') },
         },
+        ended('done'),
       ]
     case 'failed':
       return [
@@ -204,6 +210,7 @@ export function completionDrafts(
           type: 'task.failed',
           payload: { result: stripUntrustedReview(task.contract, req.result, 'failed') },
         },
+        ended('failed'),
       ]
     case 'blocked': {
       const session = req.session ?? task.blocked?.session
@@ -231,11 +238,13 @@ export function completionDrafts(
               node_id: lease.node_id,
             },
           },
+          ended('cancelled'),
         ]
       }
       if (task.status === 'blocked' && pendingReply) {
         return [
           blocked,
+          ended('blocked'),
           {
             ...base,
             type: 'task.requeued_with_reply',
@@ -243,7 +252,7 @@ export function completionDrafts(
           },
         ]
       }
-      return [blocked]
+      return [blocked, ended('blocked')]
     }
     case 'cancelled':
       return [
@@ -258,6 +267,7 @@ export function completionDrafts(
             node_id: lease.node_id,
           },
         },
+        ended('cancelled'),
       ]
   }
 }
@@ -272,6 +282,11 @@ export function expiryDrafts(
   pendingReply: ReplyView | null = null,
 ): EventInput[] {
   const base = { task_id: task.id, workspace: task.workspace }
+  const ended = (reason: 'lease_expired' | 'node_lost' | 'cancelled'): EventInput => ({
+    ...base,
+    type: 'task.attempt_ended',
+    payload: { attempt: lease.attempt, reason },
+  })
   const expired: EventInput = {
     ...base,
     type: 'task.lease_expired',
@@ -287,6 +302,7 @@ export function expiryDrafts(
   if (task.cancel_requested) {
     return [
       expired,
+      ended('cancelled'),
       {
         ...base,
         type: 'task.cancelled',
@@ -302,6 +318,7 @@ export function expiryDrafts(
       const session = task.blocked?.session
       return [
         expired,
+        ended('lease_expired'),
         {
           ...base,
           type: 'task.requeued_with_reply',
@@ -316,6 +333,7 @@ export function expiryDrafts(
     const session = was?.session
     return [
       expired,
+      ended('node_lost'),
       {
         ...base,
         type: 'task.blocked',
@@ -338,6 +356,7 @@ export function expiryDrafts(
   if (task.attempt < maxAttempts) {
     return [
       expired,
+      ended('lease_expired'),
       {
         ...base,
         type: 'task.requeued',
@@ -350,6 +369,7 @@ export function expiryDrafts(
   }
   return [
     expired,
+    ended('node_lost'),
     {
       ...base,
       type: 'task.blocked',
@@ -758,7 +778,21 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
                   type: 'task.requeued_with_reply',
                   payload: { reply_id: reply.id, ...(session ? { session } : {}) },
                 }
-      const written = ledger.append(draft, { actor: `node:${lease.node_id}` })
+      const drafts: EventInput[] =
+        req.data.outcome === 'not_running'
+          ? [
+              {
+                ...base,
+                type: 'task.attempt_ended',
+                payload: {
+                  attempt: lease.attempt,
+                  reason: task.cancel_requested ? 'cancelled' : 'blocked',
+                },
+              },
+              draft,
+            ]
+          : [draft]
+      const written = ledger.appendMany(drafts, { actor: `node:${lease.node_id}` })
       if (!written.ok) return written
       ledger.touchNode(lease.node_id)
       const after = ledger.getTask(task.id)

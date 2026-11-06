@@ -127,6 +127,8 @@ supervisor 建任务（`task_create`）时，中枢依次检查：
    不启用白名单时，supervisor 建的任务**不能带 verify**；启用方式见第 12 节。
 7. 第 3 节表中的数量与深度上限。
 
+supervisor 重试任务（`task_retry`）时，必须提供非空 `reason`，且只限本 workspace 唤醒链派生的任务：中枢检查 `created_by`，从目标任务到唤醒任务的每一级都必须由 `supervisor` 或 `hub` 创建。用户手工创建的任务、接受提案后以 `user` 创建的任务，即使继承 origin，也必须由 user 重试。唤醒任务本身与 merge/supervisor 类任务不可重试；reply 唤醒不可调用重试，autonomous 唤醒重试写类任务仍只能提案。
+
 supervisor **不能**：回复任务（`task_reply`）、接受或驳回提案、批准合并、处理收件箱条目（只能忽略自己发起的提问）、
 访问节点协议。这些返回 `user_only` / `scope_denied`。唤醒身份由节点领租约时中枢签发的"唤醒绑定 token"认定，
 细节见 [hub-auth.md](hub-auth.md)。
@@ -408,4 +410,8 @@ raindown supervisor status [product-res]                    # 当前唤醒、各
    用 `raindown ask <ws> "说明一下当前状态"` 做一次冒烟。
 
 **回滚**：把对应 workspace 的 `supervisor.enabled` 设为 `false`（或删除 supervisor 角色）即停止唤醒与代回复；已建的任务不受影响，
-已排队的事件会被清掉。需要回到旧版本二进制时，先删掉 `node.yaml` 的 `reserved` 与 `policies.yaml` 中带 `push_to` / `gh_scope` / `level: supervisor` 的规则。
+已排队的事件会被清掉。这只关闭 supervisor 功能；**任何一次任务重试（包括它生成的收件箱通知）之后，都不能沿用当前账本退回旧中枢与旧客户端**。
+
+旧版 `task.requeued` 的 `strictObject` 不认识新增的 `requested_by` / `retry_reason` 字段；旧版 `inbox.item_created` 的 `source` 枚举不认识 `task_retry`，旧 CLI 列收件箱也可能解析失败。此外，`failed → queued` 转换及后续 `task.started` 在旧状态机中不合法，重建会以 `ledger_inconsistent` 中止。
+
+使用任务重试前，先停止服务并备份账本，升级中枢、节点与使用该账本的客户端。需要退回旧版本时，必须停止服务并使用升级前的备份，不能继续使用已经发生任何任务重试或包含其收件箱通知的账本；升级后产生的记录不会包含在该备份中，详见 [任务重试的升级与回滚限制](daemon.md#任务重试的升级与回滚限制)。其他情况下需要回到旧版本二进制时，先删掉 `node.yaml` 的 `reserved` 与 `policies.yaml` 中带 `push_to` / `gh_scope` / `level: supervisor` 的规则。

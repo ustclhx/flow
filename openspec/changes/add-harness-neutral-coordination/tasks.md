@@ -15,11 +15,11 @@
 
 ## 2. 派工与恢复
 
-- [ ] 2.1 `task.attempt_ended` 事件与派工投影（D4）；`raindown task show` 列出派工
-- [ ] 2.2 `task_retry` 操作（用户与 supervisor 的权限边界按 task-assignment spec）；写入已有的 `task.requeued{reason:'manual'}`
+- [x] 2.1 `task.attempt_ended` 事件与派工投影（D4）；`raindown task show` 列出派工
+- [x] 2.2 `task_retry` 操作（用户与 supervisor 的权限边界按 task-assignment spec）；写入已有的 `task.requeued{reason:'manual'}`
 - [ ] 2.3 `ctx.recovery` 与恢复提示模板（D5），codex-orca / codex-exec / claude-sdk 适配器各自放置
 - [ ] 2.4 交付物已存在时的完成判定（D6），只对写类开发任务生效；合并资格检查回归测试
-- [ ] 2.5 supervisor 角色提示：审查崩溃用 `task_retry` 而不是新建审查任务
+- [x] 2.5 supervisor 角色提示：审查崩溃用 `task_retry` 而不是新建审查任务
 
 ## 3. 结构化上报
 

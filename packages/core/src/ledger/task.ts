@@ -31,7 +31,7 @@ export const TASK_STATUSES = [
 export type TaskStatus = (typeof TASK_STATUSES)[number]
 export const taskStatus = z.enum(TASK_STATUSES).meta({ description: '任务状态' })
 
-/** 终态：不再发生任何转换。 */
+/** 终态：failed 仅允许通过手动重试重新排队。 */
 export const TERMINAL_STATUSES = ['done', 'failed', 'cancelled'] as const satisfies TaskStatus[]
 export const isTerminalStatus = (s: TaskStatus): boolean =>
   (TERMINAL_STATUSES as readonly TaskStatus[]).includes(s)
@@ -46,6 +46,13 @@ export const BLOCKED_REASONS = [
   'other',
 ] as const
 export type BlockedReason = (typeof BLOCKED_REASONS)[number]
+/** 手动重试可重新派工的卡住原因；提示与工具说明共用此列表。 */
+export const RETRYABLE_BLOCKED_REASONS = [
+  'crashed',
+  'workdir_missing',
+  'node_lost',
+  'other',
+] as const satisfies BlockedReason[]
 export const blockedReason = z.enum(BLOCKED_REASONS).meta({
   description:
     '卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、workdir_missing 工作目录或会话丢失、node_lost 节点掉线（租约过期）、other 其他',
@@ -68,6 +75,19 @@ export const outOfBandSignal = z.discriminatedUnion('kind', [
 ])
 export type OutOfBandSignal = z.infer<typeof outOfBandSignal>
 
+/** 派工结束的事实；unknown 只用于读取缺少结束事件的旧账，不作为新事件的原因。 */
+export const TASK_ATTEMPT_END_REASONS = [
+  'done',
+  'failed',
+  'cancelled',
+  'blocked',
+  'lease_expired',
+  'node_lost',
+  'retry',
+] as const
+export const taskAttemptEndReason = z.enum(TASK_ATTEMPT_END_REASONS)
+export type TaskAttemptEndReason = z.infer<typeof taskAttemptEndReason>
+
 // ---------------------------------------------------------------------------
 // 状态机
 // ---------------------------------------------------------------------------
@@ -78,6 +98,7 @@ export type OutOfBandSignal = z.infer<typeof outOfBandSignal>
  * - running → verifying | done | failed | blocked
  * - verifying → done | failed | blocked
  * - blocked → queued | running | cancelled | failed
+ * - failed → queued：仅允许手动重试
  * - 任何非终态 → cancelled
  *
  * 另加 `running | verifying → queued`：仅用于"允许重试的任务租约过期后重新排队"
@@ -89,7 +110,7 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]
   verifying: ['done', 'failed', 'blocked', 'cancelled', 'queued'],
   blocked: ['queued', 'running', 'cancelled', 'failed'],
   done: [],
-  failed: [],
+  failed: ['queued'],
   cancelled: [],
 }
 

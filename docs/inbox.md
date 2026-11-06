@@ -3,6 +3,40 @@
 本文记录变更 ③（add-m1-inbox）在真实环境上线的步骤（任务 7.1）和端到端验证结果（任务 7.2）。
 渠道的安全边界见 `docs/telegram.md`，密钥命令见 `docs/secrets.md`，身份与接口见 `docs/hub-auth.md`。
 
+## 任务重试通知
+
+任务重试由事件驱动：用户或 supervisor 重试符合条件的 blocked 或 failed 任务时，中枢根据已提交的重试事件生成
+`source: task_retry` 的收件箱条目。条目记录重试派工、发起者、上次结局与理由；任务此时已回到
+`queued`，等待下一次派工，通知不代表执行器已经开始执行。supervisor 发起重试必须提供理由，
+用户发起时理由可选。
+
+`reason` 表示重试发起者：`supervisor` 默认使用 `interrupt`，通过已有通知渠道推送，并遵循
+静默时段规则；`user` 默认使用 `digest`，不单独推送。每日摘要展示 Digest 级重试条目的标题和
+正文，写入摘要后以 `digested` 关闭；未降级的 Interrupt 重试条目不会被摘要提前关闭。
+摘要沿用现有条数与正文长度上限，完整内容可在原条目查看。
+任务进入 done、failed 或 cancelled 终态时，自动关闭该任务此前生成的所有重试条目，
+关闭原因分别是 `task_done`、`task_failed`、`task_cancelled`；之后再次重试生成的新条目不受旧终态影响。
+此规则也包括尚未汇总的 Digest 条目：它们关闭后不会再进入每日摘要，原始通知与关闭记录仍可查询。
+
+可以在 `config/inbox.yaml` 按来源、发起者和 workspace 覆盖级别。例如：
+
+```yaml
+levels:
+  - source: task_retry
+    reason: supervisor
+    level: digest
+  - source: task_retry
+    reason: user
+    workspace: ws/product-res
+    level: interrupt
+```
+
+规则中列出的条件必须全部命中；条件更多的规则优先，同样多时后写的覆盖先写的。
+来源、发起者或字段拼写错误，以及不匹配的 source/reason 组合，都会被报告，该规则不生效。
+例如 `source: task` 不能使用 `reason: user`，`source: task_retry` 只能使用 `reason: user` 或 `reason: supervisor`。
+重试条目的标识由源事件确定，重复处理或重启回放不会重复生成；每日摘要也按计划日期幂等生成，
+重启补发与重复触发不会再次汇总已关闭的重试条目。
+
 ## 上线步骤
 
 按顺序执行，全部在用户本人的终端里完成；AI 不参与读取或输入密钥。

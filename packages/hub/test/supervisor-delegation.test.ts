@@ -865,24 +865,35 @@ describe('task_respond（4.9）', () => {
     expect(env.store.getTask(id)?.status).toBe('running')
   })
 
-  test('无头执行器的提问：回复后任务带着回复重新排队', async () => {
-    const env = await setup()
-    const id = await create(env)
-    const lease = await grant(env, 'fake')
-    must(
-      env.protocol.service.complete(lease.lease_id, {
-        lease_token: lease.lease_token,
-        outcome: 'blocked',
-        blocked_reason: 'question',
-        message: '用 A 还是 B？',
-      }),
-    )
-    await env.settle()
-    const { caller } = await replyCaller(env)
-    const r = must(respond(env, caller, { task_id: id, block_seq: blockSeqOf(env, id) }))
-    expect(r.requeued).toBe(true)
-    expect(env.store.getTask(id)?.status).toBe('queued')
-  })
+  test.each([false, true])(
+    '无头执行器的提问：带回复重排只结束一次派工（旧记录：%s）',
+    async (legacy) => {
+      const env = await setup()
+      const id = await create(env)
+      const lease = await grant(env, 'fake')
+      if (legacy) {
+        // 旧账本只有释放租约的 blocked，回复时补齐派工结束。
+        reblock(env, id)
+      } else {
+        must(
+          env.protocol.service.complete(lease.lease_id, {
+            lease_token: lease.lease_token,
+            outcome: 'blocked',
+            blocked_reason: 'question',
+            message: '用 A 还是 B？',
+          }),
+        )
+      }
+      await env.settle()
+      const { caller } = await replyCaller(env)
+      const r = must(respond(env, caller, { task_id: id, block_seq: blockSeqOf(env, id) }))
+      expect(r.requeued).toBe(true)
+      expect(env.store.getTask(id)?.status).toBe('queued')
+      expect(env.store.taskEvents(id).filter((e) => e.type === 'task.attempt_ended')).toMatchObject(
+        [{ payload: { attempt: 1, reason: 'blocked' } }],
+      )
+    },
+  )
 
   test('approve / deny：只用于授权请求；answer 用于授权请求、approve 用于提问 → invalid_arguments', async () => {
     const env = await setup()

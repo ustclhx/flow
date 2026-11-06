@@ -28,6 +28,12 @@ reserved:
 
 同理，旧节点会 strict 解析策略检查响应中的 `matched_rules[].rule`：升级节点之后，才能在 `policies.yaml` 中写带新条件（`when.push_to`、`when.gh_scope`）的规则，见 `packages/core/src/policy/README.md`。
 
+## 任务重试的升级与回滚限制
+
+**任何一次任务重试（包括它生成的收件箱通知）之后，都不能沿用当前账本回滚到旧中枢与旧客户端**。这是账本格式与语义的单向迁移：旧版 `task.requeued` 的 `strictObject` 不认识新增的 `requested_by` / `retry_reason` 字段；旧版 `inbox.item_created` 的 `source` 枚举不认识 `task_retry`，旧 CLI 列收件箱也可能解析失败。此外，`failed → queued` 转换及后续 `task.started` 在旧状态机中不合法，重建会以 `ledger_inconsistent` 中止。保留当前 SQLite 投影、暂时不运行 `raindown hub rebuild` 并不能使旧版本兼容这份账本。
+
+使用任务重试前，先停止中枢与节点并备份账本，再启动新版本；使用该账本的客户端也须升级。需要退回旧版本时，必须停止服务并使用升级前的备份，不能继续使用已经发生任何任务重试或包含其收件箱通知的账本；升级后产生的记录不会包含在该备份中。
+
 ## 本机验收记录（2026-10-24，add-m1-ledger-daemon 7.2）
 
 环境：macOS 15.1（Darwin 24.1.0），bun 位于 `~/.bun/bin/bun`，`RAINDOWN_HOME=~/raindown-home`。

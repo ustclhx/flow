@@ -230,8 +230,9 @@ describe('回复卡住的任务（task-interaction）', () => {
     expect(ctx.ledger.getTask(id)?.blocked).toMatchObject({ session: 'sess-42', lease_held: false })
     const r = ctx.tasks.replyTask(id, { kind: 'text', text: '用 main' }, { actor: 'user' })
     expect(r.ok && r.data).toMatchObject({ requeued: true, task: { status: 'queued' } })
-    expect(types(ctx, id).slice(-3)).toEqual([
+    expect(types(ctx, id).slice(-4)).toEqual([
       'task.blocked',
+      'task.attempt_ended',
       'task.replied',
       'task.requeued_with_reply',
     ])
@@ -257,10 +258,48 @@ describe('回复卡住的任务（task-interaction）', () => {
       outcome: 'not_running',
     })
     expect(ack.ok && ack.data.task.status).toBe('queued')
+    expect(ctx.ledger.taskEvents(id).filter((e) => e.type === 'task.attempt_ended')).toMatchObject([
+      { payload: { attempt: 1, reason: 'blocked' } },
+    ])
     expect(ctx.ledger.activeLease(id)).toBeNull()
     expect(
       code(ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token })),
     ).toBe('lease_expired')
+  })
+
+  test('not_running 重新排队立即派发时，只结束旧租约的 attempt，迟到 outcome 不影响新租约', async () => {
+    const ctx = await setup()
+    const { id, lease } = await blockedHeld(ctx)
+    ctx.tasks.replyTask(id, { kind: 'text', text: '继续' }, { actor: 'user' })
+    let next: ReturnType<typeof grant> | undefined
+    const off = ctx.ledger.subscribe((event) => {
+      if (event.type === 'task.requeued_with_reply') next = grant(ctx)
+    })
+    const ack = ctx.protocol.service.ackReply(lease.lease_id, {
+      lease_token: lease.lease_token,
+      reply_id: 'r-1',
+      outcome: 'not_running',
+    })
+    off()
+    expect(ack.ok).toBe(true)
+    expect(next).toBeDefined()
+    const second = await next
+    expect(second?.attempt).toBe(2)
+    expect(
+      code(
+        ctx.protocol.service.complete(lease.lease_id, {
+          lease_token: lease.lease_token,
+          outcome: 'blocked',
+          blocked_reason: 'crashed',
+          message: '稍后上报退出',
+        }),
+      ),
+    ).toBe('lease_expired')
+    expect(ctx.ledger.getTask(id)).toMatchObject({ status: 'running', attempt: 2 })
+    expect(ctx.ledger.activeLease(id)?.lease_id).toBe(second?.lease_id)
+    expect(ctx.ledger.taskEvents(id).filter((e) => e.type === 'task.attempt_ended')).toMatchObject([
+      { payload: { attempt: 1, reason: 'blocked' } },
+    ])
   })
 
   test('ack-reply 的错误：未知回复、令牌不符', async () => {
@@ -304,7 +343,14 @@ describe('回复卡住的任务（task-interaction）', () => {
     ctx.tasks.replyTask(a.id, { kind: 'text', text: '用 main' }, { actor: 'user' })
     await ctx.clock.advance((TTL + 5) * 1000)
     expect(ctx.protocol.sweep()).toBe(1)
-    expect(types(ctx, a.id).slice(-2)).toEqual(['task.lease_expired', 'task.requeued_with_reply'])
+    expect(types(ctx, a.id).slice(-3)).toEqual([
+      'task.lease_expired',
+      'task.attempt_ended',
+      'task.requeued_with_reply',
+    ])
+    expect(
+      ctx.ledger.taskEvents(a.id).filter((e) => e.type === 'task.attempt_ended'),
+    ).toMatchObject([{ payload: { attempt: 1, reason: 'lease_expired' } }])
     expect(ctx.ledger.getTask(a.id)?.status).toBe('queued')
 
     const ctx2 = await setup()
@@ -320,7 +366,14 @@ describe('回复卡住的任务（task-interaction）', () => {
     expect(ctx2.ledger.getTask(b.id)?.blocked?.message).toContain(
       '原卡住原因：question — 用哪个分支？',
     )
-    expect(types(ctx2, b.id).slice(-2)).toEqual(['task.lease_expired', 'task.blocked'])
+    expect(types(ctx2, b.id).slice(-3)).toEqual([
+      'task.lease_expired',
+      'task.attempt_ended',
+      'task.blocked',
+    ])
+    expect(
+      ctx2.ledger.taskEvents(b.id).filter((e) => e.type === 'task.attempt_ended'),
+    ).toMatchObject([{ payload: { attempt: 1, reason: 'node_lost' } }])
     const r = ctx2.tasks.replyTask(b.id, { kind: 'text', text: '用 main' }, { actor: 'user' })
     expect(r.ok && r.data.requeued).toBe(true)
   })
@@ -418,10 +471,11 @@ describe('回复卡住的任务（task-interaction）', () => {
       message: '执行器进程意外退出（退出码 137）',
     })
     expect(r.ok && r.data.task.status).toBe('queued')
-    expect(types(ctx, id).slice(-4)).toEqual([
+    expect(types(ctx, id).slice(-5)).toEqual([
       'task.blocked',
       'task.replied',
       'task.blocked',
+      'task.attempt_ended',
       'task.requeued_with_reply',
     ])
     expect(ctx.ledger.getReply('r-1')?.state).toBe('requeued')
@@ -533,7 +587,7 @@ describe('回复卡住的任务（task-interaction）', () => {
       message: '退出码 137',
     })
     expect(r.ok && r.data.task.status).toBe('cancelled')
-    expect(types(ctx, id).slice(-1)).toEqual(['task.cancelled'])
+    expect(types(ctx, id).slice(-2)).toEqual(['task.cancelled', 'task.attempt_ended'])
     expect(ctx.ledger.getReply('r-1')?.state).toBe('dropped')
   })
 

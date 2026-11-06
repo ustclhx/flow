@@ -46,6 +46,10 @@ const samples: Record<
     valid: { ...task, payload: { node_id: 'n1', lease_id: 'l1', attempt: 1 } },
     invalid: { ...task, payload: { node_id: 'n1', lease_id: 'l1', attempt: 0 } },
   },
+  'task.attempt_ended': {
+    valid: { ...task, payload: { attempt: 1, reason: 'failed', last_report: '执行器退出' } },
+    invalid: { ...task, payload: { attempt: 1, reason: 'unknown' } },
+  },
   'task.verifying': {
     valid: { ...task, payload: { node_id: 'n1' } },
     invalid: { workspace: 'ws/product-res', payload: { node_id: 'n1' } },
@@ -391,6 +395,21 @@ describe('事件 schema', () => {
     expect(ledgerEventDraft.safeParse(draft).success).toBe(true)
   })
 
+  test('task.requeued 兼容旧载荷并校验重试身份与非空限长理由', () => {
+    const parse = (payload: Record<string, unknown>) =>
+      ledgerEvent.safeParse(envelope('task.requeued', { ...task, payload }))
+    expect(parse({ reason: 'manual', note: '旧理由' }).success).toBe(true)
+    expect(
+      parse({ reason: 'manual', requested_by: 'supervisor', retry_reason: '  已恢复目录  ' })
+        .success,
+    ).toBe(true)
+    expect(parse({ reason: 'manual', requested_by: 'user' }).success).toBe(true)
+    expect(parse({ reason: 'manual', requested_by: 'hub' }).success).toBe(false)
+    for (const retry_reason of ['', '   ', 'x'.repeat(8193)]) {
+      expect(parse({ reason: 'manual', retry_reason }).success).toBe(false)
+    }
+  })
+
   test('信封：seq、ts、actor 与未知 type', () => {
     const good = envelope('hub.rebuilt', samples['hub.rebuilt'].valid)
     expect(ledgerEvent.safeParse({ ...good, seq: 0 }).success).toBe(false)
@@ -419,6 +438,7 @@ describe('事件触发的状态转换', () => {
     'policy.decided': TASK_STATUSES.map((status) => [status, status]),
     'task.created': [[null, 'queued']],
     'task.started': [['queued', 'running']],
+    'task.attempt_ended': TASK_STATUSES.map((status) => [status, status]),
     'lease.granted': [['running', 'running']],
     'task.verifying': [['running', 'verifying']],
     'task.done': [
@@ -444,6 +464,7 @@ describe('事件触发的状态转换', () => {
       ['blocked', 'queued'],
       ['running', 'queued'],
       ['verifying', 'queued'],
+      ['failed', 'queued'],
     ],
     'task.cancel_requested': [
       ['running', 'running'],
@@ -484,7 +505,8 @@ describe('事件触发的状态转换', () => {
   )
 
   const payloadFor = (type: EventType, from: TaskStatus | null) => {
-    if (type === 'task.requeued') return { reason: from === 'blocked' ? 'manual' : 'lease_expired' }
+    if (type === 'task.requeued')
+      return { reason: from === 'blocked' || from === 'failed' ? 'manual' : 'lease_expired' }
     return samples[type].valid.payload
   }
 
@@ -528,6 +550,10 @@ describe('事件触发的状态转换', () => {
     const expired = { type: 'task.requeued', payload: { reason: 'lease_expired' } } as never
     expect(checkTaskEvent('running', manual).ok).toBe(false)
     expect(checkTaskEvent('blocked', expired).ok).toBe(false)
+    expect(checkTaskEvent('failed', expired).ok).toBe(false)
+    expect(checkTaskEvent('failed', manual)).toEqual({ ok: true, data: 'queued' })
+    expect(checkTaskEvent('done', manual).ok).toBe(false)
+    expect(checkTaskEvent('cancelled', manual).ok).toBe(false)
   })
 
   test('非任务事件不涉及状态', () => {

@@ -797,6 +797,7 @@ describe('受保护的工具与配置写入（PR #29 审查的对抗用例）', 
     expect(classifyAction({ tool: 'mcp__raindown__inbox_act' })).toContain('inbox.act')
     expect(judge([rule('*', '*')], { tool: 'mcp__raindown__inbox_act' }).level).not.toMatch(/^auto/)
     expect(classifyAction({ tool: 'mcp__raindown__task_cancel' })).toContain('task.cancel')
+    expect(classifyAction({ tool: 'mcp__raindown__task_retry' })).toContain('task.retry')
     expect(classifyAction({ tool: 'mcp__raindown__kb_proposals_accept' })).toContain(
       'proposal.decide',
     )
@@ -924,6 +925,8 @@ describe('Bash 调 raindown CLI、直接访问中枢与 config.edit 词法变体
     ['raindown task create --role admin --goal x', 'task.create'],
     ['raindown task reply t-1 --approve', 'task.reply'],
     ['raindown task cancel t-1', 'task.cancel'],
+    ['raindown task retry t-1', 'task.retry'],
+    ['flow task retry t-1', 'task.retry'],
     ['raindown inbox act blk.42 approve', 'inbox.act'],
     ['raindown kb proposals accept p-1', 'proposal.decide'],
     ['raindown kb proposals reject p-1', 'proposal.decide'],

@@ -7,9 +7,10 @@ import {
   createTaskRequest,
   listTasksQuery,
   type ReplyTaskRequest,
+  retryTaskRequest,
 } from '../ledger/protocol.ts'
 import { checkContractSecrets } from '../ledger/redact.ts'
-import type { TaskContractInput, TaskView } from '../ledger/task.ts'
+import { RETRYABLE_BLOCKED_REASONS, type TaskContractInput, type TaskView } from '../ledger/task.ts'
 import { fail, ok } from '../result.ts'
 import { loadRoles } from '../roles.ts'
 import { USER_ACTOR } from '../write/policy.ts'
@@ -75,11 +76,11 @@ export const taskShowOp = defineOperation({
   name: 'task_show',
   access: 'read',
   cli: 'task show',
-  summary: '查看任务合同、结果与事件',
+  summary: '查看任务合同、结果、派工与事件',
   input: z.strictObject({ id: taskId }),
   positional: ['id'],
   run: (input: { id: string }, ctx) => client(ctx).showTask(input.id),
-  human: ({ task, events }) =>
+  human: ({ task, events, attempts }) =>
     [
       taskSummary(task),
       `合同：${JSON.stringify(task.contract, null, 2)}`,
@@ -91,6 +92,16 @@ export const taskShowOp = defineOperation({
             ...task.result.verify.map((v) => `验收：${v.cmd.join(' ')} → 退出码 ${v.exit_code}`),
           ]
         : []),
+      '派工：',
+      renderTable(attempts, [
+        { header: '派工', value: (a) => String(a.attempt) },
+        { header: '执行器', value: (a) => a.executor },
+        { header: '节点', value: (a) => a.node_id },
+        { header: '开始', value: (a) => a.started_at },
+        { header: '结束', value: (a) => a.ended_at ?? '—' },
+        { header: '结束原因', value: (a) => a.reason ?? '—' },
+        { header: '最后上报', value: (a) => a.last_report ?? '—', max: 80 },
+      ]),
       `事件：${JSON.stringify(events, null, 2)}`,
     ].join('\n'),
 })
@@ -106,6 +117,19 @@ export const taskCancelOp = defineOperation({
     return client(ctx).cancelTask(id, body)
   },
   human: ({ task }) => `${task.cancel_requested ? '已请求取消' : '已取消'}：${taskSummary(task)}`,
+})
+
+export const taskRetryOp = defineOperation({
+  name: 'task_retry',
+  cli: 'task retry',
+  summary: `重试 failed 或 blocked(${RETRYABLE_BLOCKED_REASONS.join('/')}) 的原任务；租约必须已释放，取消请求中的任务与唤醒任务本身不可重试。用户可重试，reason 可选；supervisor 必须提供非空 reason，说明重试依据，且仅限本 workspace 唤醒链派生且每一级均由 supervisor 或 hub 创建的任务，不可重试 merge/supervisor 类任务，reply 唤醒不可用；自主唤醒中写类任务只能提案，指令唤醒可重试写类任务`,
+  input: retryTaskRequest.extend({ id: taskId }),
+  positional: ['id'],
+  run: (input: { id: string; reason?: string }, ctx) => {
+    const { id, ...body } = input
+    return client(ctx).retryTask(id, body)
+  },
+  human: ({ task }) => `已重新排队：${taskSummary(task)}`,
 })
 
 /**

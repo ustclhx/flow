@@ -22,6 +22,7 @@ import { fail, ok, type Result } from '../result.ts'
 import { dateString, workspaceRef } from '../schema/common.ts'
 import { adapterCapabilities, NO_ADAPTER_CAPABILITIES, readAdapterCapabilities } from './adapter.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
+import { PROTOCOL_MESSAGE_MAX } from './redact.ts'
 import {
   blockedDelegationShape,
   blockedReason,
@@ -34,6 +35,7 @@ import {
   replyKind,
   repoSnapshot,
   type TaskStatus,
+  taskAttemptEndReason,
   taskBranch,
   taskContract,
   taskOrigin,
@@ -207,6 +209,11 @@ export const eventPayloads = {
     lease_id: leaseId,
     attempt: z.number().int().min(1).meta({ description: '第几次尝试，从 1 开始' }),
   }),
+  'task.attempt_ended': z.strictObject({
+    attempt: z.number().int().min(1),
+    reason: taskAttemptEndReason,
+    last_report: z.string().max(16_384).optional().meta({ description: '派工最后一次上报的摘要' }),
+  }),
   'task.verifying': z.strictObject({ node_id: nodeId }),
   'task.done': z.strictObject({ result: taskResult }),
   'task.failed': z
@@ -290,6 +297,8 @@ export const eventPayloads = {
     reason: z.enum(['lease_expired', 'manual']).meta({
       description: 'lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队',
     }),
+    requested_by: z.enum(['user', 'supervisor']).optional(),
+    retry_reason: z.string().trim().min(1).max(PROTOCOL_MESSAGE_MAX).optional(),
     note: z.string().optional(),
   }),
   'task.cancel_requested': z.strictObject({ reason: z.string().optional() }),
@@ -639,6 +648,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'policy.decided': 'task',
   'task.created': 'task',
   'task.started': 'task',
+  'task.attempt_ended': 'task',
   'task.verifying': 'task',
   'task.done': 'task',
   'task.failed': 'task',
@@ -795,6 +805,10 @@ export const TASK_EVENT_RULES: Readonly<
   },
   'task.created': { from: [null], to: 'queued' },
   'task.started': { from: ['queued'], to: 'running' },
+  'task.attempt_ended': {
+    from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed', 'cancelled'],
+    to: 'unchanged',
+  },
   'lease.granted': { from: ['running'], to: 'unchanged' },
   'task.verifying': { from: ['running'], to: 'verifying' },
   'task.done': { from: ['running', 'verifying'], to: 'done' },
@@ -812,7 +826,7 @@ export const TASK_EVENT_RULES: Readonly<
   'task.unblocked': { from: ['blocked'], to: 'running' },
   'task.replied': { from: ['blocked'], to: 'unchanged' },
   'task.requeued_with_reply': { from: ['blocked'], to: 'queued' },
-  'task.requeued': { from: ['blocked', 'running', 'verifying'], to: 'queued' },
+  'task.requeued': { from: ['blocked', 'running', 'verifying', 'failed'], to: 'queued' },
   // blocked：交互式执行器卡住期间仍持有租约（D7a），可以请求取消、租约也可能过期。
   'task.cancel_requested': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   'task.cancelled': { from: ['queued', 'running', 'verifying', 'blocked'], to: 'cancelled' },
@@ -853,7 +867,7 @@ export function checkTaskEvent(
   }
   if (event.type === 'task.requeued' && current !== null) {
     const reason = (event.payload as EventPayload<'task.requeued'>).reason
-    const expected = current === 'blocked' ? 'manual' : 'lease_expired'
+    const expected = current === 'blocked' || current === 'failed' ? 'manual' : 'lease_expired'
     if (reason !== expected) return reject(`task.requeued 的 reason 应为 ${expected}`)
   }
   const to = rule.to === 'unchanged' ? current : rule.to
