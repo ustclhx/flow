@@ -3,6 +3,10 @@
 各 harness 访问 Raindown 知识库的方式。MCP 服务通过 `raindown mcp --actor <name>` 以 stdio 启动；
 actor 用于提交记录和写入规则判断，MCP 下不允许使用 `user`。
 
+本页只针对你自己打开的 harness 会话，不用于 Raindown 派出的 worker：Codex worker 使用 Raindown 管理的 `CODEX_HOME`，不读这里的注册；
+Claude worker 的设置来源由角色的 `setting_sources` 决定（默认模板为 `[]`，只读、审查与 supervisor 会话另设 `strictMcpConfig`）。
+各执行器另行注入只绑定当前任务的 Raindown MCP，见 [executors.md 的适配器契约](executors.md#适配器契约)。
+
 | Harness | 方式 | 注册命令 / 配置位置 | actor |
 |---|---|---|---|
 | Claude Code | MCP | `claude mcp add --scope user raindown -- raindown mcp --actor claude`（写入 `~/.claude.json`） | `claude` |

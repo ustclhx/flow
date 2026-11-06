@@ -182,7 +182,7 @@ MCP 启动时以该文件访问绑定查询；显式的 task/workspace 只用于
 当前支持核实 GitHub PR：仓库必须与任务的 repo_snapshot 一致，head 分支必须与 task.branch 一致，且不能是 fork。
 任务分支尚未报告时返回 `branch_unknown`；PR 其余核对通过、只有 head 与登记分支不一致时返回 `deliverable_branch_mismatch`（提示中给出登记分支）。两者都提示 worker 不要反复提交 ready、改用 blocked 说明情况；只有创建并拥有任务分支的适配器才报告分支，见 [适配器契约](executors.md#适配器契约)。
 交付物最多 5 个，查询失败只返回通用错误，不向 worker 返回 gh 的 stderr 或私有仓库信息，也不写上报事件。
-blocked 必须说明 missing/tried，failed/dropped 必须说明 reason。handback 仅存储，后续 PR 订阅阶段消费。
+blocked 必须说明 missing/tried，failed/dropped 必须说明 reason。handback 只接受本任务收到过的、名单内人类的 PR 评论（否则 `handback_invalid`），通过后同一事务写 `pr.wake_requested{reason:'handback'}`，进入 supervisor 的 instruction 队列，见 [supervisor.md](supervisor.md) 第 13 节（当前共享 GitHub 身份下不会通过）。
 每个租约同时只处理一个上报，超出时返回可重试的 report_busy；请求体最多 32 KiB，每分钟最多 10 次、
 每次派工最多 200 次，超额返回可重试的 report_rate_limited。成功次数从账本恢复，失败尝试同样消耗额度，
 但失败额度只保留在本次中枢进程内。上报、消费水位和派工有效性均通过索引查询。

@@ -1,13 +1,17 @@
 # Supervisor：AI 主管
 
-（变更 ④ add-m1-supervisor。设计依据见 `openspec/changes/add-m1-supervisor/design.md`，本文以 main 上的实际实现为准。）
+（变更 ④ add-m1-supervisor 与之后的 add-harness-neutral-coordination。设计依据见两个变更的 `design.md`，本文以 main 上的实际实现为准。）
 
 supervisor 是每个 workspace 的 AI 主管：你在手机上说一句话（`/ask`），它拆成任务交给 worker（Codex 等），
 PR 开出后安排只读审查，通过后请求合并；worker 中途卡住时，在你预先划定的范围内替你批准或回答，
 拿不准就转交给你。它不是常驻进程，**每次唤醒都是一个全新的会话**，靠"简报"恢复记忆。
 
-本文面向使用者。身份与接口权限见 [hub-auth.md](hub-auth.md)，策略规则语法见
-`packages/core/src/policy/README.md`，执行器与角色见 [executors.md](executors.md)，简报细节见 [briefs.md](briefs.md)。
+本文面向使用者。身份与接口权限见 [hub-auth.md](hub-auth.md)，策略规则语法、策略版本与授权依据（mandate）见
+`packages/core/src/policy/README.md`，执行器、适配器契约与角色见 [executors.md](executors.md)，简报细节见 [briefs.md](briefs.md)。
+
+各节速览：概念与开关（1）→ 唤醒、唤醒输入与原始指令（2）→ 权限、上限与任务重试（3）→ 简报（4）→ 提问与提案（5）→
+PR 验收链（6）→ 巡检（7）→ 代回复与 observe 模式（8）→ 费用（9）→ 命令（10）→ 故障排查（11）→ 升级（12）→
+PR 订阅、直通与交回（13）→ 任务阶段（14）。
 
 ## 1. 概念与开关
 
@@ -100,12 +104,38 @@ PR 也不能被 supervisor 请求合并（卡住仍可能被委托代回复）�
 
 - 每个 workspace 有三条队列：instruction、autonomous、reply。同一时刻最多一个**普通唤醒**（instruction 或 autonomous），
   空闲时 instruction 优先；另可并行一个 reply 唤醒。
-- 一次唤醒只合并同一条队列里的事件（最新 200 个；`inputs.wake.events` 以 16000 字符为预算，超出时逐级省略正文）。任务快照按 id 在顶层去重，PR 只关联本次涉及的对象并限制内联任务数。降级同时裁剪正文和元数据，最终 `inputs.wake` 不超过 16000 字符；省略部分附 `chars` 与读取指针。事件引用也装不下时，`overflow.read` 指向本次唤醒的 `task_show section=events`，其中 `supervisor.wake_started.events` 保留完整 seq 清单，可逐条用 `event_get` 读取；队列仍一次消费最多 200 条事件。
-- 按读取指针调用 `event_get` 或带 `section`、`offset`、`limit` 的 `task_show` 补读内容；`tail` 与 `instruction` 按字符分页，其他列表按条目分页。supervisor 只能读本 workspace 的事件；无 workspace 的全局事件只有被本次唤醒引用时可读，其他返回 `forbidden`。用户可读取全部事件。`event_get` 与 `task_show section=events/tail` 都对疑似密钥做正则遮蔽；tail 先遮蔽再分页，避免秘密跨页边界泄露。任务绑定的 worker 只能读取本任务、同 workspace 的事件（以及直通给本任务的 PR 事件），越界与不存在均返回 `not_found`；唤醒读取其他 workspace 的任务同样返回 `not_found`。
-- supervisor 建任务时，中枢附加 `origin_instruction`，原文与 supervisor 的补充分段显示，以原始指令为准。本次唤醒只有一条用户指令时自动选择，多条时必须传本次唤醒中的 `instruction_seq`；autonomous 没有原始指令。用户指令最多 8192 字符，合同内联前 4000 字符，超出部分附原长和 `event_get` 指针。由开发任务完成等事件引出的审查与后续任务从关联开发任务继承原始指令；候选任务对应多条不同指令时不自动继承，授权依据中的 `instruction_note` 解释原因。提案通过 `draft.instruction_seq` 指定本次唤醒中的指令，接受后保留相同来源。没有原始指令的输入明确写出“本任务没有用户原始指令”，目标仍按 JSON 数据包裹。 长原文注入 worker 时，core 把读取指针转为本任务的 `task_show section=instruction`；中枢只从该任务合同关联的指令读取并脱敏分页，worker 仍不能直接读取没有本任务归属的原始事件。
+- 一次唤醒只合并同一条队列里的事件（最新 200 个），输入预算与补读方式见下文「唤醒输入与读取指针」。
 - 普通唤醒失败重试一次；仍失败则出现一条 Interrupt 条目，**该队列暂停**，直到你 `--release` 或 1 小时后自动恢复一次
   （再失败则退避翻倍，最长 24 小时）。
 - 唤醒任务 `blocked` 时新事件继续排队；你取消它即放行队列。
+
+### 唤醒输入与读取指针
+
+- `inputs.wake.events` 以 16000 字符为预算，超出时逐级省略正文。任务快照按 id 在顶层去重；PR 对象由中枢组装为
+  `{pr, url, tasks:[{id, role, status}]}`，只关联本次涉及的对象并限制内联任务数。降级同时裁剪正文和元数据，最终 `inputs.wake`
+  不超过 16000 字符；省略部分附 `chars`（原长）与读取指针 `{read: {op, args}}`。
+- 事件引用也装不下时，`overflow.read` 指向本次唤醒的 `task_show section=events`，其中 `supervisor.wake_started.events` 保留完整 seq 清单，
+  可逐条用 `event_get` 读取；队列仍一次消费最多 200 条事件。
+- 按读取指针调用 `event_get` 或带 `section`、`offset`、`limit` 的 `task_show` 补读内容；`tail` 与 `instruction` 按字符分页，其他列表按条目分页。
+- 可见范围：supervisor 只能读本 workspace 的事件；无 workspace 的全局事件只有被本次唤醒引用时可读，其他返回 `forbidden`；
+  唤醒读取其他 workspace 的任务返回 `not_found`。用户可读取全部事件。任务绑定的 worker 只能读取本任务、同 workspace 的事件
+  （以及直通给本任务的 PR 事件），越界与不存在均返回 `not_found`。
+- `event_get` 与 `task_show section=events/tail` 都对疑似密钥做正则遮蔽；tail 先遮蔽再分页，避免秘密跨页边界泄露。
+
+### 原始指令（D9）与 worker 的两段式输入
+
+supervisor 转述用户的话可能走样，所以 worker 直接看到用户原文，原文不经 supervisor 之手：
+
+- supervisor 建任务时，**中枢**从本次唤醒的事件中找 `user.instruction`，附加到合同的 `origin_instruction{seq, text, chars?, read?}`；
+  调用方不能自己传这个字段。本次唤醒只有一条用户指令时自动选择，多条时必须传本次唤醒中的 `instruction_seq`。autonomous 唤醒没有原始指令。
+- 用户指令最多 8192 字符；合同内联前 4000 字符，超出部分附原长和 `event_get` 指针。
+- 继承：由开发任务完成等事件引出的审查与后续任务，从关联开发任务继承原始指令；候选任务对应多条不同指令时不自动继承，
+  授权依据（mandate）中的 `instruction_note` 解释原因。提案通过 `draft.instruction_seq` 指定本次唤醒中的指令，接受后保留相同来源。
+  PR 评论引起的唤醒（第 13 节）里建的任务不继承来源任务的原始指令。
+- worker 输入由 core 的统一模板生成，分两段：「用户原始指令（以此为准）」与「supervisor 的补充」（合同 `goal`），两段都作为转义过的数据块，
+  冲突时以原始指令为准。没有原始指令时明确写出"本任务没有用户原始指令"，目标仍按 JSON 数据包裹。审查任务的输入同样带原始指令。
+- 原文被截断时，注入 worker 的读取指针改为本任务的 `task_show section=instruction`；中枢只从该任务合同关联的指令读取并脱敏分页，
+  worker 仍不能直接读取没有本任务归属的原始事件。
 
 ## 3. 权限与硬性上限
 
@@ -133,7 +163,19 @@ supervisor 建任务（`task_create`）时，中枢依次检查：
    不启用白名单时，supervisor 建的任务**不能带 verify**；启用方式见第 12 节。
 7. 第 3 节表中的数量与深度上限。
 
-supervisor 重试任务（`task_retry`）时，必须提供非空 `reason`，且只限本 workspace 唤醒链派生的任务：中枢检查 `created_by`，从目标任务到唤醒任务的每一级都必须由 `supervisor` 或 `hub` 创建。用户手工创建的任务、接受提案后以 `user` 创建的任务，即使继承 origin，也必须由 user 重试。唤醒任务本身与 merge/supervisor 类任务不可重试；reply 唤醒不可调用重试，autonomous 唤醒重试写类任务仍只能提案。
+### 任务重试：`task_retry`
+
+重试让**原任务**开始新一次派工，而不是新建一个替代任务（否则会出现两个审查任务并存，合并资格要跨任务判断）。
+例如审查任务崩溃时，supervisor 应 `task_retry` 原审查任务，而不是再建一个审查任务。
+
+- 可重试的状态：`failed`，或 `blocked` 且原因为 `crashed`、`workdir_missing`、`node_lost`、`other`；提问、待授权与无进展的卡住应回复或取消。
+- 任务必须已释放租约（否则 `lease_active`）；已请求取消的任务（`cancel_requested`）与唤醒任务本身（`wake_retry_forbidden`）不可重试。
+- 中枢写 `task.attempt_ended{reason: retry}` 与 `task.requeued{reason: manual, requested_by, retry_reason?, policy_version}`；
+  下一次派工带恢复提示（上一次如何结束、登记分支、已记录的 PR），工作目录沿用原来的，见 [executors.md](executors.md) 的「恢复提示」。
+- 写类开发任务卡在 `crashed` 或 `workdir_missing` 时，若任务分支上已有它开出的 PR，中枢会直接判定完成（`completed_via: existing_pr`），不需要重试。
+- 用户（`raindown task retry <id> [--reason …]`）可以重试任何满足上述条件的任务，`reason` 可选。
+
+supervisor 重试任务（`task_retry`）时，必须提供非空 `reason`，且只限本 workspace 唤醒链派生的任务：中枢检查 `created_by`，从目标任务到唤醒任务的每一级都必须由 `supervisor` 或 `hub` 创建。用户手工创建的任务、接受提案后以 `user` 创建的任务，即使继承 origin，也必须由 user 重试。唤醒任务本身与 merge/supervisor 类任务不可重试；reply 唤醒不可调用重试，autonomous 唤醒与 PR 评论引起的唤醒（第 13 节）重试写类任务仍只能提案（`proposal_required`）。
 
 supervisor **不能**：回复任务（`task_reply`）、接受或驳回提案、批准合并、处理收件箱条目（只能忽略自己发起的提问）、
 访问节点协议。这些返回 `user_only` / `scope_denied`。唤醒身份由节点领租约时中枢签发的"唤醒绑定 token"认定，
@@ -251,12 +293,14 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
   supervisor 没调用 `patrol_report`（例如模型没照提示词做），这一天的摘要里就没有日报；这不会报错，可在 `raindown task show <唤醒任务>` 看它做了什么。
 - **花费汇总**：见第 9 节。
 
-## 8. 代回复：卡住时由 supervisor 替你回
+## 8. 代回复与 observe 模式：卡住时由 supervisor 替你回
 
 **范围**：`delegate_replies` 开启时，本 workspace 任务（包括你手动建、没有 origin 的）的以下卡住先委托给 supervisor：
 
-- `blocked(question)`：worker 的提问；
-- `blocked(awaiting_approval)`：授权请求，**且**策略判定为 `supervisor` 档位、判定与这次卡住绑定（缺 `decision_id` 一律交给你）。
+- `blocked(question)`：**只限 worker 经 `raindown_report` 主动上报的提问**（`basis: reported`）。从终端或其他观察推断出的提问
+  （`basis: inferred`，含旧节点没有 basis 的卡住）直接交给你：推断可能把普通输出误当成问题，也没有结构化选项可供比对；
+- `blocked(awaiting_approval)`：授权请求，**且**策略判定为 `supervisor` 档位、判定与这次卡住绑定（缺 `decision_id` 一律交给你），
+  卡住上报的请求与判定的请求逐字一致，节点仍持有租约。
 
 **不委托**（直接进你的收件箱）：supervisor 自己的唤醒任务、merger 任务、`reviewer_roles` 里的审查任务（审查必须独立）、
 `node_lost` 后遗留的卡住、没有命令文本的授权请求；没有可用的 supervisor 角色或没有登记仓库的 workspace 同样不委托。
@@ -281,7 +325,10 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 **目前 `push` 与 `pr.create` 不会真正委托**：`push_to` 与 `gh_scope` 要求节点上报命令的**实际执行目录**，
 而 codex-orca 拿不到 Codex 提权命令的实际 workdir，claude-sdk 的 Bash 又会在调用之间保留 cwd，二者目前都不上报，
 所以这两类规则不会命中，推送与开 PR 的授权仍交给你。模板留着，等执行器能提供可信的执行目录后才生效。
-现阶段实际能委托的是 `pnpm check|test|lint` 这类命令前缀规则（以及 `question`）。
+现阶段实际能委托的是 `pnpm check|test|lint` 这类命令前缀规则（以及 worker 上报的 `question`）。
+
+**策略变化**：代批委托依赖的规则在委托进行中被删除或修改时，委托以 `policy_changed` 转交给你；判定与委托都记录当时的策略版本，
+见 `packages/core/src/policy/README.md`。
 
 **怎么回复**：reply 唤醒只能调用 `task_respond{task_id, block_seq, decision, text?, reason}`
 （CLI：`raindown supervisor respond`）：`approve` / `deny` 用于授权请求，`answer`（必须带 `text`，≤2000 字符）用于提问，`escalate`
@@ -296,6 +343,10 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 | `wake_unavailable` | 唤醒起不来：未启用、没有角色、当天 reply 配额用尽、当前 reply 唤醒卡住；立即转交，不等超时 |
 | `wake_failed` / `wake_ended` | 处理该委托的唤醒失败，或结束时仍没回复（reply 唤醒失败不重试） |
 | `user_dismissed` | 你忽略了条目 |
+| `user_replied` | 你在 supervisor 回复写入前先回复了 |
+| `policy_changed` | 代批依赖的策略规则已删除或修改 |
+| `observe` | 该项处于 observe 模式，supervisor 的判断只记录、不送达（见下文） |
+| `config_unavailable` | 回复时读不到 workspace 配置，判断按"失败即不送达"处理 |
 
 此外任务离开了这次卡住（取消、租约过期、已被回复等）时委托静默失效。**在 supervisor 的回复写入之前，你的回复优先**
 （你一回复，委托就结束，之后 supervisor 的 `task_respond` 返回 `stale_block`）；supervisor 的回复已写入但尚未送达时，
@@ -400,6 +451,8 @@ raindown supervisor wake product-res [<说明>]               # 手动唤醒（�
 raindown supervisor wake product-res --release instruction  # 放行暂停 / 达到上限的队列（instruction | autonomous）
 raindown supervisor status [product-res]                    # 当前唤醒、各队列长度、暂停状态、今日次数与花费、最近一次结果
 raindown supervisor report [product-res] [--days 30]        # observe 一致率、卡住 basis 比例、未执行的自主动作（第 8 节末尾）
+raindown task list --stage waiting-human                    # 只看等你处理的任务（第 14 节）
+raindown task retry <task> --reason "审查会话崩溃"           # 让原任务重新派工（第 3 节）
 ```
 
 - workspace 写 `product-res` 或 `ws/product-res` 都可以。以上命令都**只有 user** 能用，AI 身份返回 `user_only`。
@@ -432,7 +485,7 @@ raindown supervisor report [product-res] [--days 30]        # observe 一致率�
 | `proposal_required` | autonomous 唤醒想建写类任务，只能 `task_propose` |
 | `merge_not_eligible` | 看 `details.reasons`：常见是审查不是最新的 approve、PR 不是 instruction 链上的产物、任务没上报分支 |
 | 合并失败 `checks_not_green` / `head_moved` / `merge_queue_unsupported` | 见第 6 节；flaky 检查需推新提交或手动合并 |
-| 卡住总是直接来到我的收件箱 | 没启用 `level: supervisor` 规则、命中的是受保护动作、不在委托范围（第 8 节），或 `delegate_replies: false`；`push` 与 `pr.create` 目前本来就不委托 |
+| 卡住总是直接来到我的收件箱 | 没启用 `level: supervisor` 规则、命中的是受保护动作、不在委托范围（第 8 节），或 `delegate_replies: false`；提问不是 worker 经 `raindown_report` 上报的（条目显示"从终端推断"）；`push` 与 `pr.create` 目前本来就不委托；对应项开着 observe 时会以 `observe` 转交 |
 | 委托后很久才转交 | 默认 `reply_timeout_s` 是 600 秒；supervisor 回复已写入但节点长期不 ack 时，条目会一直被挡住，直到任务离开这次卡住（送达、租约过期或你取消） |
 
 ## 12. 升级步骤（已有 raindown-home）
@@ -492,6 +545,17 @@ raindown supervisor report [product-res] [--days 30]        # observe 一致率�
 
 开出或审查 PR 的任务可以持续跟随这个 PR：PR 上后来的 CI 结果、审查结论与评论由中枢读取并记入账本，
 直接送到负责的 worker，不必每次都唤醒 supervisor。默认关闭；不打开时行为与之前完全相同。
+
+当前版本实际生效的范围（原因见下文「共享 GitHub 身份」）：
+
+| 功能 | 当前版本 |
+| --- | --- |
+| 订阅、采集、`pr.event` 入账 | 生效（`github.watch: true` 时） |
+| 直通：CI、审查结论与评论作为不可信上下文送给**运行中**的订阅任务 | 生效 |
+| 已结束任务因评论恢复 | **不生效**：所有评论 `allowed` 恒为 false |
+| worker 交回（handback）、无订阅评论唤醒 supervisor | **不生效**：只接受名单内人类评论，交回返回 `handback_invalid` |
+
+后两项的代码与账本兜底已经就位，等独立的 bot 身份注入 worker 之后才会被触发。
 
 ### 开启
 
@@ -608,6 +672,28 @@ worker 目前用中枢所在机器的 `gh` 登录在 PR 上发评论与审查—
 
 ### 升级
 
-先升级中枢，再升级所有节点：旧节点忽略派工里的 `inputs`，任务未运行期间到达的 PR 输入会随派工标记为已送达却没有进入 worker。
-新事件（`pr.*`、`task.input_added`、`task.input_delivered`、`pr.wake_requested`）与 `task.requeued{reason:'input'}`、`done → queued`
+先升级中枢，再升级所有节点：旧节点不声明 `task_inputs`，中枢不向它随派工下发 PR 输入，也不经续约注入，输入保持待送达，
+直到任务被升级后的节点领取。新事件（`pr.*`、`task.input_added`、`task.input_delivered`、`pr.wake_requested`）与 `task.requeued{reason:'input'}`、`done → queued`
 在旧版本中不合法；打开 `github.watch` 并产生这些事件之后，回滚必须停止服务并恢复打开之前的账本备份。
+
+## 14. 任务阶段：现在在等谁
+
+每个未结束的任务都有一个由账本派生的阶段（core 纯函数 `taskStage`，不入库、不缓存），回答"它在等谁、等什么"。
+按下列顺序取第一条满足的：
+
+| 阶段 | 显示 | 条件 |
+| --- | --- | --- |
+| `waiting-human-approval` | 等人授权 | `blocked(awaiting_approval)`，没有委托或委托已转交给你 |
+| `waiting-human-answer` | 等人回答 | `blocked(question)`，没有委托或委托已转交给你 |
+| `waiting-supervisor` | 等 supervisor | 卡住且有进行中的代回复委托（含 observe 下尚未转交的） |
+| `waiting-human-review` | 等人审阅 | 本次派工最新的上报是带交付物的 `ready` |
+| `stalled` | 受阻 | 其他原因的 `blocked`，且此后没有你或 supervisor 的回复 |
+| `queued` | 排队 | `queued`，或没有进行中的派工 |
+| `idle` | 空闲 | 派工已结束、仍有 PR 订阅在等新事件 |
+| `working` | 工作中 | 其他 |
+
+细则：你已回复、正在送达时不再显示"等人"；已请求取消的任务只显示 `working` 或 `queued`；重试或新派工不沿用上一轮交付物的"等人审阅"。
+
+阶段显示在 `raindown task list`（默认把"等人……"排在最前）、`raindown task show`、收件箱条目与 `raindown supervisor status` 中。
+`raindown task list --stage <阶段>` 按阶段过滤，`--stage waiting-human` 同时列出等人授权、等人回答与等人审阅。
+收件箱的 `task_stage` 字段要求 CLI 与中枢同步升级，见 [daemon.md](daemon.md#任务阶段cli-必须与中枢同步升级)。
