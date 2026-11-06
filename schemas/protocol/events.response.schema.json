@@ -4034,6 +4034,11 @@
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
             },
+            "pr_sourced": {
+              "description": "中枢计算：由 PR 来源唤醒发起的重试（污染随任务保留，不因重试清除）",
+              "type": "boolean",
+              "const": true
+            },
             "requested_by": {
               "type": "string",
               "enum": [

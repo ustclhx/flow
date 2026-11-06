@@ -35,6 +35,7 @@ import type { TaskService, WorkspaceInfo, WorkspaceLookup } from '../ledger/task
 import type { HubClock } from '../server/clock.ts'
 import { consoleLogger, type HubLogger } from '../server/maintenance.ts'
 import { wakeCosts } from './cost.ts'
+import { prSourcedTask } from './observe.ts'
 import {
   NORMAL_QUEUES,
   type Queue,
@@ -874,7 +875,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     const prSourced = events.some(
       (e) =>
         e.type === 'pr.wake_requested' ||
-        (e.task_id !== undefined && ledger.getTask(e.task_id)?.mandate?.pr_sourced === true),
+        (e.task_id !== undefined && prSourcedTask(ledger, ledger.getTask(e.task_id))),
     )
     if (prSourced) {
       note = [

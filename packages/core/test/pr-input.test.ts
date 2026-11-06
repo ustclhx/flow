@@ -81,3 +81,14 @@ test('缺少种类的事件不算请求（fail closed）', () => {
     true,
   )
 })
+
+test('纵深防御：$ 与 ! 也被转义，即使被敲进 shell 也不展开', () => {
+  const text = renderPrEventInput({
+    seq: 6,
+    payload: { ...base, allowed: false, text: 'echo $HOME && !!' },
+  })
+  const block = text.split('<untrusted-pr-event>')[1] ?? ''
+  expect(block).not.toContain('$')
+  expect(block).not.toContain('!')
+  expect(facts(text).text).toBe('echo $HOME && !!')
+})

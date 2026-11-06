@@ -945,7 +945,10 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         ...(instructionSeq === undefined ? {} : { instruction_seq: instructionSeq }),
         ...(instructionNote ? { instruction_note: instructionNote } : {}),
         // PR 来源的污染：调用方唤醒为 PR 来源，或来源 / 父任务带标记时向下传递（中枢计算，调用方不能提供）。
+        // 用户接受提案不清除污染：提案的唤醒（provenanceWake）为 PR 来源时同样标记。
         ...((callerWake && prSourcedWake(ledger, callerWake.task_id)) ||
+        prSourcedWake(ledger, provenanceWake?.task_id) ||
+        prSourcedWake(ledger, contract.parent) ||
         prSourcedTask(ledger, source) ||
         prSourcedTask(ledger, contract.parent ? ledger.getTask(contract.parent) : null)
           ? { pr_sourced: true as const }
@@ -1274,6 +1277,10 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
               requested_by: opts.actor,
               policy_version: policy.version,
               ...(reason === undefined ? {} : { retry_reason: reason, note: reason }),
+              // PR 来源唤醒的重试：污染随任务保留（中枢计算）。
+              ...(opts.wake && prSourcedWake(ledger, opts.wake.task_id)
+                ? { pr_sourced: true as const }
+                : {}),
             },
           },
         ],

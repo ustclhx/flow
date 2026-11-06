@@ -371,3 +371,54 @@ test('PR 来源唤醒不能直接建或重试写类任务，与 autonomous 一�
     }),
   ).toMatchObject({ ok: false, error: { code: 'proposal_required' } })
 })
+
+test('用户接受 PR 来源唤醒的提案不清除污染：D → W2 → D2 仍为 PR 来源（不会自动合并）', async () => {
+  const { prSourcedTask, prSourcedWake } = await import('../src/supervisor/observe.ts')
+  const s = await setup()
+  const seq = s.instruction('先修这个')
+  const prWake = await s.wake([seq], 'instruction', 'pr')
+  // 用户接受提案：以 user 身份建任务，来源指令属于 PR 来源唤醒。
+  const d = must(
+    await s.tasks.createTask(
+      contractInput({ cwd: s.ledger.getTask(prWake)?.contract.cwd, executor: 'claude-sdk' }),
+      { actor: 'user', instructionSource: { seq, wake: prWake } },
+    ),
+  ).task
+  expect(d.mandate?.pr_sourced).toBe(true)
+  const done = await complete(s, d.id)
+  const w2 = await s.wake([done])
+  expect(prSourcedWake(s.ledger, w2)).toBe(true)
+  const d2 = must(await s.create(w2)).task
+  expect(d2.mandate?.pr_sourced).toBe(true)
+  expect(prSourcedTask(s.ledger, d2)).toBe(true)
+})
+
+test('PR 来源唤醒重试未污染的任务：重试记录 pr_sourced，之后的唤醒与任务都带污染', async () => {
+  const { prSourcedTask, prSourcedWake } = await import('../src/supervisor/observe.ts')
+  const s = await setup()
+  const seq = s.instruction('读一下代码')
+  const plain = await s.wake([seq])
+  const r = must(await s.create(plain)).task
+  expect(prSourcedTask(s.ledger, r)).toBe(false)
+  const { startTask, drafts } = await import('./ledger-helpers.ts')
+  startTask(s.ledger, r.id)
+  must(s.ledger.append(drafts(r.id)['task.failed'], { actor: 'hub' }))
+  const prWake = await s.wake([], 'instruction', 'pr')
+  must(
+    await s.tasks.retryTask(r.id, {
+      actor: 'supervisor',
+      wake: { task_id: prWake },
+      reason: 'PR 评论要求再看一遍',
+    }),
+  )
+  const requeued = s.ledger.taskEvents(r.id).findLast((e) => e.type === 'task.requeued')
+  expect(requeued?.payload).toMatchObject({ reason: 'manual', pr_sourced: true })
+  expect(prSourcedTask(s.ledger, s.ledger.getTask(r.id))).toBe(true)
+  // R 第二次派工完成 → W2 为 PR 来源 → 下游任务带污染（不会自动合并）。
+  const d = drafts(r.id, { attempt: 2 })
+  must(s.ledger.appendMany([d['task.started'], d['lease.granted']], { actor: 'hub' }))
+  const done = must(s.ledger.append(d['task.done'], { actor: 'hub' })).seq
+  const w2 = await s.wake([done])
+  expect(prSourcedWake(s.ledger, w2)).toBe(true)
+  expect(must(await s.create(w2)).task.mandate?.pr_sourced).toBe(true)
+})

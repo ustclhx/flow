@@ -31,15 +31,22 @@ export const observeAutonomous = (
   source?: 'pr',
 ): boolean => (origin === 'autonomous' || source === 'pr') && config?.observe.autonomous === true
 
+type TaintLedger = Pick<LedgerStore, 'wakeOf' | 'eventsAfter' | 'getTask' | 'taskEvents'>
+
+/** 沿唤醒链回溯的最大深度（链只会指向更早的唤醒与任务，不会成环；这里只是防御）。 */
+const TAINT_DEPTH = 32
+
 /**
  * 唤醒是否为 PR 来源（instruction:pr）：不只信 payload 标记，也从唤醒合并的事件推导——
- * 事件中有 `pr.wake_requested`，或事件涉及的任务授权依据带 `pr_sourced`（污染沿唤醒链向下传递）。
+ * 事件中有 `pr.wake_requested`，或事件涉及的任务（实时检查，见 `prSourcedTask`）带 PR 来源污染。
+ * 用户接受提案或重试都**不清除**污染（当前版本）。
  */
 export function prSourcedWake(
-  ledger: Pick<LedgerStore, 'wakeOf' | 'eventsAfter' | 'getTask'>,
+  ledger: TaintLedger,
   wakeTaskId: string | undefined,
+  depth = 0,
 ): boolean {
-  if (wakeTaskId === undefined) return false
+  if (wakeTaskId === undefined || depth > TAINT_DEPTH) return depth > TAINT_DEPTH
   const wake = ledger.wakeOf(wakeTaskId)
   if (!wake) return false
   if (wake.source === 'pr') return true
@@ -47,16 +54,37 @@ export function prSourcedWake(
     const e = ledger.eventsAfter(seq - 1, {}, 1)[0]
     if (e?.seq !== seq) continue
     if (e.type === 'pr.wake_requested') return true
-    if (e.task_id !== undefined && ledger.getTask(e.task_id)?.mandate?.pr_sourced) return true
+    if (e.task_id !== undefined && prSourcedTask(ledger, ledger.getTask(e.task_id), depth + 1))
+      return true
   }
   return false
 }
 
-/** 任务是否带 PR 来源污染：授权依据标记，或其来源唤醒为 PR 来源。 */
-export const prSourcedTask = (
-  ledger: Pick<LedgerStore, 'wakeOf' | 'eventsAfter' | 'getTask'>,
-  task: Pick<TaskView, 'mandate'> | null | undefined,
-): boolean => !!task?.mandate?.pr_sourced || prSourcedWake(ledger, task?.mandate?.wake_task)
+/**
+ * 任务是否带 PR 来源污染（实时检查）：授权依据带 `pr_sourced`；来源唤醒或父任务（含父任务本身就是
+ * PR 来源唤醒）为 PR 来源；或曾被 PR 来源唤醒重试（`task.requeued{pr_sourced}`）。
+ */
+export function prSourcedTask(
+  ledger: TaintLedger,
+  task: (Pick<TaskView, 'mandate'> & Partial<Pick<TaskView, 'id' | 'contract'>>) | null | undefined,
+  depth = 0,
+): boolean {
+  if (!task) return false
+  if (depth > TAINT_DEPTH) return true
+  if (task.mandate?.pr_sourced) return true
+  if (prSourcedWake(ledger, task.mandate?.wake_task, depth + 1)) return true
+  const parent = task.contract?.parent
+  if (parent !== undefined && parent !== task.id) {
+    if (prSourcedWake(ledger, parent, depth + 1)) return true
+    if (prSourcedTask(ledger, ledger.getTask(parent), depth + 1)) return true
+  }
+  if (task.id !== undefined) {
+    for (const e of ledger.taskEvents(task.id)) {
+      if (e.type === 'task.requeued' && e.payload.pr_sourced === true) return true
+    }
+  }
+  return false
+}
 
 /** 参数摘要：JSON 序列化后遮蔽疑似密钥，再截断到 `OBSERVED_ARGS_MAX`（先遮蔽后截断，避免切开密钥）。 */
 export function summarizeArgs(args: unknown): string {

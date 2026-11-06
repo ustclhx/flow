@@ -47,8 +47,10 @@ import {
   analyzeTail,
   approvalExecutionLines,
   approvalForPrecheck,
+  atShellPrompt,
   CODEX_ORCA_PRECHECK_TOOL,
   classifyCodexOrca,
+  composerReady,
   type TailAnalysis,
 } from './classify.ts'
 import {
@@ -408,7 +410,9 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
     mode: 'interactive',
     adapterCapabilities: {
       approval_requests: 'inferred',
-      inject_while_running: true,
+      // 运行中注入只在回合结束后的空闲输入框、且尚未上报停下的极短窗口内可行：如实声明为不支持，
+      // PR 输入排队到下一次派工（新终端从 spec 读取，重挂接时随恢复提示送入）。
+      inject_while_running: false,
       resume_session: false,
       raindown_mcp: true,
       out_of_band_detection: true,
@@ -870,6 +874,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         }
         if (!(await requireWorkdir())) return 'not_running'
         if (now.data.status !== 'running') return 'not_running'
+        // 终端回到了 shell 提示符：Codex 已退出，不发送任何按键（回车、Esc 或文字）。
+        if (atShellPrompt(now.data.tail)) return 'not_running'
         const h = handle
         const live = analyzeTail(now.data.tail)
         if (restoringApproval && !restoredApprovalRound) {
@@ -1037,7 +1043,21 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             replyText(reply),
           ].join(' ')
           if (text) {
-            const submitted = await sendPrompt(h, text, st, undefined, needsRecovery)
+            // 文字回复同样只敲进 Codex 的输入框：最后几行必须是输入框，shell 提示符时不发送。
+            const composerGuard = async () => {
+              const current = await orca.terminalRead({ handle: h, limit: 200 })
+              if (!current.ok) throw new TransientDeliverError(current.error.message)
+              if (current.data.status !== 'running')
+                throw new TransientDeliverError('终端不在运行，回复等待下一次送达')
+              const live = analyzeTail(current.data.tail).kind
+              // 出现新的授权或信任弹窗：这次回复所属回合已结束，文字不能落到新弹窗上。
+              if (live === 'awaiting_approval' || live === 'trust_prompt')
+                throw new RoundClosedError('出现新的弹窗，回复尚未送达')
+              if (!composerReady(current.data.tail))
+                throw new TransientDeliverError('Codex 输入框尚不可用，回复等待下一次送达')
+            }
+            await composerGuard()
+            const submitted = await sendPrompt(h, text, st, composerGuard, needsRecovery)
             if (needsRecovery && !submitted)
               throw new TransientDeliverError('恢复提示尚未确认开始，等待幂等重验')
           }
@@ -1115,7 +1135,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             kind === 'working' ||
             kind === 'trust_prompt' ||
             kind === 'awaiting_approval' ||
-            !current.data.tail.some((line) => /^›(?:\s|$)|\? for shortcuts/.test(line.trim()))
+            kind === 'shell_prompt' ||
+            !composerReady(current.data.tail)
           ) {
             throw new TransientDeliverError('普通输入框尚不可用，恢复提示等待下一次送达')
           }
@@ -1175,7 +1196,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             current.data.status !== 'running' ||
             (kind !== 'other' && kind !== 'pr_opened') ||
             reported ||
-            !current.data.tail.some((line) => /^›(?:\s|$)|\? for shortcuts/.test(line.trim()))
+            !composerReady(current.data.tail)
           ) {
             throw new TransientDeliverError('普通输入框尚不可用，输入等待下一次送达')
           }

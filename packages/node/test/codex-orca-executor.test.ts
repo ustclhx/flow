@@ -2186,6 +2186,26 @@ describe('PR 直通的输入（harness-neutral 8.4）', () => {
     expect(await s.run.inject?.(input(2))).toBe('not_running')
   })
 
+  test('Codex 已退出回到 shell、滚动历史中残留输入框：PR 输入与文字回复都不敲进 shell', async () => {
+    const shell = [
+      '• Done.',
+      '',
+      '› Ask Codex to do anything',
+      '  ? for shortcuts',
+      '',
+      'Token usage: total=1',
+      'user@host repo %',
+    ]
+    const s = await start({}, (o) => o.show('working'))
+    await ready(s)
+    s.orca.reads = [ok({ handle: s.orca.handle, status: 'running', tail: shell })]
+    expect(await s.run.inject?.(input(8))).toBe('not_now')
+    const reply = { reply_id: 'r-shell', kind: 'text' as const, text: 'rm -rf $HOME', by: 'user' }
+    expect(await s.run.deliver?.(reply)).toBe('not_running')
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
+  })
+
   test('Codex 停在提问时不送入（不能替用户回答），已上报停下后也不送入', async () => {
     const s = await start({}, (o) => o.show('working'))
     await ready(s)
@@ -2229,6 +2249,12 @@ describe('PR 直通的输入（harness-neutral 8.4）', () => {
     expect(await s.run.inject?.(input(5))).toBe('not_now')
     expect(sends(s)).toEqual([])
     await s.run.cancel()
+  })
+
+  test('如实声明不支持运行中注入：PR 输入排队到下一次派工', () => {
+    expect(
+      createCodexOrcaExecutor({ home: '/unused' }).adapterCapabilities.inject_while_running,
+    ).toBe(false)
   })
 
   test('派工输入：新终端从 spec 读取（放在恢复提示之后），不再另行送入', async () => {

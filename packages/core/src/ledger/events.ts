@@ -352,6 +352,9 @@ export const eventPayloads = {
       .positive()
       .optional()
       .meta({ description: 'reason 为 input 时：恢复所依据的 pr.event' }),
+    pr_sourced: z.literal(true).optional().meta({
+      description: '中枢计算：由 PR 来源唤醒发起的重试（污染随任务保留，不因重试清除）',
+    }),
     requested_by: z.enum(['user', 'supervisor']).optional(),
     retry_reason: z.string().trim().min(1).max(PROTOCOL_MESSAGE_MAX).optional(),
     policy_version: policyVersionSchema.optional(),

@@ -36,6 +36,7 @@ export type TailKind =
   | 'awaiting_approval'
   | 'pr_opened'
   | 'question'
+  | 'shell_prompt'
   | 'other'
 
 export interface TailAnalysis {
@@ -101,7 +102,7 @@ const CHROME_RE =
   /^\s*(?:\? for shortcuts|└ Tip:|Tip:|Worked for |■ Conversation interrupted|[─━-]{3,}\s*$)/
 
 /** zsh / bash 的默认提示符：`user@host dir %`、`user@host:~/dir$`。 */
-const SHELL_PROMPT_RE = /^[\w.-]+@[\w.-]+[ :].{0,200}[%$#]$/
+export const SHELL_PROMPT_RE = /^[\w.-]+@[\w.-]+[ :].{0,200}[%$#]$/
 
 const clean = (lines: readonly string[]) => lines.map((l) => l.replace(/\s+$/, ''))
 const nonEmpty = (lines: readonly string[]) => lines.filter((l) => l.trim() !== '')
@@ -280,6 +281,19 @@ export function analyzeTail(tail: readonly string[]): TailAnalysis {
     }
   }
 
+  // 终端回到了 shell 提示符（Codex 已退出，或命令没能启动）：先于其他判定，历史中的提问或输入框都不算数。
+  const final = body.at(-1) ?? ''
+  if (SHELL_PROMPT_RE.test(final.trim())) {
+    const before = body.at(-2)
+    return {
+      kind: 'shell_prompt',
+      message: oneLine(
+        `Codex 已不在运行，终端回到了 shell 提示符${before ? `；之前的输出：${before.trim()}` : ''}`,
+      ),
+      last_message: body.slice(-5),
+    }
+  }
+
   const msg = lastMessage(lines)
   const text = msg.join('\n')
   const lastLine = nonEmpty(msg).at(-1) ?? ''
@@ -289,19 +303,6 @@ export function analyzeTail(tail: readonly string[]): TailAnalysis {
   const pr = PR_URL_RE.exec(text)?.[0]
   if (pr) {
     return { kind: 'pr_opened', message: `Codex 说已开 PR：${pr}`, pr_url: pr, last_message: msg }
-  }
-
-  // 终端回到了 shell 提示符（Codex 已退出，或命令没能启动）。
-  const final = body.at(-1) ?? ''
-  if (SHELL_PROMPT_RE.test(final)) {
-    const before = body.at(-2)
-    return {
-      kind: 'other',
-      message: oneLine(
-        `Codex 已不在运行，终端回到了 shell 提示符${before ? `；之前的输出：${before.trim()}` : ''}`,
-      ),
-      last_message: body.slice(-5),
-    }
   }
 
   return {
@@ -494,8 +495,33 @@ export function classifyCodexOrca(snapshot: StuckSnapshot): StuckVerdict | null 
     case 'working':
       return null
     case 'empty':
+    case 'shell_prompt':
     case 'other':
       if (snapshot.trigger === 'no_progress') return null
       return { reason: 'other', message: a.message }
   }
+}
+
+/**
+ * 终端是否停在 Codex 的普通输入框上：最后的非空行必须是输入框（以 `›` 开头）及其下方最多两行状态行，
+ * 且最后一行不是 shell 提示符。只在整段末尾里找到过输入框不算（滚动历史中残留的输入框，Codex 已退出时）。
+ * 任何会敲进文字的送达（PR 输入、恢复提示、文字回复）都先过这一关，避免把文字敲进 shell。
+ */
+export function composerReady(tail: readonly string[]): boolean {
+  const lines = tail.map((l) => l.trimEnd()).filter((l) => l.trim() !== '')
+  const last = lines.at(-1)
+  if (last === undefined || SHELL_PROMPT_RE.test(last.trim())) return false
+  const tailLines = lines.slice(-3)
+  const at = tailLines.findLastIndex((l) => /^›(?:\s|$)/.test(l.trim()))
+  if (at < 0) return false
+  return tailLines.slice(at + 1).every((l) => !SHELL_PROMPT_RE.test(l.trim()))
+}
+
+/** 最后一行是否为 shell 提示符（Codex 已退出）：此时不发送任何按键。 */
+export const atShellPrompt = (tail: readonly string[]): boolean => {
+  const last = tail
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .at(-1)
+  return last !== undefined && SHELL_PROMPT_RE.test(last)
 }

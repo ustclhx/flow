@@ -41,6 +41,9 @@ const escapeFacts = (value: unknown) =>
     .replace(/</g, '\\u003c')
     .replace(/>/g, '\\u003e')
     .replace(/`/g, '\\u0060')
+    // 纵深防御：即使被敲进 shell，也不触发变量展开或历史展开。
+    .replace(/\$/g, '\\u0024')
+    .replace(/!/g, '\\u0021')
 
 /** PR 事件是否算"请求"：只有名单内人类账号的 PR 评论或代码行评论（审查正文、CI 一律只作上下文）。 */
 export const isAllowedHumanPrEvent = (
