@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { type Activity, ok, type Result, type TaskResume, taskContract } from '@raindown/core'
 import { createCodexOrcaExecutor } from '../src/codex-orca/executor.ts'
@@ -144,7 +153,7 @@ describe('启动', () => {
     }
     expect(created.worktreePath).toBe(h?.worktree ?? '')
     expect(created.command).toContain(
-      `RAINDOWN_ACTOR=dev FLOW_ACTOR=dev CODEX_HOME=${join(h?.home ?? '', 'state/codex-work-home')} codex`,
+      `RAINDOWN_ACTOR=dev FLOW_ACTOR=dev CODEX_HOME=${join(h?.home ?? '', 'state/codex-orca-home')} codex`,
     )
     expect(created.command).toContain('RAINDOWN_TASK_ID=t-orca-1 FLOW_TASK_ID=t-orca-1')
     expect(created.command).toContain(
@@ -165,7 +174,7 @@ describe('启动', () => {
 
   test('启动前清理隔离配置和规则，不改用户的 Codex 目录', async () => {
     const s = await start({}, () => {
-      const dir = join(h?.home ?? '', 'state/codex-work-home')
+      const dir = join(h?.home ?? '', 'state/codex-orca-home')
       const source = join(h?.root ?? '', 'user-codex')
       mkdirSync(join(dir, 'rules'), { recursive: true })
       mkdirSync(source, { recursive: true })
@@ -178,7 +187,7 @@ describe('启动', () => {
       )
     })
     await ready(s)
-    const dir = join(h?.home ?? '', 'state/codex-work-home')
+    const dir = join(h?.home ?? '', 'state/codex-orca-home')
     const config = readFileSync(join(dir, 'config.toml'), 'utf8')
     expect(config.replace(/^#.*$/gm, '').trim()).toBe('')
     expect(existsSync(join(dir, 'rules'))).toBe(false)
@@ -199,9 +208,46 @@ describe('启动', () => {
     )
     expect(s.orca.calls).toEqual([])
   })
+
+  test.each(['directory', 'dangling-link'])(
+    '项目 .codex 已存在（%s）：blocked(other)，不启动终端、不改项目配置',
+    async (kind) => {
+      const s = await start({}, (o) => {
+        mkdirSync(o.worktreePath, { recursive: true })
+        const config = join(o.worktreePath, '.codex')
+        if (kind === 'directory') {
+          mkdirSync(config)
+          writeFileSync(join(config, 'config.toml'), 'notify = ["project-hook"]')
+        } else symlinkSync(join(o.worktreePath, 'missing-config'), config)
+      })
+      await ready(s)
+      expect(s.outcome()).toMatchObject({
+        ok: true,
+        data: { outcome: 'blocked', reason: 'other', message: expect.stringContaining('.codex') },
+      })
+      expect(s.orca.ops('terminalCreate')).toEqual([])
+      expect(sends(s)).toEqual([])
+      const config = join(s.orca.worktreePath, '.codex')
+      if (kind === 'directory')
+        expect(readFileSync(join(config, 'config.toml'), 'utf8')).toBe('notify = ["project-hook"]')
+      else expect(lstatSync(config).isSymbolicLink()).toBe(true)
+    },
+  )
 })
 
 describe('监控循环', () => {
+  test('启动后出现 .codex：确认信任前重新检查，blocked(other)，不发回车', async () => {
+    const s = await start({}, (o) => o.show('trust-prompt'))
+    await ready(s)
+    mkdirSync(join(s.orca.worktreePath, '.codex'))
+    await s.poll()
+    expect(s.outcome()).toMatchObject({
+      ok: true,
+      data: { outcome: 'blocked', reason: 'other', message: expect.stringContaining('.codex') },
+    })
+    expect(sends(s)).toEqual([])
+  })
+
   test('信任提示：只发回车，继续监控，不报告停下', async () => {
     const s = await start({}, (o) => o.show('trust-prompt', 'starting', 'working'))
     await ready(s)
@@ -707,7 +753,7 @@ describe('deliver 与 cancel', () => {
       readFileSync(join(home.home, 'state/tasks/t-orca-1/orca.json'), 'utf8'),
     )
     expect(state.replies['r-1']).toMatchObject({ done: true })
-    expect(state.codex_home).toBe(join(home.home, 'state/codex-work-home'))
+    expect(state.codex_home).toBe(join(home.home, 'state/codex-orca-home'))
 
     const second = await start({}, (o) => o.show('question'), { home, resume: { reply } })
     await until(
@@ -721,7 +767,7 @@ describe('deliver 与 cancel', () => {
     await second.run.cancel()
   })
 
-  test.each([undefined, '/legacy-codex-home'])(
+  test.each([undefined, '/legacy-codex-home', 'codex-work-home'])(
     '拒绝重挂接未使用当前隔离目录的存活终端：%s',
     async (codexHome) => {
       const first = await start({}, (o) => o.show('question'))
@@ -730,7 +776,10 @@ describe('deliver 与 cancel', () => {
       if (!home) throw new Error('no home')
       const statePath = join(home.home, 'state/tasks/t-orca-1/orca.json')
       const state = JSON.parse(readFileSync(statePath, 'utf8'))
-      state.codex_home = codexHome
+      if (codexHome === 'codex-work-home') {
+        state.codex_home = join(home.home, 'state', codexHome)
+        mkdirSync(state.codex_home)
+      } else state.codex_home = codexHome
       writeFileSync(statePath, JSON.stringify(state))
       const second = await start({}, (o) => o.show('question'), { home })
       await ready(second)
@@ -743,6 +792,46 @@ describe('deliver 与 cancel', () => {
       await first.run.cancel()
     },
   )
+
+  test('恢复记录中的 CODEX_HOME 是真实目录别名：规范化后仍复用终端', async () => {
+    const first = await start({}, (o) => o.show('question'))
+    await ready(first)
+    const home = h
+    if (!home) throw new Error('no home')
+    const statePath = join(home.home, 'state/tasks/t-orca-1/orca.json')
+    const state = JSON.parse(readFileSync(statePath, 'utf8'))
+    const alias = join(home.root, 'codex-alias')
+    symlinkSync(realpathSync(state.codex_home), alias)
+    state.codex_home = `${alias}/.`
+    writeFileSync(statePath, JSON.stringify(state))
+    const second = await start({}, (o) => o.show('question'), { home })
+    await ready(second)
+    expect(second.activity.some((a) => a.text?.includes('接着使用已有的终端'))).toBe(true)
+    expect(second.orca.ops('terminalCreate')).toEqual([])
+    await first.run.cancel()
+    await second.run.cancel()
+  })
+
+  test('worker 创建 .codex 后恢复：blocked(other)，不重挂接或送达回复', async () => {
+    const first = await start({}, (o) => o.show('working'))
+    await ready(first)
+    const home = h
+    if (!home) throw new Error('no home')
+    mkdirSync(join(home.worktree, '.codex'))
+    const second = await start({}, (o) => o.show('working'), {
+      home,
+      resume: { reply: { reply_id: 'r-restore', kind: 'text', text: '继续', by: 'user' } },
+    })
+    await ready(second)
+    expect(second.outcome()).toMatchObject({
+      ok: true,
+      data: { outcome: 'blocked', reason: 'other', message: expect.stringContaining('.codex') },
+    })
+    expect(second.orca.ops('terminalRead')).toEqual([])
+    expect(second.orca.ops('terminalCreate')).toEqual([])
+    expect(sends(second)).toEqual([])
+    await first.run.cancel()
+  })
 
   test('复用记录中的 handle 前确认它属于这个 worktree；不属于时新建终端', async () => {
     const first = await start({}, (o) => o.show('working'))

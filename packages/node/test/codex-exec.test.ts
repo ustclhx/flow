@@ -19,9 +19,9 @@ import {
   createCodexExecExecutor,
   type ExecutorContext,
   type ExecutorRun,
+  execCodexHome,
   prepareReadCodexHome,
   readCodexHome,
-  workCodexHome,
 } from '../src/index.ts'
 import { bench } from './harness.ts'
 import { processStopped } from './process.ts'
@@ -191,7 +191,7 @@ describe('codex-exec 无头执行器', () => {
     })
     expect(s.report().actor).toBe('triage')
     expect(s.report().codexHome).toBe(initialHome)
-    expect(initialHome).toBe(workCodexHome(s.home))
+    expect(initialHome).toBe(execCodexHome(s.home))
     const args = s.report().args
     expect(args.slice(0, 7)).toEqual([
       'exec',
@@ -547,14 +547,14 @@ describe('只读角色由执行器强制只读（add-m1-supervisor 5.7）', () =
     })
   })
 
-  test('有效类别 write（sandbox 不是 read-only，或 config 含白名单外的键）：使用工作隔离目录', async () => {
+  test('有效类别 write（sandbox 不是 read-only，或 config 含白名单外的键）：使用 exec 隔离目录', async () => {
     for (const permissions of [
       { sandbox: 'workspace-write' },
       { config: { notify: 'x' } },
     ] as const) {
       const s = setup('send(resumed)', { permissions })
       await collect(s.run({ ...s.ctx, env: { ...s.ctx.env, CODEX_HOME: '/codex/user-home' } }))
-      expect(s.report().codexHome).toBe(workCodexHome(s.home))
+      expect(s.report().codexHome).toBe(execCodexHome(s.home))
       expect(existsSync(readCodexHome(s.home))).toBe(false)
     }
   })

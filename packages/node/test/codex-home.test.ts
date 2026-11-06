@@ -13,7 +13,13 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prepareCodexHome, readCodexHome, workCodexHome } from '../src/codex-home.ts'
+import {
+  execCodexHome,
+  orcaCodexHome,
+  prepareCodexHome,
+  readCodexHome,
+  sameCodexHome,
+} from '../src/codex-home.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -27,13 +33,13 @@ function setup() {
   const source = join(root, 'auth-source')
   mkdirSync(source)
   writeFileSync(join(source, 'auth.json'), '{"placeholder":true}')
-  const isolated = workCodexHome(home)
+  const isolated = orcaCodexHome(home)
   mkdirSync(isolated, { recursive: true })
   return { root, home, source, isolated }
 }
 
 describe('Raindown 管理的 Codex 目录', () => {
-  test('读写目录固定且不同，重建配置与扩展不影响会话和用户源目录', async () => {
+  test('重建配置与扩展不影响会话和用户源目录', async () => {
     const s = setup()
     const sourceConfig = join(s.source, 'config.toml')
     writeFileSync(sourceConfig, 'notify = ["source-notify"]\n')
@@ -49,8 +55,6 @@ describe('Raindown 管理的 Codex 目录', () => {
     writeFileSync(session, '会话状态')
 
     expect(await prepareCodexHome(s.isolated, s.source)).toEqual({ ok: true, data: s.isolated })
-    expect(readCodexHome(s.home)).toBe(join(s.home, 'state', 'codex-read-home'))
-    expect(workCodexHome(s.home)).toBe(join(s.home, 'state', 'codex-work-home'))
     expect(lstatSync(join(s.isolated, 'config.toml')).isSymbolicLink()).toBe(false)
     const config = readFileSync(join(s.isolated, 'config.toml'), 'utf8')
     expect(config.split('\n').every((line) => !line.trim() || line.startsWith('#'))).toBe(true)
@@ -67,6 +71,48 @@ describe('Raindown 管理的 Codex 目录', () => {
     expect(readlinkSync(join(s.isolated, 'auth.json'))).toBe(join(s.source, 'auth.json'))
     expect(await prepareCodexHome(s.isolated, s.source)).toEqual({ ok: true, data: s.isolated })
     expect(readFileSync(session, 'utf8')).toBe('会话状态')
+  })
+
+  test('读目录保持固定，两个执行器的写目录与会话状态独立', async () => {
+    const s = setup()
+    const orca = orcaCodexHome(s.home)
+    const exec = execCodexHome(s.home)
+    expect(readCodexHome(s.home)).toBe(join(s.home, 'state', 'codex-read-home'))
+    expect(orca).toBe(join(s.home, 'state', 'codex-orca-home'))
+    expect(exec).toBe(join(s.home, 'state', 'codex-exec-home'))
+    for (const dir of [orca, exec]) {
+      expect(await prepareCodexHome(dir, s.source)).toEqual({ ok: true, data: dir })
+      mkdirSync(join(dir, 'sessions'))
+      writeFileSync(join(dir, 'sessions', 'session.jsonl'), dir)
+      expect(readlinkSync(join(dir, 'auth.json'))).toBe(join(s.source, 'auth.json'))
+    }
+    expect(await prepareCodexHome(orca, s.source)).toEqual({ ok: true, data: orca })
+    expect(readFileSync(join(orca, 'sessions', 'session.jsonl'), 'utf8')).toBe(orca)
+    expect(readFileSync(join(exec, 'sessions', 'session.jsonl'), 'utf8')).toBe(exec)
+  })
+
+  test('恢复目录按 realpath 比较，接受符号链接与路径规范化别名', async () => {
+    const s = setup()
+    const alias = join(s.root, 'alias')
+    symlinkSync(s.isolated, alias)
+    mkdirSync(join(s.isolated, 'child'))
+    expect(await sameCodexHome(alias, s.isolated)).toBe(true)
+    expect(await sameCodexHome(s.isolated, alias)).toBe(true)
+    expect(await sameCodexHome(`${s.isolated}/child/..`, s.isolated)).toBe(true)
+  })
+
+  test('恢复目录未知、不同、缺失或无法解析时拒绝', async () => {
+    const s = setup()
+    const missing = join(s.root, 'missing')
+    const loop = join(s.root, 'loop')
+    symlinkSync(loop, loop)
+    expect(await sameCodexHome(undefined, s.isolated)).toBe(false)
+    expect(await sameCodexHome(s.source, s.isolated)).toBe(false)
+    expect(await sameCodexHome(missing, s.isolated)).toBe(false)
+    expect(await sameCodexHome(s.isolated, missing)).toBe(false)
+    expect(await sameCodexHome(missing, missing)).toBe(false)
+    expect(await sameCodexHome(loop, s.isolated)).toBe(false)
+    expect(await sameCodexHome(s.isolated, loop)).toBe(false)
   })
 
   test('清理期间其他 worker 刷新成普通 auth 文件时保留并拒绝启动', async () => {

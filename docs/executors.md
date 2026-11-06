@@ -14,6 +14,45 @@
 常驻方式见 [守护进程](daemon.md)。Orca 模式的仓库必须登记在合同所属 workspace 的 `repos` 中，
 并已导入 Orca；节点还需要能访问远端仓库的 git、gh 环境。Raindown 不负责合并 PR 或清理 worktree。
 
+## 适配器契约
+
+每个 harness 的差异由执行器适配器封装。以下是接入与验收要求；现有实现的隔离范围和未解决边界见下文「Codex 配置隔离」及「安全边界」，不能把契约当作所有边界均已实现的声明。
+
+适配器在节点注册时随 `type`、`mode` 声明五项能力：
+
+| 能力 | 取值与含义 |
+| --- | --- |
+| `approval_requests` | `structured`：由 SDK/协议获取授权请求；`inferred`：由适配器从输出推断；`none`：没有授权请求通道 |
+| `inject_while_running` | 是否能在当前运行中注入消息 |
+| `resume_session` | 是否能恢复原会话 |
+| `raindown_mcp` | 是否加载 Raindown MCP，供 worker 使用 `raindown_report` 等受限工具 |
+| `out_of_band_detection` | 是否能检测绕过 Raindown 的批准及会话、工作目录被外部移除 |
+
+中枢的派送、消息直通与代答限制只依赖能力声明，不按执行器类型名维护分支。不能中途注入消息时，
+直通输入留在任务的待送达队列，下一次派工开始时送达；声明不支持的能力不得靠假定 harness 行为补足。
+
+授权请求由适配器统一为：**动作、命令或参数、理由、命令执行目录（cwd）、请求 id、识别方式（`structured` 或 `inferred`）**。
+策略、supervisor 代批与推送只消费这个结构，不解析 harness 原始输出；SDK 与终端适配器对同一动作应产生同样的策略输入。
+
+适配器必须隔离 harness 的用户级及全局自动放行规则、自动审批器、hooks、额外 MCP 服务器与项目信任记录，
+不得让这些配置削弱 Raindown 的授权。需要的配置只能来自角色配置与 Raindown 生成的配置。
+登录凭证可通过符号链接共享，适配器不读取、复制或输出凭证内容。可见会话应有统一标识和任务 id，
+例如 Orca 终端标题 `[Raindown] <task id>`，让用户能区分自己的会话和受管 worker。
+
+声明带外检测能力的适配器应关联待处理的请求与任务：Raindown 未送达回复而授权已执行或消失，
+或工作目录、会话被外部删除或关闭时，记录 `task.out_of_band` 并通知用户。
+带外批准记录 `approval_outside_raindown`，外部移除记录 `session_removed`；目录丢失另报 `blocked(workdir_missing)`。
+检测不撤销已执行的动作，也不把它补记为 Raindown 批准；任务按实际状态继续运行或卡住。
+终端型适配器只应依据明确的批准/执行信号判定，不将输出暂时变化或请求暂时不可见直接当作授权完成。
+
+新 harness 接入清单：
+
+1. 按真实行为声明五项能力，验证节点注册及中枢按能力选择交互方式；覆盖不能注入、不能恢复等声明的限制。
+2. 将原生授权转换为统一结构，验证相同请求命中相同策略，批准、拒绝和文字回复送达原请求。
+3. 盘点用户、项目、系统配置及扩展加载来源，隔离规则、审批器、hooks、MCP 和信任记录；用临时凭证路径验证符号链接，不读取真实凭证。
+4. 验证会话标识、恢复身份、目录丢失与带外操作；支持检测时，检查事件关联和用户通知，以及任务按实际状态恢复或卡住。
+5. 记录已验证版本、真实 harness 证据与尚未覆盖的边界；若加载来源尚无法隔离，应明确限制，不能宣称完整满足隔离契约。
+
 ## Codex 配置隔离
 
 Raindown 启动的所有 Codex worker（`codex-orca` 和 `codex-exec` 的全部角色）都显式使用 Raindown 管理的 `CODEX_HOME`，
@@ -22,11 +61,14 @@ Raindown 启动的所有 Codex worker（`codex-orca` 和 `codex-exec` 的全部�
 模型与推理强度也可以用角色的 `model` / `effort`。
 
 - 有效类别为 read 的 `codex-exec`：`<raindown-home>/state/codex-read-home/`；
-- `codex-orca` 和其他 `codex-exec`：`<raindown-home>/state/codex-work-home/`。
+- `codex-orca`：`<raindown-home>/state/codex-orca-home/`；
+- 其他 `codex-exec`（写类角色）：`<raindown-home>/state/codex-exec-home/`。
 
-目录按读写类别固定，保留会话记录供 `exec resume <session id>` 和 Orca 终端重挂接使用；
-并发任务由 Codex 的会话 id 区分，无需为每个角色复制目录。Orca 在任务状态中记录启动时的隔离目录，
-只重挂接使用同一隔离目录的终端；升级前的存活终端没有该记录，以 `failed(codex_home_mismatch)` 拒绝接管，
+目录按执行器及只读用途固定，保留会话记录供 `exec resume <session id>` 和 Orca 终端重挂接使用，
+无需按任务清理会话目录，同时减少不同适配器之间的配置污染。并发任务由 Codex 的会话 id 区分，
+无需为每个角色复制目录。旧的 `codex-work-home` 不再使用，也不自动迁移其中的会话。
+Orca 在任务状态中记录启动时的隔离目录，只重挂接使用同一隔离目录的终端（比较规范化后的路径）；
+升级前的存活终端若缺少该记录或仍使用旧目录，以 `failed(codex_home_mismatch)` 拒绝接管，
 需要先关闭旧终端后重试。句柄失效后的替换终端还须匹配已记录的 pty/incarnation 身份；
 缺少原身份时持续重试，交给节点的无进展检测处理，避免误接用户另开的 Codex。用户目录中的旧会话不会复制到隔离目录。
 
@@ -36,7 +78,7 @@ Raindown 启动的所有 Codex worker（`codex-orca` 和 `codex-exec` 的全部�
 角色显式配置仍优先。
 
 唯一共享的用户文件是 `auth.json`：来源取节点/worker 环境的 `CODEX_HOME`，缺省 `~/.codex`。
-Raindown 通过临时符号链接加 rename 原子替换，避免并发启动时短暂丢失链接；不会复制或输出凭证内容。
+Raindown 通过临时符号链接加 rename 原子替换，避免并发启动时短暂丢失链接；不读取、复制或输出凭证内容。
 源目录没有 `auth.json` 时不创建链接，也不回退加载用户配置。Codex 原地刷新凭证可能写回源文件；
 若它将隔离目录中的链接替换成普通文件，Raindown 保留该文件并报 `codex_home_failed`，提示确认合并凭证后再删除。
 用户 `CODEX_HOME` 指向隔离目录（含真实路径相同的别名），或隔离目录本身是符号链接时同样拒绝启动，避免改写用户目录。
@@ -58,10 +100,32 @@ Codex 0.166.0 实测（2026-11-06，全部使用临时 HOME、CODEX_HOME 和 git
 真实 TUI 中，首次信任弹窗默认选中 `Trust and continue`；按 Enter 后，同一个进程改用项目配置的模型，
 在隔离 config 写入 canonical 仓库路径的 trust 记录，并报告项目规则文件的解析警告。
 因此 **codex-orca 自动确认信任会激活项目配置和规则**，即使启动前清空了隔离目录的信任表。
-本次只处理用户层继承；项目 `.codex/` 仍是后续需要收紧的边界：worker 可以写这里，规则可能在后续加载时绕过审批。
-启动前检查项目规则只能发现当时已有的文件，无法约束后续写入，故本次不加入这种检查。
+这是 #68 审查留下的项目层风险：信任后，项目 `.codex/` 中的 `rules`、`mcp_servers`、`hooks`、`notify`
+可能影响授权或执行额外程序，不能仅靠隔离用户配置防止。
+
+本次在 Codex 0.167.0 复测（2026-11-06）：临时 HOME、CODEX_HOME、RAINDOWN_HOME 与 git 仓库，
+使用手写的非秘密占位 API key，不读取真实凭证、不提交模型请求。项目配置只设置探针模型，另放一个无效 rules 文件。
+以 `codex --no-alt-screen -C <临时仓库> -a on-request -s workspace-write` 启动，弹窗仅提供
+`Trust and continue` 与 `Back to Agent Command Center`；Esc 返回空的任务中心，没有不信任/只读继续 worker 的选项。
+重新启动后按 Enter，同进程显示探针模型，F2 警告指向项目 `.codex/rules/`，隔离 config 中写入 canonical 仓库信任路径。
+因此不采用方案 A；方案 B 在任何信任交互前拒绝已有项目配置，且不依赖当前版本是否展示或能识别信任弹窗。
+0.167 的返回选项与既有 fixture 不同；本次不放宽弹窗识别，未知布局仍交用户处理，启动与恢复检查照常生效。
+
+本次采用启动检查方案（B）：codex-orca 每次启动及恢复前检查 worktree 中是否存在 `.codex/`，
+存在则进入 `blocked(other)`，说明项目配置风险并交给用户处理，不自动确认信任；只有未发现 `.codex/` 时才自动信任，
+在向信任弹窗发送 Enter 前还会再检查一次。该检查不读取项目配置内容，也不把 `.codex/` 的存在解释成用户授权。
+启动与恢复检查只能反映检查当时的状态，不能阻止 worker 或同一系统用户的其他进程随后创建、替换文件。
 没有验证外部修改规则后当前线程会自动热重载，不能据此作此断言。
-后续建议为 Raindown worker 增加可靠的项目配置/规则来源限制，再评估自动信任行为。
+
+以下来源仍未隔离，属于后续工作：
+
+- 系统层 `/etc/codex` 与 MDM：系统策略不受 `CODEX_HOME` 控制，可能改变权限或配置。
+  处理它们需要部署侧管理权限，本次不由适配器改动，也不能据此声称全局配置已完全隔离。
+- `~/.agents/skills`：可能引入用户指令或脚本，不随 `CODEX_HOME` 隔离。
+  需要独立的 skills 发现与执行隔离方案，本次不扩大到该范围。
+
+这些措施隔离配置继承，不是操作系统沙箱；同一系统用户下的文件改写、检查与使用之间的并发竞态（TOCTOU），
+以及具备文件和命令权限的 worker 自行写入配置，仍受现有权限与部署边界约束。
 官方行为说明见 [Config basics](https://learn.chatgpt.com/docs/config-file/config-basic) 和
 [Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)；升级 Codex 后应复测。
 
@@ -364,7 +428,7 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
   不加载 `.mcp.json`、用户设置、插件中的 MCP 服务器与 claude.ai connector。
 - codex-exec：继续使用 `codex-read-home` 和只读沙箱；完整的配置隔离、凭证链接与恢复约定见上文「Codex 配置隔离」。
   只读角色需要的 `permissions.config` 只允许 `model`、`model_reasoning_effort`，否则推断为 write；
-  写类角色也隔离，只是改用 `codex-work-home`。`codexExecPermissions` 可用的键与 core 的
+  写类角色也隔离，改用 `codex-exec-home`。`codexExecPermissions` 可用的键与 core 的
   `CODEX_EXEC_KNOWN_PERMISSION_KEYS` 由防漂移测试保持一致。
   - **为什么不用 `-c`（Codex 0.164.0 实测，2026-10-26）**：在临时 `CODEX_HOME` 的 `config.toml` 中配置
     `[mcp_servers.userfoo] command = "/bin/sh", args = ["-c", "touch <标记>"]` 与一个指向 `http://127.0.0.1:1/v1` 的 provider，

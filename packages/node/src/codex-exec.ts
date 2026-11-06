@@ -19,7 +19,7 @@ import {
 } from '@raindown/core'
 import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
-import { prepareCodexHome, readCodexHome, workCodexHome } from './codex-home.ts'
+import { execCodexHome, prepareCodexHome, readCodexHome } from './codex-home.ts'
 import { questionMessage } from './codex-orca/classify.ts'
 import { resolveContext } from './codex-orca/spec.ts'
 import { executorRoleEnv } from './env.ts'
@@ -261,7 +261,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
         const dir =
           effectiveRoleKind(role.data) === 'read'
             ? readCodexHome(options.home)
-            : workCodexHome(options.home)
+            : execCodexHome(options.home)
         const isolated = await prepareCodexHome(dir, source)
         if (!isolated.ok) {
           finish(

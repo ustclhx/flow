@@ -7,11 +7,9 @@ import { fail, ok, type Result, raindownPaths } from '@raindown/core'
 /** 读任务继续使用原目录，保留已有会话以便恢复。 */
 export const readCodexHome = (home: string) => join(raindownPaths(home).state, 'codex-read-home')
 
-/**
- * 写任务与交互式 Codex 共用固定目录以便恢复会话；并发任务由独立 session 区分，
- * 无需再按角色划分目录，避免角色变化后丢失会话。
- */
-export const workCodexHome = (home: string) => join(raindownPaths(home).state, 'codex-work-home')
+/** 写任务按执行器隔离运行状态，避免交互式与无头 Codex 互相影响。 */
+export const orcaCodexHome = (home: string) => join(raindownPaths(home).state, 'codex-orca-home')
+export const execCodexHome = (home: string) => join(raindownPaths(home).state, 'codex-exec-home')
 
 const HOME_CONFIG = `# 由 Raindown 生成，每次启动 Codex 前覆盖。
 # 不含 MCP、notify、hooks 与项目信任记录，角色设置由 permissions.config 经 -c 传入。
@@ -36,6 +34,16 @@ async function sameRealPath(a: string, b: string): Promise<boolean> {
   } catch (err) {
     if (missing(err)) return false
     throw err
+  }
+}
+
+/** 恢复会话只接受能确认相同的真实目录，缺失或不可访问时拒绝。 */
+export async function sameCodexHome(a: string | undefined, b: string): Promise<boolean> {
+  if (a === undefined) return false
+  try {
+    return await sameRealPath(a, b)
+  } catch {
+    return false
   }
 }
 

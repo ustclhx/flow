@@ -10,8 +10,8 @@
 - [ ] 1.4 codex-orca：`gh pr list` 改在登记仓库目录执行；ENOENT 区分"程序不存在"与"目录不存在"，说明如实
 - [ ] 1.5 codex-orca 终端标题 `[Raindown] <task id>`（D13）
 - [ ] 1.6 codex-orca 带外检测：Raindown 未回复而授权被批准/执行 → `task.out_of_band`；终端或目录被删 → `workdir_missing` + 带外事件；收件箱带外条目（inbox spec）
-- [ ] 1.7 harness 隔离纳入契约文档：`docs/executors.md` 增加"适配器契约"一节（能力、授权请求结构、隔离要求、带外检测），并记录 #68 审查留下的残余风险：项目级 `.codex/`（rules、mcp_servers、hooks、notify）在信任后加载、系统层 `/etc/codex` 与 MDM、`~/.agents/skills` 不在隔离范围
-- [ ] 1.8 跟进 #68 的残余风险：信任弹窗不再自动按"信任"，或启动前确认 worktree 中没有 `.codex/`；codex-orca 与 codex-exec 写类角色分开 CODEX_HOME；`codex_home_mismatch` 比较规范化路径
+- [x] 1.7 harness 隔离纳入契约文档：`docs/executors.md` 增加"适配器契约"一节（能力、授权请求结构、隔离要求、带外检测），并记录 #68 审查留下的残余风险：项目级 `.codex/`（rules、mcp_servers、hooks、notify）在信任后加载、系统层 `/etc/codex` 与 MDM、`~/.agents/skills` 不在隔离范围
+- [x] 1.8 跟进 #68 的残余风险：信任弹窗不再自动按"信任"，或启动前确认 worktree 中没有 `.codex/`；codex-orca 与 codex-exec 写类角色分开 CODEX_HOME；`codex_home_mismatch` 比较规范化路径
 
 ## 2. 派工与恢复
 
