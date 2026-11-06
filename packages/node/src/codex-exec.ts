@@ -13,6 +13,7 @@ import {
   type Role,
   redactSecrets,
   renderRecoveryPrompt,
+  renderWorkerTaskPrompt,
   type TaskContract,
   type TaskCost,
   type TaskResult,
@@ -100,7 +101,7 @@ async function taskPrompt(home: string, role: Role, contract: TaskContract, resu
   return [
     role.prompt,
     note,
-    untrusted('goal', contract.goal),
+    renderWorkerTaskPrompt(contract),
     untrusted(
       'context',
       context.map((c) => `${c.ref}\n${c.title ?? ''}\n${c.summary ?? ''}`).join('\n\n'),

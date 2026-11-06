@@ -26,12 +26,17 @@ import {
   type Result,
   type RetryTaskData,
   type Role,
+  redactSecrets,
   replyTaskRequest,
   retryTaskRequest,
   reviewTaskGoal,
   type ShowTaskData,
+  type ShowTaskQuery,
   SUPERVISOR_ACTOR,
+  showTaskQuery,
+  type TaskContract,
   type TaskOrigin,
+  type TaskShowResponse,
   type TaskView,
   USER_ACTOR,
   type VerifyStep,
@@ -244,6 +249,7 @@ export interface TaskService {
   createTask(contractInput: unknown, opts: CreateTaskOptions): Promise<Result<CreateTaskData>>
   listTasks(filter?: unknown): Result<ListTasksData>
   getTask(id: string): Result<ShowTaskData>
+  getTask(id: string, query: ShowTaskQuery): Result<TaskShowResponse>
   cancelTask(id: string, opts: CancelTaskOptions): Result<CancelTaskData>
   retryTask(id: string, opts: RetryTaskOptions): Promise<Result<RetryTaskData>>
   replyTask(id: string, body: unknown, opts: ReplyTaskOptions): Result<ReplyTaskData>
@@ -284,11 +290,80 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
   const verifyPolicy: VerifyPolicyCheck =
     o.verifyPolicy ?? (async (scope, steps) => ok(decideVerifySteps([], scope, steps)))
 
+  function getTask(id: string): Result<ShowTaskData>
+  function getTask(id: string, query: ShowTaskQuery): Result<TaskShowResponse>
+  function getTask(id: string, query: ShowTaskQuery = {}): Result<TaskShowResponse> {
+    const parsed = showTaskQuery.safeParse(query)
+    if (!parsed.success) return invalidArguments('查询参数', parsed.error.issues, query)
+    const storedTask = ledger.getTask(id)
+    if (!storedTask) return notFound(id)
+    const { section, offset, limit } = parsed.data
+    // 分段读取不能在 task 副本里再次附上完整终端输出。
+    const task =
+      section && storedTask.blocked
+        ? { ...storedTask, blocked: { ...storedTask.blocked, tail: undefined } }
+        : storedTask
+    if (section === 'summary') return ok({ task, section })
+    const events = ledger.taskEvents(id).filter((event) => isKnownEventType(event.type))
+    if (section === undefined) {
+      return ok({
+        task,
+        events,
+        replies: ledger.taskReplies(id),
+        attempts: foldTaskAttempts(task, events),
+      })
+    }
+    const pagination = (total: number) => {
+      const has_more = offset + limit < total
+      return {
+        task,
+        offset,
+        limit,
+        total,
+        has_more,
+        ...(has_more ? { next_offset: offset + limit } : {}),
+      }
+    }
+    switch (section) {
+      case 'events':
+        return ok({
+          ...pagination(events.length),
+          section,
+          events: events.slice(offset, offset + limit),
+        })
+      case 'replies': {
+        const replies = ledger.taskReplies(id)
+        return ok({
+          ...pagination(replies.length),
+          section,
+          replies: replies.slice(offset, offset + limit),
+        })
+      }
+      case 'attempts': {
+        const attempts = foldTaskAttempts(task, events)
+        return ok({
+          ...pagination(attempts.length),
+          section,
+          attempts: attempts.slice(offset, offset + limit),
+        })
+      }
+      case 'tail': {
+        const tail = (
+          storedTask.blocked?.tail ??
+          events.findLast((event) => event.type === 'task.blocked')?.payload.tail ??
+          []
+        ).join('\n')
+        return ok({ ...pagination(tail.length), section, tail: tail.slice(offset, offset + limit) })
+      }
+    }
+  }
+
   return {
     async createTask(contractInput, opts) {
       const parsed = createTaskRequest.safeParse(contractInput)
       if (!parsed.success) return invalidArguments('任务合同', parsed.error.issues, contractInput)
-      const contract = parsed.data
+      const { instruction_seq: requestedInstruction, ...requestContract } = parsed.data
+      const contract: TaskContract = requestContract
       // 合同入账时只做已知值的名单替换，不跑正则；高置信度的疑似密钥在这里直接拒绝。
       const suspected = checkContractSecrets(contract)
       if (!suspected.ok) return suspected
@@ -604,6 +679,68 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       const early = checkLimits()
       if (!early.ok) return early
 
+      // D9：选择原始指令与 mandate 共用同一个结果，原文只从账本读取。
+      const source = opts.mandateSourceTask ? ledger.getTask(opts.mandateSourceTask) : parent
+      let provenanceWake = opts.mandateSourceTask ? null : (callerWake ?? parentWake)
+      let ancestor = source
+      const seen = new Set<string>()
+      while (!provenanceWake && ancestor && !seen.has(ancestor.id)) {
+        seen.add(ancestor.id)
+        provenanceWake = ledger.wakeOf(ancestor.mandate?.wake_task ?? ancestor.id)
+        ancestor = ancestor.contract.parent ? ledger.getTask(ancestor.contract.parent) : null
+      }
+      const instructions =
+        provenanceWake?.origin === 'instruction'
+          ? provenanceWake.events.flatMap((seq) => {
+              const event = ledger.eventsAfter(seq - 1, undefined, 1)[0]
+              return event?.seq === seq &&
+                event.type === 'user.instruction' &&
+                event.actor === USER_ACTOR &&
+                event.workspace === contract.workspace
+                ? [event]
+                : []
+            })
+          : []
+      const instructionError = (message: string) =>
+        fail('usage', 'invalid_arguments', message, [
+          { field: 'instruction_seq', code: 'invalid_field', message },
+        ])
+      if (
+        requestedInstruction !== undefined &&
+        (!callerWake || !instructions.some((event) => event.seq === requestedInstruction))
+      ) {
+        return instructionError('instruction_seq 必须是本次唤醒的 user.instruction 事件')
+      }
+      if (callerWake && instructions.length > 1 && requestedInstruction === undefined) {
+        return instructionError('本次唤醒包含多条用户指令，必须指定 instruction_seq')
+      }
+      const sourceInstruction =
+        source?.contract.origin_instruction?.seq ?? source?.mandate?.instruction_seq
+      const instruction =
+        requestedInstruction !== undefined
+          ? instructions.find((event) => event.seq === requestedInstruction)
+          : !callerWake && sourceInstruction !== undefined
+            ? instructions.find((event) => event.seq === sourceInstruction)
+            : instructions.length === 1
+              ? instructions[0]
+              : undefined
+      const instructionSeq = instruction?.seq
+      if (instruction) {
+        const originalText = instruction.payload.text
+        // 与 event_get 使用相同的输出遮蔽，历史指令中的疑似密钥不能经合同重新暴露。
+        const text = redactSecrets(originalText)
+        contract.origin_instruction = {
+          seq: instruction.seq,
+          text: text.slice(0, 4000),
+          ...(originalText.length > 4000
+            ? {
+                chars: originalText.length,
+                read: { op: 'event_get' as const, args: { seq: instruction.seq } },
+              }
+            : {}),
+        }
+      }
+
       const existing = () => (key === undefined ? null : ledger.findTaskByIdempotencyKey(key))
       const hit = existing()
       if (hit) return ok({ task: hit, created: false })
@@ -632,26 +769,6 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         scope: { workspace: contract.workspace, role: opts.actor },
         actions: ['task.create'],
       })
-      const source = opts.mandateSourceTask ? ledger.getTask(opts.mandateSourceTask) : parent
-      let provenanceWake = opts.mandateSourceTask ? null : (callerWake ?? parentWake)
-      let ancestor = source
-      const seen = new Set<string>()
-      while (!provenanceWake && ancestor && !seen.has(ancestor.id)) {
-        seen.add(ancestor.id)
-        provenanceWake = ledger.wakeOf(ancestor.mandate?.wake_task ?? ancestor.id)
-        ancestor = ancestor.contract.parent ? ledger.getTask(ancestor.contract.parent) : null
-      }
-      const instructions = (provenanceWake?.events ?? []).filter((seq) => {
-        const event = ledger.eventsAfter(seq - 1, undefined, 1)[0]
-        return event?.type === 'user.instruction' && event.actor === USER_ACTOR
-      })
-      const sourceInstruction = source?.mandate?.instruction_seq
-      const instructionSeq =
-        sourceInstruction !== undefined && instructions.includes(sourceInstruction)
-          ? sourceInstruction
-          : instructions.length === 1
-            ? instructions[0]
-            : undefined
       const mandate = {
         created_by: opts.actor,
         origin:
@@ -716,17 +833,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       return ok({ tasks: ledger.listTasks(parsed.data) })
     },
 
-    getTask(id) {
-      const task = ledger.getTask(id)
-      if (!task) return notFound(id)
-      const events = ledger.taskEvents(id).filter((event) => isKnownEventType(event.type))
-      return ok({
-        task,
-        events,
-        replies: ledger.taskReplies(id),
-        attempts: foldTaskAttempts(task, events),
-      })
-    },
+    getTask,
 
     cancelTask(id, opts) {
       const task = ledger.getTask(id)

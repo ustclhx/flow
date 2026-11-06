@@ -33,6 +33,7 @@ import {
   redactLines,
   redactSecrets,
   renderRecoveryPrompt,
+  renderWorkerTaskPrompt,
   reviewerRoleProblem,
   reviewOutput,
   SUPERVISOR_ACTOR,
@@ -128,6 +129,7 @@ export const RAINDOWN_MCP_AUTO_ALLOWED = [
   'brief_update',
   'task_list',
   'task_show',
+  'event_get',
 ] as const
 /**
  * 只在 supervisor 会话（`kind: supervisor`）中自动放行的 raindown MCP 工具（design D7；tasks 4.1）：
@@ -357,7 +359,7 @@ export function classifyClaudeSdk(snapshot: StuckSnapshot): StuckVerdict | null 
 
 /** 首条用户消息：任务说明。 */
 export function renderTaskPrompt(contract: TaskContract, cwd: string): string {
-  const lines = ['# 任务', '', contract.goal.trim(), '', `工作目录：${cwd}`]
+  const lines = ['# 任务', '', renderWorkerTaskPrompt(contract), '', `工作目录：${cwd}`]
   if (contract.context?.length) {
     lines.push('', '## 上下文引用', ...contract.context.map((c) => `- ${c}`))
     lines.push('（brain 条目可以通过 raindown MCP 的 kb 工具检索。）')

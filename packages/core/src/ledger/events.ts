@@ -542,7 +542,7 @@ export const eventPayloads = {
     via: inboxVia,
   }),
   'user.instruction': z.strictObject({
-    text: z.string().min(1).max(INBOX_BODY_MAX).meta({ description: '指令原文' }),
+    text: z.string().min(1).max(PROTOCOL_MESSAGE_MAX).meta({ description: '指令原文' }),
     via: inboxVia.meta({ description: '指令来自哪个渠道' }),
   }),
   /**

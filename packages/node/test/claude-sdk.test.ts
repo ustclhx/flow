@@ -424,6 +424,7 @@ describe('注入 Raindown MCP', () => {
   test('放行清单与 raindown 的实际工具名一致；PENDING 只列尚未实现的 supervisor 操作', () => {
     const names = new Set(operations.map((op) => op.name))
     for (const n of RAINDOWN_MCP_AUTO_ALLOWED) expect(names.has(n)).toBe(true)
+    expect(readRoleMayUse('mcp__raindown__event_get', false)).toBe(true)
     for (const n of SUPERVISOR_MCP_AUTO_ALLOWED) {
       expect(names.has(n) || RAINDOWN_MCP_AUTO_ALLOWED_PENDING.includes(n)).toBe(true)
     }

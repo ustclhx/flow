@@ -252,6 +252,7 @@ describe('reply 唤醒（--reply-only）', () => {
     const reads = operations.filter((op) => op.access === 'read').map((op) => op.name)
     expect(reads.sort()).toEqual(
       [
+        'event_get',
         'inbox_list',
         'kb_get',
         'kb_proposals_diff',

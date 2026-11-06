@@ -4,18 +4,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   defaultSupervisorConfig,
+  eventGetData,
   fail,
   ok,
+  okBody,
   type Result,
   type Role,
   type SupervisorConfig,
   type TaskOrigin,
+  taskSectionData,
 } from '@raindown/core'
 import { Hono } from 'hono'
 import {
   actOnInbox,
   createHubApp,
   createSupervisorRoutes,
+  createTaskRoutes,
   createTaskService,
   createWakeScheduler,
   createWakeTokenAuthority,
@@ -937,14 +941,16 @@ describe('积压丢弃与合并上限（G10 审查）', () => {
     expect(w?.events).toEqual(seqs.slice(-200))
     const events = env.store.getTask(w?.task_id ?? '')?.contract.inputs?.wake?.events ?? []
     expect(events).toHaveLength(200)
-    // 逐级降级：最旧的只带引用，最新的指令保留原文
+    // 200 个完整指针已超过正文预算下界，保留全部引用，不再追加正文。
     expect(events[0]).toEqual({
       seq: seqs[30] as number,
       type: 'user.instruction',
       ts: expect.any(String),
+      chars: expect.any(Number),
+      read: { op: 'event_get', args: { seq: seqs[30] as number } },
     })
-    expect(events.at(-1)?.summary).toContain('第 229 条')
-    expect(JSON.stringify(events).length).toBeLessThanOrEqual(16_000)
+    expect(events.every((event) => event.summary === undefined)).toBe(true)
+    expect(events.every((event) => event.chars && event.read?.op === 'event_get')).toBe(true)
   })
 
   test('放行只作用于当时已有的事件；空队列放行不留通行证', async () => {
@@ -1578,5 +1584,134 @@ describe('巡检唤醒与今日花费（D13；tasks 6.2）', () => {
       cost_usd: 0,
       cost_wakes: 0,
     })
+  })
+})
+
+describe('读取指针与关联任务（6.3）', () => {
+  test('终端片段超出预算被省略后，supervisor沿event_get与task_show读取完整内容', async () => {
+    const env = await setup()
+    instruction(env.store)
+    await env.settle()
+    derived(env.store, 'long-tail', 'instruction')
+    start(env.store, 'long-tail')
+    const tail = Array.from({ length: 40 }, (_, i) => `${i} ${'输出'.repeat(240)}`)
+    const event = must(
+      env.store.append(
+        {
+          type: 'task.blocked',
+          task_id: 'long-tail',
+          workspace: WS,
+          payload: { reason: 'crashed', message: '执行停止', tail },
+        },
+        { actor: 'node:n1' },
+      ),
+    )
+    finish(env.store, env.wakes()[0]?.task_id ?? '')
+    await env.settle()
+    const wake = env.wakes()[1]
+    const input = env.store.getTask(wake?.task_id ?? '')?.contract.inputs?.wake?.events[0]
+    expect(input?.data).toBeUndefined()
+    expect(input?.read).toEqual({ op: 'event_get', args: { seq: event.seq } })
+    expect(input?.sources).toContainEqual({
+      field: 'data.tail',
+      chars: tail.join('\n').length,
+      read: { op: 'event_get', args: { seq: event.seq } },
+    })
+    start(env.store, wake?.task_id ?? '')
+    const tokens = createWakeTokenAuthority({ ledger: () => env.store, now: env.clock.now })
+    const token = tokens.issue({ task_id: wake?.task_id ?? '', lease_id: `l-${wake?.task_id}-1` })
+    const app = createHubApp({
+      token: testToken,
+      ledger: env.store,
+      wakeTokens: tokens,
+      mount: [{ path: '/', app: createTaskRoutes({ ledger: env.store, tasks: env.tasks }) }],
+    })
+    const response = await app.request(`/v1/events/${event.seq}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    expect(response.status).toBe(200)
+    expect(okBody(eventGetData).parse(await response.json()).data.event).toMatchObject({
+      payload: { tail },
+    })
+    const taskPointer = input?.task?.read as { op: string; args: { id: string } }
+    expect(taskPointer.args.id).toBe('long-tail')
+    const readTail = async (offset: number) => {
+      const res = await app.request(
+        `/v1/tasks/${taskPointer.args.id}?section=tail&offset=${offset}&limit=1000`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      )
+      expect(res.status).toBe(200)
+      const page = okBody(taskSectionData).parse(await res.json()).data
+      if (page.section !== 'tail') throw new Error('预期终端分页')
+      return page
+    }
+    let complete = ''
+    let page = await readTail(0)
+    complete += page.tail
+    while (page.has_more) {
+      page = await readTail(page.next_offset as number)
+      complete += page.tail
+    }
+    expect(complete).toBe(tail.join('\n'))
+  })
+
+  test('审查完成注入的PR列出同PR的卡住旧审查，并附任务关联id', async () => {
+    const env = await setup()
+    instruction(env.store)
+    await env.settle()
+    const parent = env.wakes()[0]?.task_id ?? ''
+    const pr = 'https://github.com/example/repo/pull/31'
+    for (const id of ['review-old', 'review-new']) {
+      must(
+        env.store.append(
+          {
+            type: 'task.created',
+            task_id: id,
+            workspace: WS,
+            payload: {
+              contract: { ...contract(), role: 'reviewer', parent, inputs: { review: { pr } } },
+              origin: 'instruction',
+            },
+          },
+          { actor: 'hub' },
+        ),
+      )
+    }
+    start(env.store, 'review-old')
+    block(env.store, 'review-old', 'crashed')
+    start(env.store, 'review-new')
+    const event = must(
+      env.store.append(
+        {
+          type: 'task.done',
+          task_id: 'review-new',
+          workspace: WS,
+          payload: { result: { ...result(), artifacts: [{ kind: 'pr', ref: pr }] } },
+        },
+        { actor: 'node:n1' },
+      ),
+    )
+    finish(env.store, parent)
+    await env.settle()
+    const input = env.store
+      .getTask(env.wakes()[1]?.task_id ?? '')
+      ?.contract.inputs?.wake?.events.find((e) => e.seq === event.seq)
+    expect(input?.task).toMatchObject({
+      id: 'review-new',
+      parent,
+      attempts: { items: [{ attempt: 1 }] },
+    })
+    expect(input?.data?.prs).toEqual([
+      {
+        pr: 31,
+        url: pr,
+        tasks: expect.arrayContaining([
+          { id: 'review-old', role: 'reviewer', status: 'blocked' },
+          { id: 'review-new', role: 'reviewer', status: 'done' },
+        ]),
+      },
+    ])
   })
 })

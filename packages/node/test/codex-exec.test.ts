@@ -18,6 +18,7 @@ import {
   ok,
   type Role,
   renderRecoveryPrompt,
+  renderWorkerTaskPrompt,
   type TaskRecovery,
   taskContract,
   taskResult,
@@ -142,6 +143,14 @@ const say = (text: string) =>
   `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`
 
 describe('codex-exec 无头执行器', () => {
+  test('首次派工保留 core 的用户原文与 supervisor 补充模板', async () => {
+    const s = setup()
+    s.contract.origin_instruction = { seq: 12, text: '用户原话：检查文档' }
+    await collect(s.run())
+    expect(s.report().args.at(-1)).toContain(renderWorkerTaskPrompt(s.contract))
+    expect(s.report().args.at(-1)).toContain('只读分析，不修改文件。')
+  })
+
   test.each([false, true])('恢复提示放在输入开头（恢复旧会话：%s）', async (resume) => {
     const s = setup()
     const recovery: TaskRecovery = {

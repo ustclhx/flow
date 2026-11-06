@@ -96,7 +96,9 @@ PR 也不能被 supervisor 请求合并（卡住仍可能被委托代回复）�
 
 - 每个 workspace 有三条队列：instruction、autonomous、reply。同一时刻最多一个**普通唤醒**（instruction 或 autonomous），
   空闲时 instruction 优先；另可并行一个 reply 唤醒。
-- 一次唤醒只合并同一条队列里的事件（最新 200 个；`inputs.wake` 有 16000 字符预算，超出时逐级降级）。
+- 一次唤醒只合并同一条队列里的事件（最新 200 个；`inputs.wake.events` 以 16000 字符为预算，超出时逐级省略正文）。每条事件保留原始长度 `chars` 和 `{read: {op, args}}` 读取指针，任务带父任务、派工、PR 与用户指令 seq。必需的引用与关联 id 本身超过预算时，保留这些元数据，不再追加正文；200 条事件仍会在同次唤醒中处理。
+- 按读取指针调用 `event_get` 或带 `section`、`offset`、`limit` 的 `task_show` 补读内容；`tail` 按字符分页，其他列表按条目分页。supervisor 只能读本 workspace 的事件；无 workspace 的全局事件只有被本次唤醒引用时可读，其他返回 `forbidden`。用户可读取全部事件，疑似密钥会被遮蔽。
+- supervisor 建任务时，中枢附加 `origin_instruction`，原文与 supervisor 的补充分段显示，以原始指令为准。本次唤醒只有一条用户指令时自动选择，多条时必须传本次唤醒中的 `instruction_seq`；autonomous 没有原始指令。用户指令最多 8192 字符，合同内联前 4000 字符，超出部分附原长和 `event_get` 指针。中枢创建的 PR 审查继承开发任务的原始指令。
 - 普通唤醒失败重试一次；仍失败则出现一条 Interrupt 条目，**该队列暂停**，直到你 `--release` 或 1 小时后自动恢复一次
   （再失败则退避翻倍，最长 24 小时）。
 - 唤醒任务 `blocked` 时新事件继续排队；你取消它即放行队列。

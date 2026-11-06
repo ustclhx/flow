@@ -11,11 +11,13 @@ export * from './common.ts'
 export * from './delegation.ts'
 export * from './events.ts'
 export * from './protocol.ts'
+export * from './read-pointer.ts'
 export * from './recovery.ts'
 export * from './redact.ts'
 export * from './review.ts'
 export * from './supervisor-api.ts'
 export * from './task.ts'
+export * from './worker-input.ts'
 export * from './worker-report.ts'
 
 type SchemaEntry = { schema: z.ZodType; io: 'input' | 'output' }

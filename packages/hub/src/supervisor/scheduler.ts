@@ -2,7 +2,9 @@ import { existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import {
   clipText,
+  eventReadPointer,
   fail,
+  foldTaskAttempts,
   type InboxVia,
   type LedgerEvent,
   loadWorkspaces,
@@ -17,6 +19,8 @@ import {
   type SupervisorWorkspaceStatus,
   type TaskContractInput,
   type TaskOrigin,
+  type TaskView,
+  taskReadPointer,
   WAKE_EVENT_SUMMARY_MAX,
   WAKE_EVENTS_MAX,
   type WakeEventInput,
@@ -644,15 +648,16 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
    * 2. 裁掉 data（tail、diff_stat、请求等），只留说明；
    * 3. 只保留 user.instruction 的原文，从新到旧放进说明直到装满预算，其余只带引用。
    * `bare`（说明里有疑似密钥时）直接只带引用。
+   * 指针与关联 id 是不可省略的元数据；数量多时它们构成预算下界，不再追加正文。
    */
   function wakeEvents(events: readonly QueuedEvent[], bare: boolean): WakeEventInput[] {
     const size = (x: unknown) => JSON.stringify(x).length
-    if (bare) return describeAll(events, 'bare')
-    const full = describeAll(events, 'full')
+    const full = describeAll(events, bare ? 'bare' : 'full')
+    if (bare) return full
     if (size(full) <= WAKE_INPUT_BUDGET) return full
-    const lean = describeAll(events, 'lean')
+    const lean = full.map(({ data: _data, ...head }) => head)
     if (size(lean) <= WAKE_INPUT_BUDGET) return lean
-    const out = describeAll(events, 'bare')
+    const out = lean.map(({ summary: _summary, ...head }) => head)
     let total = size(out)
     for (let i = out.length - 1; i >= 0; i--) {
       const l = lean[i]
@@ -667,21 +672,128 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     return out
   }
 
+  /** PR 关联来自合同与历次结果，重试不能隐藏旧审查或已开出的 PR。 */
+  function taskPrs(task: TaskView): string[] {
+    const prs = new Set<string>()
+    if (task.contract.inputs?.pr) prs.add(task.contract.inputs.pr)
+    if (task.contract.inputs?.review) prs.add(task.contract.inputs.review.pr)
+    for (const ev of ledger.taskEvents(task.id)) {
+      if (ev.type !== 'task.done' && ev.type !== 'task.failed' && ev.type !== 'task.cancelled')
+        continue
+      const result = ev.payload.result
+      for (const artifact of result?.artifacts ?? []) {
+        if (artifact.kind === 'pr') prs.add(artifact.ref)
+      }
+    }
+    return [...prs]
+  }
+
   function describeAll(
     events: readonly QueuedEvent[],
     mode: 'full' | 'lean' | 'bare',
   ): WakeEventInput[] {
+    const workspaces = new Set(events.map((q) => eventAt(q.seq)?.workspace))
+    const tasks = [...workspaces].flatMap((workspace) =>
+      workspace === undefined
+        ? []
+        : ledger.listTasks({ workspace, limit: Number.MAX_SAFE_INTEGER }),
+    )
+    const prsByTask = new Map(tasks.map((task) => [task.id, taskPrs(task)]))
+    const prObject = (url: string) => ({
+      pr: /\/pull\/(\d+)$/.test(url) ? Number(url.split('/').at(-1)) : url,
+      url,
+      tasks: tasks
+        .filter((task) => prsByTask.get(task.id)?.includes(url))
+        .map((task) => ({ id: task.id, role: task.contract.role, status: task.status })),
+    })
     return events.map((q) => {
       const ev = eventAt(q.seq)
+      const task = q.task_id === undefined ? null : ledger.getTask(q.task_id)
+      const attempts = task ? foldTaskAttempts(task, ledger.taskEvents(task.id)) : []
+      // 关联事实在三级降级中都保留；任务正文与派工的详细字段可沿各自的指针读取。
+      const taskInput = task
+        ? {
+            id: task.id,
+            parent: task.contract.parent ?? null,
+            status: task.status,
+            role: task.contract.role,
+            attempts: {
+              items: attempts.slice(-3).map((attempt) => ({
+                attempt: attempt.attempt,
+                executor: attempt.executor,
+                node_id: attempt.node_id,
+                reason: attempt.reason ?? null,
+              })),
+              chars: JSON.stringify(attempts).length,
+              ...taskReadPointer(task.id, 'attempts', 0),
+            },
+            prs: (prsByTask.get(task.id) ?? []).map(prObject),
+            instruction_seq: task.mandate?.instruction_seq ?? null,
+            chars: JSON.stringify(task).length,
+            ...taskReadPointer(task.id),
+          }
+        : undefined
+      // 委托的终端、命令与目标来自其他对象；只给委托事件指针无法找回它们。
+      const sources: {
+        field?: string
+        chars: number
+        read: ReturnType<typeof eventReadPointer>['read']
+      }[] =
+        ev?.type === 'task.reply_delegated'
+          ? [ev.payload.block_seq, ev.payload.decision_id].flatMap((seq) => {
+              const source = seq === undefined ? null : eventAt(seq)
+              return source && source.workspace === ev.workspace
+                ? [{ chars: JSON.stringify(source).length, ...eventReadPointer(source.seq) }]
+                : []
+            })
+          : []
+      if (ev?.type === 'task.blocked' && ev.payload.tail) {
+        sources.push({
+          field: 'data.tail',
+          chars: ev.payload.tail.join('\n').length,
+          ...eventReadPointer(ev.seq),
+        })
+      }
+      if (ev?.type === 'task.reply_delegated') {
+        const block = eventAt(ev.payload.block_seq)
+        if (block?.type === 'task.blocked' && block.payload.tail) {
+          sources.push({
+            field: 'data.tail',
+            chars: block.payload.tail.join('\n').length,
+            ...eventReadPointer(block.seq),
+          })
+        }
+      }
+      if (ev?.type === 'user.instruction' && ev.payload.text.length > WAKE_EVENT_SUMMARY_MAX) {
+        sources.push({
+          field: 'summary',
+          chars: ev.payload.text.length,
+          ...eventReadPointer(ev.seq),
+        })
+      }
       const head = {
         seq: q.seq,
         type: ev?.type ?? q.type,
         ts: ev?.ts ?? q.ts,
         ...(q.task_id === undefined ? {} : { task_id: q.task_id }),
+        chars: ev ? JSON.stringify(ev).length : 0,
+        ...eventReadPointer(q.seq),
+        ...(taskInput ? { task: taskInput } : {}),
+        ...(sources.length ? { sources } : {}),
       }
       if (mode === 'bare' || !ev) return head
-      const { data: _data, ...rest } = describe(ev)
-      return mode === 'lean' ? { ...head, ...rest } : { ...head, ...describe(ev) }
+      const description = describe(ev)
+      // 事件中的 PR 与任务快照共用中枢关联信息，保留旧审查的状态。
+      if (typeof description.data?.pr === 'string') {
+        description.data.pr = prObject(description.data.pr)
+      }
+      if (description.data?.prs && Array.isArray(description.data.prs)) {
+        description.data.prs = description.data.prs.map((pr) =>
+          typeof pr === 'string' ? prObject(pr) : pr,
+        )
+      }
+      const { data: _data, ...rest } = description
+      return mode === 'lean' ? { ...head, ...rest } : { ...head, ...description }
     })
   }
 

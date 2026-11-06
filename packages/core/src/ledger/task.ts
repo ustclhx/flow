@@ -11,6 +11,7 @@ import {
   taskId,
   timestamp,
 } from './common.ts'
+import { readOperation } from './read-pointer.ts'
 import { clipText, PROTOCOL_MESSAGE_MAX } from './redact.ts'
 import { reportQuestion } from './worker-report.ts'
 
@@ -351,6 +352,20 @@ export const wakeEventInput = z
       .max(WAKE_EVENT_SUMMARY_MAX)
       .optional()
       .meta({ description: '中枢生成的事件说明，例如指令原文、任务结果摘要、卡住说明' }),
+    chars: z.number().int().nonnegative().optional(),
+    read: readOperation.optional(),
+    task: z.record(z.string(), z.unknown()).optional().meta({
+      description: '中枢生成的关联任务快照；省略内容附 chars 与读取指针',
+    }),
+    sources: z
+      .array(
+        z.strictObject({
+          field: z.string().optional(),
+          chars: z.number().int().nonnegative(),
+          read: readOperation,
+        }),
+      )
+      .optional(),
     data: z.record(z.string(), z.unknown()).optional().meta({
       description:
         '中枢附上的结构化上下文，例如代回复时的 block_seq、请求的命令、终端末尾、diff_stat、目标与角色',
@@ -634,9 +649,26 @@ export function reviewTaskGoal(review: Pick<ReviewInputs, 'pr' | 'focus'>): stri
 
 export const DEFAULT_TIMEOUT_S = 3600
 
+/** 中枢从账本附加的用户原始指令；创建入口不接受调用方传入。 */
+export const originInstruction = z.strictObject({
+  seq: z.number().int().min(1),
+  text: z.string().max(4000),
+  chars: z.number().int().nonnegative().optional(),
+  read: z
+    .strictObject({
+      op: z.literal('event_get'),
+      args: z.strictObject({ seq: z.number().int().min(1) }),
+    })
+    .optional(),
+})
+export type OriginInstruction = z.infer<typeof originInstruction>
+
 export const taskContract = z
   .strictObject({
     goal: z.string().trim().min(1).meta({ description: '任务目标' }),
+    origin_instruction: originInstruction.optional().meta({
+      description: '中枢附加的用户原始指令；goal 是 supervisor 的目标与补充要求',
+    }),
     workspace: workspaceRef,
     role: z.string().min(1).meta({ description: '角色，例如 developer、reviewer、triage' }),
     executor: executorType,

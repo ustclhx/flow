@@ -3,14 +3,16 @@ import { HubClient } from '../daemon/client.ts'
 import { renderTable } from '../format/table.ts'
 import { taskId } from '../ledger/common.ts'
 import {
+  type CreateTaskRequest,
   cancelTaskRequest,
   createTaskRequest,
   listTasksQuery,
   type ReplyTaskRequest,
   retryTaskRequest,
+  showTaskQuery,
 } from '../ledger/protocol.ts'
 import { checkContractSecrets } from '../ledger/redact.ts'
-import { RETRYABLE_BLOCKED_REASONS, type TaskContractInput, type TaskView } from '../ledger/task.ts'
+import { RETRYABLE_BLOCKED_REASONS, type TaskView } from '../ledger/task.ts'
 import { fail, ok } from '../result.ts'
 import { loadRoles } from '../roles.ts'
 import { USER_ACTOR } from '../write/policy.ts'
@@ -28,7 +30,7 @@ export const taskCreateOp = defineOperation({
   input: createTaskRequest,
   fileInput: true,
   // 会话绑定（tasks 4.1）：只能建绑定 workspace 的任务；未写 parent 时以绑定的任务为 parent。
-  bind: (input: TaskContractInput, binding) => {
+  bind: (input: CreateTaskRequest, binding) => {
     const ws = checkBoundWorkspace(input.workspace, binding)
     if (!ws.ok) return ws
     return ok(
@@ -37,7 +39,7 @@ export const taskCreateOp = defineOperation({
         : input,
     )
   },
-  run: async (input: TaskContractInput, ctx) => {
+  run: async (input: CreateTaskRequest, ctx) => {
     const loaded = await loadRoles(ctx.home)
     if (!loaded.ok) return loaded
     if (!loaded.data.roles.some((role) => role.name === input.role)) {
@@ -77,11 +79,16 @@ export const taskShowOp = defineOperation({
   access: 'read',
   cli: 'task show',
   summary: '查看任务合同、结果、派工与事件',
-  input: z.strictObject({ id: taskId }),
+  input: showTaskQuery.extend({ id: taskId }),
   positional: ['id'],
-  run: (input: { id: string }, ctx) => client(ctx).showTask(input.id),
-  human: ({ task, events, attempts }) =>
-    [
+  run: (input: z.infer<typeof showTaskQuery> & { id: string }, ctx) => {
+    const { id, ...query } = input
+    return client(ctx).showTask(id, query)
+  },
+  human: (data) => {
+    if ('section' in data) return JSON.stringify(data, null, 2)
+    const { task, events, attempts } = data
+    return [
       taskSummary(task),
       `合同：${JSON.stringify(task.contract, null, 2)}`,
       `授权依据：${task.mandate ? JSON.stringify(task.mandate, null, 2) : '未记录（旧任务）'}`,
@@ -105,7 +112,8 @@ export const taskShowOp = defineOperation({
         { header: '最后上报', value: (a) => a.last_report ?? '—', max: 80 },
       ]),
       `事件：${JSON.stringify(events, null, 2)}`,
-    ].join('\n'),
+    ].join('\n')
+  },
 })
 
 export const taskCancelOp = defineOperation({

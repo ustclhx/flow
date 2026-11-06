@@ -1,8 +1,9 @@
 import { z } from 'zod'
-import { INBOX_BODY_MAX, inboxVia } from '../inbox/schema.ts'
+import { inboxVia } from '../inbox/schema.ts'
 import { dateString, workspaceRef } from '../schema/common.ts'
 import { taskId, timestamp } from './common.ts'
 import { supervisorQueue } from './events.ts'
+import { PROTOCOL_MESSAGE_MAX } from './redact.ts'
 import { taskStatus, wakeGeneration, wakeOrigin } from './task.ts'
 
 /**
@@ -21,7 +22,7 @@ export const supervisorWakeRequest = z
       .string()
       .trim()
       .min(1)
-      .max(INBOX_BODY_MAX)
+      .max(PROTOCOL_MESSAGE_MAX)
       .optional()
       .meta({ description: '指令原文；省略且不带 release 时写入一条"手动唤醒"指令' }),
     release: supervisorQueue.optional().meta({
