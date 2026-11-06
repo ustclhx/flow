@@ -147,7 +147,7 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     const auth = c.get('auth')
     return respond(
       c,
-      tasks.retryTask(c.req.param('id'), {
+      await tasks.retryTask(c.req.param('id'), {
         actor: actor.data,
         ...(auth?.kind === 'wake' ? { wake: { task_id: auth.wake.task_id } } : {}),
         ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),

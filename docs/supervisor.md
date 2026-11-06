@@ -408,4 +408,4 @@ raindown supervisor status [product-res]                    # 当前唤醒、各
    用 `raindown ask <ws> "说明一下当前状态"` 做一次冒烟。
 
 **回滚**：把对应 workspace 的 `supervisor.enabled` 设为 `false`（或删除 supervisor 角色）即停止唤醒与代回复；已建的任务不受影响，
-已排队的事件会被清掉。需要回到旧版本二进制时，先删掉 `node.yaml` 的 `reserved` 与 `policies.yaml` 中带 `push_to` / `gh_scope` / `level: supervisor` 的规则。
+已排队的事件会被清掉。这只关闭 supervisor 功能；出现重试过的 failed 任务后，不能沿用当前账本退回本版本之前的中枢，必须使用升级前的备份，详见 [任务重试的升级与回滚限制](daemon.md#任务重试的升级与回滚限制)。其他情况下需要回到旧版本二进制时，先删掉 `node.yaml` 的 `reserved` 与 `policies.yaml` 中带 `push_to` / `gh_scope` / `level: supervisor` 的规则。

@@ -221,7 +221,7 @@ export function createApplier(db: Database): Applier {
         setStatus(
           e,
           'queued',
-          ', blocked_json = NULL, result_json = NULL, finished_at = NULL, cancel_requested = 0, resume_json = NULL',
+          ', blocked_json = NULL, result_json = NULL, finished_at = NULL, resume_json = NULL',
         )
         return
       case 'task.cancel_requested':

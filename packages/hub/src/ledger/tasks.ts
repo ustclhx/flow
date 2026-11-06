@@ -17,6 +17,7 @@ import {
   loadRoles,
   loadWorkspaces,
   ok,
+  RETRYABLE_BLOCKED_REASONS,
   type ReplyKind,
   type ReplyTaskData,
   type Result,
@@ -233,7 +234,7 @@ export interface TaskService {
   listTasks(filter?: unknown): Result<ListTasksData>
   getTask(id: string): Result<ShowTaskData>
   cancelTask(id: string, opts: CancelTaskOptions): Result<CancelTaskData>
-  retryTask(id: string, opts: RetryTaskOptions): Result<RetryTaskData>
+  retryTask(id: string, opts: RetryTaskOptions): Promise<Result<RetryTaskData>>
   replyTask(id: string, body: unknown, opts: ReplyTaskOptions): Result<ReplyTaskData>
 }
 
@@ -727,15 +728,36 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       return after ? ok({ task: after }) : notFound(id)
     },
 
-    retryTask(id, opts) {
+    async retryTask(id, opts) {
       if (opts.actor !== USER_ACTOR && opts.actor !== SUPERVISOR_ACTOR) {
         return fail('failure', 'role_not_allowed', '只有用户或有效唤醒中的 supervisor 可以重试任务')
       }
       if (opts.wake && opts.actor !== SUPERVISOR_ACTOR) {
         return fail('failure', 'actor_mismatch', '唤醒绑定只能用于 supervisor 身份')
       }
+      const before = ledger.getTask(id)
+      if (!before) return notFound(id)
+      let role: RoleForKind | null = null
+      if (opts.actor === SUPERVISOR_ACTOR) {
+        const found = await o.roles(before.contract.role)
+        if (!found.ok) return found
+        if (!found.data) {
+          return fail('failure', 'unknown_role', `角色 ${before.contract.role} 未定义或加载失败`)
+        }
+        role = found.data
+      }
+      // 角色加载后重新读状态；此后的校验与写入之间不能 await，避免撤销并发取消或释放新租约。
       const task = ledger.getTask(id)
       if (!task) return notFound(id)
+      if (task.cancel_requested) {
+        return fail('failure', 'cancel_requested', '任务已请求取消，不能重试')
+      }
+      if (ledger.wakeOf(id)) {
+        return fail('failure', 'wake_retry_forbidden', '唤醒任务由调度器重新唤醒，不能直接重试')
+      }
+      if (ledger.activeLease(id) !== null) {
+        return fail('failure', 'lease_active', '任务仍持有活动租约，不能重试')
+      }
       if (opts.actor === SUPERVISOR_ACTOR) {
         const wake = opts.wake ? ledger.wakeOf(opts.wake.task_id) : null
         const caller = wake ? ledger.getTask(wake.task_id) : null
@@ -752,6 +774,17 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
             `本次唤醒绑定 ${wake.workspace}，不能重试 ${task.workspace} 的任务`,
           )
         }
+        const kind = taskKind(role, task.contract, { actor: opts.actor })
+        if (kind === 'merge' || kind === 'supervisor') {
+          return fail('failure', 'role_not_allowed', `supervisor 不能重试 ${kind} 类任务`)
+        }
+        if (kind === 'write' && wake.origin === 'autonomous') {
+          return fail(
+            'failure',
+            'proposal_required',
+            '自发唤醒不能直接重试写类任务，请提交任务提案',
+          )
+        }
         // 任务必须确实源自本 workspace 的普通唤醒；后续唤醒可以恢复前代唤醒的子孙任务。
         // origin 由中枢固化，不能只凭用户可填写的 parent 借任意任务进入唤醒链。
         const seen = new Set<string>()
@@ -759,11 +792,15 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         let derived = false
         while (ancestor?.contract.parent && !seen.has(ancestor.id)) {
           seen.add(ancestor.id)
+          if (ancestor.created_by !== SUPERVISOR_ACTOR && ancestor.created_by !== HUB_ACTOR) break
           const parent = ledger.getTask(ancestor.contract.parent)
           if (!parent || parent.workspace !== wake.workspace) break
           const parentWake = ledger.wakeOf(parent.id)
           if (parentWake) {
-            derived = parentWake.workspace === wake.workspace && parentWake.origin !== 'reply'
+            derived =
+              parent.created_by === HUB_ACTOR &&
+              parentWake.workspace === wake.workspace &&
+              parentWake.origin !== 'reply'
             break
           }
           if (!parent.origin) break
@@ -777,7 +814,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         task.status === 'failed' ||
         (task.status === 'blocked' &&
           task.blocked !== null &&
-          ['crashed', 'node_lost', 'other'].includes(task.blocked.reason))
+          RETRYABLE_BLOCKED_REASONS.some((reason) => reason === task.blocked?.reason))
       if (!retryable) {
         return fail(
           'failure',
@@ -792,11 +829,20 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       const base = { task_id: id, workspace: task.workspace }
       const written = ledger.appendMany(
         [
-          {
-            ...base,
-            type: 'task.attempt_ended',
-            payload: { attempt: task.attempt, reason: 'retry' },
-          },
+          ...(!ledger
+            .taskEvents(id)
+            .some(
+              (event) =>
+                event.type === 'task.attempt_ended' && event.payload.attempt === task.attempt,
+            )
+            ? [
+                {
+                  ...base,
+                  type: 'task.attempt_ended' as const,
+                  payload: { attempt: task.attempt, reason: 'retry' as const },
+                },
+              ]
+            : []),
           {
             ...base,
             type: 'task.requeued',

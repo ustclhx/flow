@@ -783,10 +783,23 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
-      case 'task.attempt_ended':
-        return draft.payload.attempt === task?.attempt
-          ? ok(null)
-          : invalidEvent('task.attempt_ended 的 attempt 必须是当前派工')
+      case 'task.attempt_ended': {
+        if (draft.payload.attempt !== task?.attempt) {
+          return invalidEvent('task.attempt_ended 的 attempt 必须是当前派工')
+        }
+        if (
+          get(
+            `SELECT 1 FROM events WHERE task_id = ? AND type = 'task.attempt_ended'
+               AND json_extract(payload_json, '$.attempt') = ? AND seq < ? LIMIT 1`,
+            draft.task_id ?? null,
+            draft.payload.attempt,
+            before,
+          )
+        ) {
+          return invalidEvent('同一派工只能记录一次 task.attempt_ended')
+        }
+        return ok(null)
+      }
       case 'lease.granted': {
         if (get('SELECT 1 FROM leases WHERE lease_id = ?', draft.payload.lease_id)) {
           return invalidEvent(`租约 ${draft.payload.lease_id} 已存在`)

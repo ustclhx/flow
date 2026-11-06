@@ -267,6 +267,41 @@ describe('回复卡住的任务（task-interaction）', () => {
     ).toBe('lease_expired')
   })
 
+  test('not_running 重新排队立即派发时，只结束旧租约的 attempt，迟到 outcome 不影响新租约', async () => {
+    const ctx = await setup()
+    const { id, lease } = await blockedHeld(ctx)
+    ctx.tasks.replyTask(id, { kind: 'text', text: '继续' }, { actor: 'user' })
+    let next: ReturnType<typeof grant> | undefined
+    const off = ctx.ledger.subscribe((event) => {
+      if (event.type === 'task.requeued_with_reply') next = grant(ctx)
+    })
+    const ack = ctx.protocol.service.ackReply(lease.lease_id, {
+      lease_token: lease.lease_token,
+      reply_id: 'r-1',
+      outcome: 'not_running',
+    })
+    off()
+    expect(ack.ok).toBe(true)
+    expect(next).toBeDefined()
+    const second = await next
+    expect(second?.attempt).toBe(2)
+    expect(
+      code(
+        ctx.protocol.service.complete(lease.lease_id, {
+          lease_token: lease.lease_token,
+          outcome: 'blocked',
+          blocked_reason: 'crashed',
+          message: '稍后上报退出',
+        }),
+      ),
+    ).toBe('lease_expired')
+    expect(ctx.ledger.getTask(id)).toMatchObject({ status: 'running', attempt: 2 })
+    expect(ctx.ledger.activeLease(id)?.lease_id).toBe(second?.lease_id)
+    expect(ctx.ledger.taskEvents(id).filter((e) => e.type === 'task.attempt_ended')).toMatchObject([
+      { payload: { attempt: 1, reason: 'blocked' } },
+    ])
+  })
+
   test('ack-reply 的错误：未知回复、令牌不符', async () => {
     const ctx = await setup()
     const { lease } = await blockedHeld(ctx)

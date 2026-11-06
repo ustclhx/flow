@@ -10,7 +10,7 @@ import {
   retryTaskRequest,
 } from '../ledger/protocol.ts'
 import { checkContractSecrets } from '../ledger/redact.ts'
-import type { TaskContractInput, TaskView } from '../ledger/task.ts'
+import { RETRYABLE_BLOCKED_REASONS, type TaskContractInput, type TaskView } from '../ledger/task.ts'
 import { fail, ok } from '../result.ts'
 import { loadRoles } from '../roles.ts'
 import { USER_ACTOR } from '../write/policy.ts'
@@ -122,8 +122,7 @@ export const taskCancelOp = defineOperation({
 export const taskRetryOp = defineOperation({
   name: 'task_retry',
   cli: 'task retry',
-  summary:
-    '重试 failed 或 blocked(crashed/node_lost/other) 的原任务；用户可重试，supervisor 仅限本 workspace 唤醒链派生的任务，reply 唤醒不可用',
+  summary: `重试 failed 或 blocked(${RETRYABLE_BLOCKED_REASONS.join('/')}) 的原任务；租约必须已释放，取消请求中的任务与唤醒任务本身不可重试。用户可重试；supervisor 仅限本 workspace 唤醒链派生且每一级均由 supervisor 或 hub 创建的任务，不可重试 merge/supervisor 类任务，reply 唤醒不可用；自主唤醒中写类任务只能提案，指令唤醒可重试写类任务`,
   input: retryTaskRequest.extend({ id: taskId }),
   positional: ['id'],
   run: (input: { id: string; reason?: string }, ctx) => {

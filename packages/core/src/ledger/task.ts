@@ -46,6 +46,12 @@ export const BLOCKED_REASONS = [
   'other',
 ] as const
 export type BlockedReason = (typeof BLOCKED_REASONS)[number]
+/** 手动重试可重新派工的卡住原因；提示与工具说明共用此列表。 */
+export const RETRYABLE_BLOCKED_REASONS = [
+  'crashed',
+  'node_lost',
+  'other',
+] as const satisfies BlockedReason[]
 export const blockedReason = z.enum(BLOCKED_REASONS).meta({
   description:
     '卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、workdir_missing 工作目录或会话丢失、node_lost 节点掉线（租约过期）、other 其他',

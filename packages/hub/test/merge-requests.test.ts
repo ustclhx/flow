@@ -212,6 +212,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       branch?: string
       /** 随分支上报的登记仓库快照的 origin 地址；null 表示不带快照。缺省为 acme/demo。 */
       remoteUrl?: string | null
+      actor?: 'user' | 'hub'
     } = {},
   ) => {
     clock.time += 1000
@@ -228,7 +229,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
             ...(opts.origin ? { origin: opts.origin } : {}),
           },
         } as unknown as EventInput,
-        { actor: 'user' },
+        { actor: opts.actor ?? 'user' },
       ),
     )
     const status = opts.status ?? 'done'
@@ -524,7 +525,7 @@ describe('合并请求的资格（D10 第 4 步）', () => {
         inputs: { review: { pr: PR } },
       },
       null,
-      { origin: 'instruction', status: 'queued' },
+      { origin: 'instruction', status: 'queued', actor: 'hub' },
     )
     const base = { task_id: rv, workspace: WS }
     must(
@@ -552,14 +553,25 @@ describe('合并请求的资格（D10 第 4 步）', () => {
     expect(await response.json()).toMatchObject({
       data: { task: { id: rv, status: 'queued', attempt: 1 } },
     })
+    const queued = await s.request(w.token, rv)
+    expect(code(queued)).toBe('merge_not_eligible')
+    expect(reasonsOf(queued).join()).toContain(`未结束的审查任务 ${rv}（queued）`)
+    must(
+      s.ledger.append(
+        {
+          ...base,
+          type: 'task.started',
+          payload: { node_id: 'nr', lease_id: 'l-review-2', attempt: 2 },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    const running = await s.request(w.token, rv)
+    expect(code(running)).toBe('merge_not_eligible')
+    expect(reasonsOf(running).join()).toContain(`未结束的审查任务 ${rv}（running）`)
     must(
       s.ledger.appendMany(
         [
-          {
-            ...base,
-            type: 'task.started',
-            payload: { node_id: 'nr', lease_id: 'l-review-2', attempt: 2 },
-          },
           {
             ...base,
             type: 'task.done',
