@@ -251,6 +251,12 @@ export const eventPayloads = {
     lease_id: leaseId,
     report_seq: z.number().int().positive(),
   }),
+  'task.report_conflict': z.strictObject({
+    attempt: z.number().int().positive(),
+    lease_id: leaseId,
+    report_seq: z.number().int().positive(),
+    observed: z.enum(['idle', 'busy', 'no_progress']),
+  }),
   'task.blocked': z.strictObject({
     request_id: z.string().min(1).max(512).optional(),
     approval_fingerprint: approvalFingerprint.optional(),
@@ -377,7 +383,7 @@ export const eventPayloads = {
     note: z.string().max(2000).optional().meta({ description: '说明，例如 supervisor 转交的理由' }),
   }),
   /**
-   * 执行器创建的任务分支（D15，codex-orca 开始时上报）：只接受持有该任务活动租约的节点写入，
+   * 执行器创建的任务分支（D15，写类适配器启动前上报）：只接受持有该任务活动租约的节点写入，
    * 每个任务只写一次、不可更改。`when.push_to: task_branch` 以它为准。
    */
   'task.branch_reported': z.strictObject({
@@ -706,6 +712,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task.failed': 'task',
   'task.reported': 'task',
   'task.report_consumed': 'task',
+  'task.report_conflict': 'task',
   'task.blocked': 'task',
   'task.reply_dropped': 'task',
   'task.out_of_band': 'task',
@@ -873,6 +880,7 @@ export const TASK_EVENT_RULES: Readonly<
   // blocked → blocked：只用于"本轮结束"（lease_held=false），例如卡住期间 worker 崩溃、节点掉线（D7a）。
   'task.reported': { from: ['running'], to: 'unchanged' },
   'task.report_consumed': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
+  'task.report_conflict': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   'task.blocked': { from: ['running', 'verifying', 'blocked'], to: 'blocked' },
   'task.out_of_band': {
     from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed', 'cancelled'],

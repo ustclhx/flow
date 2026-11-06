@@ -205,6 +205,16 @@ export function createWorkerReportRoutes({
         )
       const report: WorkerReport = parsed.data
       if (report.status === 'ready') {
+        if (!task.branch)
+          return respond(
+            c,
+            fail(
+              'failure',
+              'branch_unknown',
+              '尚未登记本任务分支；请先上报 blocked，说明缺少的分支信息与已尝试的办法',
+            ),
+            workerReportData,
+          )
         for (const ref of report.deliverables ?? []) {
           const checked = await verifyDeliverable(ref, task)
           if (!checked.ok) return respond(c, checked, workerReportData)

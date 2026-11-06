@@ -85,7 +85,11 @@ export interface NodeServiceOptions extends NodeProtocolConfig {
   issueWakeToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
   issueTaskToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
   /** 中枢重启等导致派工凭证记录丢失时，在续约响应补发。 */
-  renewTaskToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
+  renewTaskToken?: (grant: {
+    lease_id: string
+    task_id: string
+    dispatch_token_sha256?: string
+  }) => string | undefined
   /** 不影响请求结果的失败（例如任务分支上报写入失败）只记日志。 */
   logger?: Pick<HubLogger, 'warn'>
 }
@@ -171,10 +175,14 @@ function delegationFields(b: {
   no_delegate?: boolean | undefined
   basis?: 'reported' | 'inferred' | undefined
   question?: ReportQuestion | undefined
+  missing?: string | undefined
+  tried?: string | undefined
 }) {
   return {
     basis: b.basis ?? 'inferred',
     ...(b.question ? { question: b.question } : {}),
+    ...(b.missing ? { missing: b.missing } : {}),
+    ...(b.tried ? { tried: b.tried } : {}),
     ...(b.decision_id !== undefined ? { decision_id: b.decision_id } : {}),
     ...(b.request !== undefined ? { request: b.request } : {}),
     // 协议允许 8192 字符，入账前截到 2000（clipDiffStat，与 scrub 的 clipText 同一截断标记）。
@@ -700,7 +708,13 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
           ? lastBlock
           : undefined
       // 先持久化回复交付事实，再补发凭证；记录失败的续约不能留下未送达的新凭证。
-      const dispatchToken = o.renewTaskToken?.({ lease_id: lease.lease_id, task_id: task.id })
+      const dispatchToken = o.renewTaskToken?.({
+        lease_id: lease.lease_id,
+        task_id: task.id,
+        ...(req.data.dispatch_token_sha256
+          ? { dispatch_token_sha256: req.data.dispatch_token_sha256 }
+          : {}),
+      })
       return ok({
         lease_id: lease.lease_id,
         expires_at: expiresAt,
@@ -1009,9 +1023,16 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
                 recommended: report.recommended as string,
               },
             }
-          : {}),
+          : { missing: report.missing as string, tried: report.tried as string }),
       })
     }
+    // ready 只代表交付物已存在；节点随后的强制验收仍可失败或因工作目录丢失受阻。
+    if (
+      report.status === 'ready' &&
+      ((req.outcome === 'failed' && req.result.reason === 'verify_failed') ||
+        (req.outcome === 'blocked' && req.blocked_reason === 'workdir_missing'))
+    )
+      return ok(req)
     if (
       (req.outcome === 'done' && (report.status === 'ready' || report.status === 'dropped')) ||
       (req.outcome === 'failed' && report.status === 'failed')
@@ -1038,7 +1059,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   /**
    * 写入任务分支（D15）：每个任务只写一次、不可更改；worktree 缺失的旧任务可补报一次 worktree
    * （分支相同，不补快照）。返回 recorded / ignored / retry：只有明确的临时性错误（SQLITE_BUSY）
-   * 才让节点重发，其他失败（已上报、不是 codex-orca、数据不合法……）节点放弃上报——没有分支时
+   * 才让节点重发，其他失败（已上报、租约不匹配、数据不合法……）节点放弃上报——没有分支时
    * push_to 恒不满足。
    */
   function reportBranch(
@@ -1092,6 +1113,21 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         : [],
     )
     const signals: EventInput[] = consumed ? [consumed] : []
+    if (
+      req.report_conflict &&
+      !ledger.workerReportConflict(
+        task.id,
+        lease.lease_id,
+        lease.attempt,
+        req.report_conflict.report_seq,
+      )
+    ) {
+      signals.push({
+        ...base,
+        type: 'task.report_conflict',
+        payload: { lease_id: lease.lease_id, attempt: lease.attempt, ...req.report_conflict },
+      })
+    }
     let externalApproval = false
     for (const signal of req.out_of_band ?? []) {
       if (seen.has(signal.id)) continue

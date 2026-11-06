@@ -7,6 +7,35 @@
       "type": "string",
       "minLength": 16
     },
+    "dispatch_token_sha256": {
+      "description": "节点当前派工凭证的 SHA-256 前 16 位；缺失或不匹配时中枢重新下发凭证",
+      "type": "string",
+      "pattern": "^[a-f0-9]{16}$"
+    },
+    "report_conflict": {
+      "description": "上报与观察矛盾；须与同批 report_seq 相同",
+      "type": "object",
+      "properties": {
+        "report_seq": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observed": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "busy",
+            "no_progress"
+          ]
+        }
+      },
+      "required": [
+        "report_seq",
+        "observed"
+      ],
+      "additionalProperties": false
+    },
     "activity": {
       "default": [],
       "description": "自上次续约以来的活动",
@@ -163,6 +192,16 @@
           ],
           "additionalProperties": false
         },
+        "missing": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "tried": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
         "decision_id": {
           "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",
           "type": "integer",
@@ -299,7 +338,7 @@
       "additionalProperties": false
     },
     "branch": {
-      "description": "执行器创建的任务分支与 worktree，以及节点在任务首次上报时对执行器解析出的登记仓库的快照（D15，codex-orca 开始时）：中枢在续约生效后写入 task.branch_reported（每个任务一次；worktree 缺失的旧任务可补报一次 worktree，不补快照），结果见响应的 branch_report",
+      "description": "执行器创建的任务分支与 worktree，以及节点在任务首次上报时对执行器解析出的登记仓库的快照（D15，写类适配器启动前）：中枢在续约生效后写入 task.branch_reported（每个任务一次；worktree 缺失的旧任务可补报一次 worktree，不补快照），结果见响应的 branch_report",
       "type": "object",
       "properties": {
         "branch": {

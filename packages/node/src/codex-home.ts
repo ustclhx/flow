@@ -12,8 +12,23 @@ export const orcaCodexHome = (home: string) => join(raindownPaths(home).state, '
 export const execCodexHome = (home: string) => join(raindownPaths(home).state, 'codex-exec-home')
 
 const HOME_CONFIG = `# 由 Raindown 生成，每次启动 Codex 前覆盖。
-# 不含 MCP、notify、hooks 与项目信任记录，角色设置由 permissions.config 经 -c 传入。
+# 不含任务绑定、notify、hooks 与项目信任记录；Raindown MCP 由本模块生成的 -c 层注入。
 `
+
+/**
+ * 共享 CODEX_HOME 只保存无任务状态的配置；绑定放在每个进程独有的 -c 层，避免并发启动相互覆盖。
+ * 官方 MCP 配置支持 env_vars 和 server 级 default_tools_approval_mode：
+ * https://learn.chatgpt.com/docs/extend/mcp
+ * 只免除受限 Raindown 工具的审批，不改变 shell、沙箱或其他工具的审批策略。
+ */
+export function codexTaskMcpConfig(binding: {
+  home: string
+  role: string
+  taskId: string
+}): string {
+  const args = ['mcp', '--actor', binding.role, '--task', binding.taskId]
+  return `mcp_servers.raindown={command="raindown",args=${JSON.stringify(args)},env={RAINDOWN_HOME=${JSON.stringify(binding.home)},RAINDOWN_ACTOR=${JSON.stringify(binding.role)}},env_vars=["RAINDOWN_LEASE_TOKEN_FILE"],default_tools_approval_mode="approve"}`
+}
 
 // 隔离目录由 Raindown 管理，不加载用户级扩展；尤其不能保留审批后积累的 allow 规则。
 const HOME_EXTENSIONS = [

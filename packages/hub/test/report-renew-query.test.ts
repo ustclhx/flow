@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { fail } from '@raindown/core'
 import type { LedgerStore } from '../src/ledger/store.ts'
 import { createNodeService } from '../src/nodes/service.ts'
@@ -144,7 +145,11 @@ async function pendingRenewal() {
     rejectFetched: (value: boolean) => {
       rejectFetched = value
     },
-    renew: () => service.renew(lease.lease_id, { lease_token: lease.lease_token }),
+    renew: (token = lease.dispatch_token as string) =>
+      service.renew(lease.lease_id, {
+        lease_token: lease.lease_token,
+        dispatch_token_sha256: createHash('sha256').update(token).digest('hex').slice(0, 16),
+      }),
     close: () => {
       service.close()
       fixture.cleanup()
@@ -164,7 +169,7 @@ test('续约同时返回回复、补发凭证与待消费报告，回复交付�
       c.lease.task_id,
     )
     expect(c.ledger.getReply('r-renew-all')?.fetched_at).toBeString()
-    const second = must(c.renew())
+    const second = must(c.renew(first.dispatch_token))
     expect(second.reply).toEqual(first.reply)
     expect(second.report).toEqual(first.report)
     expect(second.dispatch_token).toBeUndefined()
@@ -194,6 +199,23 @@ test('回复交付记录失败时不提前签发凭证，重试仍能取得新�
     expect(c.authority().authenticate(renewed.dispatch_token as string)?.task_id).toBe(
       c.lease.task_id,
     )
+  } finally {
+    c.close()
+  }
+})
+
+test('中枢重启后第一次续约响应丢失，旧凭证指纹重试仍能取得有效凭证', async () => {
+  const c = await pendingRenewal()
+  try {
+    const lost = must(c.renew())
+    const retried = must(c.renew())
+    expect(retried.dispatch_token).toBeString()
+    expect(retried.dispatch_token).not.toBe(lost.dispatch_token)
+    expect(c.authority().authenticate(lost.dispatch_token as string)).toBeNull()
+    expect(c.authority().authenticate(retried.dispatch_token as string)?.task_id).toBe(
+      c.lease.task_id,
+    )
+    expect(must(c.renew(retried.dispatch_token)).dispatch_token).toBeUndefined()
   } finally {
     c.close()
   }

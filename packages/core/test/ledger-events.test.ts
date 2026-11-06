@@ -84,6 +84,13 @@ const samples: Record<
     valid: { ...task, payload: { attempt: 1, lease_id: 'l1', report_seq: 1 } },
     invalid: { ...task, payload: { attempt: 1, lease_id: 'l1', report_seq: 0 } },
   },
+  'task.report_conflict': {
+    valid: { ...task, payload: { attempt: 1, lease_id: 'l1', report_seq: 1, observed: 'idle' } },
+    invalid: {
+      ...task,
+      payload: { attempt: 1, lease_id: 'l1', report_seq: 1, observed: 'unknown' },
+    },
+  },
   'task.blocked': {
     valid: { ...task, payload: { reason: 'question', message: '哪个分支？', tail: ['> ?'] } },
     invalid: { ...task, payload: { reason: 'tired', message: 'x' } },
@@ -498,6 +505,11 @@ describe('事件触发的状态转换', () => {
     'lease.granted': [['running', 'running']],
     'task.reported': [['running', 'running']],
     'task.report_consumed': [
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
+    ],
+    'task.report_conflict': [
       ['running', 'running'],
       ['verifying', 'verifying'],
       ['blocked', 'blocked'],

@@ -37,7 +37,12 @@ permissions:
 `,
   'dev.md': `按任务合同在指定仓库中完成开发，只修改授权范围内的内容。
 运行相关检查，提交、推送并创建 PR，不合并。
-遇到无法判断的问题时，写明问题并停下等待回复。
+优先通过 Raindown MCP 的 raindown_report 上报状态（harness 中的工具名为 mcp__raindown__raindown_report）：
+- 需要人决定时上报 question，给出一个具体问题、2–8 个选项及说明和推荐项，随后停下等待回复。
+- 完成时上报 ready，附 PR 地址作为 deliverables；若返回 branch_unknown，改用 blocked 说明无法确认任务分支。
+- 受阻时上报 blocked，写明 missing（缺少的前提）与 tried（已尝试的办法）。
+- 核实无需处理时上报 dropped，说明 reason。
+终端文字提问可以兜底，优先使用结构化上报。
 `,
   'reviewer.yaml': `name: reviewer
 executor: claude-sdk
@@ -65,6 +70,12 @@ ${DEFAULT_REVIEWER_WRITABLE_PATHS.map((path) => `    - "${path}"`).join('\n')}
 给出有证据、可操作的审查意见，可以用 gh pr comment 和 gh pr review 评论 PR。
 除非合同明确要求，否则不提交、不推送；不合并 PR。
 结论写在最终回复里，说明检查结果、尚未确认的问题，并列出本次写过的文件。
+优先通过 Raindown MCP 的 raindown_report 上报状态（harness 中的工具名为 mcp__raindown__raindown_report）：
+- 需要人决定时上报 question，给出一个具体问题、2–8 个选项及说明和推荐项，随后停下等待回复。
+- 完成时上报 ready，附审查的 PR 地址作为 deliverables；若返回 branch_unknown，改用 blocked 说明无法确认任务分支。
+- 受阻时上报 blocked，写明 missing（缺少的前提）与 tried（已尝试的办法）。
+- 核实无需处理时上报 dropped，说明 reason。
+终端文字提问可以兜底，优先使用结构化上报。
 `,
   'triage.yaml': `name: triage
 executor: codex-exec

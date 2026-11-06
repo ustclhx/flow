@@ -164,6 +164,8 @@ export function createApplier(db: Database): Applier {
           reason: p.reason,
           basis: p.basis ?? 'inferred',
           ...(p.question ? { question: p.question } : {}),
+          ...(p.missing ? { missing: p.missing } : {}),
+          ...(p.tried ? { tried: p.tried } : {}),
           message: p.message,
           ...(p.tail ? { tail: p.tail } : {}),
           ...(p.session ? { session: p.session } : {}),

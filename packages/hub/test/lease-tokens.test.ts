@@ -1,9 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { redactSecrets } from '@raindown/core'
 import { Hono } from 'hono'
 import { createHubApp } from '../src/app.ts'
 import { createTaskTokenAuthority } from '../src/server/lease-tokens.ts'
 import { drafts, must, startTask, sys, tempLedger } from './ledger-helpers.ts'
+
+const fingerprint = (token: string) => createHash('sha256').update(token).digest('hex').slice(0, 16)
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
@@ -67,12 +70,14 @@ test('到期时间已过但清扫前仍可鉴权，续约后沿用原凭证', as
   const grant = { task_id: e.id, lease_id: `l-${e.id}-1` }
   e.advance(3_600_001)
   expect(e.authority.authenticate(e.token)?.task_id).toBe(e.id)
-  expect(e.authority.ensure(grant)).toBeUndefined()
+  expect(
+    e.authority.ensure({ ...grant, dispatch_token_sha256: fingerprint(e.token) }),
+  ).toBeUndefined()
   expect(e.store.renewLease(grant.lease_id, '2026-10-24T02:00:00.000Z')).toBe(true)
   expect(e.authority.authenticate(e.token)?.task_id).toBe(e.id)
 })
 
-test('中枢重启后缺失凭证可重发一次，旧凭证在新 authority 中不可用', async () => {
+test('中枢重启后凭证在节点确认当前指纹前持续补发', async () => {
   const e = await setup()
   const authority = createTaskTokenAuthority({ ledger: () => e.store })
   const grant = { task_id: e.id, lease_id: `l-${e.id}-1` }
@@ -80,7 +85,13 @@ test('中枢重启后缺失凭证可重发一次，旧凭证在新 authority 中
   expect(token).toMatch(/^fls_/)
   expect(authority.authenticate(e.token)).toBeNull()
   expect(authority.authenticate(token ?? '')?.task_id).toBe(e.id)
-  expect(authority.ensure(grant)).toBeUndefined()
+  const retried = authority.ensure({ ...grant, dispatch_token_sha256: fingerprint(e.token) })
+  expect(retried).toMatch(/^fls_/)
+  expect(authority.authenticate(token ?? '')).toBeNull()
+  expect(authority.authenticate(retried ?? '')?.task_id).toBe(e.id)
+  expect(
+    authority.ensure({ ...grant, dispatch_token_sha256: fingerprint(retried ?? '') }),
+  ).toBeUndefined()
   expect(authority.size()).toBe(1)
   must(e.store.append(e.d['task.lease_expired'], sys))
   expect(authority.ensure(grant)).toBeUndefined()

@@ -131,6 +131,8 @@ function mockSdk(script: Script): { query: ClaudeQueryFn; state: MockState } {
   return { query, state }
 }
 
+// event_get 不在 worker 自动放行清单：按 #82 的绑定规则处理（只读角色经 readRoleMayUse 按绑定放行）。
+const WORKER_TOOLS = ['raindown_report', 'task_show', 'kb_search', 'kb_get', 'kb_query']
 const SID = 's-review-1'
 const msg = (m: Record<string, unknown>) => m as unknown as SDKMessage
 const init = (sid = SID) =>
@@ -237,6 +239,7 @@ async function sdkBench(
     clock: dc.clock,
     query,
     resolveRole: roleResolver(role),
+    git: { run: async () => ({ code: 1, stdout: '', stderr: '无分支' }) },
     ...extra,
   })
   const b = await bench({ executors: [executor] })
@@ -289,6 +292,64 @@ describe('按角色运行', () => {
     expect(task.origin_instruction?.read?.op).toBe('event_get')
   })
 
+  test('写任务在 SDK 启动前等待任务分支报告，git 使用执行器环境', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'raindown-claude-branch-'))
+    const repo = join(home, 'repo')
+    const reports: unknown[] = []
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    try {
+      mkdirSync(repo)
+      mkdirSync(join(home, 'config', 'workspaces'), { recursive: true })
+      writeFileSync(
+        join(home, 'config', 'workspaces', 'demo.yaml'),
+        `id: demo\nname: 测试\ndescription: 分支报告\nkind: product\nrepos:\n  - ${repo}\n`,
+      )
+      const ex = createClaudeSdkExecutor({
+        home,
+        query,
+        resolveRole: roleResolver(reviewer()),
+        git: {
+          run: async (_cmd, args, options) => {
+            expect(options.env?.PATH).toBe(process.env.PATH)
+            expect(options.env?.RAINDOWN_HUB_TOKEN).toBeUndefined()
+            return {
+              code: 0,
+              stdout: args.includes('symbolic-ref') ? 'dev/task\n' : `${repo}\n`,
+              stderr: '',
+            }
+          },
+        },
+      })
+      const run = ex.run(
+        contract({ cwd: repo }),
+        ctx({
+          cwd: repo,
+          env: { PATH: process.env.PATH },
+          reportBranch: async (report: unknown) => {
+            reports.push(report)
+            await gate
+          },
+        }),
+      )
+      await waitFor(() => reports.length === 1, '分支报告')
+      expect(state.calls).toHaveLength(0)
+      expect(reports).toEqual([{ branch: 'dev/task', worktree: repo, repo }])
+      release()
+      expect(await run.done).toMatchObject({ ok: true, data: { outcome: 'done' } })
+      expect(createClaudeSdkExecutor({ home, query }).adapterCapabilities.raindown_mcp).toBe(true)
+    } finally {
+      release()
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   test('审查一个 PR：在仓库目录运行，账本可见活动，结果含审查摘要、会话 id 与费用', async () => {
     const { b, state, create } = await sdkBench(async function* (io) {
       await io.nextUser()
@@ -328,7 +389,7 @@ describe('按角色运行', () => {
     expect(o?.systemPrompt).toEqual({
       type: 'preset',
       preset: 'claude_code',
-      append: '只读审查 PR。',
+      append: expect.stringContaining('只读审查 PR。'),
     })
     expect(o?.permissionMode).toBe('auto')
     expect(o?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit'])
@@ -379,7 +440,7 @@ describe('按角色运行', () => {
         'Grep',
         'Bash(gh pr comment:*)',
         'Bash(gh pr review:*)',
-        ...RAINDOWN_MCP_AUTO_ALLOWED.map((n) => `mcp__raindown__${n}`),
+        ...WORKER_TOOLS.map((n) => `mcp__raindown__${n}`),
       ])
       expect(rev?.disallowedTools).toEqual(['NotebookEdit'])
       expect(rev?.hooks?.PreToolUse).toHaveLength(1)
@@ -389,7 +450,7 @@ describe('按角色运行', () => {
       expect(rev?.mcpServers?.raindown).toEqual({
         type: 'stdio',
         command: 'bun',
-        args: ['/x/raindown.ts', 'mcp', '--actor', 'reviewer'],
+        args: ['/x/raindown.ts', 'mcp', '--actor', 'reviewer', '--task', 't-1'],
         env: {
           RAINDOWN_HOME: home,
           FLOW_HOME: home,
@@ -422,10 +483,10 @@ describe('按角色运行', () => {
 })
 
 describe('注入 Raindown MCP', () => {
-  test('worker 写 journal：raindown MCP 以 --actor <角色名> 启动，操作者是 reviewer，工具默认放行', async () => {
+  test('worker MCP 绑定角色与任务，只自动放行派工工具', async () => {
     const { b, state, create } = await sdkBench(async function* (io) {
       await io.nextUser()
-      yield toolUse('mcp__raindown__kb_journal', { text: '审查了 PR #42' })
+      yield toolUse('mcp__raindown__task_show', { id: 't-1' })
       yield say('已记录 journal')
       yield result()
     })
@@ -435,10 +496,12 @@ describe('注入 Raindown MCP', () => {
     expect(raindown).toMatchObject({
       type: 'stdio',
       command: 'raindown',
-      args: ['mcp', '--actor', 'reviewer'],
+      args: ['mcp', '--actor', 'reviewer', '--task', id],
     })
     const allowed = state.calls[0]?.allowedTools ?? []
-    expect(allowed).toContain('mcp__raindown__kb_journal')
+    expect(allowed.filter((name) => name.startsWith('mcp__raindown__'))).toEqual(
+      WORKER_TOOLS.map((name) => `mcp__raindown__${name}`),
+    )
     // 不再整体放行 raindown 服务；创建、取消任务等不在清单里。
     expect(allowed).not.toContain('mcp__raindown')
     expect(allowed).not.toContain('mcp__raindown__event_get')
@@ -1848,7 +1911,7 @@ describe('supervisor 会话绑定', () => {
     }
   })
 
-  test('其他角色：不绑定、不放行 supervisor 专属工具', async () => {
+  test('其他角色：绑定当前任务，不放行 supervisor 专属工具', async () => {
     const { query, state } = mockSdk(async function* (io) {
       await io.nextUser()
       yield result()
@@ -1858,13 +1921,14 @@ describe('supervisor 会话绑定', () => {
       query,
       resolveRole: roleResolver(reviewer()),
     })
-    const r = await ex.run(contract(), ctx()).done
+    const r = await ex.run(contract(), ctx({ leaseTokenFile: '/private/task.token' })).done
     expect(r.ok && r.data.outcome).toBe('done')
     expect(state.calls[0]?.mcpServers?.raindown).toEqual({
       type: 'stdio',
       command: 'raindown',
-      args: ['mcp', '--actor', 'reviewer'],
+      args: ['mcp', '--actor', 'reviewer', '--task', 't-1'],
       env: {
+        RAINDOWN_LEASE_TOKEN_FILE: '/private/task.token',
         RAINDOWN_HOME: '/tmp/raindown-home-x',
         FLOW_HOME: '/tmp/raindown-home-x',
         RAINDOWN_ACTOR: 'reviewer',

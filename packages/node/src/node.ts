@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { hostname as osHostname } from 'node:os'
@@ -28,6 +28,8 @@ import {
   ok,
   outOfBandSignal,
   PROTOCOL_MESSAGE_MAX,
+  type RenewLeaseData,
+  type ReportQuestion,
   type RepoSnapshot,
   type Result,
   raindownPaths,
@@ -237,6 +239,10 @@ export function noProgressMs(contract: TaskContract, resolver?: NoProgressResolv
 
 /** 经续约上报的卡住（含代回复相关字段，D15）。 */
 interface BlockedSignal {
+  basis?: 'reported' | 'inferred'
+  question?: ReportQuestion
+  missing?: string
+  tried?: string
   reason: BlockedReason
   message: string
   tail?: string[]
@@ -282,14 +288,19 @@ export function blockedRequestOf(
   }
 }
 
+type PendingReport = NonNullable<RenewLeaseData['report']>
+type ReportConflict = { report_seq: number; observed: 'idle' | 'busy' | 'no_progress' }
+
 type RenewSignal =
-  | { blocked: BlockedSignal }
+  | { blocked: BlockedSignal; report_seq?: number; report_conflict?: ReportConflict }
   | { resumed: { note: string } }
   | { phase: 'verifying' }
 
 /** 节点上报 blocked 时附带的末尾输出行数（stuck-detection "卡住的原因分类"）。 */
 export const STUCK_TAIL_LINES = 40
 const TAIL_KEEP = 200
+/** 上报受阻后仍忙碌，最多等两分钟即以上报为准。 */
+const REPORT_BUSY_MS = 2 * 60_000
 /** 超时后等待执行器响应取消的宽限时间；过后不再等待，直接提交 failed(timeout)。 */
 export const TIMEOUT_GRACE_MS = 10_000
 /** deliver 超过这个时长只记警告：不重送，继续等待结果（避免重复送达）。 */
@@ -335,6 +346,13 @@ class LeaseRunner {
   private cancelTimeout = () => {}
   private cancelIdle = () => {}
   private cancelGrace = () => {}
+  private cancelReportWait = () => {}
+  /** idle 先续约读取最新上报，避免终端信号与 MCP 上报到达顺序影响判定。 */
+  private observedIdle: { at: number; hint?: Record<string, unknown>; text?: string } | undefined
+  private pendingReport: PendingReport | undefined
+  private lastReportSeq = 0
+  private terminalReport: PendingReport | undefined
+  private adapterOutcome: Result<ExecutorOutcome> | undefined
   private renewing: Promise<void> | undefined
   private renewAgain = false
   private run: ExecutorRun | undefined
@@ -364,6 +382,9 @@ class LeaseRunner {
   /** 初始写入与续约刷新共用最新 token 和串行写队列，清理关闭队列后不再创建文件。 */
   private dispatchToken: string | undefined
   private leaseTokenFile: string | undefined
+  /** 只确认实际成功写入凭证文件的内容。 */
+  private dispatchTokenSha256: string | undefined
+  private renewReadFailed = false
   private tokenWrites: Promise<void> = Promise.resolve()
   private tokenFilesReady = false
   private tokenFilesClosed = false
@@ -378,7 +399,7 @@ class LeaseRunner {
   private blockedDecision: SupervisorDecision | undefined
   /** supervisor 的批准被拒收后：下一次卡住以 no_delegate 上报，直接交给用户。 */
   private noDelegateNext = false
-  /** 待随续约上报的任务分支（codex-orca 开始时，D15）；上报成功后清空。 */
+  /** 待随续约上报的任务分支（写类适配器启动前，D15）；上报成功后清空。 */
   private pendingBranch:
     | { branch: string; worktree: string; repo_snapshot?: RepoSnapshot }
     | undefined
@@ -431,6 +452,7 @@ class LeaseRunner {
     this.cancelTimeout()
     this.cancelIdle()
     this.cancelGrace()
+    this.cancelReportWait()
     this.abort.abort()
     // 不再等执行器：让 execute 尽快退出。
     this.forceDone?.(ok({ outcome: 'cancelled', message: '租约已释放' }))
@@ -468,14 +490,16 @@ class LeaseRunner {
     const outOfBand = this.outOfBand.splice(0, 100)
     const r = await this.env.client.renew(this.grant.lease_id, {
       lease_token: this.grant.lease_token,
+      ...(this.dispatchTokenSha256 ? { dispatch_token_sha256: this.dispatchTokenSha256 } : {}),
       activity: batch,
       ...(signal && 'blocked' in signal
-        ? { blocked: clipBlocked(signal.blocked) }
+        ? { ...signal, blocked: clipBlocked(signal.blocked) }
         : (signal ?? {})),
       ...(branch ? { branch } : {}),
       ...(outOfBand.length > 0 ? { out_of_band: outOfBand } : {}),
     })
     if (this.released) return
+    this.renewReadFailed = !r.ok && r.error.kind === 'retryable'
     // 中枢已处理分支上报（写入或因已上报而忽略）：不再重复发送。
     // 分支上报的结果（D15）：只有中枢明确说临时失败（retry）时保留重发；写入、忽略或旧版中枢
     // （没有该字段）都不再上报。
@@ -517,6 +541,10 @@ class LeaseRunner {
       this.cancelRequested = true
       this.abort.abort()
       await this.run?.cancel().catch(() => {})
+    }
+    if (!this.cancelRequested) {
+      if (r.data.report) this.acceptReport(r.data.report)
+      this.mergeIdle()
     }
     if (r.data.blocked?.request_id) {
       this.run?.bindBlocked?.({ seq: r.data.blocked.seq, request_id: r.data.blocked.request_id })
@@ -685,12 +713,14 @@ class LeaseRunner {
     }
     if (isIdleSignal(a)) {
       const hint = a.data?.hint
-      this.stuck(
-        'idle',
-        hint && typeof hint === 'object' ? (hint as Record<string, unknown>) : undefined,
-        a.text,
-      )
+      this.observedIdle ??= {
+        at: this.mono(),
+        ...(hint && typeof hint === 'object' ? { hint: hint as Record<string, unknown> } : {}),
+        ...(a.text ? { text: a.text } : {}),
+      }
+      void this.renewNow()
     } else if (isResumedSignal(a)) {
+      this.observedIdle = undefined
       // round_closed 只确认旧回复被拒收；确认重试期间的真实恢复仍须上报。
       if (
         this.phase === 'blocked' &&
@@ -702,23 +732,111 @@ class LeaseRunner {
         this.enterRunning()
         void this.renewNow()
       }
-    } else if (this.phase === 'running') this.armIdle()
+    } else if (this.phase === 'running') {
+      this.observedIdle = undefined
+      this.armIdle()
+    }
+  }
+
+  /** 续约重复下发同一上报时不重复转换，也不重置两分钟期限。 */
+  private acceptReport(report: PendingReport) {
+    if (report.attempt !== this.grant.attempt || report.seq <= this.lastReportSeq) return
+    this.lastReportSeq = report.seq
+    this.pendingReport = report
+    this.cancelReportWait()
+    if (report.status === 'ready' || report.status === 'failed' || report.status === 'dropped') {
+      this.terminalReport = report
+      this.pendingReport = undefined
+      this.cancelIdle()
+      this.cancelTimeout()
+      const outcome = this.reportedOutcome(report)
+      this.forceDone?.(outcome)
+      // 先固定结构化结果，再取消 harness；取消返回的 cancelled 不能覆盖上报。
+      void this.run?.cancel().catch(() => {})
+    } else if (report.status === 'question' || report.status === 'blocked') {
+      this.cancelIdle()
+      this.cancelReportWait = this.env.clock.setTimeout(() => {
+        if (this.pendingReport !== report || this.observedIdle || this.runEnded) return
+        this.stuck('idle', undefined, undefined, 'busy')
+      }, REPORT_BUSY_MS)
+    } else this.armIdle()
+  }
+
+  private reportedOutcome(report: PendingReport): Result<ExecutorOutcome> {
+    const prior = this.adapterOutcome?.ok ? this.adapterOutcome.data : undefined
+    const result =
+      prior && (prior.outcome === 'done' || prior.outcome === 'failed') ? prior.result : undefined
+    const artifacts = [...(result?.artifacts ?? [])]
+    for (const ref of report.deliverables ?? []) {
+      if (!artifacts.some((a) => a.ref === ref)) artifacts.push({ kind: 'pr', ref })
+    }
+    return ok({
+      outcome: report.status === 'failed' ? 'failed' : 'done',
+      ...(this.workdir
+        ? { workdir: this.workdir }
+        : prior?.outcome === 'done' && prior.workdir
+          ? { workdir: prior.workdir }
+          : {}),
+      result: {
+        ...result,
+        summary: report.summary,
+        artifacts,
+        verify: result?.verify ?? [],
+        executor: this.grant.contract.executor,
+        node_id: this.env.nodeId,
+        ...(report.reason ? { reported_reason: report.reason } : {}),
+        ...(report.status === 'failed' ? { reason: 'worker_failed' } : {}),
+        ...(report.status === 'dropped' ? { dropped: true } : {}),
+      },
+    })
+  }
+
+  /** progress 与 idle 矛盾时先等无进展阈值，其余 idle 立即合并。 */
+  private mergeIdle() {
+    const idle = this.observedIdle
+    if (!idle || this.phase !== 'running' || this.terminalReport || this.runEnded) return
+    if (this.pendingReport?.status === 'progress') {
+      const wait = noProgressMs(this.grant.contract, this.env.roleNoProgressMinutes)
+      const left = wait - (this.mono() - idle.at)
+      if (left > 0) {
+        this.cancelIdle()
+        this.cancelIdle = this.env.clock.setTimeout(() => this.mergeIdle(), left)
+        return
+      }
+    }
+    this.stuck('idle', idle.hint, idle.text)
   }
 
   /** 判定卡住并经续约上报（lease_held）。 */
-  private stuck(trigger: 'idle' | 'no_progress', hint?: Record<string, unknown>, text?: string) {
+  private stuck(
+    trigger: 'idle' | 'no_progress',
+    hint?: Record<string, unknown>,
+    text?: string,
+    observed?: ReportConflict['observed'],
+  ) {
     if (this.phase !== 'running' || this.released || this.cancelRequested || this.timedOut) return
     const tail = this.recentTail()
-    let verdict: StuckVerdict | null = null
+    const workerReport = this.pendingReport
+    const reported = workerReport?.status === 'question' || workerReport?.status === 'blocked'
+    let verdict: StuckVerdict | null = reported
+      ? {
+          reason: workerReport.status === 'question' ? 'question' : 'other',
+          message:
+            workerReport.status === 'question'
+              ? (workerReport.question as string)
+              : workerReport.summary,
+        }
+      : null
     try {
-      verdict =
-        this.executor?.classify?.({
-          trigger,
-          tail,
-          idle_ms: Math.max(0, this.mono() - this.lastActivityAt),
-          ...(hint ? { hint } : {}),
-          contract: this.grant.contract,
-        }) ?? null
+      if (!reported)
+        verdict =
+          this.executor?.classify?.({
+            trigger,
+            tail,
+            idle_ms: Math.max(0, this.mono() - this.lastActivityAt),
+            ...(hint ? { hint } : {}),
+            contract: this.grant.contract,
+          }) ?? null
     } catch (err) {
       this.env.logger.warn('执行器的 classify 抛出异常，按未识别处理', String(err))
     }
@@ -733,6 +851,7 @@ class LeaseRunner {
           })
     this.phase = 'blocked'
     this.cancelIdle()
+    this.cancelReportWait()
     this.pauseTimeout()
     const session = v.session ?? (typeof hint?.session === 'string' ? hint.session : undefined)
     const fingerprint = approvalFingerprint.safeParse(hint?.approval_fingerprint)
@@ -741,8 +860,29 @@ class LeaseRunner {
     const report = (diff?: string) => {
       // 计算期间 worker 已恢复、回复已送达或租约已结束：这次上报作废。
       if (gen !== this.stuckGen || this.phase !== 'blocked' || this.released) return
+      if (this.pendingReport === workerReport) this.pendingReport = undefined
       this.signals.push({
+        ...(workerReport ? { report_seq: workerReport.seq } : {}),
+        ...(workerReport && (observed || workerReport.status === 'progress')
+          ? { report_conflict: { report_seq: workerReport.seq, observed: observed ?? trigger } }
+          : {}),
         blocked: {
+          basis: reported ? 'reported' : 'inferred',
+          ...(workerReport?.status === 'question'
+            ? {
+                question: {
+                  text: workerReport.question as string,
+                  options: workerReport.options as ReportQuestion['options'],
+                  recommended: workerReport.recommended as string,
+                },
+              }
+            : {}),
+          ...(workerReport?.status === 'blocked'
+            ? {
+                missing: workerReport.missing as string,
+                tried: workerReport.tried as string,
+              }
+            : {}),
           reason: v.reason,
           message: v.message,
           ...(typeof hint?.request_id === 'string' ? { request_id: hint.request_id } : {}),
@@ -860,7 +1000,7 @@ class LeaseRunner {
   }
 
   /**
-   * 执行器上报任务分支（codex-orca 开始时，Codex 启动之前）：worktree realpath 后随下一次续约上报，
+   * 执行器上报任务分支（写类适配器启动 worker 之前）：worktree realpath 后随下一次续约上报，
    * 每个租约一次。中枢还没有快照时，对执行器解析出的登记仓库（`report.repo`）采集快照一并上报；
    * 已有快照（随租约下发）时只用它，不重新采集。
    */
@@ -919,6 +1059,7 @@ class LeaseRunner {
   }
 
   private enterRunning() {
+    this.observedIdle = undefined
     this.phase = 'running'
     this.stuckGen++
     this.blockedDecision = undefined
@@ -930,7 +1071,13 @@ class LeaseRunner {
 
   private armIdle() {
     this.cancelIdle()
-    if (this.released || this.phase !== 'running') return
+    if (
+      this.released ||
+      this.phase !== 'running' ||
+      this.pendingReport?.status === 'question' ||
+      this.pendingReport?.status === 'blocked'
+    )
+      return
     this.cancelIdle = this.env.clock.setTimeout(
       () => this.stuck('no_progress'),
       noProgressMs(this.grant.contract, this.env.roleNoProgressMinutes),
@@ -992,6 +1139,7 @@ class LeaseRunner {
           this.grant.lease_id,
           token,
         )
+        this.dispatchTokenSha256 = createHash('sha256').update(token).digest('hex').slice(0, 16)
       } catch {
         if (this.executor?.adapterCapabilities.raindown_mcp === true) {
           this.tokenWriteFailed = true
@@ -1125,7 +1273,11 @@ class LeaseRunner {
         const pump = (async () => {
           for await (const a of run.activity) this.onActivity(a)
         })().catch(() => {})
-        outcome = await Promise.race([run.done, forced])
+        const adapterDone = run.done.then((result) => {
+          this.adapterOutcome = result
+          return result
+        })
+        outcome = await Promise.race([adapterDone, forced])
         // 等执行器把剩余活动交出来（执行器结束时应关闭活动流），最多等一个续约周期。
         await Promise.race([pump, forced, sleep(env.clock, this.intervalMs, this.abort.signal)])
       } catch (err) {
@@ -1148,6 +1300,7 @@ class LeaseRunner {
         this.cancelTimeout()
         this.cancelIdle()
         this.cancelGrace()
+        this.cancelReportWait()
         this.tokenFilesClosed = true
         await this.tokenWrites
         if (wakeTokenFile) await removeWakeTokenFile(wakeTokenFile).catch(() => {})
@@ -1162,7 +1315,43 @@ class LeaseRunner {
       if (this.unacked && !this.released) await sleep(env.clock, env.retryMs)
     }
     if (this.released) return
+    // harness 的结束可能紧随 MCP 上报；提交前再读取一次中枢，保留最后的结构化结果。
+    do {
+      await this.renewNow()
+      if (this.renewReadFailed && !this.released) await sleep(env.clock, env.retryMs)
+    } while (this.renewReadFailed && !this.released)
+    if (this.released) return
+    if (this.terminalReport) outcome = this.reportedOutcome(this.terminalReport)
     let req = this.completion(this.tokenWriteFailed ? this.dispatchTokenFailure() : outcome)
+    if (this.terminalReport && !this.timedOut && !this.tokenWriteFailed) {
+      req = { ...req, report_seq: this.terminalReport.seq }
+    } else if (
+      !this.timedOut &&
+      !this.cancelRequested &&
+      !this.tokenWriteFailed &&
+      this.pendingReport &&
+      (this.pendingReport.status === 'question' || this.pendingReport.status === 'blocked')
+    ) {
+      const report = this.pendingReport
+      req = {
+        lease_token: grant.lease_token,
+        outcome: 'blocked',
+        report_seq: report.seq,
+        basis: 'reported',
+        blocked_reason: report.status === 'question' ? 'question' : 'other',
+        message: report.status === 'question' ? (report.question as string) : report.summary,
+        ...(report.status === 'question'
+          ? {
+              question: {
+                text: report.question as string,
+                options: report.options as ReportQuestion['options'],
+                recommended: report.recommended as string,
+              },
+            }
+          : { missing: report.missing as string, tried: report.tried as string }),
+      }
+      this.pendingReport = undefined
+    }
     // 卡住期间执行器完成（例如用户直接在终端里答复后 worker 做完了）：blocked 不能直接转 done，
     // 先上报恢复为 running。崩溃或以 blocked 结束时不上报恢复：中枢写 blocked → blocked，
     // 有待送达的回复时带着回复重新排队（PR #16 审查第 5 条）。
@@ -1199,6 +1388,7 @@ class LeaseRunner {
       req.outcome === 'done' &&
       cwd.ok &&
       grant.contract.verify?.length &&
+      this.terminalReport?.status !== 'dropped' &&
       !this.cancelRequested
     ) {
       this.phase = 'verifying'
@@ -1238,6 +1428,8 @@ class LeaseRunner {
           lease_token: grant.lease_token,
           outcome: 'blocked',
           blocked_reason: 'workdir_missing',
+          basis: 'inferred',
+          ...(req.report_seq ? { report_seq: req.report_seq } : {}),
           message,
         }
         while (!this.released && this.outOfBand.length > 0) {
@@ -1290,6 +1482,7 @@ class LeaseRunner {
         ...token,
         outcome: 'blocked',
         blocked_reason: 'crashed',
+        basis: 'inferred',
         message: `执行器出错（${outcome.error.code}）：${outcome.error.message}`,
         ...withTail,
       }
@@ -1304,6 +1497,7 @@ class LeaseRunner {
           ...token,
           outcome: 'blocked',
           blocked_reason: o.reason,
+          basis: 'inferred',
           message: o.message,
           ...(o.tail ? { tail: o.tail.slice(-200) } : withTail),
           ...(o.session ? { session: o.session } : {}),
@@ -1314,6 +1508,7 @@ class LeaseRunner {
           ...token,
           outcome: 'blocked',
           blocked_reason: 'crashed',
+          basis: 'inferred',
           message: `执行器进程意外退出（${how}）${o.message ? `：${o.message}` : ''}`,
           ...withTail,
         }
@@ -1331,6 +1526,7 @@ class LeaseRunner {
           ...token,
           outcome: 'blocked',
           blocked_reason: 'crashed',
+          basis: 'inferred',
           message: o.message ?? '执行器自行中止',
           ...withTail,
         }
@@ -1351,6 +1547,7 @@ class LeaseRunner {
     }
     this.released = true
     this.cancelRenew()
+    this.cancelReportWait()
   }
 }
 

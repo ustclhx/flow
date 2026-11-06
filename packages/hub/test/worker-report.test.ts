@@ -30,6 +30,8 @@ const question = {
 async function setup(
   verifyDeliverable?: WorkerReportRoutesDeps['verifyDeliverable'],
   now = Date.now,
+  knownBranch = true,
+  executor = 'fake',
 ) {
   const t = await tempLedger({ now })
   const ledger = t.store
@@ -44,21 +46,36 @@ async function setup(
         type: 'task.created',
         task_id: 't-report',
         workspace: WS,
-        payload: { contract: contract() },
+        payload: { contract: contract({ executor }) },
       },
       { actor: 'user' },
     ),
   )
   must(
     service.registerNode(
-      { node_id: 'n1', hostname: 'host', version: '1', capabilities: ['executor:fake'] },
+      { node_id: 'n1', hostname: 'host', version: '1', capabilities: [`executor:${executor}`] },
       'user',
     ),
   )
   const lease = must(
-    await service.acquire({ node_id: 'n1', capabilities: ['executor:fake'] }, { actor: 'user' }),
+    await service.acquire(
+      { node_id: 'n1', capabilities: [`executor:${executor}`] },
+      { actor: 'user' },
+    ),
   ).lease
   if (!lease) throw new Error('未派工')
+  if (knownBranch)
+    must(
+      ledger.append(
+        {
+          type: 'task.branch_reported',
+          task_id: lease.task_id,
+          workspace: WS,
+          payload: { branch: 'task/report' },
+        },
+        { actor: 'node:n1' },
+      ),
+    )
   const mountRoutes = () => {
     const app = new Hono()
     app.use('*', async (c, next) => {
@@ -573,4 +590,200 @@ test('读取请求体期间持有同租约busy锁', async () => {
   release()
   expect((await pending).status).toBe(200)
   expect((await c.report({ status: 'progress', summary: '随后请求' })).status).toBe(200)
+})
+
+test('未登记分支的ready明确要求blocked说明前提，且不查询交付物或写报告', async () => {
+  let checks = 0
+  const c = await setup(
+    async () => {
+      checks++
+      return ok(null)
+    },
+    Date.now,
+    false,
+  )
+  const before = c.ledger.seq()
+  const response = await c.report(ready)
+  expect(response.status).toBe(409)
+  expect(await response.json()).toMatchObject({
+    error: { code: 'branch_unknown', message: expect.stringContaining('blocked') },
+  })
+  expect(checks).toBe(0)
+  expect(c.ledger.seq()).toBe(before)
+  expect(
+    (
+      await c.report({
+        status: 'blocked',
+        summary: '无法核实交付物',
+        missing: '尚未登记任务分支',
+        tried: '已查询本地分支',
+      })
+    ).status,
+  ).toBe(200)
+})
+
+test.each(['codex-exec', 'claude-sdk'])(
+  '%s 报告分支后ready可核对交付物并完成',
+  async (executor) => {
+    const c = await setup(
+      async (_ref, task) => {
+        expect(task.branch).toBe('dev/report')
+        expect(task.repo_snapshot?.remote_url).toBe('https://github.com/org/repo.git')
+        return ok(null)
+      },
+      Date.now,
+      false,
+      executor,
+    )
+    expect(
+      c.renew({
+        branch: {
+          branch: 'dev/report',
+          worktree: '/work/task',
+          repo_snapshot: { remote_url: 'https://github.com/org/repo.git', default_branch: 'main' },
+        },
+      }).branch_report,
+    ).toBe('recorded')
+    const response = await c.report(ready)
+    expect(response.status).toBe(200)
+    const { data } = await readBody(response)
+    const completed = must(
+      c.service.complete(c.lease.lease_id, {
+        lease_token: c.lease.lease_token,
+        report_seq: data.seq,
+        outcome: 'done',
+        result: { summary: '完成', executor, node_id: 'n1' },
+      }),
+    )
+    expect(completed.task.status).toBe('done')
+    expect(completed.task.result?.artifacts).toContainEqual({
+      kind: 'pr',
+      ref: reportPr,
+    })
+  },
+)
+
+test('上报矛盾与消费、推断卡住同批入账，重试和重建后保持幂等', async () => {
+  const c = await setup()
+  const { data } = await readBody(await c.report({ status: 'progress', summary: '仍在处理' }))
+  const request = {
+    report_seq: data.seq,
+    report_conflict: { report_seq: data.seq, observed: 'idle' },
+    blocked: { basis: 'inferred', reason: 'no_progress', message: '执行器已经空闲' },
+  }
+  const before = c.ledger.seq()
+  c.renew(request)
+  expect(c.ledger.eventsAfter(before).map((event) => event.type)).toEqual([
+    'task.report_consumed',
+    'task.report_conflict',
+    'task.blocked',
+  ])
+  c.renew(request)
+  must(c.ledger.rebuild())
+  c.renew(request)
+  expect(
+    c.ledger.eventsAfter(before).filter((event) => event.type === 'task.report_conflict'),
+  ).toHaveLength(1)
+  expect(
+    c.ledger.workerReportConflict(c.lease.task_id, c.lease.lease_id, c.lease.attempt, data.seq),
+  ).toBe(true)
+  expect(c.ledger.getTask(c.lease.task_id)?.blocked?.basis).toBe('inferred')
+  expect(c.renew().report).toBeUndefined()
+})
+
+test('矛盾引用不属于本派工或与消费不一致时不写任何事件', async () => {
+  const c = await setup()
+  const { data } = await readBody(await c.report({ status: 'progress', summary: '处理中' }))
+  const before = c.ledger.seq()
+  for (const [reportSeq, conflictSeq] of [
+    [data.seq, data.seq + 1],
+    [1, 1],
+  ]) {
+    expect(
+      c.service.renew(c.lease.lease_id, {
+        lease_token: c.lease.lease_token,
+        report_seq: reportSeq,
+        report_conflict: { report_seq: conflictSeq, observed: 'busy' },
+      }),
+    ).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } })
+  }
+  expect(c.ledger.seq()).toBe(before)
+})
+
+test('blocked上报的缺少前提与已尝试办法在续约、完成和重建后保留', async () => {
+  for (const finish of [false, true]) {
+    const c = await setup()
+    const report = {
+      status: 'blocked' as const,
+      summary: '需要环境',
+      missing: '部署凭证',
+      tried: '已检查环境变量',
+    }
+    const { data } = await readBody(await c.report(report))
+    if (finish)
+      must(
+        c.service.complete(c.lease.lease_id, {
+          lease_token: c.lease.lease_token,
+          outcome: 'blocked',
+          report_seq: data.seq,
+          blocked_reason: 'other',
+          message: '节点说明',
+        }),
+      )
+    else
+      c.renew({
+        report_seq: data.seq,
+        blocked: {
+          basis: 'reported',
+          reason: 'other',
+          message: report.summary,
+          missing: report.missing,
+          tried: report.tried,
+        },
+      })
+    must(c.ledger.rebuild())
+    expect(c.ledger.getTask(c.lease.task_id)?.blocked).toMatchObject({
+      basis: 'reported',
+      missing: report.missing,
+      tried: report.tried,
+    })
+  }
+})
+
+test('ready后的强制验收失败保留failed和验收证据，并原子消费报告', async () => {
+  const c = await setup(async () => ok(null))
+  const { data } = await readBody(await c.report(ready))
+  const before = c.ledger.seq()
+  const result = must(
+    c.service.complete(c.lease.lease_id, {
+      lease_token: c.lease.lease_token,
+      outcome: 'failed',
+      report_seq: data.seq,
+      result: {
+        summary: '验收失败',
+        reason: 'verify_failed',
+        node_id: 'n1',
+        executor: 'codex-orca',
+        verify: [
+          {
+            cmd: ['bun', 'test'],
+            exit_code: 1,
+            duration_ms: 10,
+            timed_out: false,
+            output_tail: ['测试失败'],
+          },
+        ],
+      },
+    }),
+  )
+  expect(result.task.status).toBe('failed')
+  expect(result.task.result).toMatchObject({
+    reason: 'verify_failed',
+    verify: [{ exit_code: 1, output_tail: ['测试失败'] }],
+  })
+  expect(c.ledger.eventsAfter(before).map((event) => event.type)).toEqual([
+    'task.report_consumed',
+    'task.failed',
+    'task.attempt_ended',
+  ])
 })

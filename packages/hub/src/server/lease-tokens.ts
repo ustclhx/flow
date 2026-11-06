@@ -14,7 +14,11 @@ export interface TaskCaller {
 
 export interface TaskTokenAuthority {
   issue(grant: { lease_id: string; task_id: string }): string | undefined
-  ensure(grant: { lease_id: string; task_id: string }): string | undefined
+  ensure(grant: {
+    lease_id: string
+    task_id: string
+    dispatch_token_sha256?: string
+  }): string | undefined
   authenticate(presented: string): TaskCaller | null
   size(): number
 }
@@ -91,7 +95,13 @@ export function createTaskTokenAuthority(o: TaskTokenOptions): TaskTokenAuthorit
     ensure(grant) {
       const key = byLease.get(grant.lease_id)
       const caller = key === undefined ? undefined : records.get(key)
-      if (caller && caller.task_id === grant.task_id && current(caller)) return undefined
+      if (
+        caller &&
+        caller.task_id === grant.task_id &&
+        current(caller) &&
+        grant.dispatch_token_sha256 === key?.slice(0, 16)
+      )
+        return undefined
       return issue(grant)
     },
     authenticate(presented) {

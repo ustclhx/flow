@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HubClient, type Result, raindownPaths } from '@raindown/core'
@@ -77,8 +78,19 @@ test('中枢重启后续约补发派工凭证，新令牌可用而旧令牌失�
       error: { code: 'unauthorized' },
     })
     expect(
-      must(await node.request('leases-renew', { lease_token: lease.lease_token }, lease.lease_id))
-        .dispatch_token,
+      must(
+        await node.request(
+          'leases-renew',
+          {
+            lease_token: lease.lease_token,
+            dispatch_token_sha256: createHash('sha256')
+              .update(renewed.dispatch_token)
+              .digest('hex')
+              .slice(0, 16),
+          },
+          lease.lease_id,
+        ),
+      ).dispatch_token,
     ).toBeUndefined()
   } finally {
     await hub.stop()

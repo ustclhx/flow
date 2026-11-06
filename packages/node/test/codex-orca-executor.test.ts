@@ -76,6 +76,7 @@ async function start(
     home?: OrcaHome
     resume?: TaskResume
     recovery?: TaskRecovery
+    leaseTokenFile?: string
     reportResumeReplyDropped?: (options?: { attempted?: boolean }) => void
     directoryStat?: (path: string) => { isDirectory(): boolean }
   } = {},
@@ -113,6 +114,7 @@ async function start(
     signal: abort.signal,
     ...(extra.resume ? { resume: extra.resume } : {}),
     ...(extra.recovery ? { recovery: extra.recovery } : {}),
+    ...(extra.leaseTokenFile ? { leaseTokenFile: extra.leaseTokenFile } : {}),
     ...(extra.reportResumeReplyDropped
       ? { reportResumeReplyDropped: extra.reportResumeReplyDropped }
       : {}),
@@ -183,6 +185,42 @@ const idles = (s: Started) => s.activity.filter((a) => a.data?.idle === true)
 const sends = (s: Started) => s.orca.ops('terminalSend').map((c) => c.input)
 
 describe('启动', () => {
+  test.each([undefined, '/private/old-lease.token', '/private/current-lease.token'])(
+    '重挂接核对派工 MCP 绑定，旧路径 %s 不可沿用',
+    async (previous) => {
+      const first = await start(
+        {},
+        (o) => o.show('question'),
+        previous ? { leaseTokenFile: previous } : {},
+      )
+      await ready(first)
+      const home = h
+      if (!home) throw new Error('no home')
+      const current = '/private/current-lease.token'
+      const second = await start({}, (o) => o.show('question'), { home, leaseTokenFile: current })
+      await ready(second)
+      expect(second.orca.ops('worktreeCreate')).toHaveLength(0)
+      if (previous === current) {
+        expect(second.orca.ops('terminalClose')).toHaveLength(0)
+        expect(second.orca.ops('terminalCreate')).toHaveLength(0)
+      } else {
+        expect(second.orca.ops('terminalClose')).toHaveLength(1)
+        expect(second.orca.ops('terminalCreate')).toHaveLength(1)
+        const created = second.orca.ops('terminalCreate')[0]?.input as
+          | { command: string }
+          | undefined
+        expect(created?.command).toContain(`RAINDOWN_LEASE_TOKEN_FILE=${current}`)
+        expect(created?.command).toContain('mcp_servers.raindown=')
+      }
+      const state = JSON.parse(
+        readFileSync(join(home.home, 'state/tasks/t-orca-1/orca.json'), 'utf8'),
+      )
+      expect(state.lease_token_file).toBe(current)
+      await first.run.cancel()
+      await second.run.cancel()
+    },
+  )
+
   test('重挂接直接送达恢复提示，普通输入框出现前不向授权弹窗输入文字', async () => {
     const first = await start({}, (o) => o.show('question'))
     await ready(first)

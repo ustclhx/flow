@@ -73,9 +73,9 @@ export interface ExecutorContext {
   /** 当前 worker 派工凭证文件（0600）；只传路径到受管 MCP，不传凭证明文。 */
   leaseTokenFile?: string
   /**
-   * 上报执行器创建的任务分支与 worktree（D15，codex-orca 开始时调用）：节点随下一次续约上报，
+   * 上报写类任务的真实分支与 worktree（D15；各适配器在能确定分支时于 worker 启动前调用）：节点随下一次续约上报，
    * 中枢写 `task.branch_reported`（每个任务一次、不可更改）。worktree 由节点 realpath 后上报；
-   * `repo` 是执行器解析出的登记仓库（codex-orca 的 `resolveTaskRepo`），节点在任务首次上报时对它采集快照。
+   * `repo` 是执行器解析出的登记仓库，节点在任务首次上报时对它采集快照；无法确定分支时不能伪造报告。
    * 返回 Promise 时在快照采集完成后结束（不等中枢确认、不会 reject）：执行器应等它结束再启动 worker，
    * 让快照反映 worker 改动之前的仓库状态。
    */

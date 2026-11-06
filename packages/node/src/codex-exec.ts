@@ -21,7 +21,7 @@ import {
 } from '@raindown/core'
 import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
-import { execCodexHome, prepareCodexHome, readCodexHome } from './codex-home.ts'
+import { codexTaskMcpConfig, execCodexHome, prepareCodexHome, readCodexHome } from './codex-home.ts'
 import { questionMessage } from './codex-orca/classify.ts'
 import { resolveContext } from './codex-orca/spec.ts'
 import { executorRoleEnv } from './env.ts'
@@ -31,6 +31,8 @@ import {
   type ExecutorPlugin,
   resumedSignal,
 } from './executor.ts'
+import { type GitOptions, git } from './github.ts'
+import { resolveContractCwd } from './workdir.ts'
 
 export { readCodexHome } from './codex-home.ts'
 
@@ -80,6 +82,8 @@ export interface CodexExecOptions {
   codexCommand?: readonly [string, ...string[]]
   resolveRole?: (name: string) => Promise<Result<Role>>
   clock?: NodeClock
+  /** 分支识别的 git runner；测试注入，避免调用真实 git。 */
+  git?: GitOptions
 }
 
 const safe = (text: string, max = 16_000) => clipText(redactSecrets(text), max)
@@ -153,7 +157,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
       approval_requests: 'none',
       inject_while_running: false,
       resume_session: true,
-      raindown_mcp: false,
+      raindown_mcp: true,
       out_of_band_detection: false,
     },
     // 进程仍在运行时不从中间消息推断提问；无进展由节点判定。
@@ -313,11 +317,45 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
           return
         }
         if (finished) return
-        const childEnv = { ...env.data, CODEX_HOME: isolated.data }
+        const childEnv = {
+          ...env.data,
+          CODEX_HOME: isolated.data,
+          ...(ctx.leaseTokenFile ? { RAINDOWN_LEASE_TOKEN_FILE: ctx.leaseTokenFile } : {}),
+        }
+        if (effectiveRoleKind(role.data) === 'write' && ctx.reportBranch) {
+          const branch = await git(ctx.cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+            ...options.git,
+            env: options.git?.env ?? env.data,
+          })
+          if (branch.ok && branch.data.trim()) {
+            const root = await git(ctx.cwd, ['rev-parse', '--show-toplevel'], {
+              ...options.git,
+              env: options.git?.env ?? env.data,
+            })
+            if (root.ok && root.data.trim()) {
+              const repo = await resolveContractCwd(
+                options.home,
+                { ...contract, cwd: root.data.trim() },
+                true,
+              )
+              if (repo.ok)
+                await ctx.reportBranch({
+                  branch: branch.data.trim(),
+                  worktree: root.data.trim(),
+                  repo: repo.data,
+                })
+            }
+          }
+        }
+        if (finished) return
         // exec 无 -a 选项、不走交互审批，无需默认覆盖 reviewer。
         const args = [...command.slice(1), 'exec', '--json']
         for (const [key, value] of Object.entries(perms.data.config))
           args.push('-c', `${key}=${value}`)
+        args.push(
+          '-c',
+          codexTaskMcpConfig({ home: options.home, role: role.data.name, taskId: ctx.taskId }),
+        )
         if (role.data.model) args.push('-m', role.data.model)
         if (role.data.effort) args.push('-c', `model_reasoning_effort=${role.data.effort}`)
         // exec 层的 -s 对 resume 同样生效，且优先于 permissions.config 中的 sandbox_mode。

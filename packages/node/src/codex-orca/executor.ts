@@ -20,7 +20,12 @@ import {
 } from '@raindown/core'
 import { z } from 'zod'
 import { type NodeClock, sleep, systemClock } from '../clock.ts'
-import { orcaCodexHome, prepareCodexHome, sameCodexHome } from '../codex-home.ts'
+import {
+  codexTaskMcpConfig,
+  orcaCodexHome,
+  prepareCodexHome,
+  sameCodexHome,
+} from '../codex-home.ts'
 import { CHILD_ENV_DENYLIST, dualRaindownEnv, executorRoleEnv } from '../env.ts'
 import {
   ActivityQueue,
@@ -178,6 +183,8 @@ const stateSchema = z.object({
   handle: z.string().optional(),
   /** 启动终端时使用的隔离目录；旧记录缺失时不接管，避免继续运行未隔离的进程。 */
   codex_home: z.string().optional(),
+  /** 存活进程的 MCP 环境不可改写；只有相同派工凭证路径才可重挂接。 */
+  lease_token_file: z.string().optional(),
   /** 创建终端时 Orca 给出的进程身份；stale 后接管其他 handle 前必须一致（PR #24 复核）。 */
   pty_id: z.string().optional(),
   incarnation_id: z.string().optional(),
@@ -215,7 +222,7 @@ export function buildCodexCommand(input: {
   codexHome: string
   worktreePath: string
   specPath: string
-  task?: { id: string; workspace: string; home: string }
+  task?: { id: string; workspace: string; home: string; leaseTokenFile?: string }
   role: Pick<Role, 'name' | 'model' | 'effort' | 'permissions'>
 }): Result<string> {
   if (input.codexBin.includes('=')) {
@@ -242,12 +249,20 @@ export function buildCodexCommand(input: {
     if (p.approval) argv.push('-a', p.approval)
     if (p.sandbox) argv.push('-s', p.sandbox)
   }
+  if (input.task)
+    argv.push(
+      '-c',
+      codexTaskMcpConfig({ home: input.task.home, role: input.role.name, taskId: input.task.id }),
+    )
   const cmd = argv.map(quote).join(' ')
   const taskEnv = input.task
     ? dualRaindownEnv({
         RAINDOWN_TASK_ID: input.task.id,
         RAINDOWN_WORKSPACE: input.task.workspace,
         RAINDOWN_HOME: input.task.home,
+        ...(input.task.leaseTokenFile
+          ? { RAINDOWN_LEASE_TOKEN_FILE: input.task.leaseTokenFile }
+          : {}),
       })
     : {}
   const assignments = Object.entries({
@@ -388,7 +403,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       approval_requests: 'inferred',
       inject_while_running: true,
       resume_session: false,
-      raindown_mcp: false,
+      raindown_mcp: true,
       out_of_band_detection: true,
     },
     classify: classifyCodexOrca,
@@ -1464,11 +1479,26 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
                 'codex_home_mismatch',
                 '已有 Codex 终端未使用当前隔离目录；请先关闭旧终端后重试',
               )
-            handle = st.handle
-            prevTail = tail
-            status(`接着使用已有的终端 ${handle}`)
-            await deliverResumeReply()
-            await deliverRecoveryPrompt()
+            if (ctx.leaseTokenFile && st.lease_token_file !== ctx.leaseTokenFile) {
+              // 新派工不能复用仍指向旧租约凭证的 MCP；保留 worktree，在同一分支重启 worker。
+              const closed = await orca.terminalClose({ handle: st.handle })
+              if (!closed.ok)
+                return failed(
+                  'mcp_binding_mismatch',
+                  '已有终端的 MCP 属于旧派工，关闭失败；请先关闭旧终端后重试',
+                )
+              delete st.handle
+              delete st.pty_id
+              delete st.incarnation_id
+              await saveState()
+              status('派工绑定已变化，保留工作目录并重启 Codex')
+            } else {
+              handle = st.handle
+              prevTail = tail
+              status(`接着使用已有的终端 ${handle}`)
+              await deliverResumeReply()
+              await deliverRecoveryPrompt()
+            }
           }
         }
         if (!handle) {
@@ -1484,7 +1514,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             codexHome: isolated.data,
             worktreePath: st.worktree_path,
             specPath,
-            task: { id: ctx.taskId, workspace: contract.workspace, home: options.home },
+            task: {
+              id: ctx.taskId,
+              workspace: contract.workspace,
+              home: options.home,
+              ...(ctx.leaseTokenFile ? { leaseTokenFile: ctx.leaseTokenFile } : {}),
+            },
             role,
           })
           if (!cmd.ok) return failed(cmd.error.code, cmd.error.message)
@@ -1508,6 +1543,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           // 新终端的首条输入已从 spec 读取恢复提示。
           if (recoveryText) replyState(recoveryId).done = true
           st.codex_home = isolated.data
+          if (ctx.leaseTokenFile) st.lease_token_file = ctx.leaseTokenFile
+          else delete st.lease_token_file
           if (term.data.ptyId) st.pty_id = term.data.ptyId
           else delete st.pty_id
           if (term.data.incarnationId) st.incarnation_id = term.data.incarnationId
