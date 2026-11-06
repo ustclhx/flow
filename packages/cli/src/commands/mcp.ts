@@ -1,9 +1,9 @@
-import { ok } from '@flow/core'
-import { checkMcpActor, resolveMcpBinding, startStdioServer } from '@flow/mcp'
+import { ok } from '@raindown/core'
+import { checkMcpActor, resolveMcpBinding, startStdioServer } from '@raindown/mcp'
 import { defineCommand } from '../command.ts'
 
 /**
- * `flow mcp --actor <name>`：以 stdio 传输启动 MCP 服务（knowledge-access "两种接口等价"）。
+ * `raindown mcp --actor <name>`：以 stdio 传输启动 MCP 服务（knowledge-access "两种接口等价"）。
  * 服务运行期间 stdout 只能输出协议消息，因此日志一律改走 stderr；客户端断开后正常退出。
  */
 export const mcpCommand = defineCommand({

@@ -161,7 +161,7 @@ const samples: Record<
     invalid: { payload: { slept_ms: -1, extended_leases: 0 } },
   },
   'hub.backup_done': {
-    valid: { payload: { path: 'state/backups/flow-x.db', size_bytes: 10, duration_ms: 3 } },
+    valid: { payload: { path: 'state/backups/raindown-x.db', size_bytes: 10, duration_ms: 3 } },
     invalid: { payload: { size_bytes: 10, duration_ms: 3 } },
   },
   'hub.rebuilt': {

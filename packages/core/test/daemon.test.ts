@@ -15,10 +15,11 @@ import {
   checkDaemonPlists,
   DAEMON_LABELS,
   generatePlist,
+  LEGACY_DAEMON_LABELS,
   parsePlistPaths,
 } from '../src/daemon/plist.ts'
 import type { ExecResult } from '../src/git.ts'
-import { flowPaths } from '../src/home.ts'
+import { raindownPaths } from '../src/home.ts'
 import { fail, ok } from '../src/result.ts'
 
 let root: string
@@ -31,7 +32,7 @@ const missing: ExecResult = { code: 3, stdout: '', stderr: 'No such process' }
 const printed = await readFile(new URL('./fixtures/launchctl-finder.txt', import.meta.url), 'utf8')
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'flow-daemon-'))
+  root = await mkdtemp(join(tmpdir(), 'raindown-daemon-'))
   calls = []
   const bunPath = join(root, 'bun & <"\'>')
   const cliPath = join(root, 'main & <"\'>.ts')
@@ -58,12 +59,12 @@ describe('plist', () => {
     for (const service of ['hub', 'node']) {
       expect(
         generatePlist({
-          label: `dev.flow.${service}`,
+          label: `dev.raindown.${service}`,
           bunPath: '/opt/bun',
           cliPath: '/src/main.ts',
           command: [service, 'start'],
-          home: '/flow',
-          logPath: `/flow/state/logs/${service}.log`,
+          home: '/raindown',
+          logPath: `/raindown/state/logs/${service}.log`,
           path: '/opt:/usr/bin',
         }),
       ).toMatchSnapshot(service)
@@ -94,22 +95,84 @@ describe('plist', () => {
 
 describe('launchd 托管', () => {
   test('安装顺序为每个服务 bootout → bootstrap，重装会更新 plist', async () => {
-    expect(await installDaemons(options)).toEqual(ok(healthy))
-    const expected = DAEMON_LABELS.flatMap((label) => [
-      ['bootout', `gui/123/${label}`],
-      ['bootstrap', 'gui/123', join(options.launchAgentsDir as string, `${label}.plist`)],
-    ])
+    expect(await installDaemons(options)).toEqual(ok({ ...healthy, removedLegacyLabels: [] }))
+    const expected = [
+      ...LEGACY_DAEMON_LABELS.map((label) => ['bootout', `gui/123/${label}`]),
+      ...DAEMON_LABELS.flatMap((label) => [
+        ['bootout', `gui/123/${label}`],
+        ['bootstrap', 'gui/123', join(options.launchAgentsDir as string, `${label}.plist`)],
+      ]),
+    ]
     expect(calls).toEqual(expected)
     const checks = checkDaemonPlists(options.launchAgentsDir as string)
     expect(checks.every((c) => c.bunExists && c.cliExists)).toBe(true)
     const plist = await readFile(checks[0]?.plistPath as string, 'utf8')
     expect(plist).toContain(options.path as string)
-    expect(plist).toContain(join(flowPaths(options.home).logs, 'hub.log'))
+    expect(plist).toContain(join(raindownPaths(options.home).logs, 'hub.log'))
     const newCli = join(root, 'updated.ts')
     await writeFile(newCli, '')
     expect((await installDaemons({ ...options, cliPath: newCli })).ok).toBe(true)
     expect(calls).toEqual([...expected, ...expected])
     expect(checkDaemonPlists(options.launchAgentsDir as string)[0]?.cliPath).toBe(newCli)
+  })
+
+  test('安装先停止并删除旧 plist，报告清理标签；停止失败时保留旧文件', async () => {
+    const directory = options.launchAgentsDir as string
+    await mkdir(directory, { recursive: true })
+    for (const label of LEGACY_DAEMON_LABELS)
+      await writeFile(join(directory, `${label}.plist`), 'legacy')
+    const result = await installDaemons(options)
+    expect(result).toEqual(ok({ ...healthy, removedLegacyLabels: [...LEGACY_DAEMON_LABELS] }))
+    expect(calls.slice(0, 2)).toEqual(
+      LEGACY_DAEMON_LABELS.map((label) => ['bootout', `gui/123/${label}`]),
+    )
+    for (const label of LEGACY_DAEMON_LABELS)
+      expect(existsSync(join(directory, `${label}.plist`))).toBe(false)
+    const legacy = join(directory, 'dev.flow.hub.plist')
+    await writeFile(legacy, 'legacy')
+    calls = []
+    const failed = await installDaemons({
+      ...options,
+      launchctl: async (args) => {
+        calls.push(args)
+        return { code: 5, stdout: '', stderr: 'Input/output error' }
+      },
+    })
+    expect(failed).toMatchObject({ ok: false, error: { code: 'launchctl_failed' } })
+    expect(await readFile(legacy, 'utf8')).toBe('legacy')
+    expect(calls).toHaveLength(1)
+  })
+
+  test('旧 plist 缺失时仍停止已加载的旧服务，并只报告实际清理的标签', async () => {
+    const result = await installDaemons({
+      ...options,
+      launchctl: async (args) => {
+        calls.push(args)
+        return args[0] === 'bootout' && args[1] !== 'gui/123/dev.flow.hub' ? missing : success
+      },
+    })
+    expect(result).toEqual(ok({ ...healthy, removedLegacyLabels: ['dev.flow.hub'] }))
+    expect(calls.slice(0, 2)).toEqual(
+      LEGACY_DAEMON_LABELS.map((label) => ['bootout', `gui/123/${label}`]),
+    )
+    for (const label of LEGACY_DAEMON_LABELS)
+      expect(existsSync(join(options.launchAgentsDir as string, `${label}.plist`))).toBe(false)
+  })
+
+  test('旧服务状态只作迁移诊断，不使新服务健康检查失败', async () => {
+    await installDaemons(options)
+    const legacy = join(options.launchAgentsDir as string, 'dev.flow.hub.plist')
+    await writeFile(legacy, 'invalid old plist')
+    const result = await daemonStatus(options)
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error.message)
+    expect(result.data.legacyServices[0]).toMatchObject({
+      installed: true,
+      loaded: true,
+      error: expect.any(String),
+    })
+    expect((await uninstallDaemons(options)).ok).toBe(true)
+    expect(existsSync(legacy)).toBe(false)
   })
 
   for (const command of ['bootout', 'bootstrap']) {
@@ -129,7 +192,7 @@ describe('launchd 托管', () => {
         },
       })
       expect(result).toMatchObject({ ok: false, error: { code: 'launchctl_failed' } })
-      expect(calls).toHaveLength(command === 'bootout' ? 1 : 2)
+      expect(calls).toHaveLength(command === 'bootout' ? 1 : 4)
       expect(healthCalled).toBe(false)
     })
   }
@@ -143,26 +206,42 @@ describe('launchd 托管', () => {
         return ++probes === 1 ? fail('retryable', 'hub_unavailable', '尚未启动') : ok(healthy)
       },
     })
-    expect(result).toEqual(ok(healthy))
+    expect(result).toEqual(ok({ ...healthy, removedLegacyLabels: [] }))
     expect(probes).toBe(2)
   })
 
-  test('health 永久挂起也受总等待期限约束', async () => {
+  test('health 永久挂起也受总等待期限约束，并报告已清理的旧服务', async () => {
+    const legacy = join(options.launchAgentsDir as string, 'dev.flow.hub.plist')
+    await mkdir(options.launchAgentsDir as string, { recursive: true })
+    await writeFile(legacy, 'legacy')
     const started = performance.now()
-    expect(
-      await installDaemons({ ...options, healthWaitMs: 25, health: () => new Promise(() => {}) }),
-    ).toMatchObject({ ok: false, error: { code: 'hub_health_timeout', kind: 'retryable' } })
+    const result = await installDaemons({
+      ...options,
+      healthWaitMs: 25,
+      health: () => new Promise(() => {}),
+    })
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'hub_health_timeout',
+        kind: 'retryable',
+        message: expect.stringContaining('已停止并移除旧服务 dev.flow.hub'),
+      },
+    })
+    expect(existsSync(legacy)).toBe(false)
     expect(performance.now() - started).toBeLessThan(1000)
   })
 
   test('卸载两个服务并移除 plist，可重复执行，state 文件内容不变', async () => {
     await installDaemons(options)
-    const paths = flowPaths(options.home)
+    const paths = raindownPaths(options.home)
     await writeFile(paths.ledgerDb, 'ledger remains')
     await writeFile(paths.hubToken, 'token remains')
     calls = []
     expect((await uninstallDaemons(options)).ok).toBe(true)
-    expect(calls).toEqual(DAEMON_LABELS.map((label) => ['bootout', `gui/123/${label}`]))
+    expect(calls).toEqual(
+      [...DAEMON_LABELS, ...LEGACY_DAEMON_LABELS].map((label) => ['bootout', `gui/123/${label}`]),
+    )
     expect(checkDaemonPlists(options.launchAgentsDir as string).every((c) => !c.installed)).toBe(
       true,
     )
@@ -184,7 +263,7 @@ describe('launchd 托管', () => {
       },
     })
     expect(result).toMatchObject({ ok: false, error: { code: 'daemon_uninstall_failed' } })
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(4)
     expect(checkDaemonPlists(options.launchAgentsDir as string).map((c) => c.installed)).toEqual([
       true,
       false,
@@ -195,17 +274,19 @@ describe('launchd 托管', () => {
     expect(parseLaunchctlPid(printed)).toBe(749)
     expect(parseLaunchctlPid(printed.replace('\tpid = 749\n', ''))).toBeNull()
     expect(
-      parseLaunchctlPid('gui/123/dev.flow.node = {\n\tstate = waiting\n\tlast exit code = 1\n}'),
+      parseLaunchctlPid(
+        'gui/123/dev.raindown.node = {\n\tstate = waiting\n\tlast exit code = 1\n}',
+      ),
     ).toBeNull()
     expect(parseLaunchctlPid('')).toBeNull()
   })
 
   test('status 合并进程、有效路径、health 与最近一次实际备份', async () => {
     await installDaemons(options)
-    const paths = flowPaths(options.home)
+    const paths = raindownPaths(options.home)
     await mkdir(paths.backups)
     for (const [name, date] of [
-      ['flow-20260101-033000.db', '2026-01-01'],
+      ['raindown-20260101-033000.db', '2026-01-01'],
       ['flow-20260201-033000.db', '2026-02-01'],
       ['unrelated.txt', '2026-03-01'],
     ]) {
@@ -226,7 +307,9 @@ describe('launchd 托管', () => {
     expect(
       result.data.services.every((s) => s.loaded && s.pid === 749 && s.bunExists && s.cliExists),
     ).toBe(true)
-    expect(calls).toEqual(DAEMON_LABELS.map((label) => ['print', `gui/123/${label}`]))
+    expect(calls).toEqual(
+      [...DAEMON_LABELS, ...LEGACY_DAEMON_LABELS].map((label) => ['print', `gui/123/${label}`]),
+    )
   })
 
   test('status 失败保留完整诊断：未加载、缺失路径、中枢不可用、无备份', async () => {

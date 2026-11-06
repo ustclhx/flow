@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { initFlowHome, kbGetOp, kbQueryOp, kbSearchOp } from '@flow/core'
+import { initRaindownHome, kbGetOp, kbQueryOp, kbSearchOp } from '@raindown/core'
 import { tempHome, writeEntry } from '../../core/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
@@ -11,10 +11,10 @@ describe('检索操作的 CLI 等价性', () => {
   let previousHome: string | undefined
   const context = () => ({ home, actor: 'codex', via: 'mcp' as const })
   beforeEach(async () => {
-    home = tempHome('flow-search-cli-')
-    previousHome = process.env.FLOW_HOME
-    process.env.FLOW_HOME = home
-    const initialized = await initFlowHome(home)
+    home = tempHome('raindown-search-cli-')
+    previousHome = process.env.RAINDOWN_HOME
+    process.env.RAINDOWN_HOME = home
+    const initialized = await initRaindownHome(home)
     if (!initialized.ok) throw new Error(initialized.error.message)
     writeEntry(
       home,
@@ -29,8 +29,8 @@ describe('检索操作的 CLI 等价性', () => {
     )
   })
   afterEach(() => {
-    if (previousHome === undefined) delete process.env.FLOW_HOME
-    else process.env.FLOW_HOME = previousHome
+    if (previousHome === undefined) delete process.env.RAINDOWN_HOME
+    else process.env.RAINDOWN_HOME = previousHome
     rmSync(dirname(home), { recursive: true, force: true })
   })
 

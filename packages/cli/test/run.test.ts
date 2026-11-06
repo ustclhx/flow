@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { fail, ok, VERSION } from '@flow/core'
+import { fail, ok, VERSION } from '@raindown/core'
 import { defineCommand } from '../src/command.ts'
 import { runCli } from '../src/run.ts'
 
@@ -68,4 +68,22 @@ describe('runCli', () => {
     expect(out.exitCode).toBe(1)
     expect(out.stderr).toContain('internal_error')
   })
+})
+
+test('两个环境身份保留更严格限制，非用户冲突返回用法错误', async () => {
+  for (const env of [
+    { RAINDOWN_ACTOR: 'user', FLOW_ACTOR: 'codex' },
+    { RAINDOWN_ACTOR: 'codex', FLOW_ACTOR: 'user' },
+    { RAINDOWN_ACTOR: ' ', FLOW_ACTOR: 'codex' },
+    { RAINDOWN_ACTOR: 'codex', FLOW_ACTOR: ' codex ' },
+  ]) {
+    const out = await runCli(['kb', 'echo', '--json', '--actor', 'user'], commands, env)
+    expect(JSON.parse(out.stdout).data.actor).toBe('codex')
+  }
+  const out = await runCli(['kb', 'echo', '--json'], commands, {
+    RAINDOWN_ACTOR: 'codex',
+    FLOW_ACTOR: 'claude',
+  })
+  expect(out.exitCode).toBe(2)
+  expect(JSON.parse(out.stdout).error.code).toBe('actor_conflict')
 })

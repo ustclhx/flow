@@ -1,17 +1,17 @@
-# Flow 密钥命令
+# Raindown 密钥命令
 
-先安装 sops、age 和 gitleaks，再运行 `flow init`、`flow secrets init`。
+先安装 sops、age 和 gitleaks，再运行 `raindown init`、`raindown secrets init`。
 初始化会生成权限为 0600 的 `~/.config/sops/age/keys.txt`，在 config 仓库创建
 `.sops.yaml` 和空的 `secrets.sops.yaml` 并提交。重复初始化保留已有私钥和文件。
 **立即离线备份私钥；丢失后不能恢复已有密文。**
 
-运行 `flow secrets set telegram/bot-token`，在不回显的提示中输入值。
+运行 `raindown secrets set telegram/bot-token`，在不回显的提示中输入值。
 也可从标准输入传入：非 TTY 时读到 EOF，去掉末尾 CR/LF，保留内部换行和空格。
 不要把值写到命令行参数里。路径以 `/` 分隔，每段接受英文、数字、下划线和连字符，
 拒绝空段及 `__proto__`、`prototype`、`constructor`。已有字符串与子路径冲突时报错。
 
-`flow secrets list` 只输出路径；`flow secrets get telegram/bot-token` 输出值。
-CLI 默认身份为 user；`--actor` 或 `FLOW_ACTOR` 声明非 user 时，get 返回 `user_only`，
+`raindown secrets list` 只输出路径；`raindown secrets get telegram/bot-token` 输出值。
+CLI 默认身份为 user；`--actor` 或 `RAINDOWN_ACTOR` 声明非 user 时，get 返回 `user_only`，
 即使同时传入 `--actor user` 也不能覆盖环境中的非 user 身份。secrets 是独立 CLI 命令，
 不注册为 operation，因此 MCP 没有对应工具。
 
@@ -41,7 +41,7 @@ core 的 `loadSecrets(home, options)` 返回 `Result<Map<string, string>>`，只
 
 CI 固定安装 sops 3.13.3、age 1.3.2，使用官方 Linux x64 release 并验证固定 SHA-256。
 本地找不到 sops 时用 `test.skipIf` 跳过真实测试并输出原因；注入执行器测试仍运行。
-CI 设置 `FLOW_REQUIRE_SOPS_TESTS=1`，未安装 sops 时直接失败，防止集成测试静默跳过。
+CI 设置 `RAINDOWN_REQUIRE_SOPS_TESTS=1`，未安装 sops 时直接失败，防止集成测试静默跳过。
 
 ## 中枢运行时解析与脱敏名单
 
@@ -52,7 +52,7 @@ CI 设置 `FLOW_REQUIRE_SOPS_TESTS=1`，未安装 sops 时直接失败，防止�
 - **引用**：扫描 `config/*.yaml`（不含 sops 文件）中**整个字符串**恰好为 `secret://<路径>` 的值；
   嵌在其他文本里的引用不解析。依赖密钥的功能调用 `resolve(配置)`，拿到替换后的配置和缺失的路径；
   有缺失时该功能不启动，中枢其余功能照常。
-- **缺失报告**：`flow hub status` 显示"已解析的密钥"个数、"缺少的密钥"（路径与所在文件），
+- **缺失报告**：`raindown hub status` 显示"已解析的密钥"个数、"缺少的密钥"（路径与所在文件），
   以及解密失败时的错误码（如 `sops_missing`）。解密失败时保留上一次成功的结果。
 - **脱敏名单**：每个解析出的值（以及多行值的每一行、`state/hub.token`）加入"值 → 路径"名单，
   长度小于 8 的值不入名单；密钥轮换后旧值仍保留在名单中直到中枢退出。替换为 `[secret:<路径>]`。

@@ -7,13 +7,13 @@ import {
   formatDoctorReport,
   runDoctor,
 } from '../src/doctor.ts'
-import { initFlowHome } from '../src/init.ts'
+import { initRaindownHome } from '../src/init.ts'
 import { doctorOptions } from './doctor-helpers.ts'
 import { tempHome, writeText } from './helpers.ts'
 
 async function setup(executors: string[] = ['codex-orca', 'claude-sdk', 'codex-exec']) {
-  const home = tempHome('flow-doctor-executors-')
-  const init = await initFlowHome(home)
+  const home = tempHome('raindown-doctor-executors-')
+  const init = await initRaindownHome(home)
   if (!init.ok) throw new Error(init.error.message)
   rmSync(join(home, 'config/roles'), { recursive: true })
   for (const executor of executors) {
@@ -26,7 +26,7 @@ async function setup(executors: string[] = ['codex-orca', 'claude-sdk', 'codex-e
 }
 
 async function report(home: string, overrides: DoctorOptions = {}): Promise<DoctorReport> {
-  const r = await runDoctor(home, 'FLOW_HOME', doctorOptions(home, overrides))
+  const r = await runDoctor(home, 'RAINDOWN_HOME', doctorOptions(home, overrides))
   return r.ok ? r.data : (r.error.details as DoctorReport)
 }
 const check = (r: DoctorReport, id: string) => {

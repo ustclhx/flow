@@ -15,7 +15,7 @@
 ### Requirement: 任务说明
 执行器 SHALL 把任务合同渲染成一份任务说明交给 Codex，包括：
 - 目标、角色提示词；
-- 上下文引用：brain 条目要内联其摘要，并给出 `flow kb get` 命令；
+- 上下文引用：brain 条目要内联其摘要，并给出 `raindown kb get` 命令；
 - 允许修改的范围、验收命令；
 - 完成标准：在分支上提交、推送并开 PR，不合并；
 - "遇到无法判断的问题时写明问题后停下"这条约定。
@@ -24,7 +24,7 @@
 
 #### Scenario: 任务说明带上下文
 - **WHEN** 合同的 context 中包含 `projects/product-res`
-- **THEN** 任务说明中包含该项目卡片的摘要，以及 `flow kb get projects/product-res`
+- **THEN** 任务说明中包含该项目卡片的摘要，以及 `raindown kb get projects/product-res`
 
 ### Requirement: 自动处理文件夹信任提示
 Codex 在新 worktree 中停在文件夹信任提示上时，如果该仓库属于已定义的 workspace，执行器 SHALL 自动确认，方法是只发送回车，然后继续监控；否则上报 `blocked(awaiting_approval)`。

@@ -16,7 +16,7 @@ import {
   type SupervisorConfig,
   type TaskRespondRequest,
   taskRespondOp,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   actOnInbox,
   createDelegationService,
@@ -99,7 +99,7 @@ async function setup(o: SetupOptions = {}) {
     ledger = t.store
   }
   const store = ledger
-  const root = mkdtempSync(join(tmpdir(), 'flow-delegation-'))
+  const root = mkdtempSync(join(tmpdir(), 'raindown-delegation-'))
   const repo = join(root, 'repo')
   mkdirSync(repo, { recursive: true })
   cleanups.push(() => rmSync(root, { recursive: true, force: true }))
@@ -1188,7 +1188,7 @@ describe('收件箱：委托期间不推送（inbox spec "委托给 supervisor �
     const channel = new MemoryChannel()
     const inbox = await startInbox({
       ledger: env.store,
-      home: join(mkdtempSync(join(tmpdir(), 'flow-delegation-inbox-')), 'home'),
+      home: join(mkdtempSync(join(tmpdir(), 'raindown-delegation-inbox-')), 'home'),
       clock: env.clock,
       watch: false,
       channels: [specOf(channel)],
@@ -1290,7 +1290,7 @@ describe('每日摘要列出 supervisor 代回复的内容', () => {
     const channel = new MemoryChannel()
     const inbox = await startInbox({
       ledger: env.store,
-      home: join(mkdtempSync(join(tmpdir(), 'flow-delegation-digest-')), 'home'),
+      home: join(mkdtempSync(join(tmpdir(), 'raindown-delegation-digest-')), 'home'),
       clock: env.clock,
       watch: false,
       channels: [specOf(channel)],
@@ -1392,10 +1392,10 @@ describe('HTTP 路由与操作（4.9）', () => {
       text: '选 A',
       reason: '范围内',
     }
-    // 冒用：user token + X-Flow-Actor: supervisor。
+    // 冒用：user token + X-Raindown-Actor: supervisor。
     const spoof = await post('/v1/supervisor/respond', body, {
       ...authHeaders,
-      'X-Flow-Actor': 'supervisor',
+      'X-Raindown-Actor': 'supervisor',
     })
     expect(spoof.status).toBe(403)
     expect(((await spoof.json()) as { error: { code: string } }).error.code).toBe('reserved_actor')
@@ -1458,7 +1458,7 @@ describe('推送：被挡住的条目不计入 Decide 提前推送阈值', () =>
     let holding = true
     const inbox = await startInbox({
       ledger: t.store,
-      home: join(mkdtempSync(join(tmpdir(), 'flow-delegation-held-')), 'home'),
+      home: join(mkdtempSync(join(tmpdir(), 'raindown-delegation-held-')), 'home'),
       clock,
       watch: false,
       channels: [specOf(channel)],
@@ -1484,7 +1484,7 @@ describe('纵深防御（审查后补充）', () => {
     const channel = new MemoryChannel()
     const inbox = await startInbox({
       ledger: env.store,
-      home: join(mkdtempSync(join(tmpdir(), 'flow-delegation-cancel-')), 'home'),
+      home: join(mkdtempSync(join(tmpdir(), 'raindown-delegation-cancel-')), 'home'),
       clock: env.clock,
       watch: false,
       channels: [specOf(channel)],

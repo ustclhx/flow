@@ -11,7 +11,7 @@ import {
   SUPERVISOR_ACTOR,
   USER_ACTOR,
   writeBrief,
-} from '@flow/core'
+} from '@raindown/core'
 import { type Context, Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import type { LedgerStore } from '../ledger/store.ts'

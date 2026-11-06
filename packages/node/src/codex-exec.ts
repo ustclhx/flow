@@ -16,7 +16,7 @@ import {
   type TaskCost,
   type TaskResult,
   type TaskResume,
-} from '@flow/core'
+} from '@raindown/core'
 import { z } from 'zod'
 import { type NodeClock, systemClock } from './clock.ts'
 import { prepareCodexHome, readCodexHome, workCodexHome } from './codex-home.ts'

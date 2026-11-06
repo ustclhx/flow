@@ -1,7 +1,7 @@
 # executor-claude-sdk Specification
 
 ## Purpose
-通过 Claude Agent SDK 无头运行 Claude Code，用于审查、分析这类不需要人一直盯着的任务，并让工具审批进入 Flow 的审批流程。
+通过 Claude Agent SDK 无头运行 Claude Code，用于审查、分析这类不需要人一直盯着的任务，并让工具审批进入 Raindown 的审批流程。
 
 ## Requirements
 
@@ -12,10 +12,10 @@
 - **WHEN** 一个 reviewer 任务的目标是审查某个 PR
 - **THEN** Claude 在该仓库目录中运行，账本中可以看到它的活动，结束时结果包含审查摘要
 
-### Requirement: 注入 Flow MCP
-执行器 SHALL 为每次运行注入 `flow` MCP 服务（`flow mcp --actor <角色名>`），使 worker 可以检索知识库、写 journal、提交提案，且受 AI 写入边界约束。
+### Requirement: 注入 Raindown MCP
+执行器 SHALL 为每次运行注入 `raindown` MCP 服务（`raindown mcp --actor <角色名>`），使 worker 可以检索知识库、写 journal、提交提案，且受 AI 写入边界约束。
 
-只有一份固定清单中的 flow 工具不经审批放行：`kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、`ws_brief`、`task_list`、`task_show`。其余 flow 工具 MUST 走工具审批，包括 `task_create`、`task_cancel` 和以后新增的工具。原因是 `task_create` 可以创建其他角色的任务（例如 `dev` 角色以 `danger-full-access` 运行），受限角色借此就能提权。
+只有一份固定清单中的 raindown 工具不经审批放行：`kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、`ws_brief`、`task_list`、`task_show`。其余 raindown 工具 MUST 走工具审批，包括 `task_create`、`task_cancel` 和以后新增的工具。原因是 `task_create` 可以创建其他角色的任务（例如 `dev` 角色以 `danger-full-access` 运行），受限角色借此就能提权。
 
 #### Scenario: worker 写 journal
 - **WHEN** reviewer 任务中的 Claude 调用 `kb_journal`
@@ -28,11 +28,11 @@
 ### Requirement: 设置来源与权限模式
 角色的 `permissions.setting_sources` SHALL 决定加载哪些 Claude Code 设置来源，默认 `['project']`。
 
-加载项目设置时，被操作仓库的 `.claude/settings.json` 会生效：其中的 hooks 会直接执行命令，`permissions.allow` 会在审批之前放行调用，从而绕过 Flow 的审批。因此：
+加载项目设置时，被操作仓库的 `.claude/settings.json` 会生效：其中的 hooks 会直接执行命令，`permissions.allow` 会在审批之前放行调用，从而绕过 Raindown 的审批。因此：
 - 审查他人仓库的 `reviewer` 默认角色 MUST 设为 `[]`；
 - `setting_sources` 不含 `project` 时，执行器 SHALL 把工作目录下 `CLAUDE.md`、`AGENTS.md` 的纯文本（限长、经脱敏）追加到系统提示词，保留项目约定，但不加载 hooks 和权限规则。
 
-权限模式默认 `default`，即所有未被允许列表放行的调用都进入 Flow 审批。`auto` 模式下，分类器有把握的调用不会进入审批，所以只在角色显式写出时使用；角色显式写出的 `auto`、`bypassPermissions` 照原样传递。
+权限模式默认 `default`，即所有未被允许列表放行的调用都进入 Raindown 审批。`auto` 模式下，分类器有把握的调用不会进入审批，所以只在角色显式写出时使用；角色显式写出的 `auto`、`bypassPermissions` 照原样传递。
 
 #### Scenario: 审查不受被审查仓库的设置影响
 - **WHEN** reviewer 任务的工作目录中有 `.claude/settings.json`（含 hooks 与 `permissions.allow`）和 `CLAUDE.md`
@@ -49,7 +49,7 @@
 
 #### Scenario: 禁止代码与越界写入
 - **WHEN** reviewer 请求修改 `src/main.ts`、`.git/report.md`、`../report.md`、指向 cwd 外的符号链接路径或使用 NotebookEdit
-- **THEN** 调用直接拒绝，即使 SDK 允许规则或 Flow 自动策略原本会放行
+- **THEN** 调用直接拒绝，即使 SDK 允许规则或 Raindown 自动策略原本会放行
 
 #### Scenario: 不可信 PR 诱导改写代理指令或执行配置
 - **WHEN** reviewer 请求写入任意层级的隐藏文件、CLAUDE.md 等代理指令文件或指向这些路径的符号链接

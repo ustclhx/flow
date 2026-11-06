@@ -3,14 +3,14 @@
 ## ADDED Requirements
 
 ### Requirement: 读边界 `read_scope`
-claude-sdk 角色 SHALL 支持权限字段 `read_scope: cwd`。设置后执行器 MUST 对所有工具调用检查路径类参数（含 `file_path`、`path`、`notebook_path`、Glob 的 `pattern`、Grep 的 `glob`），只允许合同工作目录与本任务私有目录内的路径，拒绝 `.` 开头的路径段、`..`、绝对路径模式与符号链接越界；带无法识别的路径类参数的非 MCP 工具一律拒绝；Flow MCP 工具不受影响。
+claude-sdk 角色 SHALL 支持权限字段 `read_scope: cwd`。设置后执行器 MUST 对所有工具调用检查路径类参数（含 `file_path`、`path`、`notebook_path`、Glob 的 `pattern`、Grep 的 `glob`），只允许合同工作目录与本任务私有目录内的路径，拒绝 `.` 开头的路径段、`..`、绝对路径模式与符号链接越界；带无法识别的路径类参数的非 MCP 工具一律拒绝；Raindown MCP 工具不受影响。
 
 #### Scenario: 用 Glob 越界
 - **WHEN** 会话调用 Glob，`pattern` 为 `/Users/x/.ssh/*`
 - **THEN** 调用被拒绝
 
 #### Scenario: 读取中枢 token
-- **WHEN** 设有 `read_scope: cwd` 的会话尝试 Read `~/flow-home/state/hub.token`
+- **WHEN** 设有 `read_scope: cwd` 的会话尝试 Read `~/raindown-home/state/hub.token`
 - **THEN** 调用被拒绝
 
 ### Requirement: 审查任务的准备与结构化输出
@@ -21,7 +21,7 @@ claude-sdk 角色 SHALL 支持权限字段 `read_scope: cwd`。设置后执行�
 - **THEN** `result.review.reviewed_sha` 为会话前记录的 head，`summary` 仍为可读文字
 
 ### Requirement: supervisor 会话绑定
-执行 `kind: supervisor` 角色的任务时，执行器 SHALL 以 `--actor supervisor --workspace <ws> --task <id>` 注入 Flow MCP，并设置 `FLOW_WORKSPACE`、`FLOW_TASK_ID`。
+执行 `kind: supervisor` 角色的任务时，执行器 SHALL 以 `--actor supervisor --workspace <ws> --task <id>` 注入 Raindown MCP，并设置 `RAINDOWN_WORKSPACE`、`RAINDOWN_TASK_ID`。
 
 #### Scenario: 注入参数
 - **WHEN** 节点运行 `ws/product-res` 的唤醒任务 `t-1`

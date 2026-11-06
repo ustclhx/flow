@@ -7,14 +7,14 @@ import {
   listTokensData,
   ok,
   revokeTokenData,
-} from '@flow/core'
+} from '@raindown/core'
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { userOnly } from './auth.ts'
 import type { HubTokenStore } from './tokens.ts'
 
-/** `flow hub token issue|list|revoke` 对应的路由；三个都只允许 user（design D9）。 */
+/** `raindown hub token issue|list|revoke` 对应的路由；三个都只允许 user（design D9）。 */
 export function createTokenRoutes(store: HubTokenStore): Hono {
   const app = new Hono()
   const guard = userOnly('管理中枢 token')

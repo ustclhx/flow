@@ -13,7 +13,7 @@ import {
   readBrainEntries,
   resolveInboxLevel,
   reviewDecision,
-} from '@flow/core'
+} from '@raindown/core'
 import type { EventInput } from '../ledger/store.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
 import { oneLine, type SupervisorToolsDeps } from './common.ts'

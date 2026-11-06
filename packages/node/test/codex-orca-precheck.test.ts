@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Activity, ok, type Result, taskContract } from '@flow/core'
+import { type Activity, ok, type Result, taskContract } from '@raindown/core'
 import { approvalForPrecheck, CODEX_ORCA_PRECHECK_TOOL } from '../src/codex-orca/classify.ts'
 import { createCodexOrcaExecutor } from '../src/codex-orca/executor.ts'
 import type { OrcaTerminalRead } from '../src/codex-orca/orca.ts'
@@ -34,7 +34,7 @@ afterEach(async () => {
 })
 
 const APPROVAL = tuiFixture('approval')
-const COMMAND = 'mkdir -p /tmp/flow-tui-probe-dir2'
+const COMMAND = 'mkdir -p /tmp/raindown-tui-probe-dir2'
 /** 改写 approval fixture 的末尾行。 */
 const approvalWith = (edit: (tail: string[]) => string[]): OrcaTerminalRead => ({
   ...APPROVAL,
@@ -159,7 +159,9 @@ describe('严格解析授权弹窗', () => {
     ],
     [
       '命令被截断',
-      approvalWith(replaceLine('$ mkdir -p /tmp/flow-tui-probe-dir2', '$ mkdir -p /tmp/flow…')),
+      approvalWith(
+        replaceLine('$ mkdir -p /tmp/raindown-tui-probe-dir2', '$ mkdir -p /tmp/raindown…'),
+      ),
     ],
     [
       '两行 $ 命令',
@@ -201,7 +203,7 @@ describe('codex-orca 监控循环中的预检', () => {
         tool: CODEX_ORCA_PRECHECK_TOOL,
         command: COMMAND,
         cwd: h?.worktree as string,
-        reason: '当前沙箱为只读，是否授权执行 mkdir -p /tmp/flow-tui-probe-dir2 创建目录？',
+        reason: '当前沙箱为只读，是否授权执行 mkdir -p /tmp/raindown-tui-probe-dir2 创建目录？',
       },
     ])
     expect(s.enters()).toHaveLength(1)

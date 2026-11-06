@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type Activity, ok, type Role, taskContract, taskResult } from '@flow/core'
+import { type Activity, ok, type Role, taskContract, taskResult } from '@raindown/core'
 import {
   type CodexExecOptions,
   createCodexExecExecutor,
@@ -41,7 +41,7 @@ afterEach(async () => {
 })
 
 function setup(body = 'send(resumed)', role: Partial<Role> = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'flow-codex-exec-'))
+  const dir = mkdtempSync(join(tmpdir(), 'raindown-codex-exec-'))
   dirs.push(dir)
   const script = join(dir, 'codex.cjs')
   const report = join(dir, 'argv.json')
@@ -55,7 +55,7 @@ const { spawn } = require('node:child_process')
 const question = ${JSON.stringify(question)}
 const resumed = ${JSON.stringify(resumed)}
 const args = process.argv.slice(2)
-fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ args, cwd: process.cwd(), token: process.env.FLOW_HUB_TOKEN, home: process.env.FLOW_HOME, actor: process.env.FLOW_ACTOR, codexHome: process.env.CODEX_HOME }))
+fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ args, cwd: process.cwd(), token: process.env.RAINDOWN_HUB_TOKEN, home: process.env.RAINDOWN_HOME, actor: process.env.RAINDOWN_ACTOR, codexHome: process.env.CODEX_HOME }))
 // 故意逐 7 字节输出，覆盖 UTF-8、多行和 JSON 跨 chunk；最后一行没有换行。
 const send = text => { const b = Buffer.from(text.trimEnd()); for (let i = 0; i < b.length; i += 7) fs.writeSync(1, b.subarray(i, i + 7)) }
 ${body}
@@ -68,7 +68,11 @@ ${body}
     nodeId: 'n-test',
     cwd: dir,
     signal: abort.signal,
-    env: { FLOW_HOME: home, FLOW_HUB_TOKEN: 'must-not-reach-worker', FLOW_ACTOR: 'user' },
+    env: {
+      RAINDOWN_HOME: home,
+      RAINDOWN_HUB_TOKEN: 'must-not-reach-worker',
+      RAINDOWN_ACTOR: 'user',
+    },
   }
   const contract = taskContract.parse({
     goal: '只读分诊',
@@ -151,9 +155,9 @@ describe('codex-exec 无头执行器', () => {
     expect(report.token).toBeUndefined()
     expect(report.actor).toBe('triage')
     expect(activities.some((a) => a.text?.includes('/bin/zsh -lc pwd'))).toBe(true)
-    expect(activities.some((a) => a.text?.includes('/Users/user/flow-codex-fixture/work'))).toBe(
-      true,
-    )
+    expect(
+      activities.some((a) => a.text?.includes('/Users/user/raindown-codex-fixture/work')),
+    ).toBe(true)
   })
 
   test.each(['-', '*', '1.'])('完成总结带 %s 列表时仍结束任务', async (marker) => {
@@ -456,7 +460,7 @@ describe('codex-exec 无头执行器', () => {
     expect(JSON.stringify(blocked)).not.toContain('super-secret-value')
   })
 
-  test('缺省解析 flow-home 的角色，未知角色不会启动进程', async () => {
+  test('缺省解析 raindown-home 的角色，未知角色不会启动进程', async () => {
     const s = setup()
     mkdirSync(join(s.home, 'config', 'roles'), { recursive: true })
     writeFileSync(

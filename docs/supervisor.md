@@ -11,15 +11,15 @@ PR 开出后安排只读审查，通过后请求合并；worker 中途卡住时�
 
 ## 1. 概念与开关
 
-- supervisor 是一个 `kind: supervisor` 的角色（`config/roles/supervisor.yaml`，`flow init` 生成），每次唤醒由**中枢**
+- supervisor 是一个 `kind: supervisor` 的角色（`config/roles/supervisor.yaml`，`raindown init` 生成），每次唤醒由**中枢**
   创建一个该角色的任务（执行器 claude-sdk）。全局只能有一个 `kind: supervisor` 角色，名字必须是 `supervisor`。
-- supervisor 角色必须是只读配置：只有 Read、Grep、Glob 和 Flow MCP，没有 Bash 与写文件工具，并设 `read_scope: cwd`
-  （只能读合同工作目录，读不到 `state/hub.token`、密钥与 `~/.ssh`）。配置被改成可写时 `flow doctor` 报错，中枢不唤醒。
+- supervisor 角色必须是只读配置：只有 Read、Grep、Glob 和 Raindown MCP，没有 Bash 与写文件工具，并设 `read_scope: cwd`
+  （只能读合同工作目录，读不到 `state/hub.token`、密钥与 `~/.ssh`）。配置被改成可写时 `raindown doctor` 报错，中枢不唤醒。
 - 它能产生的外部效果只有：建任务（受上限与策略约束）、提案、提问、请求合并、代回复。所有动作落账，可审计。
 
 ### workspace 配置（`config/workspaces/<id>.yaml` 的 `supervisor` 段）
 
-整段可省略，全部取默认值；写错（未知字段、类型不对）时该 workspace 照常加载，但 supervisor 视为未启用，`flow doctor` 报告问题。
+整段可省略，全部取默认值；写错（未知字段、类型不对）时该 workspace 照常加载，但 supervisor 视为未启用，`raindown doctor` 报告问题。
 
 ```yaml
 id: product-res
@@ -48,16 +48,16 @@ supervisor:
 
 `limits` 必须满足 `autonomous_wakes_per_day <= wakes_per_day`。违反这条约束、任一项超出取值范围或不是整数时，
 **整段 `supervisor` 配置都会被降级为未启用**（不只是 `limits` 回到默认值）：该 workspace 不唤醒、不代回复，
-`flow doctor` 给出指向文件与字段的 warning；改正后重跑 doctor 即恢复。
+`raindown doctor` 给出指向文件与字段的 warning；改正后重跑 doctor 即恢复。
 
 要点：
 
 - **默认已启用**：`enabled` 缺省为 `true`。升级后只要某个 workspace 有登记仓库、又存在 supervisor 角色，它就会被唤醒
   （升级步骤见第 12 节，想先观察请显式写 `enabled: false`）。
 - 唤醒任务以**登记仓库**为工作目录，没有登记仓库的 workspace 视为不可唤醒。
-- **`ws/global` 固定不启用** supervisor：不唤醒，也不代回复其中任务的卡住；`flow doctor` 显示"global 不启用 supervisor"。
+- **`ws/global` 固定不启用** supervisor：不唤醒，也不代回复其中任务的卡住；`raindown doctor` 显示"global 不启用 supervisor"。
 - 是否代回复 = `enabled && delegate_replies`。
-- `flow doctor` 会逐个 workspace 显示 supervisor 设置（启用与否、是否缺仓库）。
+- `raindown doctor` 会逐个 workspace 显示 supervisor 设置（启用与否、是否缺仓库）。
 
 ### 节点预留槽（`config/node.yaml`）
 
@@ -75,7 +75,7 @@ reserved:
 
 | 事件 | origin |
 | --- | --- |
-| 你的指令（`flow ask`、`flow supervisor wake`、Telegram `/ask`） | `instruction` |
+| 你的指令（`raindown ask`、`raindown supervisor wake`、Telegram `/ask`） | `instruction` |
 | 巡检定时规则触发（`payload.kind: supervisor_patrol`）、决策回看到期 | `autonomous` |
 | supervisor 派生的任务 `done` / `failed` / `cancelled`，或卡住原因为 `crashed`、`node_lost`、`no_progress`、`other` | 继承该任务的 origin |
 | 你回答了 supervisor 的提问 | 提问所在唤醒的 origin |
@@ -143,7 +143,7 @@ supervisor **不能**：回复任务（`task_reply`）、接受或驳回提案�
   worker 就能经提问内容影响它。回答原文只出现在你可见的每日摘要里。
 - reply 唤醒不写笔记，也不写 journal。
 
-你也可以自己改笔记：`flow brief update`（user 同样走中枢）。
+你也可以自己改笔记：`raindown brief update`（user 同样走中枢）。
 
 ## 5. 提问、任务提案与决策回看
 
@@ -153,7 +153,7 @@ supervisor **不能**：回复任务（`task_reply`）、接受或驳回提案�
 
 **任务提案** `task_propose`：autonomous 唤醒不能直接建写类任务，只能提案。条目展示角色、执行器、仓库与 cwd、验收命令、目标全文；
 你**接受**后，中枢以 user 身份建任务（origin 为 instruction），**驳回**则唤醒 supervisor 知道结果。
-- Web 页面可以先改目标再接受；Web 页面目前**只能在本机访问**（`flow ui`），Telegram 消息里不附链接，只注明"Web 页面仅本机可用"。
+- Web 页面可以先改目标再接受；Web 页面目前**只能在本机访问**（`raindown ui`），Telegram 消息里不附链接，只注明"Web 页面仅本机可用"。
   手机访问 Web 是后续任务（tasks 4.10）。
 - 验收命令不会因为"你点了接受"而绕过判定：接受时 `verify` 仍按第 3 节第 6 步逐条判定，不通过则接受失败（`verify_not_allowed`），条目保持打开；
   提交提案时也先预判，注定建不出来的提案直接拒绝。
@@ -206,7 +206,7 @@ PR 为 open、base 是默认分支、不是 fork、head 分支等于任务分支
 
 ## 7. 巡检
 
-巡检就是一条定时规则触发的 autonomous 唤醒。`flow init` 会在 `config/schedules.yaml` **不存在时**生成一份只有注释的示例
+巡检就是一条定时规则触发的 autonomous 唤醒。`raindown init` 会在 `config/schedules.yaml` **不存在时**生成一份只有注释的示例
 （已有文件不覆盖），默认不启用任何巡检。要巡检的 workspace 各写一条（取消注释、把 `<id>` 换成实际 id）：
 
 ```yaml
@@ -219,8 +219,8 @@ PR 为 open、base 是默认分支、不是 fork、head 分支等于任务分支
     kind: supervisor_patrol      # 必须是这个值，才会唤醒 supervisor
 ```
 
-规则 id 不能以 `inbox:` 开头；写错的规则只会被跳过，`flow hub status` 报告。改完重启中枢生效。
-启用了 supervisor（有登记仓库、存在 supervisor 角色）却没有巡检规则的 workspace，`flow doctor` 会给一条 info。
+规则 id 不能以 `inbox:` 开头；写错的规则只会被跳过，`raindown hub status` 报告。改完重启中枢生效。
+启用了 supervisor（有登记仓库、存在 supervisor 角色）却没有巡检规则的 workspace，`raindown doctor` 会给一条 info。
 autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普通唤醒上限。
 
 巡检唤醒做什么，分两类：
@@ -240,7 +240,7 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
   2. 生成一条 Digest 级、没有任何动作的收件箱条目 `patrol.<唤醒任务 id>`，**不推送**；
   3. 下一份每日摘要的"supervisor 巡检日报"一节列出它（每份最多展示 600 字符，全文在 journal 与条目里），随后条目以 `digested` 关闭。
 
-  supervisor 没调用 `patrol_report`（例如模型没照提示词做），这一天的摘要里就没有日报；这不会报错，可在 `flow task show <唤醒任务>` 看它做了什么。
+  supervisor 没调用 `patrol_report`（例如模型没照提示词做），这一天的摘要里就没有日报；这不会报错，可在 `raindown task show <唤醒任务>` 看它做了什么。
 - **花费汇总**：见第 9 节。
 
 ## 8. 代回复：卡住时由 supervisor 替你回
@@ -257,13 +257,13 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 **策略档位 `supervisor`**：你在 `policies.yaml` 里写 `level: supervisor` 的规则，表示"这类请求先问 supervisor"，不是直接放行。
 合并次序为 `notify > user > draft-approve > supervisor > auto-report > auto`。要点：
 
-- 受保护的动作（`shell.opaque`、`pr.merge`、`deploy`、`secrets`、`policy.edit`、`config.edit`、`flow.admin`、`task.respond` 等）
+- 受保护的动作（`shell.opaque`、`pr.merge`、`deploy`、`secrets`、`policy.edit`、`config.edit`、`raindown.admin`、`task.respond` 等）
   命中 `supervisor` 规则也会被提升为 `draft-approve`，**永不委托**；
 - 受保护的工具（`tool:CodexCommand`、`tool:mcp__*` 等）只有"具体 scope + 精确 action"的规则才能判为 `supervisor`，不要写 `scope: *`；
 - `command_prefix` 按原始词严格匹配：`pnpm test --x` 命中，`pnpm test:e2e`、`sudo pnpm test`、`./pnpm test`、`FOO=1 pnpm test`、
   `pnpm test > f`、`pnpm test $X` 都不命中，只允许独立的 `2>&1`；串联命令每段都须满足。
 
-**白名单模板**（`flow init` 生成在 `policies.yaml` 里，**默认全部注释掉**，按 workspace 启用）：
+**白名单模板**（`raindown init` 生成在 `policies.yaml` 里，**默认全部注释掉**，按 workspace 启用）：
 
 - `tool:CodexCommand` 与 `tool:Bash` 下的 `pnpm check`、`pnpm test`、`pnpm lint` 前缀；
 - 带 `gh_scope: workspace_repo` 的 `pr.create`、`gh pr view`、`gh pr diff`（不带 `-R`、无环境变量前缀，节点核对 gh 解析出的仓库；
@@ -276,7 +276,7 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 现阶段实际能委托的是 `pnpm check|test|lint` 这类命令前缀规则（以及 `question`）。
 
 **怎么回复**：reply 唤醒只能调用 `task_respond{task_id, block_seq, decision, text?, reason}`
-（CLI：`flow supervisor respond`）：`approve` / `deny` 用于授权请求，`answer`（必须带 `text`，≤2000 字符）用于提问，`escalate`
+（CLI：`raindown supervisor respond`）：`approve` / `deny` 用于授权请求，`answer`（必须带 `text`，≤2000 字符）用于提问，`escalate`
 两者都可，转交给你。批准会被节点在送达前**重新读取待批请求并复查环境**，与判定时不一致就拒收并改交给你。
 
 **转交与竞态**：下列情况委托结束，条目按原级别推送给你：
@@ -307,11 +307,11 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 ## 9. 费用
 
 每次唤醒是一次 Opus 级别的 claude-sdk 会话；代回复唤醒、巡检、审查任务也各自是会话。claude-sdk 执行器在结果里记录
-`result.cost.usd`（SDK 给出的**估算值，不是账单**），Flow 据此汇总 supervisor 的花费：
+`result.cost.usd`（SDK 给出的**估算值，不是账单**），Raindown 据此汇总 supervisor 的花费：
 
 - **每日摘要**的"supervisor 花费（估算）"一节：昨天**结束**的唤醒任务（含 reply 唤醒；按结束时间归日，每个唤醒恰好计入一份摘要）按 workspace 列出次数、代回复次数、金额，
   以及没有上报费用的次数（例如被取消的唤醒）；
-- **`flow supervisor status`** 的"今日花费（估算）"：今天（中枢时区）结束的唤醒任务的金额与次数（`--json` 中 `today.cost_usd` 保留 6 位小数）。
+- **`raindown supervisor status`** 的"今日花费（估算）"：今天（中枢时区）结束的唤醒任务的金额与次数（`--json` 中 `today.cost_usd` 保留 6 位小数）。
 
 只统计唤醒任务本身；supervisor 建的 dev、审查等任务不计入，未结束的唤醒也不计入。实际账单以 Anthropic 控制台为准。
 控制费用的手段：
@@ -324,35 +324,35 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
 ## 10. 命令
 
 ```sh
-flow ask product-res "给登录页加上忘记密码链接"       # 下指令；输出唤醒任务 id 或"已排队"
-flow supervisor wake product-res [<说明>]               # 手动唤醒（有说明则等同指令）
-flow supervisor wake product-res --release instruction  # 放行暂停 / 达到上限的队列（instruction | autonomous）
-flow supervisor status [product-res]                    # 当前唤醒、各队列长度、暂停状态、今日次数与花费、最近一次结果
+raindown ask product-res "给登录页加上忘记密码链接"       # 下指令；输出唤醒任务 id 或"已排队"
+raindown supervisor wake product-res [<说明>]               # 手动唤醒（有说明则等同指令）
+raindown supervisor wake product-res --release instruction  # 放行暂停 / 达到上限的队列（instruction | autonomous）
+raindown supervisor status [product-res]                    # 当前唤醒、各队列长度、暂停状态、今日次数与花费、最近一次结果
 ```
 
 - workspace 写 `product-res` 或 `ws/product-res` 都可以。以上命令都**只有 user** 能用，AI 身份返回 `user_only`。
-- 不可唤醒（未启用、没有角色、没有登记仓库）时 `flow ask` 会告知"未启用"，指令不会被积压。
+- 不可唤醒（未启用、没有角色、没有登记仓库）时 `raindown ask` 会告知"未启用"，指令不会被积压。
 - `--release` 只作用于放行当时队列里已有的事件；它立刻用这些事件唤醒一次，**不计入每日上限**，不能与说明同时给出。
 - Telegram：`/ask <workspace> <内容>`，回复唤醒编号、排队说明或"未启用"。转发来的消息和 inline bot 发出的消息会被拒绝。
-- supervisor 自己用的命令（`flow supervisor ask-user | propose | merge-request | respond | review-decision | patrol-report`、`flow brief update`）
+- supervisor 自己用的命令（`raindown supervisor ask-user | propose | merge-request | respond | review-decision | patrol-report`、`raindown brief update`）
   在你的终端里没有意义，需要唤醒绑定 token。
 
 ## 11. 故障排查
 
-先运行 `flow doctor`（在节点实际使用的环境里），再看 `flow supervisor status`。
+先运行 `raindown doctor`（在节点实际使用的环境里），再看 `raindown supervisor status`。
 
 | 现象 / 提示 | 含义与处理 |
 | --- | --- |
 | doctor：`<ws> supervisor：未启用` | `enabled: false`，或 supervisor 段写错被降级（同时有一条指向文件与字段的 warning，改正后重跑） |
 | doctor：`启用了 supervisor 但没有登记仓库` | 在 workspace 的 `repos` 登记仓库，或设 `enabled: false` |
-| doctor：supervisor 角色问题（多个、可写、名字不符） | 只保留一个只读的 `kind: supervisor` 角色；可写时参照 `flow init` 生成的 `supervisor.yaml` 收紧 |
+| doctor：supervisor 角色问题（多个、可写、名字不符） | 只保留一个只读的 `kind: supervisor` 角色；可写时参照 `raindown init` 生成的 `supervisor.yaml` 收紧 |
 | doctor：`dev.yaml` 的 `creatable_by` 不包含 supervisor | supervisor 建不出 dev 任务，按提示片段补上 |
 | doctor（info）：`启用了 supervisor 但没有巡检规则` | 只是提示：不需要每日巡检可以忽略；需要时按第 7 节在 `schedules.yaml` 取消注释示例 |
-| 每日摘要里没有巡检日报 | 确认规则的 `payload.kind` 是 `supervisor_patrol` 且当天有巡检唤醒（`flow supervisor status`）；日报靠 supervisor 调用 `patrol_report`，没调用就没有 |
+| 每日摘要里没有巡检日报 | 确认规则的 `payload.kind` 是 `supervisor_patrol` 且当天有巡检唤醒（`raindown supervisor status`）；日报靠 supervisor 调用 `patrol_report`，没调用就没有 |
 | doctor：角色有效类别 | 显示每个角色是 read / write / merge / supervisor；声明只能收紧，推断更严格时以推断为准 |
 | `/ask` 回"未启用" | 同上三类原因之一 |
 | 事件没处理、队列为空 | 不可唤醒期间中枢会写 `supervisor.queue_dropped{queue, up_to_seq, reason}` 并清掉该队列的积压（原因 `disabled`、`global`、`no_repo`、`no_role`、`unknown_workspace` 立即丢；配置暂时有错的 `role_invalid`、`workspaces_invalid` 先保留并重试，持续 24 小时才丢）。重新启用后**不会**带出旧事件，需要重新下指令 |
-| Interrupt："今日唤醒已达上限，<队列> 的事件在等待" | 触到 `wakes_per_day` / `autonomous_wakes_per_day`；等明天，或 `flow supervisor wake <ws> --release <队列>` 放行一次，或调大上限 |
+| Interrupt："今日唤醒已达上限，<队列> 的事件在等待" | 触到 `wakes_per_day` / `autonomous_wakes_per_day`；等明天，或 `raindown supervisor wake <ws> --release <队列>` 放行一次，或调大上限 |
 | Interrupt："supervisor 唤醒连续失败，<队列> 已暂停" | 普通唤醒重试后仍失败；看唤醒任务的失败原因修好后 `--release`，或等自动恢复（1 小时起，翻倍，最长 24 小时） |
 | Interrupt："supervisor 唤醒无法创建" | 角色或配置临时不可读，已按 30 秒起翻倍退避重试 3 次；每天每 workspace 一条 |
 | Interrupt："超过 24 小时无法唤醒，已丢弃积压的事件" | 配置错误持续超过 24 小时；修好配置后重新下指令 |
@@ -363,15 +363,15 @@ flow supervisor status [product-res]                    # 当前唤醒、各队�
 | 卡住总是直接来到我的收件箱 | 没启用 `level: supervisor` 规则、命中的是受保护动作、不在委托范围（第 8 节），或 `delegate_replies: false`；`push` 与 `pr.create` 目前本来就不委托 |
 | 委托后很久才转交 | 默认 `reply_timeout_s` 是 600 秒；supervisor 回复已写入但节点长期不 ack 时，条目会一直被挡住，直到任务离开这次卡住（送达、租约过期或你取消） |
 
-## 12. 升级步骤（已有 flow-home）
+## 12. 升级步骤（已有 raindown-home）
 
 假设你已经有运行中的中枢与节点。按顺序做：
 
-1. **更新代码并补齐模板**：拉取最新 main 后运行 `flow init`。它只补齐缺失文件、**不覆盖已有文件**，
+1. **更新代码并补齐模板**：拉取最新 main 后运行 `raindown init`。它只补齐缺失文件、**不覆盖已有文件**，
    会新增 `config/roles/supervisor.yaml`、`supervisor.md`、`pr-reviewer.yaml`、`pr-reviewer.md`、`merger.yaml`、`merger.md`，
    并在**尚不存在**时生成带注释模板的 `policies.yaml` 与只有注释巡检示例的 `schedules.yaml`。已有的 `policies.yaml` 不会被改动，需要的模板请从
-   `packages/core/src/templates.ts` 的 `POLICIES_YAML` 或新建 flow-home 里的文件复制。
-2. **手动改 `config/roles/dev.yaml`**：加上 supervisor 才能创建 dev 任务（`flow init` 不会改已有文件，`flow doctor` 会提示缺失）：
+   `packages/core/src/templates.ts` 的 `POLICIES_YAML` 或新建 raindown-home 里的文件复制。
+2. **手动改 `config/roles/dev.yaml`**：加上 supervisor 才能创建 dev 任务（`raindown init` 不会改已有文件，`raindown doctor` 会提示缺失）：
 
    ```yaml
    creatable_by:
@@ -391,21 +391,21 @@ flow supervisor status [product-res]                    # 当前唤醒、各队�
    - 可选：代回复白名单（第 8 节）。**先升级所有节点，再写带 `push_to` / `gh_scope` 的规则**，旧节点不认识这些条件。
 4. **按需调整 workspace**：在 `config/workspaces/<id>.yaml` 增加 `supervisor` 段（第 1 节）。想先观察就写 `enabled: false`。
    要自动合并再写 `auto_merge: true`，建议先在 `false` 下完整跑过几次。
-5. **补上提示词里的巡检段**：`flow init` 不覆盖已有的 `config/roles/supervisor.md`，所以升级前就有这个文件的 home
+5. **补上提示词里的巡检段**：`raindown init` 不覆盖已有的 `config/roles/supervisor.md`，所以升级前就有这个文件的 home
    拿不到新增的"巡检"一段（读简报 → 检查 → `patrol_report` 提交日报 → 只能提案 → 更新简报），supervisor 也就不会调用 `patrol_report`。
    请把新模板中以"巡检（inputs.wake.events 中有 type 为 schedule.fired"开头的一段复制进你的 `supervisor.md`。新模板可在
    `packages/core/src/role-templates.ts` 的 `DEFAULT_ROLE_FILES['supervisor.md']` 查看；也可以在临时目录里初始化一个新 home 后查看：
-   `export FLOW_HOME=$(mktemp -d)/home && flow init`，打开 `$FLOW_HOME/config/roles/supervisor.md`，看完 `unset FLOW_HOME`
+   `export RAINDOWN_HOME=$(mktemp -d)/home && raindown init`，打开 `$RAINDOWN_HOME/config/roles/supervisor.md`，看完 `unset RAINDOWN_HOME`
    （别在这个终端里继续操作真实的 home）。
-6. **按需启用巡检**：在 `config/schedules.yaml` 取消注释巡检示例（第 7 节）；已有 `schedules.yaml` 时 `flow init` 不改它，照第 7 节手动加规则。
+6. **按需启用巡检**：在 `config/schedules.yaml` 取消注释巡检示例（第 7 节）；已有 `schedules.yaml` 时 `raindown init` 不改它，照第 7 节手动加规则。
 7. **重启，先中枢后节点**：
-   - 用 launchd 常驻（**前提是之前执行过 `flow daemon install`**）：`launchctl kickstart -k gui/$(id -u)/dev.flow.hub`，
-     再 `launchctl kickstart -k gui/$(id -u)/dev.flow.node`（或重新运行 `flow daemon install`）；
-   - 没有用 launchd 常驻、在前台运行的：先停掉并重新运行 `flow hub start`，再停掉并重新运行 `flow node start`。
+   - 用 launchd 常驻（**前提是之前执行过 `raindown daemon install`**）：`launchctl kickstart -k gui/$(id -u)/dev.raindown.hub`，
+     再 `launchctl kickstart -k gui/$(id -u)/dev.raindown.node`（或重新运行 `raindown daemon install`）；
+   - 没有用 launchd 常驻、在前台运行的：先停掉并重新运行 `raindown hub start`，再停掉并重新运行 `raindown node start`。
 
    新旧节点协议兼容；`node.yaml` 的 `reserved` 要等所有节点升级后才能写（见 [daemon.md](daemon.md)）。
-8. **检查**：`flow doctor` 应没有 supervisor 相关的 fail；`flow supervisor status` 应列出各 workspace 的启用状态；
-   用 `flow ask <ws> "说明一下当前状态"` 做一次冒烟。
+8. **检查**：`raindown doctor` 应没有 supervisor 相关的 fail；`raindown supervisor status` 应列出各 workspace 的启用状态；
+   用 `raindown ask <ws> "说明一下当前状态"` 做一次冒烟。
 
 **回滚**：把对应 workspace 的 `supervisor.enabled` 设为 `false`（或删除 supervisor 角色）即停止唤醒与代回复；已建的任务不受影响，
 已排队的事件会被清掉。需要回到旧版本二进制时，先删掉 `node.yaml` 的 `reserved` 与 `policies.yaml` 中带 `push_to` / `gh_scope` / `level: supervisor` 的规则。

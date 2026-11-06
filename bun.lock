@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "flow",
+      "name": "raindown",
       "devDependencies": {
         "@biomejs/biome": "^2.2.0",
         "@types/bun": "latest",
@@ -11,16 +11,17 @@
       },
     },
     "packages/cli": {
-      "name": "@flow/cli",
+      "name": "@raindown/cli",
       "version": "0.0.0",
       "bin": {
-        "flow": "./src/main.ts",
+        "raindown": "./src/main.ts",
+        "flow": "./src/flow.ts",
       },
       "dependencies": {
-        "@flow/core": "workspace:*",
-        "@flow/hub": "workspace:*",
-        "@flow/mcp": "workspace:*",
-        "@flow/node": "workspace:*",
+        "@raindown/core": "workspace:*",
+        "@raindown/hub": "workspace:*",
+        "@raindown/mcp": "workspace:*",
+        "@raindown/node": "workspace:*",
         "zod": "^4.6.7",
       },
       "devDependencies": {
@@ -28,7 +29,7 @@
       },
     },
     "packages/core": {
-      "name": "@flow/core",
+      "name": "@raindown/core",
       "version": "0.0.0",
       "dependencies": {
         "yaml": "^2.9.1",
@@ -36,11 +37,11 @@
       },
     },
     "packages/hub": {
-      "name": "@flow/hub",
+      "name": "@raindown/hub",
       "version": "0.0.0",
       "dependencies": {
-        "@flow/core": "workspace:*",
         "@hono/node-server": "^2.1.5",
+        "@raindown/core": "workspace:*",
         "croner": "^10.0.1",
         "hono": "^4.13.13",
         "yaml": "^2.9.1",
@@ -48,11 +49,11 @@
       },
     },
     "packages/mcp": {
-      "name": "@flow/mcp",
+      "name": "@raindown/mcp",
       "version": "0.0.0",
       "dependencies": {
-        "@flow/core": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.32.2",
+        "@raindown/core": "workspace:*",
         "zod": "^4.6.7",
       },
       "devDependencies": {
@@ -60,15 +61,15 @@
       },
     },
     "packages/node": {
-      "name": "@flow/node",
+      "name": "@raindown/node",
       "version": "0.0.0",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.310",
-        "@flow/core": "workspace:*",
+        "@raindown/core": "workspace:*",
         "zod": "^4.6.7",
       },
       "devDependencies": {
-        "@flow/hub": "workspace:*",
+        "@raindown/hub": "workspace:*",
       },
     },
   },
@@ -117,21 +118,21 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.6.2", "", { "os": "win32", "cpu": "x64" }, "sha512-FVlWD+mDDz8nN5LWKRWUhhb7wKIK0VE3oXQvQBX7Fwwj00CvqMVhMyiz1iz8O5aZGmnkhFlKSwJPrUvMh5prQw=="],
 
-    "@flow/cli": ["@flow/cli@workspace:packages/cli"],
-
-    "@flow/core": ["@flow/core@workspace:packages/core"],
-
-    "@flow/hub": ["@flow/hub@workspace:packages/hub"],
-
-    "@flow/mcp": ["@flow/mcp@workspace:packages/mcp"],
-
-    "@flow/node": ["@flow/node@workspace:packages/node"],
-
     "@hono/node-server": ["@hono/node-server@2.1.5", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q=="],
 
     "@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.32.2", "", { "dependencies": { "@hono/node-server": "^1.19.9 || ^2.0.5", "ajv": "^8.17.1", "ajv-formats": "^3.0.1", "content-type": "^1.0.5", "cors": "^2.8.5", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "express": "^5.2.1", "express-rate-limit": "^8.2.1", "hono": "^4.11.4", "jose": "^6.1.3", "json-schema-typed": "^8.0.2", "pkce-challenge": "^5.0.0", "raw-body": "^3.0.0", "zod": "^3.25 || ^4.0", "zod-to-json-schema": "^3.25.1" }, "peerDependencies": { "@cfworker/json-schema": "^4.1.1" }, "optionalPeers": ["@cfworker/json-schema"] }, "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.10.0", "", {}, "sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ=="],
+
+    "@raindown/cli": ["@raindown/cli@workspace:packages/cli"],
+
+    "@raindown/core": ["@raindown/core@workspace:packages/core"],
+
+    "@raindown/hub": ["@raindown/hub@workspace:packages/hub"],
+
+    "@raindown/mcp": ["@raindown/mcp@workspace:packages/mcp"],
+
+    "@raindown/node": ["@raindown/node@workspace:packages/node"],
 
     "@stablelib/base64": ["@stablelib/base64@1.0.1", "", {}, "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ=="],
 

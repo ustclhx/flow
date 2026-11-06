@@ -15,11 +15,11 @@ import {
   SUPERVISOR_ACTOR,
   type TaskContract,
   type TaskResult,
-} from '@flow/core'
+} from '@raindown/core'
 import { z } from 'zod'
 import { type NodeClock, sleep, systemClock } from '../clock.ts'
 import { prepareCodexHome, workCodexHome } from '../codex-home.ts'
-import { CHILD_ENV_DENYLIST, executorRoleEnv } from '../env.ts'
+import { CHILD_ENV_DENYLIST, dualRaindownEnv, executorRoleEnv } from '../env.ts'
 import {
   ActivityQueue,
   type DeliverResult,
@@ -94,7 +94,7 @@ export interface CodexOrcaLogger {
 }
 
 export interface CodexOrcaOptions {
-  /** flow-home：读取 workspace、角色、brain，写 `state/tasks/<id>/`。 */
+  /** raindown-home：读取 workspace、角色、brain，写 `state/tasks/<id>/`。 */
   home: string
   clock?: NodeClock
   orca?: OrcaCli
@@ -192,6 +192,7 @@ export function buildCodexCommand(input: {
   codexHome: string
   worktreePath: string
   specPath: string
+  task?: { id: string; workspace: string; home: string }
   role: Pick<Role, 'name' | 'model' | 'effort' | 'permissions'>
 }): Result<string> {
   if (input.codexBin.includes('=')) {
@@ -219,9 +220,24 @@ export function buildCodexCommand(input: {
     if (p.sandbox) argv.push('-s', p.sandbox)
   }
   const cmd = argv.map(quote).join(' ')
+  const taskEnv = input.task
+    ? dualRaindownEnv({
+        RAINDOWN_TASK_ID: input.task.id,
+        RAINDOWN_WORKSPACE: input.task.workspace,
+        RAINDOWN_HOME: input.task.home,
+      })
+    : {}
+  const assignments = Object.entries({
+    ...taskEnv,
+    RAINDOWN_ACTOR: env.data.RAINDOWN_ACTOR,
+    FLOW_ACTOR: env.data.FLOW_ACTOR,
+    CODEX_HOME: input.codexHome,
+  })
+    .map(([key, value]) => quote(`${key}=${value}`))
+    .join(' ')
   const unset = CHILD_ENV_DENYLIST.flatMap((key) => ['-u', quote(key)]).join(' ')
   return ok(
-    `cd ${quote(input.worktreePath)} && exec env ${unset} ${quote(`FLOW_ACTOR=${env.data.FLOW_ACTOR}`)} ${quote(`CODEX_HOME=${input.codexHome}`)} ${cmd} "$(cat ${quote(input.specPath)})"`,
+    `cd ${quote(input.worktreePath)} && exec env ${unset} ${assignments} ${cmd} "$(cat ${quote(input.specPath)})"`,
   )
 }
 
@@ -757,7 +773,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             // 新终端启动时的信任提示（仓库已确认属于 workspace）：只发回车确认（发 "1" 会被拒绝）。
             // Codex 0.166 实测：确认信任会在同一进程加载项目 .codex/config.toml 和 rules，
             // linked worktree 也可继承主仓库信任。CODEX_HOME 只隔离用户层，不能隔离项目层；
-            // 项目规则仍可绕过 Flow 审批，需后续独立约束，不能把自动确认当作纯 UI 操作。
+            // 项目规则仍可绕过 Raindown 审批，需后续独立约束，不能把自动确认当作纯 UI 操作。
             trustSent++
             const s = await send({ handle, enter: true })
             // 信任提示只会出现一次：成功确认过一次就关闭自动确认，只有发送失败时才重试。
@@ -845,7 +861,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             name: ctx.taskId,
             baseBranch: base,
             setup: 'run',
-            comment: `flow 任务 ${ctx.taskId}`,
+            comment: `raindown 任务 ${ctx.taskId}`,
           })
           if (finished || stopping) return
           if (!wt.ok)
@@ -918,10 +934,11 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             codexHome: isolated.data,
             worktreePath: st.worktree_path,
             specPath,
+            task: { id: ctx.taskId, workspace: contract.workspace, home: options.home },
             role,
           })
           if (!cmd.ok) return failed(cmd.error.code, cmd.error.message)
-          const title = `flow ${ctx.taskId}`
+          const title = `raindown ${ctx.taskId}`
           const term = await orca.terminalCreate({
             worktreePath: st.worktree_path,
             command: cmd.data,

@@ -3,7 +3,7 @@ import { SUPERVISOR_ACTOR } from './roles.ts'
 /**
  * 默认角色（② design D3、D5、D9；④ design D9、D10、D14）。只由 init 在文件缺失时写入，不覆盖已有文件。
  * `creatable_by`：dev 为 `[supervisor]`（除 user 外只有 supervisor 能建，AI 与节点不能借 dev 提权）；
- * reviewer、triage 为 `*`（任何非 user 身份都可以创建，例如 claude-sdk 执行器经 `flow mcp --actor reviewer`
+ * reviewer、triage 为 `*`（任何非 user 身份都可以创建，例如 claude-sdk 执行器经 `raindown mcp --actor reviewer`
  * 拆子任务）；pr-reviewer 为 `[supervisor]`（PR 验收链由 supervisor 发起）；supervisor 与 merger 不写
  * （`kind: supervisor` 只能由 hub 建，`kind: merge` 只能由 hub 与 user 建，由中枢按类别判定）。
  */
@@ -74,10 +74,10 @@ permissions:
   sandbox: read-only
 `,
   'supervisor.yaml': `# 每个 workspace 的 AI 主管（design D14）。只能有一个 kind: supervisor 角色，任务只由中枢创建。
-# 只有读文件工具与 Flow MCP；read_scope: cwd 把读取限制在合同工作目录与任务私有目录内。
+# 只有读文件工具与 Raindown MCP；read_scope: cwd 把读取限制在合同工作目录与任务私有目录内。
 # 有效类别必须推断为只读：setting_sources 必须是 []，disallowedTools 必须列出 Bash、Edit、Write、MultiEdit、NotebookEdit，
 # 否则 doctor 报错、中枢不唤醒 supervisor。
-# allowedTools 不列 Flow MCP：只读与笔记类 flow 工具由执行器自动放行，task_create 等仍走策略审批。
+# allowedTools 不列 Raindown MCP：只读与笔记类 raindown 工具由执行器自动放行，task_create 等仍走策略审批。
 name: ${SUPERVISOR_ACTOR}
 kind: supervisor
 executor: claude-sdk

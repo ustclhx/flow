@@ -6,7 +6,7 @@ import {
   supervisorStatusQuery,
   supervisorWakeData,
   supervisorWakeRequest,
-} from '@flow/core'
+} from '@raindown/core'
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
@@ -14,8 +14,8 @@ import { userOnly } from '../server/auth.ts'
 import type { WakeScheduler } from './scheduler.ts'
 
 /**
- * supervisor 唤醒的用户接口（add-m1-supervisor D2、D3；tasks 3.4）：`flow ask`、`flow supervisor wake`、
- * `flow supervisor status`。全部只接受 user 身份：AI、节点与唤醒 token 一律 `user_only`，
+ * supervisor 唤醒的用户接口（add-m1-supervisor D2、D3；tasks 3.4）：`raindown ask`、`raindown supervisor wake`、
+ * `raindown supervisor status`。全部只接受 user 身份：AI、节点与唤醒 token 一律 `user_only`，
  * `user.instruction` 与 `supervisor.release` 因此只由用户写入（store 另有身份白名单兜底）。
  */
 export function createSupervisorRoutes(deps: { scheduler: () => WakeScheduler | undefined }): Hono {

@@ -1,12 +1,12 @@
 import { renderEntryFieldDocs } from './schema/index.ts'
 
 /**
- * `flow init` 写入的模板文件。内容是确定性的（不含时间戳），且不包含任何密钥，
+ * `raindown init` 写入的模板文件。内容是确定性的（不含时间戳），且不包含任何密钥，
  * 因此初始化提交可以安全地跳过提交前钩子。
  */
 
 /** 各仓库的 gitleaks 配置：在默认规则之上放行 `secret://` 引用（design D7）。 */
-export const GITLEAKS_TOML = `# 由 flow init 生成。在 gitleaks 默认规则之上，放行 secret:// 引用。
+export const GITLEAKS_TOML = `# 由 raindown init 生成。在 gitleaks 默认规则之上，放行 secret:// 引用。
 # 公开 token 被误报时，可在下方 regexes 中按需逐条加入允许项。
 [extend]
 useDefault = true
@@ -20,7 +20,7 @@ regexes = ['''secret://[A-Za-z0-9._/-]+''']
 /** 仅放行 sops 元数据中的加密 MAC，不放行整个文件或任何明文业务字段。 */
 export const SOPS_ALLOWLIST = `
 [[allowlists]]
-description = "flow: sops 加密 MAC 元数据"
+description = "raindown: sops 加密 MAC 元数据"
 regexTarget = "line"
 regexes = ['''^\\s*mac: ENC\\[AES256_GCM,.*\\]$''']
 `
@@ -28,15 +28,15 @@ regexes = ['''^\\s*mac: ENC\\[AES256_GCM,.*\\]$''']
 export const CONFIG_GITLEAKS_TOML =
   GITLEAKS_TOML.replace('[allowlist]', '[[allowlists]]') + SOPS_ALLOWLIST
 
-/** 钩子中用于识别 Flow 管理的标记，`flow doctor` 据此检查钩子是否就位。 */
-export const HOOK_MARKER = 'flow-managed: gitleaks pre-commit'
+/** 钩子中用于识别 Raindown 管理的标记，`raindown doctor` 据此检查钩子是否就位。 */
+export const HOOK_MARKER = 'raindown-managed: gitleaks pre-commit'
 
 /** 提交前钩子：用 gitleaks 扫描暂存区，脱敏输出，发现疑似密钥时阻止提交（secret-hygiene）。 */
 export const PRE_COMMIT_HOOK = `#!/bin/sh
 # ${HOOK_MARKER}
-# 由 flow init 生成：提交前扫描暂存内容中的密钥。
+# 由 raindown init 生成：提交前扫描暂存内容中的密钥。
 if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "flow: 未找到 gitleaks，提交已阻止。安装：brew install gitleaks" >&2
+  echo "raindown: 未找到 gitleaks，提交已阻止。安装：brew install gitleaks" >&2
   exit 1
 fi
 exec gitleaks git --pre-commit --staged --redact --no-banner --verbose .
@@ -45,16 +45,16 @@ exec gitleaks git --pre-commit --staged --redact --no-banner --verbose .
 export function brainAgentsMd(): string {
   return `# brain 知识库约定
 
-> 由 \`flow init\` 生成。本文件说明 brain 中知识条目的写法，供人和各 AI harness 共同遵守。
-> 修改本文件不会被 Flow 覆盖。
+> 由 \`raindown init\` 生成。本文件说明 brain 中知识条目的写法，供人和各 AI harness 共同遵守。
+> 修改本文件不会被 Raindown 覆盖。
 
 ## 分层（LLM-Wiki 式）
 
 - \`raw/\`：原始资料，**只追加**。随手记写入 \`raw/inbox/\`，已有文件不得修改。
-- \`brain/\`：由 Flow 维护的结构化知识。每个条目是一个带 YAML frontmatter 的 Markdown 文件，
+- \`brain/\`：由 Raindown 维护的结构化知识。每个条目是一个带 YAML frontmatter 的 Markdown 文件，
   条目标识是相对 \`brain/\` 的路径（不含 \`.md\`），例如 \`resources/domains/arcanumber.com\`。
-- \`brain/index.md\`：按类型分组的条目索引，由 Flow 自动重新生成，**不要手动编辑**。
-- \`brain/log.md\`：变更日志，每次 Flow 写入追加一行，**已有行不得修改**。
+- \`brain/index.md\`：按类型分组的条目索引，由 Raindown 自动重新生成，**不要手动编辑**。
+- \`brain/log.md\`：变更日志，每次 Raindown 写入追加一行，**已有行不得修改**。
   行格式：\`YYYY-MM-DD <操作> <操作者> <简述>\`，操作为
   \`journal\`、\`capture\`、\`propose\`、\`apply\`、\`reject\`、\`owner-change\`、\`sync\` 之一。
 - \`brain/journal/\`：按天分文件的工作日志（\`journal/YYYY-MM-DD.md\`），不是条目。
@@ -64,7 +64,7 @@ export function brainAgentsMd(): string {
 - **journal、随手记**：任何操作者都可以直接追加。
 - **事实修改**（新增或修改条目）：AI 通过修改提案提交，由用户确认后合入。
 - **decision 与 \`scope: personal\` 的条目**：AI 不得直接写入。
-- 所有 Flow 写入都会先做密钥扫描，再提交到 git；提交作者为 \`Flow (<操作者>)\`。
+- 所有 Raindown 写入都会先做密钥扫描，再提交到 git；提交作者为 \`Raindown (<操作者>)\`。
 
 ## 出处规则
 
@@ -80,7 +80,7 @@ export function brainAgentsMd(): string {
 
 - 资源条目必须有唯一的 \`owner\`，值为 \`config/workspaces/\` 中定义的 workspace（\`ws/<id>\`），
   或隐式存在的 \`ws/global\`。职能（\`kind: function\`）workspace 不能拥有资源。
-- 归属只能通过 \`flow resource transfer\` 或经确认的修改提案更改。
+- 归属只能通过 \`raindown resource transfer\` 或经确认的修改提案更改。
 
 ## 密钥
 
@@ -88,26 +88,26 @@ export function brainAgentsMd(): string {
 
 ## 条目类型与字段
 
-日期一律写作 \`YYYY-MM-DD\`。以下字段说明由 Flow 的 schema 生成。
+日期一律写作 \`YYYY-MM-DD\`。以下字段说明由 Raindown 的 schema 生成。
 
 ${renderEntryFieldDocs()}
 
 ## 校验
 
-运行 \`flow kb validate\` 检查全部条目；\`flow doctor\` 检查 flow-home 是否完整。
+运行 \`raindown kb validate\` 检查全部条目；\`raindown doctor\` 检查 raindown-home 是否完整。
 `
 }
 
 export const BRAIN_INDEX_MD = `# 索引
 
-> 由 Flow 自动生成，请勿手动编辑。
+> 由 Raindown 自动生成，请勿手动编辑。
 
 （暂无条目）
 `
 
 export const BRAIN_LOG_MD = `# 变更日志
 
-> 由 Flow 追加，已有行不得修改。格式：\`YYYY-MM-DD <操作> <操作者> <简述>\`
+> 由 Raindown 追加，已有行不得修改。格式：\`YYYY-MM-DD <操作> <操作者> <简述>\`
 
 `
 
@@ -115,7 +115,7 @@ export const BRAIN_LOG_MD = `# 变更日志
  * `config/policies.yaml` 的初始内容：规则全部注释掉，未配置的动作一律交给用户。
  * 以 `# ` 开头的行是可直接取消注释的规则，`## ` 开头的行是说明（测试据此逐条验证模板）。
  */
-export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语法与判定规则见 packages/core/src/policy/README.md。
+export const POLICIES_YAML = `## 由 raindown init 生成。策略规则数组，语法与判定规则见 packages/core/src/policy/README.md。
 ## 未被规则覆盖的动作一律交给用户。以下模板默认全部注释掉：按 workspace 取消注释，
 ## 并把 ws/<id> 换成实际的 workspace id。
 ##
@@ -223,8 +223,8 @@ export const POLICIES_YAML = `## 由 flow init 生成。策略规则数组，语
  * `config/schedules.yaml` 的初始内容（add-m1-supervisor D13）：只有注释掉的巡检示例，默认不启用任何巡检。
  * 以 `# ` 开头的行是可直接取消注释的规则，`## ` 开头的行是说明（测试据此验证取消注释后是合法规则）。
  */
-export const SCHEDULES_YAML = `## 由 flow init 生成。定时规则数组：触发时中枢写 schedule.fired（字段见 packages/core/src/daemon/schedules.ts）。
-## 默认不启用任何规则。规则 id 不能以 inbox: 开头；写错的规则只会被跳过，flow hub status 会报告。
+export const SCHEDULES_YAML = `## 由 raindown init 生成。定时规则数组：触发时中枢写 schedule.fired（字段见 packages/core/src/daemon/schedules.ts）。
+## 默认不启用任何规则。规则 id 不能以 inbox: 开头；写错的规则只会被跳过，raindown hub status 会报告。
 ##
 ## —— supervisor 巡检（add-m1-supervisor D13）——
 ## payload.kind: supervisor_patrol 的规则触发时唤醒该 workspace 的 supervisor（origin autonomous，

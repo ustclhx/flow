@@ -1,4 +1,4 @@
-import type { InboxAction, InboxLevel } from '@flow/core'
+import type { InboxAction, InboxLevel } from '@raindown/core'
 import type { ChannelMessage, OutboundItem } from '../types.ts'
 import type { InlineButton, ReplyMarkup } from './api.ts'
 
@@ -149,7 +149,7 @@ function renderItem(item: OutboundItem, scale: number, r: Redact): string {
   // 任务提案可在 Web 上修改目标后接受（D11）。Web 页面只接受本机访问，从手机打开需要对外暴露，
   // 留给用户决定（design Open Questions），这里只提示到电脑上操作。
   if (item.state === 'open' && item.source === 'task_proposal') {
-    lines.push('<i>要修改目标后再接受：Web 页面仅本机可用（在电脑上运行 flow ui）</i>')
+    lines.push('<i>要修改目标后再接受：Web 页面仅本机可用（在电脑上运行 raindown ui）</i>')
   }
   if (item.state === 'open' && item.actions.includes('reply')) {
     lines.push(

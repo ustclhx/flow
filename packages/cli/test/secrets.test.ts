@@ -3,29 +3,32 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { execCommand, initFlowHome, ok } from '@flow/core'
+import { execCommand, initRaindownHome, ok } from '@raindown/core'
 import { connect } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { createSecretsCommands, readSecretValue } from '../src/commands/secrets.ts'
 import { runCli } from '../src/run.ts'
 
 const roots: string[] = []
-const savedActor = process.env.FLOW_ACTOR
+const savedActor = process.env.RAINDOWN_ACTOR
+const savedLegacyActor = process.env.FLOW_ACTOR
 afterEach(async () => {
-  if (savedActor === undefined) delete process.env.FLOW_ACTOR
-  else process.env.FLOW_ACTOR = savedActor
+  if (savedActor === undefined) delete process.env.RAINDOWN_ACTOR
+  else process.env.RAINDOWN_ACTOR = savedActor
+  if (savedLegacyActor === undefined) delete process.env.FLOW_ACTOR
+  else process.env.FLOW_ACTOR = savedLegacyActor
   await Promise.all(roots.splice(0).map((p) => rm(p, { recursive: true, force: true })))
 })
 async function setup() {
-  const root = await mkdtemp(join(tmpdir(), 'flow-secrets-cli-'))
+  const root = await mkdtemp(join(tmpdir(), 'raindown-secrets-cli-'))
   roots.push(root)
   const home = join(root, 'home')
-  expect((await initFlowHome(home)).ok).toBe(true)
+  expect((await initRaindownHome(home)).ok).toBe(true)
   return { home, ageKeyFile: join(root, 'age/keys.txt') }
 }
 
-describe('flow secrets', () => {
-  test('AI 读取被拒绝：--actor、FLOW_ACTOR、显式 --actor user 都不能覆盖非用户身份', async () => {
+describe('raindown secrets', () => {
+  test('AI 读取被拒绝：--actor、RAINDOWN_ACTOR、显式 --actor user 都不能覆盖非用户身份', async () => {
     const { home, ageKeyFile } = await setup()
     let called = false
     const secretCommands = createSecretsCommands({
@@ -36,14 +39,14 @@ describe('flow secrets', () => {
         throw new Error('不应解密')
       },
     })
-    delete process.env.FLOW_ACTOR
+    delete process.env.RAINDOWN_ACTOR
     const denied = await runCli(
       ['secrets', 'get', 'telegram/bot-token', '--actor', 'codex', '--json'],
       secretCommands,
     )
     expect(JSON.parse(denied.stdout)).toMatchObject({ ok: false, error: { code: 'user_only' } })
     expect(denied.exitCode).toBe(1)
-    process.env.FLOW_ACTOR = 'codex'
+    process.env.RAINDOWN_ACTOR = 'codex'
     for (const args of [[], ['--actor', 'user']]) {
       const out = await runCli(
         ['secrets', 'get', 'telegram/bot-token', ...args, '--json'],
@@ -147,7 +150,7 @@ const hasSops = (await execCommand('sops', ['--version'])).code === 0
 if (!hasSops) console.info('跳过 CLI 真实 sops 测试：PATH 中未找到 sops')
 
 test.skipIf(!hasSops)('CLI 真实 sops：初始化提示、stdin set、list 不含值、user get', async () => {
-  delete process.env.FLOW_ACTOR
+  delete process.env.RAINDOWN_ACTOR
   const { home, ageKeyFile } = await setup()
   const value = 'test-value-not-a-secret-0001'
   const input = new PassThrough()
@@ -170,3 +173,31 @@ test.skipIf(!hasSops)('CLI 真实 sops：初始化提示、stdin set、list 不�
   )
   console.info('CLI 真实 sops 集成通过：init/set/list/get、默认 user 与无明文列表')
 })
+
+test.each(['RAINDOWN_ACTOR', 'FLOW_ACTOR'] as const)(
+  '%s 必须严格为 user，否则 secrets get 被拒绝',
+  async (actorVariable) => {
+    const secretCommands = createSecretsCommands()
+    const command = secretCommands.find((command) => command.name === 'secrets get')
+    for (const otherActor of [undefined, 'user']) {
+      const otherVariable = actorVariable === 'RAINDOWN_ACTOR' ? 'FLOW_ACTOR' : 'RAINDOWN_ACTOR'
+      if (otherActor === undefined) delete process.env[otherVariable]
+      else process.env[otherVariable] = otherActor
+      for (const value of ['supervisor', '', ' user', 'user ']) {
+        process.env[actorVariable] = value
+        const result = await command?.run({
+          args: ['telegram/bot-token'],
+          options: {},
+          actor: 'user',
+        })
+        expect(result).toMatchObject({ ok: false, error: { code: 'user_only' } })
+        const out = await runCli(
+          ['secrets', 'get', 'telegram/bot-token', '--actor', 'user', '--json'],
+          secretCommands,
+        )
+        expect(out.exitCode).toBe(1)
+        expect(JSON.parse(out.stdout).error.code).toBe('user_only')
+      }
+    }
+  },
+)

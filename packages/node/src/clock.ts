@@ -1,5 +1,5 @@
 /**
- * 节点用的时钟（与中枢的 HubClock 同形，节点包不依赖 @flow/hub）。
+ * 节点用的时钟（与中枢的 HubClock 同形，节点包不依赖 @raindown/hub）。
  * 测试注入可控时钟；fake 执行器的延时也走它。
  */
 export interface NodeClock {

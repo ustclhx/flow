@@ -29,7 +29,7 @@ import {
   type VerifyStep,
   type VerifyVerdict,
   type Workspace,
-} from '@flow/core'
+} from '@raindown/core'
 import type { EventInput, LedgerStore } from './store.ts'
 import {
   chainDepth,
@@ -56,7 +56,7 @@ import {
 /** workspace 是否存在。中枢里用 `workspaceCheckFromHome`，测试可注入任意函数。 */
 export type WorkspaceCheck = (ref: string) => boolean | Promise<boolean>
 
-/** 基于 flow-home 的 `config/workspaces/` 检查（每次调用都重新读取，配置改动无需重启）。 */
+/** 基于 raindown-home 的 `config/workspaces/` 检查（每次调用都重新读取，配置改动无需重启）。 */
 export function workspaceCheckFromHome(home: string): WorkspaceCheck {
   return async (ref) => {
     const loaded = await loadWorkspaces(home)
@@ -70,7 +70,7 @@ export type WorkspaceInfo = Pick<Workspace, 'ref' | 'repos' | 'supervisor'>
 /** 按 ref 查 workspace：未定义时为 null。 */
 export type WorkspaceLookup = (ref: string) => Promise<WorkspaceInfo | null>
 
-/** 基于 flow-home 的 `config/workspaces/`（每次调用都重新读取）。 */
+/** 基于 raindown-home 的 `config/workspaces/`（每次调用都重新读取）。 */
 export function workspaceLookupFromHome(home: string): WorkspaceLookup {
   return async (ref) => {
     const loaded = await loadWorkspaces(home)
@@ -87,7 +87,7 @@ export type RoleLookup = (
 ) => Promise<Result<(Pick<Role, 'name' | 'creatable_by'> & RoleForKind) | null>>
 
 /**
- * 基于 flow-home 的 `config/roles/`（复用 core 的 loadRoles）：与 workspaceCheckFromHome 一样每次调用都重新读取，
+ * 基于 raindown-home 的 `config/roles/`（复用 core 的 loadRoles）：与 workspaceCheckFromHome 一样每次调用都重新读取，
  * 修改 `creatable_by` 后下一次创建请求即生效，无需重启中枢。
  */
 export function roleLookupFromHome(home: string): RoleLookup {
@@ -97,7 +97,7 @@ export function roleLookupFromHome(home: string): RoleLookup {
       return fail(
         'failure',
         'unknown_role',
-        `角色 ${name} 未定义或加载失败，运行 flow doctor 查看`,
+        `角色 ${name} 未定义或加载失败，运行 raindown doctor 查看`,
         {
           field: 'role',
           role: name,
@@ -347,7 +347,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           return fail(
             'failure',
             'unknown_role',
-            `角色 ${contract.role} 未定义或加载失败，运行 flow doctor 查看`,
+            `角色 ${contract.role} 未定义或加载失败，运行 raindown doctor 查看`,
             {
               field: 'role',
               role: contract.role,
@@ -370,7 +370,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         return fail(
           'failure',
           'role_not_allowed',
-          `supervisor 唤醒任务只能由中枢创建；要手动唤醒请用 flow supervisor wake <ws> [<说明>]`,
+          `supervisor 唤醒任务只能由中枢创建；要手动唤醒请用 raindown supervisor wake <ws> [<说明>]`,
           { field: 'role', role: contract.role, actor: opts.actor },
         )
       }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { errorBody, flowPaths } from '@flow/core'
+import { errorBody, raindownPaths } from '@raindown/core'
 import { Hono } from 'hono'
 import { createHubApp, ensureHubToken } from '../src/index.ts'
 import { authHeaders, testToken } from './server-fixtures.ts'
@@ -10,13 +10,13 @@ import { authHeaders, testToken } from './server-fixtures.ts'
 let home: string
 let previousHome: string | undefined
 beforeEach(async () => {
-  home = await mkdtemp(join(tmpdir(), 'flow-hub-auth-'))
-  previousHome = process.env.FLOW_HOME
-  process.env.FLOW_HOME = home
+  home = await mkdtemp(join(tmpdir(), 'raindown-hub-auth-'))
+  previousHome = process.env.RAINDOWN_HOME
+  process.env.RAINDOWN_HOME = home
 })
 afterEach(async () => {
-  if (previousHome === undefined) delete process.env.FLOW_HOME
-  else process.env.FLOW_HOME = previousHome
+  if (previousHome === undefined) delete process.env.RAINDOWN_HOME
+  else process.env.RAINDOWN_HOME = previousHome
   await rm(home, { recursive: true, force: true })
 })
 
@@ -28,7 +28,7 @@ test('token：32 字节随机值、0600、并发初始化后复用已有 token',
     return result.data
   })
   expect(new Set(tokens).size).toBe(1)
-  const path = flowPaths(home).hubToken
+  const path = raindownPaths(home).hubToken
   expect((await stat(path)).mode & 0o777).toBe(0o600)
   const otherHome = await mkdtemp(join(home, 'other-'))
   const other = await ensureHubToken(otherHome)
@@ -60,6 +60,33 @@ describe('认证与操作者', () => {
     expect((await app().request('/v1/not-found')).status).toBe(401)
     expect((await app().request('/v1/not-found', { headers: authHeaders })).status).toBe(404)
   })
+  test('新旧 actor 头共用身份验证，值冲突返回 400', async () => {
+    for (const actorHeaders of [
+      { 'X-Flow-Actor': 'agent:codex' },
+      { 'X-Flow-Actor': 'agent:codex', 'X-Raindown-Actor': 'agent:codex' },
+    ]) {
+      const response = await app().request('/v1/tasks', {
+        headers: { ...authHeaders, ...actorHeaders },
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ actor: 'agent:codex' })
+    }
+    for (const actorHeaders of [
+      { 'X-Flow-Actor': 'bad actor' },
+      { 'X-Flow-Actor': 'agent:codex', 'X-Raindown-Actor': 'user' },
+    ]) {
+      const response = await app().request('/v1/tasks', {
+        headers: { ...authHeaders, ...actorHeaders },
+      })
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ error: { code: 'invalid_arguments' } })
+    }
+    const reserved = await app().request('/v1/tasks', {
+      headers: { ...authHeaders, 'X-Flow-Actor': 'supervisor' },
+    })
+    expect(reserved.status).toBe(403)
+  })
+
   test('子应用能读取 actor：user token 缺省为 user，可降级声明；不合法 actor 被拒绝', async () => {
     expect(await (await app().request('/v1/tasks', { headers: authHeaders })).json()).toEqual({
       actor: 'user',
@@ -67,14 +94,14 @@ describe('认证与操作者', () => {
     expect(
       await (
         await app().request('/v1/tasks', {
-          headers: { ...authHeaders, 'X-Flow-Actor': 'agent:codex' },
+          headers: { ...authHeaders, 'X-Raindown-Actor': 'agent:codex' },
         })
       ).json(),
     ).toEqual({ actor: 'agent:codex' })
     expect(
       (
         await app().request('/v1/tasks', {
-          headers: { ...authHeaders, 'X-Flow-Actor': 'bad actor' },
+          headers: { ...authHeaders, 'X-Raindown-Actor': 'bad actor' },
         })
       ).status,
     ).toBe(400)

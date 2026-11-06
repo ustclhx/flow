@@ -1,7 +1,7 @@
 import { existsSync, type FSWatcher, watch } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { flowPaths, loadSecrets, type Result, secretPathSchema } from '@flow/core'
+import { loadSecrets, type Result, raindownPaths, secretPathSchema } from '@raindown/core'
 import { parse } from 'yaml'
 import type { HubLogger } from '../server/maintenance.ts'
 import { SecretRedactor } from './redactor.ts'
@@ -12,7 +12,7 @@ import { SecretRedactor } from './redactor.ts'
  * - 启动时和 `config/` 下的 YAML 变化时，用 sops 解密 `secrets.sops.yaml`（`loadSecrets`），
  *   结果只放在内存，并加入脱敏名单；
  * - 扫描 `config/*.yaml` 中所有 `secret://<路径>` 引用，路径不存在的记为缺失，
- *   由 `flow hub status` 报告；
+ *   由 `raindown hub status` 报告；
  * - 依赖密钥的功能（例如 Telegram 渠道）调用 `resolve(配置)`：返回替换后的配置和缺失的路径，
  *   有缺失时该功能不启动，中枢其余功能照常；
  * - 解密失败（sops 不可用等）时保留上一次成功的结果，并在状态中报告错误码。
@@ -106,7 +106,7 @@ const isConfigYaml = (name: string) =>
   !SKIP_FILES.has(name) && !name.startsWith('.') && /\.ya?ml$/.test(name)
 
 async function scanRefs(home: string): Promise<MissingSecret[]> {
-  const dir = flowPaths(home).config
+  const dir = raindownPaths(home).config
   let names: string[]
   try {
     names = (await readdir(dir)).filter(isConfigYaml).sort()
@@ -140,7 +140,7 @@ export function createHubSecrets(o: HubSecretsOptions): HubSecrets {
   async function doReload(): Promise<SecretsStatus> {
     const refs = await scanRefs(o.home)
     let error: string | null = null
-    const initialized = existsSync(join(flowPaths(o.home).config, 'secrets.sops.yaml'))
+    const initialized = existsSync(join(raindownPaths(o.home).config, 'secrets.sops.yaml'))
     if (initialized) {
       const loaded = await load(o.home)
       if (loaded.ok) {
@@ -177,7 +177,7 @@ export function createHubSecrets(o: HubSecretsOptions): HubSecrets {
     watch() {
       if (watcher || closed) return () => {}
       try {
-        watcher = watch(flowPaths(o.home).config, (_event, name) => {
+        watcher = watch(raindownPaths(o.home).config, (_event, name) => {
           if (closed || (name && !/\.ya?ml$/.test(String(name)))) return
           if (timer) clearTimeout(timer)
           timer = setTimeout(() => {

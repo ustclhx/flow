@@ -2,12 +2,12 @@ import {
   fail,
   formatUsd,
   HubClient,
-  resolveFlowHome,
+  resolveRaindownHome,
   SUPERVISOR_QUEUES,
   type SupervisorStatusData,
   type SupervisorWakeData,
   type WakeSummary,
-} from '@flow/core'
+} from '@raindown/core'
 import { defineCommand } from '../command.ts'
 
 /**
@@ -26,7 +26,7 @@ const wakeLine = (w: WakeSummary) =>
 const humanWake = (d: SupervisorWakeData) =>
   d.state === 'started' && d.wake ? `已唤醒 supervisor：${wakeLine(d.wake)}` : d.message
 
-/** `flow ask <ws> <说明>`：下达指令（写 `user.instruction`，via cli），输出唤醒任务 id 或排队说明。 */
+/** `raindown ask <ws> <说明>`：下达指令（写 `user.instruction`，via cli），输出唤醒任务 id 或排队说明。 */
 export const askCommand = defineCommand<SupervisorWakeData>({
   name: 'ask',
   usage: 'ask <workspace> <说明>',
@@ -34,14 +34,14 @@ export const askCommand = defineCommand<SupervisorWakeData>({
   run: async ({ args, actor }) => {
     const [ws, ...rest] = args
     const text = rest.join(' ').trim()
-    if (!ws || !text) return usage('用法：flow ask <workspace> <说明>')
-    const home = resolveFlowHome(process.env)
+    if (!ws || !text) return usage('用法：raindown ask <workspace> <说明>')
+    const home = resolveRaindownHome(process.env)
     return new HubClient({ home, actor }).supervisorWake({ workspace: wsRef(ws), text, via: 'cli' })
   },
   human: humanWake,
 })
 
-/** `flow supervisor wake <ws> [<说明>] [--release <instruction|autonomous>]`。 */
+/** `raindown supervisor wake <ws> [<说明>] [--release <instruction|autonomous>]`。 */
 export const supervisorWakeCommand = defineCommand<SupervisorWakeData>({
   name: 'supervisor wake',
   usage: 'supervisor wake <workspace> [<说明>] [--release <instruction|autonomous>]',
@@ -55,7 +55,7 @@ export const supervisorWakeCommand = defineCommand<SupervisorWakeData>({
   },
   run: async ({ args, options, actor }) => {
     const [ws, ...rest] = args
-    if (!ws) return usage('用法：flow supervisor wake <workspace> [<说明>] [--release <queue>]')
+    if (!ws) return usage('用法：raindown supervisor wake <workspace> [<说明>] [--release <queue>]')
     const text = rest.join(' ').trim()
     const release = options.release
     if (release !== undefined) {
@@ -67,7 +67,7 @@ export const supervisorWakeCommand = defineCommand<SupervisorWakeData>({
       }
       if (text) return usage('--release 不能与说明同时给出')
     }
-    const home = resolveFlowHome(process.env)
+    const home = resolveRaindownHome(process.env)
     return new HubClient({ home, actor }).supervisorWake({
       workspace: wsRef(ws),
       ...(text ? { text } : {}),
@@ -78,13 +78,13 @@ export const supervisorWakeCommand = defineCommand<SupervisorWakeData>({
   human: humanWake,
 })
 
-/** `flow supervisor status [<ws>]`：当前唤醒、各队列长度、今日唤醒次数与最近一次结果。 */
+/** `raindown supervisor status [<ws>]`：当前唤醒、各队列长度、今日唤醒次数与最近一次结果。 */
 export const supervisorStatusCommand = defineCommand<SupervisorStatusData>({
   name: 'supervisor status',
   usage: 'supervisor status [<workspace>]',
   summary: '查看 supervisor 的当前唤醒、队列、今日次数与最近一次结果（仅 user）',
   run: async ({ args, actor }) => {
-    const home = resolveFlowHome(process.env)
+    const home = resolveRaindownHome(process.env)
     const ws = args[0]
     return new HubClient({ home, actor }).supervisorStatus(ws ? { workspace: wsRef(ws) } : {})
   },

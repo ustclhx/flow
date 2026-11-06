@@ -18,7 +18,7 @@ import {
   type VerifyStep,
   type WakeOrigin,
   writeEntry,
-} from '@flow/core'
+} from '@raindown/core'
 import { initTempHome, isolateHub } from '../../core/test/helpers.ts'
 import {
   acceptTaskProposal,
@@ -96,9 +96,9 @@ const roles: RoleLookup = async (name) => {
 const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? 'ok' : r.error?.code)
 
 async function setup(o: { supervisorActive?: (ws: string) => Promise<boolean> } = {}) {
-  const home = await initTempHome('flow-sv-tools-')
+  const home = await initTempHome('raindown-sv-tools-')
   const restore = isolateHub(home)
-  const repo = mkdtempSync(join(tmpdir(), 'flow-sv-repo-'))
+  const repo = mkdtempSync(join(tmpdir(), 'raindown-sv-repo-'))
   const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
   const l = await tempLedger({ now: clock.now })
   const wakeTokens = createWakeTokenAuthority({ ledger: () => l.store, now: clock.now })
@@ -245,7 +245,7 @@ async function setup(o: { supervisorActive?: (ws: string) => Promise<boolean> } 
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
-        ...(actor ? { 'X-Flow-Actor': actor } : {}),
+        ...(actor ? { 'X-Raindown-Actor': actor } : {}),
       },
       body: JSON.stringify(body),
     })
@@ -769,8 +769,8 @@ describe('Web 与渠道的呈现', () => {
     })
     const { data } = (await issued.json()) as { data: { login_path: string } }
     const login = await ui.request(data.login_path, { headers: { Host: HOST } })
-    const cookie = /flow_ui_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1]
-    const headers = { Host: HOST, Cookie: `flow_ui_session=${cookie}` }
+    const cookie = /raindown_ui_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1]
+    const headers = { Host: HOST, Cookie: `raindown_ui_session=${cookie}` }
     const html = await (await ui.request('/ui/items', { headers })).text()
     expect(html).toContain('data-option="甲"')
     expect(html).toContain('data-goal')

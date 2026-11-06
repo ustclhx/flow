@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type Activity, flowPaths, LEDGER_ID_RE, taskContract } from '@flow/core'
+import { type Activity, LEDGER_ID_RE, raindownPaths, taskContract } from '@raindown/core'
 import {
   createExecutorRegistry,
   createFakeExecutor,
@@ -128,12 +128,12 @@ describe('节点 id', () => {
   test('由主机名派生且符合 id 格式；首次生成后持久化', async () => {
     expect(generateNodeId('Hxlee-MacBook.local', () => 'abc123')).toBe('n-hxlee-macbook-abc123')
     expect(generateNodeId('!!!', () => '000000')).toBe('n-node-000000')
-    const home = join(mkdtempSync(join(tmpdir(), 'flow-node-id-')), 'home')
+    const home = join(mkdtempSync(join(tmpdir(), 'raindown-node-id-')), 'home')
     const first = await loadOrCreateNodeId(home, 'host')
     const second = await loadOrCreateNodeId(home, 'other')
     expect(first.ok && LEDGER_ID_RE.test(first.data)).toBe(true)
     expect(second).toEqual(first)
-    expect(readFileSync(flowPaths(home).nodeId, 'utf8').trim()).toBe(first.ok ? first.data : '')
+    expect(readFileSync(raindownPaths(home).nodeId, 'utf8').trim()).toBe(first.ok ? first.data : '')
   })
 })
 

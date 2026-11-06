@@ -21,9 +21,9 @@ afterEach(() => {
 })
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'flow-codex-home-'))
+  const root = mkdtempSync(join(tmpdir(), 'raindown-codex-home-'))
   dirs.push(root)
-  const home = join(root, 'flow-home')
+  const home = join(root, 'raindown-home')
   const source = join(root, 'auth-source')
   mkdirSync(source)
   writeFileSync(join(source, 'auth.json'), '{"placeholder":true}')
@@ -32,7 +32,7 @@ function setup() {
   return { root, home, source, isolated }
 }
 
-describe('Flow 管理的 Codex 目录', () => {
+describe('Raindown 管理的 Codex 目录', () => {
   test('读写目录固定且不同，重建配置与扩展不影响会话和用户源目录', async () => {
     const s = setup()
     const sourceConfig = join(s.source, 'config.toml')

@@ -82,7 +82,7 @@ describe('决策条目', () => {
   })
 
   test('user 写入后 hub 经 reviewDecision 回看', async () => {
-    const home = await initTempHome('flow-decision-')
+    const home = await initTempHome('raindown-decision-')
     const content = renderDecision({
       title: '缓存 TTL',
       expected_outcome: '命中率 90%',

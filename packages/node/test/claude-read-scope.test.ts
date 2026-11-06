@@ -7,7 +7,7 @@ import {
   GREP_HIDDEN_EXCLUDE,
   globPatternAllowed,
   grepGlobWithHiddenExclude,
-  isFlowMcp,
+  isRaindownMcp,
   type ReadScopeCall,
   type ReadScopeContext,
   stripHiddenExclude,
@@ -22,11 +22,11 @@ let privateDir: string
 let home: string
 let scope: ReadScopeContext
 beforeEach(() => {
-  temp = realpathSync(mkdtempSync(join(tmpdir(), 'flow-read-scope-')))
+  temp = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-read-scope-')))
   cwd = join(temp, 'repo')
   privateDir = join(temp, 'private', 't-1')
-  // 临时 FLOW_HOME：模拟中枢 token 所在位置。
-  home = join(temp, 'flow-home')
+  // 临时 RAINDOWN_HOME：模拟中枢 token 所在位置。
+  home = join(temp, 'raindown-home')
   mkdirSync(join(cwd, 'src'), { recursive: true })
   mkdirSync(join(cwd, '.git'))
   mkdirSync(join(cwd, '.github', 'workflows'), { recursive: true })
@@ -44,7 +44,7 @@ beforeEach(() => {
 afterEach(() => rmSync(temp, { recursive: true, force: true }))
 
 const denied = { behavior: 'deny' }
-const flow: ReadScopeCall = { mcpServer: { name: 'flow', source: 'dynamic' } }
+const raindown: ReadScopeCall = { mcpServer: { name: 'raindown', source: 'dynamic' } }
 
 async function passed(tool: string, input: unknown, s = scope, call: ReadScopeCall = {}) {
   const r = await checkReadScope(tool, input, s, call)
@@ -118,7 +118,7 @@ describe('路径字段', () => {
   test('~ 展开、首尾空白与不存在的读取目标拒绝（CLI 会把 ~ 展开为 home）', async () => {
     for (const path of [
       '~',
-      '~/flow-home/state/hub.token',
+      '~/raindown-home/state/hub.token',
       ' ~/.ssh',
       '~/.ssh',
       'README.md ',
@@ -322,11 +322,11 @@ describe('工具类别', () => {
       expect(await checkReadScope(tool, input, scope)).toMatchObject(denied)
     }
     await passed('TodoWrite', { todos: [{ content: '读 README', status: 'pending' }] })
-    await passed('ToolSearch', { query: 'select:mcp__flow__ws_brief', max_results: 5 })
-    await passed('WaitForMcpServers', { servers: ['flow'] })
+    await passed('ToolSearch', { query: 'select:mcp__raindown__ws_brief', max_results: 5 })
+    await passed('WaitForMcpServers', { servers: ['raindown'] })
     await passed('WaitForMcpServers', {})
     expect(
-      await checkReadScope('WaitForMcpServers', { servers: ['flow'], path: '/' }, scope),
+      await checkReadScope('WaitForMcpServers', { servers: ['raindown'], path: '/' }, scope),
     ).toMatchObject(denied)
   })
 
@@ -339,34 +339,36 @@ describe('工具类别', () => {
     await passed('StructuredOutput', input, { ...scope, structuredOutput: true })
   })
 
-  test('Flow MCP 只在名称与来源都对得上时豁免；缺少来源、其他来源或其他 MCP 一律拒绝', async () => {
+  test('Raindown MCP 只在名称与来源都对得上时豁免；缺少来源、其他来源或其他 MCP 一律拒绝', async () => {
     const input = { path: join(home, 'state', 'hub.token'), file: '/x' }
-    expect(await checkReadScope('mcp__flow__kb_get', input, scope, flow)).toBeUndefined()
+    expect(await checkReadScope('mcp__raindown__kb_get', input, scope, raindown)).toBeUndefined()
     expect(
-      await checkReadScope('mcp__flow__kb_get', input, scope, {
-        mcpServer: { name: 'flow', source: 'sdk' },
+      await checkReadScope('mcp__raindown__kb_get', input, scope, {
+        mcpServer: { name: 'raindown', source: 'sdk' },
       }),
     ).toBeUndefined()
     for (const call of [
       {},
-      { mcpServer: { name: 'flow', source: 'project' } },
-      { mcpServer: { name: 'flow', source: 'plugin' } },
+      { mcpServer: { name: 'raindown', source: 'project' } },
+      { mcpServer: { name: 'raindown', source: 'plugin' } },
       { mcpServer: { name: 'evil', source: 'dynamic' } },
     ])
-      expect(await checkReadScope('mcp__flow__kb_get', input, scope, call)).toMatchObject(denied)
-    for (const tool of ['mcp__flowx__y', 'mcp__external__search'])
-      expect(await checkReadScope(tool, { query: 'x' }, scope, flow)).toMatchObject(denied)
-    expect(isFlowMcp('mcp__flow__ws_brief', undefined)).toBe(false)
+      expect(await checkReadScope('mcp__raindown__kb_get', input, scope, call)).toMatchObject(
+        denied,
+      )
+    for (const tool of ['mcp__raindownx__y', 'mcp__external__search'])
+      expect(await checkReadScope(tool, { query: 'x' }, scope, raindown)).toMatchObject(denied)
+    expect(isRaindownMcp('mcp__raindown__ws_brief', undefined)).toBe(false)
   })
 
-  test('会话 cwd 偏离合同 cwd 时拒绝全部非 Flow 工具', async () => {
+  test('会话 cwd 偏离合同 cwd 时拒绝全部非 Raindown 工具', async () => {
     await passed('Read', { file_path: 'README.md' }, scope, { sessionCwd: cwd })
     for (const sessionCwd of [temp, join(temp, 'missing')])
       expect(
         await checkReadScope('Read', { file_path: 'README.md' }, scope, { sessionCwd }),
       ).toMatchObject(denied)
     expect(
-      await checkReadScope('mcp__flow__ws_brief', {}, scope, { ...flow, sessionCwd: temp }),
+      await checkReadScope('mcp__raindown__ws_brief', {}, scope, { ...raindown, sessionCwd: temp }),
     ).toBeUndefined()
   })
 })

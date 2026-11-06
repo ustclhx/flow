@@ -18,7 +18,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 async function home() {
-  const h = await initTempHome('flow-reserved-')
+  const h = await initTempHome('raindown-reserved-')
   restores.push(isolateHub(h))
   dirs.push(join(h, '..'))
   return h
@@ -62,13 +62,13 @@ describe('已有的保留名大小写变体', () => {
 
   test('doctor 给出 warning，不影响退出码', async () => {
     const h = await home()
-    const clean = await runDoctor(h, 'FLOW_HOME', doctorOptions(h))
+    const clean = await runDoctor(h, 'RAINDOWN_HOME', doctorOptions(h))
     const cleanReport = clean.ok
       ? clean.data
       : (clean.error.details as { checks: { id: string; ok?: boolean; severity?: string }[] })
     expect(cleanReport.checks.some((c) => c.id === 'brain.reserved-names')).toBe(false)
     plantVariants(h)
-    const r = await runDoctor(h, 'FLOW_HOME', doctorOptions(h))
+    const r = await runDoctor(h, 'RAINDOWN_HOME', doctorOptions(h))
     const report = r.ok
       ? r.data
       : (r.error.details as {
@@ -89,7 +89,7 @@ describe('已有的保留名大小写变体', () => {
 
 describe('readBrief', () => {
   test('brain 仓库还没有提交（没有 HEAD）时按笔记不存在处理', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'flow-nohead-'))
+    const root = mkdtempSync(join(tmpdir(), 'raindown-nohead-'))
     dirs.push(root)
     const h = join(root, 'home')
     mkdirSync(join(h, 'brain'), { recursive: true })
@@ -104,7 +104,7 @@ describe('readBrief', () => {
   })
 
   test('HEAD 损坏等其他 git 失败返回 read_failed，不当作笔记不存在', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'flow-badhead-'))
+    const root = mkdtempSync(join(tmpdir(), 'raindown-badhead-'))
     dirs.push(root)
     const h = join(root, 'home')
     mkdirSync(join(h, 'brain'), { recursive: true })

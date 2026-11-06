@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/entry.schema.json",
+  "$id": "https://raindown.local/schemas/entry.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
@@ -955,6 +955,6 @@
       "description": "项目卡片：一个产品 workspace 的入口说明"
     }
   ],
-  "title": "Flow brain entry",
+  "title": "Raindown brain entry",
   "description": "brain/ 下知识条目的 YAML frontmatter"
 }

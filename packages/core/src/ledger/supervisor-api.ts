@@ -7,7 +7,7 @@ import { taskStatus, wakeGeneration, wakeOrigin } from './task.ts'
 
 /**
  * supervisor 唤醒调度的用户接口（add-m1-supervisor D3；tasks 3.4）：
- * `flow ask`、`flow supervisor wake [--release]`、`flow supervisor status` 与 Telegram `/ask`。
+ * `raindown ask`、`raindown supervisor wake [--release]`、`raindown supervisor status` 与 Telegram `/ask`。
  * 这些路由只接受 user 身份（userOnly）。
  */
 

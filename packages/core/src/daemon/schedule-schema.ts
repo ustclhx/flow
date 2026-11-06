@@ -28,7 +28,7 @@ export const schedulesConfigSchema = z
       seen.add(rule.id)
     })
   })
-  .meta({ title: 'Flow schedules config', description: 'config/schedules.yaml：定时规则数组' })
+  .meta({ title: 'Raindown schedules config', description: 'config/schedules.yaml：定时规则数组' })
 
 export const scheduleErrorSchema = z.object({
   rule_id: z.string().optional(),

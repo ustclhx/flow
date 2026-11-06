@@ -11,7 +11,7 @@ import {
   type TaskOrigin,
   type TaskView,
   USER_ACTOR,
-} from '@flow/core'
+} from '@raindown/core'
 import type { LedgerStore, WakeRecord } from './store.ts'
 
 /**
@@ -55,7 +55,7 @@ export const reservedCapabilitiesIn = (requires: readonly string[]) =>
   requires.filter((c) => (RESERVED_CAPABILITIES as readonly string[]).includes(c.toLowerCase()))
 
 /** 角色查找结果中参与类别判定的字段与新任务的有效类别（D9）：定义在 core，中枢与 pr-merge 执行器共用。 */
-export { type RoleForKind, taskKind } from '@flow/core'
+export { type RoleForKind, taskKind } from '@raindown/core'
 
 const TERMINAL: ReadonlySet<TaskView['status']> = new Set(['done', 'failed', 'cancelled'])
 export const isTerminal = (t: Pick<TaskView, 'status'>) => TERMINAL.has(t.status)

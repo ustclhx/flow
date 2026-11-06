@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type Operation, operations } from '@flow/core'
-import { toolInputSchema } from '@flow/mcp'
+import { type Operation, operations } from '@raindown/core'
+import { toolInputSchema } from '@raindown/mcp'
 import { callJson, connect, initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
@@ -96,7 +96,7 @@ function toArgv(op: Operation<never, unknown>, input: Json): string[] {
     op.fileInput &&
     Object.values(input).some((v) => v !== null && typeof v === 'object' && !Array.isArray(v))
   ) {
-    const file = join(mkdtempSync(join(tmpdir(), 'flow-parity-input-')), 'input.json')
+    const file = join(mkdtempSync(join(tmpdir(), 'raindown-parity-input-')), 'input.json')
     writeFileSync(file, JSON.stringify(input))
     return [...op.cli.split(' '), '--file', file, '--json', '--actor', ACTOR]
   }
@@ -138,11 +138,11 @@ function normalize(value: unknown): unknown {
 
 let saved: string | undefined
 beforeEach(() => {
-  saved = process.env.FLOW_HOME
+  saved = process.env.RAINDOWN_HOME
 })
 afterEach(() => {
-  if (saved === undefined) delete process.env.FLOW_HOME
-  else process.env.FLOW_HOME = saved
+  if (saved === undefined) delete process.env.RAINDOWN_HOME
+  else process.env.RAINDOWN_HOME = saved
 })
 
 describe('CLI 与 MCP 结果一致', () => {
@@ -152,7 +152,7 @@ describe('CLI 与 MCP 结果一致', () => {
   })
 
   for (const op of operations) {
-    test(`${op.name}（flow ${op.cli}）`, async () => {
+    test(`${op.name}（raindown ${op.cli}）`, async () => {
       const input = sampleInput(op)
       const parsed = op.input.safeParse(input)
       if (!parsed.success) {
@@ -161,12 +161,12 @@ describe('CLI 与 MCP 结果一致', () => {
         )
       }
 
-      const cliHome = await initTempHome('flow-parity-cli-')
-      process.env.FLOW_HOME = cliHome
+      const cliHome = await initTempHome('raindown-parity-cli-')
+      process.env.RAINDOWN_HOME = cliHome
       const out = await runCli(toArgv(op, input), commands)
       const cliDoc = JSON.parse(out.stdout)
 
-      const mcpHome = await initTempHome('flow-parity-mcp-')
+      const mcpHome = await initTempHome('raindown-parity-mcp-')
       const client = await connect({ actor: ACTOR, home: mcpHome })
       const { isError, doc: mcpDoc } = await callJson(client, op.name, input)
 
@@ -179,8 +179,8 @@ describe('CLI 与 MCP 结果一致', () => {
 
   test('非法输入在两端得到同一个用法错误', async () => {
     const op = operations.find((o) => o.name === 'kb_journal') as Operation<never, unknown>
-    const home = await initTempHome('flow-parity-bad-')
-    process.env.FLOW_HOME = home
+    const home = await initTempHome('raindown-parity-bad-')
+    process.env.RAINDOWN_HOME = home
     const out = await runCli(
       [...op.cli.split(' '), '--workspace', 'ws/product-res', '--json', '--actor', ACTOR],
       commands,

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { fail, ok, type Result } from '@flow/core'
+import { fail, ok, type Result } from '@raindown/core'
 import { z } from 'zod'
 import { executorEnv } from '../env.ts'
 
@@ -40,7 +40,7 @@ export const execRunner: CommandRunner = (bin, args, options) =>
       [...args],
       {
         ...(options.cwd ? { cwd: options.cwd } : {}),
-        // orca / gh 子进程不继承中枢凭证（FLOW_HUB_TOKEN，design D9）。
+        // orca / gh 子进程不继承中枢凭证（RAINDOWN_HUB_TOKEN，design D9）。
         env: executorEnv(options.env ?? process.env),
         timeout: options.timeoutMs,
         maxBuffer: 16 * 1024 * 1024,

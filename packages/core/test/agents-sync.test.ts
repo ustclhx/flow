@@ -58,7 +58,7 @@ describe('renderManagedBlock', () => {
     expect(block.length).toBeLessThanOrEqual(2000)
     expect(block).toContain('domain `resources/domains/arcanumber.com`：arcanumber.com，西方站')
     expect(block).toContain('`ws/xuanxue-saas`（Xuanxue，产品）')
-    expect(block).toContain('`flow kb get projects/xuanxue-saas`')
+    expect(block).toContain('`raindown kb get projects/xuanxue-saas`')
     for (const tool of [
       'kb_search',
       'kb_get',
@@ -106,7 +106,7 @@ describe('renderManagedBlock', () => {
     const block = renderManagedBlock(large, { maxChars: 1000 })
     expect(block.length).toBeLessThanOrEqual(1000)
     expect(block).toContain('domain：30 个\n  - service：30 个')
-    expect(block).toContain('完整列表：flow ws resources ws/xuanxue-saas')
+    expect(block).toContain('完整列表：raindown ws resources ws/xuanxue-saas')
     expect(block).not.toContain('resources/domains/')
     expect(
       renderManagedBlock({ ...large, resources: large.resources.toReversed() }, { maxChars: 1000 }),
@@ -125,12 +125,21 @@ describe('renderManagedBlock', () => {
     expect(block).toContain('- 项目卡片：尚未建立')
     expect(block).toContain('暂无资源')
     expect(renderManagedBlock(empty, { maxChars: 1 })).toContain(
-      '完整列表：flow ws resources ws/research',
+      '完整列表：raindown ws resources ws/research',
     )
   })
 })
 
 describe('spliceManagedBlock', () => {
+  test('旧 Flow 标记原位替换为 Raindown，重复同步不产生第二份区块', () => {
+    const block = renderManagedBlock(input)
+    const existing =
+      '用户前言\n<!-- BEGIN:flow-managed -->\n旧内容\n<!-- END:flow-managed -->\n用户结尾\n'
+    const content = `用户前言\n${block}\n用户结尾\n`
+    expect(spliceManagedBlock(existing, block)).toEqual(ok({ content, changed: true }))
+    expect(spliceManagedBlock(content, block)).toEqual(ok({ content, changed: false }))
+  })
+
   const block = `${BEGIN_MARKER}\n新的上下文\n${END_MARKER}`
 
   test('文件不存在时创建带尾换行的区块', () => {
@@ -157,8 +166,10 @@ describe('spliceManagedBlock', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error(result.error.message)
     const updated = Buffer.from(result.data.content)
-    const before = fixture.subarray(0, fixture.indexOf(BEGIN_MARKER))
-    const after = fixture.subarray(fixture.indexOf(END_MARKER) + Buffer.byteLength(END_MARKER))
+    const legacyBegin = '<!-- BEGIN:flow-managed -->'
+    const legacyEnd = '<!-- END:flow-managed -->'
+    const before = fixture.subarray(0, fixture.indexOf(legacyBegin))
+    const after = fixture.subarray(fixture.indexOf(legacyEnd) + Buffer.byteLength(legacyEnd))
     expect(updated.subarray(0, before.length)).toEqual(before)
     expect(updated.subarray(before.length + Buffer.byteLength(block))).toEqual(after)
   })
@@ -180,17 +191,17 @@ describe('spliceManagedBlock', () => {
 
 describe('syncAgentsFiles', () => {
   let root: string
-  let previousFlowHome: string | undefined
+  let previousRaindownHome: string | undefined
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'flow-agents-sync-'))
-    previousFlowHome = process.env.FLOW_HOME
-    process.env.FLOW_HOME = join(root, 'flow-home')
+    root = await mkdtemp(join(tmpdir(), 'raindown-agents-sync-'))
+    previousRaindownHome = process.env.RAINDOWN_HOME
+    process.env.RAINDOWN_HOME = join(root, 'raindown-home')
   })
 
   afterEach(async () => {
-    if (previousFlowHome === undefined) delete process.env.FLOW_HOME
-    else process.env.FLOW_HOME = previousFlowHome
+    if (previousRaindownHome === undefined) delete process.env.RAINDOWN_HOME
+    else process.env.RAINDOWN_HOME = previousRaindownHome
     await rm(root, { recursive: true, force: true })
   })
 

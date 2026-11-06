@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { TaskContractInput, WakeOrigin } from '@flow/core'
+import type { TaskContractInput, WakeOrigin } from '@raindown/core'
 import { rejectsField } from '../src/node.ts'
 import { type Bench, bench, fake, type Intercept } from './harness.ts'
 

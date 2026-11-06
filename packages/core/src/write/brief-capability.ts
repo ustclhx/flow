@@ -3,4 +3,4 @@
  * 带上它；这个模块不从包入口导出，条目写入、提案合入、journal 等其他写入路径拿不到它，
  * 因此写 `briefs/` 一律被策略拒绝。
  */
-export const BRIEF_WRITE: unique symbol = Symbol('flow.briefWrite')
+export const BRIEF_WRITE: unique symbol = Symbol('raindown.briefWrite')

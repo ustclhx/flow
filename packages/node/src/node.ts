@@ -14,7 +14,6 @@ import {
   DEFAULT_NO_PROGRESS_MINUTES,
   type DeliveredReply,
   fail,
-  flowPaths,
   HUB_TOKEN_ENV,
   LEASE_SLOT_KINDS,
   LEDGER_ID_RE,
@@ -28,16 +27,18 @@ import {
   PROTOCOL_MESSAGE_MAX,
   type RepoSnapshot,
   type Result,
+  raindownPaths,
+  readRaindownEnv,
   redactLines,
   resolveHubUrl,
   type TaskContract,
   taskBranch,
   VERSION,
-} from '@flow/core'
+} from '@raindown/core'
 import { createNodeHubClient, type FetchLike, type NodeHubClient } from './client.ts'
 import { type NodeClock, sleep, systemClock } from './clock.ts'
 import type { CommandRunner } from './codex-orca/orca.ts'
-import { executorEnv } from './env.ts'
+import { dualRaindownEnv, executorEnv } from './env.ts'
 import {
   createExecutorRegistry,
   type DeliverResult,
@@ -63,7 +64,7 @@ import { cleanWakeTokenDir, removeWakeTokenFile, writeWakeTokenFile } from './wa
 import { resolveContractCwd, workspaceRepos } from './workdir.ts'
 
 /**
- * `flow node` 执行节点（tasks.md 4.3；design D6；node-protocol spec）。
+ * `raindown node` 执行节点（tasks.md 4.3；design D6；node-protocol spec）。
  *
  * - 身份：`state/node-id`，首次启动时生成；
  * - 注册 → 领取循环（long-poll）→ 每个租约一个 LeaseRunner：执行器 + 续约循环（TTL/3）
@@ -96,7 +97,7 @@ export interface StartNodeOptions {
   token?: string
   fetch?: FetchLike
   hostname?: string
-  /** 覆盖 `state/node-id`（同一 flow-home 上运行多个节点的测试用）。 */
+  /** 覆盖 `state/node-id`（同一 raindown-home 上运行多个节点的测试用）。 */
   nodeId?: string
   version?: string
   /** 额外能力（与 node.yaml 合并）。 */
@@ -185,7 +186,7 @@ export function generateNodeId(host: string, random = () => randomBytes(3).toStr
 
 /** 读取 `state/node-id`；不存在时生成并保存。 */
 export async function loadOrCreateNodeId(home: string, host: string): Promise<Result<string>> {
-  const path = flowPaths(home).nodeId
+  const path = raindownPaths(home).nodeId
   if (existsSync(path)) {
     const id = (await readFile(path, 'utf8')).trim()
     if (!LEDGER_ID_RE.test(id)) {
@@ -969,7 +970,14 @@ class LeaseRunner {
           attempt: grant.attempt,
           cwd: cwd.data,
           nodeId: env.nodeId,
-          env: executorEnv(),
+          env: {
+            ...executorEnv(),
+            ...dualRaindownEnv({
+              RAINDOWN_HOME: env.home,
+              RAINDOWN_TASK_ID: grant.task_id,
+              RAINDOWN_WORKSPACE: grant.contract.workspace,
+            }),
+          },
           signal: this.abort.signal,
           ...(grant.resume ? { resume: grant.resume } : {}),
           ...(wakeTokenFile ? { wakeTokenFile } : {}),
@@ -1217,15 +1225,18 @@ async function startNodeLocked(options: StartNodeOptions): Promise<Result<Runnin
   if (!nodeConfig.ok) return nodeConfig
 
   // 本机节点用 user token（options.token 或 state/hub.token），不声明身份：中枢在注册与租约流程中
-  // 按 node_id 记为 node:<id>（user token 不能声明 node:*）。设置了 FLOW_HUB_TOKEN 时它是签发给
+  // 按 node_id 记为 node:<id>（user token 不能声明 node:*）。设置了 RAINDOWN_HUB_TOKEN 时它是签发给
   // node:<id> 的绑定 token，此时声明同一身份（design D9）。
-  const envToken =
-    options.token === undefined ? process.env[HUB_TOKEN_ENV]?.trim() || undefined : undefined
+  const envToken = options.token === undefined ? readRaindownEnv(HUB_TOKEN_ENV) : undefined
   let token = options.token ?? envToken
   if (token === undefined) {
-    const path = flowPaths(home).hubToken
+    const path = raindownPaths(home).hubToken
     if (!existsSync(path)) {
-      return fail('retryable', 'hub_token_missing', `缺少 ${path}，请先启动中枢（flow hub start）`)
+      return fail(
+        'retryable',
+        'hub_token_missing',
+        `缺少 ${path}，请先启动中枢（raindown hub start）`,
+      )
     }
     token = (await readFile(path, 'utf8')).trim()
   }

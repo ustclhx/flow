@@ -3,12 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  flowPaths,
   hubStatusData,
-  initFlowHome,
+  initRaindownHome,
   type LedgerEvent,
   loadSchedulesConfig,
-} from '@flow/core'
+  raindownPaths,
+} from '@raindown/core'
 import { stringify } from 'yaml'
 import { createScheduler, type HubClock, openLedger, runHub } from '../src/index.ts'
 import { must } from './ledger-helpers.ts'
@@ -68,13 +68,13 @@ afterEach(async () => {
   cleanups.length = 0
 })
 async function fixture(rules: unknown = [rule()]) {
-  const home = await mkdtemp(join(tmpdir(), 'flow-scheduler-'))
+  const home = await mkdtemp(join(tmpdir(), 'raindown-scheduler-'))
   cleanups.push(() => rm(home, { recursive: true, force: true }))
-  must(await initFlowHome(home))
-  const config = flowPaths(home).schedulesConfig
+  must(await initRaindownHome(home))
+  const config = raindownPaths(home).schedulesConfig
   await writeFile(config, stringify(rules))
   const clock = new Clock()
-  const ledger = await openLedger(flowPaths(home).ledgerDb, { now: clock.now })
+  const ledger = await openLedger(raindownPaths(home).ledgerDb, { now: clock.now })
   cleanups.push(() => ledger.close())
   const fires = () => ledger.eventsAfter(0).filter((event) => event.type === 'schedule.fired')
   const start = async () => {
@@ -253,7 +253,7 @@ test('runHub：真实 HTTP/SSE 可见准点事件与规则错误，停止后重�
   cleanups.pop()
   const hub = must(await runHub({ home: f.home, port: 0, clock: f.clock, logger: quiet }))
   cleanups.push(() => hub.stop())
-  const token = (await readFile(flowPaths(f.home).hubToken, 'utf8')).trim()
+  const token = (await readFile(raindownPaths(f.home).hubToken, 'utf8')).trim()
   const headers = { Authorization: `Bearer ${token}` }
   expect((await fetch(`${hub.url}/v1/hub/status`)).status).toBe(401)
   const status = (await (await fetch(`${hub.url}/v1/hub/status`, { headers })).json()) as {
@@ -279,7 +279,7 @@ test('runHub：真实 HTTP/SSE 可见准点事件与规则错误，停止后重�
   await f.clock.advance(30_000)
   const restarted = must(await runHub({ home: f.home, port: 0, clock: f.clock, logger: quiet }))
   await restarted.stop()
-  const ledger = await openLedger(flowPaths(f.home).ledgerDb)
+  const ledger = await openLedger(raindownPaths(f.home).ledgerDb)
   try {
     expect(ledger.eventsAfter(0).filter((event) => event.type === 'schedule.fired')).toHaveLength(1)
   } finally {
@@ -298,7 +298,7 @@ test.each([false, true])(
     cleanups.push(() => hub.stop())
     await f.clock.wake(8 * 3600_000, latestFirst)
     await hub.stop()
-    const ledger = await openLedger(flowPaths(f.home).ledgerDb)
+    const ledger = await openLedger(raindownPaths(f.home).ledgerDb)
     try {
       const events = ledger.eventsAfter(0)
       expect(events.filter((event) => event.type === 'hub.resumed')).toHaveLength(1)

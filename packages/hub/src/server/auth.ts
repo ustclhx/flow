@@ -8,7 +8,7 @@ import {
   isHubIssuedActor,
   isNodeActor,
   USER_ACTOR,
-} from '@flow/core'
+} from '@raindown/core'
 import type { Context, MiddlewareHandler } from 'hono'
 import { errorResponse } from '../app.ts'
 import type { BoundTokenLookup } from './tokens.ts'
@@ -109,7 +109,7 @@ async function checkNodeScope(
 /**
  * 鉴权中间件（hub-daemon "Token 认证"、design D9）。判定表见 `docs/hub-auth.md`：
  *
- * | token                  | X-Flow-Actor                    | 结果                    |
+ * | token                  | X-Raindown-Actor                    | 结果                    |
  * |------------------------|---------------------------------|-------------------------|
  * | 缺失 / 不认识 / 已撤销  | 任意                            | 401 unauthorized        |
  * | 任意有效 token          | 格式不合法                       | 400 invalid_arguments   |
@@ -146,7 +146,12 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
     const wake = wakeTokens?.authenticate(presented) ?? null
     if (!isUser && !bound && !wake) return errorResponse(c, 'unauthorized', '未授权')
 
-    const declared = c.req.header(HEADERS.actor)?.trim() ?? ''
+    const currentActor = c.req.header(HEADERS.actor)?.trim()
+    const legacyActor = c.req.header('X-Flow-Actor')?.trim()
+    if (currentActor !== undefined && legacyActor !== undefined && currentActor !== legacyActor) {
+      return errorResponse(c, 'invalid_arguments', 'X-Raindown-Actor 与 X-Flow-Actor 必须一致')
+    }
+    const declared = currentActor ?? legacyActor ?? ''
     if (declared !== '' && !ACTOR_RE.test(declared)) {
       return errorResponse(c, 'invalid_arguments', '操作者标识格式不合法')
     }

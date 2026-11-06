@@ -2,24 +2,24 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { flowPaths, initFlowHome, type TaskView } from '@flow/core'
+import { initRaindownHome, raindownPaths, type TaskView } from '@raindown/core'
 import { type Bench, bench } from './harness.ts'
 
 /**
- * add-m1-supervisor 2.6：`flow init` 的 policies.yaml 模板中 supervisor 建任务的 auto 规则默认注释掉；
+ * add-m1-supervisor 2.6：`raindown init` 的 policies.yaml 模板中 supervisor 建任务的 auto 规则默认注释掉；
  * 未启用时 supervisor 的 task_create 走审批（blocked awaiting_approval，用户批准后继续），
  * 启用后自动放行。端到端：真实中枢路由（policy/check + 真实 decide）+ 节点 + fake 执行器。
  */
 
-/** `flow init` 在临时 flow-home 中生成的 policies.yaml 原文。 */
+/** `raindown init` 在临时 raindown-home 中生成的 policies.yaml 原文。 */
 let POLICIES_YAML = ''
 let initRoot = ''
 beforeAll(async () => {
-  initRoot = mkdtempSync(join(tmpdir(), 'flow-sup-policy-'))
+  initRoot = mkdtempSync(join(tmpdir(), 'raindown-sup-policy-'))
   const home = join(initRoot, 'home')
-  const r = await initFlowHome(home)
+  const r = await initRaindownHome(home)
   if (!r.ok) throw new Error(r.error.message)
-  POLICIES_YAML = readFileSync(join(flowPaths(home).config, 'policies.yaml'), 'utf8')
+  POLICIES_YAML = readFileSync(join(raindownPaths(home).config, 'policies.yaml'), 'utf8')
 })
 afterAll(() => rmSync(initRoot, { recursive: true, force: true }))
 
@@ -57,7 +57,7 @@ async function run(policiesYaml: string) {
       cwd: b.home,
       inputs: {
         fake: {
-          script: [{ do: 'approval', tool: 'mcp__flow__task_create' }],
+          script: [{ do: 'approval', tool: 'mcp__raindown__task_create' }],
           message: '完成',
         },
       },

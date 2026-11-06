@@ -12,7 +12,7 @@ import {
   roundUsd,
   SUPERVISOR_ACTOR,
   type TaskView,
-} from '@flow/core'
+} from '@raindown/core'
 import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import type { Scheduler } from '../scheduler/index.ts'
 import type { HubClock } from '../server/clock.ts'

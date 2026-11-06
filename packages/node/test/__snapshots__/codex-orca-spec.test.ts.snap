@@ -1,7 +1,7 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`renderTaskSpec 完整的任务说明 1`] = `
-"# Flow 任务 t-20261025-abc
+"# Raindown 任务 t-20261025-abc
 
 - workspace：\`ws/product-res\`
 - 角色：\`dev\`
@@ -24,12 +24,12 @@ exports[`renderTaskSpec 完整的任务说明 1`] = `
 
 ## 上下文
 
-- \`projects/product-res\`，完整内容：\`flow kb get projects/product-res\`
+- \`projects/product-res\`，完整内容：\`raindown kb get projects/product-res\`
   <untrusted-summary>
   Product Res：产品资源站，Next.js 部署在 Cloudflare
   </untrusted-summary>
 - 文件 \`docs/deploy.md\`
-- \`projects/missing\`（brain 中没有找到这个条目，可以试试 \`flow kb search\`）
+- \`projects/missing\`（brain 中没有找到这个条目，可以试试 \`raindown kb search\`）
 
 ## 范围
 
@@ -59,7 +59,7 @@ exports[`renderTaskSpec 完整的任务说明 1`] = `
 `;
 
 exports[`renderTaskSpec 没有上下文、验收命令和范围；带着上一轮的回复 1`] = `
-"# Flow 任务 t-20261025-abc
+"# Raindown 任务 t-20261025-abc
 
 - workspace：\`ws/product-res\`
 - 角色：\`dev\`

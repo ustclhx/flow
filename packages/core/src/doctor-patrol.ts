@@ -11,7 +11,7 @@ export const SUPERVISOR_PATROL_KIND = 'supervisor_patrol'
  *
  * 只看真正可能被唤醒的 workspace：非 global、`supervisor.enabled`、有登记仓库，且存在
  * `kind: supervisor` 角色（没有仓库、没有角色的情况已由其他检查报告）。
- * `config/schedules.yaml` 读不出来（YAML 错误）时不给这条 info：规则错误由 `flow hub status` 报告。
+ * `config/schedules.yaml` 读不出来（YAML 错误）时不给这条 info：规则错误由 `raindown hub status` 报告。
  */
 export async function checkPatrolRules(home: string, roles?: Role[]): Promise<DoctorCheck[]> {
   if (roles && !roles.some((r) => effectiveRoleKind(r) === 'supervisor')) return []

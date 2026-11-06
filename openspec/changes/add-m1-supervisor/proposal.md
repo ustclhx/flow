@@ -7,7 +7,7 @@
 ## What Changes
 
 - **supervisor 是内核监督的一类任务**：每个 workspace 一个逻辑 supervisor。中枢在下列事件发生时为该 workspace 排一个 supervisor 唤醒任务（新会话，claude-sdk 执行器）：
-  - 用户指令（Telegram `/ask`、CLI `flow ask`）；
+  - 用户指令（Telegram `/ask`、CLI `raindown ask`）；
   - 该 workspace 中由 supervisor 派生的任务结束、失败或卡住；
   - 用户回答了 supervisor 的提问；
   - 每日巡检（`config/schedules.yaml`，默认每天一次）；
@@ -71,7 +71,7 @@
 
 ## Impact
 
-- 代码：`packages/hub`（唤醒调度器、来源链校验、提问与提案的收件箱动作、决策回看定时）、`packages/core/src/ops/`（新操作）、`packages/core/src/write/`（简报笔记、决策回看追加）、`packages/node`（pr-merge 执行器、预留执行槽、claude-sdk 结构化输出）、`packages/mcp`（按 workspace 绑定）、CLI（`flow ask`、`flow supervisor status`）、`packages/core/src/policy/`（新档位与推送条件）。
+- 代码：`packages/hub`（唤醒调度器、来源链校验、提问与提案的收件箱动作、决策回看定时）、`packages/core/src/ops/`（新操作）、`packages/core/src/write/`（简报笔记、决策回看追加）、`packages/node`（pr-merge 执行器、预留执行槽、claude-sdk 结构化输出）、`packages/mcp`（按 workspace 绑定）、CLI（`raindown ask`、`raindown supervisor status`）、`packages/core/src/policy/`（新档位与推送条件）。
 - 协议与 schema：新的账本事件（`supervisor.*`、`task_proposal.*`、`decision.review_due`）、角色与 workspace 配置字段、结果中的审查结论。
 - 用户数据：`brain/briefs/`、`brain/decisions/` 新增内容；`config/roles/{supervisor,pr-reviewer,merger}.{yaml,md}`；`dev.yaml` 需手动加 `creatable_by: [supervisor]`；`config/schedules.yaml` 增加巡检规则。
 - 外部动作：pr-merge 会真实合并 PR，受默认关闭的开关和条件双重约束。

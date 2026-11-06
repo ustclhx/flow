@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
-import { flowPaths, HUB_TOKEN_ENV, ok, type Result } from '@flow/core'
-import { type RunningHub, runHub } from '@flow/hub'
+import { HUB_TOKEN_ENV, ok, type Result, raindownPaths } from '@raindown/core'
+import { type RunningHub, runHub } from '@raindown/hub'
 import { FakeTelegram, USER_ID } from '../../hub/test/telegram-fixtures.ts'
 import { initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
 
 /**
- * `flow telegram link`（add-m1-inbox 5.1）：真实中枢（随机端口、临时 FLOW_HOME），Telegram 是假的 HTTP 服务。
+ * `raindown telegram link`（add-m1-inbox 5.1）：真实中枢（随机端口、临时 RAINDOWN_HOME），Telegram 是假的 HTTP 服务。
  */
 
 let home: string
@@ -24,11 +24,11 @@ function data<T>(r: Result<T>): T {
 
 beforeAll(async () => {
   fake = await new FakeTelegram().start()
-  home = await initTempHome('flow-telegram-cli-')
-  await writeFile(`${flowPaths(home).config}/secrets.sops.yaml`, 'sops: placeholder\n')
-  for (const k of ['FLOW_HOME', 'FLOW_ACTOR', HUB_TOKEN_ENV]) saved[k] = process.env[k]
-  process.env.FLOW_HOME = home
-  delete process.env.FLOW_ACTOR
+  home = await initTempHome('raindown-telegram-cli-')
+  await writeFile(`${raindownPaths(home).config}/secrets.sops.yaml`, 'sops: placeholder\n')
+  for (const k of ['RAINDOWN_HOME', 'RAINDOWN_ACTOR', HUB_TOKEN_ENV]) saved[k] = process.env[k]
+  process.env.RAINDOWN_HOME = home
+  delete process.env.RAINDOWN_ACTOR
   delete process.env[HUB_TOKEN_ENV]
   hub = data(
     await runHub({
@@ -42,7 +42,7 @@ beforeAll(async () => {
       inbox: { watch: false, telegram: { apiBase: fake.url, pollTimeoutS: 1, env: {} } },
     }),
   )
-  await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
+  await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
 })
 
 afterAll(async () => {
@@ -55,13 +55,13 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true })
 })
 
-describe('flow telegram link', () => {
+describe('raindown telegram link', () => {
   test('输出绑定命令与深链接；发送后完成绑定；AI 身份不能申请', async () => {
     const r = await runCli(['telegram', 'link'], commands)
     expect(r.exitCode).toBe(0)
     const code = /\/link ([a-z2-9]{16})/.exec(r.stdout)?.[1]
     expect(code).toBeDefined()
-    expect(r.stdout).toContain(`https://t.me/flow_test_bot?start=${code}`)
+    expect(r.stdout).toContain(`https://t.me/raindown_test_bot?start=${code}`)
     expect(r.stdout).toContain('只能使用一次')
 
     fake.say(`/link ${code}`)
@@ -76,7 +76,7 @@ describe('flow telegram link', () => {
     expect(JSON.parse(ai.stdout || ai.stderr)).toMatchObject({ error: { code: 'user_only' } })
   })
 
-  test('已绑定：不加 --rebind 提示已绑定；--rebind 发码；flow telegram unlink 解除绑定（仅 user）', async () => {
+  test('已绑定：不加 --rebind 提示已绑定；--rebind 发码；raindown telegram unlink 解除绑定（仅 user）', async () => {
     const bound = await runCli(['telegram', 'link', '--json'], commands)
     expect(bound.exitCode).toBe(1)
     expect(JSON.parse(bound.stdout || bound.stderr)).toMatchObject({

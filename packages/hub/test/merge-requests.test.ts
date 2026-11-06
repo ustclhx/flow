@@ -15,7 +15,7 @@ import {
   type SupervisorConfig,
   type TaskOrigin,
   type WakeOrigin,
-} from '@flow/core'
+} from '@raindown/core'
 import { initTempHome, isolateHub } from '../../core/test/helpers.ts'
 import {
   actOnInbox,
@@ -50,7 +50,7 @@ const OTHER = 'ws/xuanxue-saas'
 const PR = 'https://github.com/acme/demo/pull/7'
 const SHA_A = 'a'.repeat(40)
 const SHA_B = 'b'.repeat(40)
-const BRANCH = 'flow/t-dev'
+const BRANCH = 'raindown/t-dev'
 
 const cleanups: (() => void)[] = []
 afterEach(() => {
@@ -81,9 +81,9 @@ const ROLES: (RoleForKind & { creatable_by: string[] })[] = [
 const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? 'ok' : r.error?.code)
 
 async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
-  const home = await initTempHome('flow-merge-req-')
+  const home = await initTempHome('raindown-merge-req-')
   const restore = isolateHub(home)
-  const repo = mkdtempSync(join(tmpdir(), 'flow-merge-repo-'))
+  const repo = mkdtempSync(join(tmpdir(), 'raindown-merge-repo-'))
   const clock = new FakeClock(Date.parse('2026-10-26T08:00:00.000Z'))
   const l = await tempLedger({ now: clock.now })
   const wakeTokens = createWakeTokenAuthority({ ledger: () => l.store, now: clock.now })
@@ -363,7 +363,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
-        ...(actor ? { 'X-Flow-Actor': actor } : {}),
+        ...(actor ? { 'X-Raindown-Actor': actor } : {}),
       },
       body: JSON.stringify(body),
     })
@@ -555,7 +555,7 @@ describe('合并请求的资格（D10 第 4 步）', () => {
     expect(reasonsOf(await s.request(w.token, rv)).join()).toContain('未启用 supervisor')
     s.config.sup = { ...s.config.sup, enabled: true }
     // dev 任务的 cwd 不再是登记仓库（仓库配置改了）
-    s.config.repos = [mkdtempSync(join(tmpdir(), 'flow-merge-other-'))]
+    s.config.repos = [mkdtempSync(join(tmpdir(), 'raindown-merge-other-'))]
     cleanups.push(() => rmSync(s.config.repos[0] as string, { recursive: true, force: true }))
     const r = await s.request(w.token, rv)
     expect(code(r)).toBe('merge_not_eligible')
@@ -572,8 +572,8 @@ describe('PR 归属（fork、任务分支、登记仓库 origin）', () => {
     const r = await s.request(w.token, rv)
     expect(code(r)).toBe('merge_not_eligible')
     expect(reasonsOf(r).join()).toContain('没有上报任务分支')
-    s.dev({ branch: 'flow/a' })
-    s.dev({ branch: 'flow/b' })
+    s.dev({ branch: 'raindown/a' })
+    s.dev({ branch: 'raindown/b' })
     const r2 = await s.request(w.token, rv)
     expect(reasonsOf(r2).join()).toContain('分支不一致')
   })
@@ -628,7 +628,7 @@ describe('PR 归属（fork、任务分支、登记仓库 origin）', () => {
   })
 
   test('repoOriginFromGit：读真实仓库的 remote.origin.url；没有或有多个 origin 时失败', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'flow-merge-git-'))
+    const dir = mkdtempSync(join(tmpdir(), 'raindown-merge-git-'))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
     const run = (args: string[]) => git(dir, args)
     expect((await run(['init', '-q'])).code).toBe(0)

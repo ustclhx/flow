@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { taskContract } from '@flow/core'
+import { taskContract } from '@raindown/core'
 import { renderTaskSpec, resolveContext, writeTaskSpec } from '../src/codex-orca/spec.ts'
 import { orcaHome } from './codex-orca-helpers.ts'
 
@@ -126,7 +126,7 @@ describe('防提示注入（PR #24 审查第 7 条）', () => {
 })
 
 describe('上下文与存档', () => {
-  test('context 中的项目卡片：内联摘要并给出 flow kb get（spec 场景"任务说明带上下文"）', async () => {
+  test('context 中的项目卡片：内联摘要并给出 raindown kb get（spec 场景"任务说明带上下文"）', async () => {
     const h = orcaHome()
     roots.push(h.root)
     const items = await resolveContext(h.home, [
@@ -148,7 +148,7 @@ describe('上下文与存档', () => {
     ])
     const text = renderTaskSpec({ ...base, context: items })
     expect(text).toContain('产品资源站，Next.js 部署在 Cloudflare')
-    expect(text).toContain('`flow kb get projects/product-res`')
+    expect(text).toContain('`raindown kb get projects/product-res`')
   })
 
   test('写入 state/tasks/<id>/spec.md', async () => {

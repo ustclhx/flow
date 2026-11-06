@@ -3,27 +3,27 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { operations } from '@flow/core'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { operations } from '@raindown/core'
 import { initTempHome } from '../../mcp/test/helpers.ts'
 
 /** 真实进程：`bun packages/cli/src/main.ts mcp --actor test-agent`，经 stdio 连接。 */
 const main = fileURLToPath(new URL('../src/main.ts', import.meta.url))
 
-describe('flow mcp（真实进程）', () => {
+describe('raindown mcp（真实进程）', () => {
   test('stdio 连接：列出工具并调用 kb_journal', async () => {
-    const home = await initTempHome('flow-mcp-stdio-')
+    const home = await initTempHome('raindown-mcp-stdio-')
     const env = Object.fromEntries(
       Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined),
     )
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [main, 'mcp', '--actor', 'test-agent'],
-      env: { ...env, FLOW_HOME: home },
+      env: { ...env, RAINDOWN_HOME: home },
       stderr: 'pipe',
     })
-    const client = new Client({ name: 'flow-stdio-test', version: '0.0.0' })
+    const client = new Client({ name: 'raindown-stdio-test', version: '0.0.0' })
     await client.connect(transport)
     try {
       const { tools } = await client.listTools()
@@ -41,10 +41,10 @@ describe('flow mcp（真实进程）', () => {
   }, 20_000)
 
   test('缺少 --actor 或 actor 为 user：用法错误，退出码 2，stdout 为空', async () => {
-    const home = await initTempHome('flow-mcp-stdio-')
+    const home = await initTempHome('raindown-mcp-stdio-')
     for (const extra of [[], ['--actor', 'user']]) {
       const r = spawnSync(process.execPath, [main, 'mcp', ...extra], {
-        env: { ...process.env, FLOW_HOME: home },
+        env: { ...process.env, RAINDOWN_HOME: home },
         input: '',
         encoding: 'utf8',
       })
@@ -55,7 +55,7 @@ describe('flow mcp（真实进程）', () => {
   })
 
   test('绑定参数不合法：--task / --reply-only 缺 --workspace、workspace 非法时用法错误，退出码 2', async () => {
-    const home = await initTempHome('flow-mcp-stdio-')
+    const home = await initTempHome('raindown-mcp-stdio-')
     for (const extra of [
       ['--task', 't-1'],
       ['--reply-only'],
@@ -63,7 +63,7 @@ describe('flow mcp（真实进程）', () => {
       ['--workspace', 'ws/demo', '--task', '../x'],
     ]) {
       const r = spawnSync(process.execPath, [main, 'mcp', '--actor', 'supervisor', ...extra], {
-        env: { ...process.env, FLOW_HOME: home },
+        env: { ...process.env, RAINDOWN_HOME: home },
         input: '',
         encoding: 'utf8',
       })

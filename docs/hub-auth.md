@@ -6,8 +6,8 @@
 
 | token | 位置 | 身份 |
 |---|---|---|
-| user token | `state/hub.token`（0600，首次启动生成） | `user`；可用 `X-Flow-Actor` 降级为 AI 身份 |
-| 绑定 token | `flow hub token issue <actor>` 签发，`fht_` 前缀 | 固定为签发时绑定的 actor |
+| user token | `state/hub.token`（0600，首次启动生成） | `user`；可用 `X-Raindown-Actor` 降级为 AI 身份 |
+| 绑定 token | `raindown hub token issue <actor>` 签发，`fht_` 前缀 | 固定为签发时绑定的 actor |
 | 唤醒绑定 token | 中枢在节点领到 supervisor 唤醒任务时签发，`fwk_` 前缀（见下文"唤醒绑定 token"） | 固定为 `supervisor`，绑定该次唤醒 |
 
 绑定 token 的记录保存在 `state/hub-tokens.json`（0600），每条只有：
@@ -28,7 +28,7 @@
 
 保留身份不能签发，比较时不区分大小写：`user`、`hub`、`scheduler`、`policy`、`unknown`（`User`、`HUB`
 等变体同样拒绝）；`node:` 前缀必须小写并后接合法的节点 id。`supervisor` 只由中枢按唤醒租约签发，
-`flow hub token issue supervisor`（带不带 `--remote`、大小写变体）一律拒绝；`state/hub-tokens.json`
+`raindown hub token issue supervisor`（带不带 `--remote`、大小写变体）一律拒绝；`state/hub-tokens.json`
 中即使有这样的记录，鉴权时也返回 403 `reserved_actor`。
 
 ## 保留身份
@@ -42,12 +42,12 @@
 | `supervisor` | 只由唤醒绑定 token 认定（add-m1-supervisor D6）；它也是 `kind: supervisor` 角色的保留名 |
 
 user token 降级时不能声明上述任何一个（不区分大小写，包括 `node:*` 与 `supervisor`），否则 403 `reserved_actor`。
-`flow mcp --actor` 拒绝 `supervisor` 之外的这些名字；`flow mcp --actor supervisor` 仍可启动（claude-sdk 为唤醒任务注入），
-但它只有带上唤醒绑定 token（`FLOW_HUB_TOKEN`）时才能访问中枢，用 `state/hub.token` 声明 supervisor 会被拒绝。
+`raindown mcp --actor` 拒绝 `supervisor` 之外的这些名字；`raindown mcp --actor supervisor` 仍可启动（claude-sdk 为唤醒任务注入），
+但它只有带上唤醒绑定 token（`RAINDOWN_HUB_TOKEN`）时才能访问中枢，用 `state/hub.token` 声明 supervisor 会被拒绝。
 
 ## 鉴权判定
 
-| token | `X-Flow-Actor` | 结果 |
+| token | `X-Raindown-Actor` | 结果 |
 |---|---|---|
 | 缺失 / 不认识 / 已撤销 | 任意 | 401 `unauthorized` |
 | 任意有效 token | 格式不合法 | 400 `invalid_arguments` |
@@ -82,11 +82,11 @@ user token 降级时不能声明上述任何一个（不区分大小写，包括
 | `POST /v1/supervisor/questions`（`ask_user`）、`POST /v1/task-proposals`（`task_propose`）、`POST /v1/decisions/review`（`decision_review`） | 403 `role_not_allowed`（这三个操作只属于 supervisor；接受 / 驳回提案与答复提问走 `POST /v1/inbox/:id/act`，只有 user） | 仅经**唤醒绑定 token** 认证、非 reply 的 `supervisor`：只能作用于绑定的 workspace（否则 403 `workspace_mismatch`），reply 唤醒 403 `reply_only_wake`，没有唤醒绑定 403 `scope_denied`；`decision_review` 只限本次唤醒关联的决策（否则 403 `not_review_target`）；其他身份 403 `role_not_allowed` | 403 `role_not_allowed` | 403 |
 | `POST /v1/merge-requests`（`pr_merge_request`） | 403 `role_not_allowed`（只属于 supervisor；批准 / 驳回合并条目走 `POST /v1/inbox/:id/act`，只有 user） | 仅经**唤醒绑定 token** 认证、非 reply 的 `supervisor`：资格由中枢按账本核对（`merge_not_eligible`），reply 唤醒 403 `reply_only_wake`，没有唤醒绑定 403 `scope_denied`；其他身份 403 `role_not_allowed` | 403 `scope_denied` | 403 |
 | `POST /v1/supervisor/respond`（`task_respond`） | 同上，非 supervisor 一律拒绝 | 仅经**唤醒绑定 token** 认证、**且是被分配该委托的 reply 唤醒**的 `supervisor`：核对在 store 同一事务内完成，不满足返回 `not_delegated` / `stale_block` / `invalid_arguments`；非 reply 唤醒与其他身份被拒绝 | 403 `scope_denied` | 403 |
-| `POST /v1/supervisor/wake`、`GET /v1/supervisor/status`（`flow ask`、`flow supervisor wake\|status`、Telegram `/ask`） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
+| `POST /v1/supervisor/wake`、`GET /v1/supervisor/status`（`raindown ask`、`raindown supervisor wake\|status`、Telegram `/ask`） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/tasks/:id/reply` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `POST /v1/hub/rebuild` | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 | `/v1/hub/tokens`（签发、列出、撤销） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
-| `POST /v1/ui/login-code`（`flow ui` 申请 Web 登录码） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
+| `POST /v1/ui/login-code`（`raindown ui` 申请 Web 登录码） | ✓ | 403 `user_only` | 403 `scope_denied` | 403 |
 
 remote token 一列的 403 都是 `remote_not_allowed`。
 
@@ -104,20 +104,20 @@ CLI 固定传 cli。读取密钥等只有用户能做的接口使用 `userOnly`�
 调用方确为该任务的租约持有者时采信：`node:<id>` 身份持有未过期的活动租约，或请求带的 `lease_token`
 与该任务未过期的活动租约匹配（本机节点用 user token 调用，租约令牌只在节点进程内存中）。否则这些字段
 视为缺失、不入账，`push_to` / `gh_scope` 条件随之不满足；`lease_token` 本身从不入账。
-MCP 层的限制（`flow mcp` 的 actor 不能是 user 或保留身份、没有读取密钥的工具）保留，作为第一道防线。
+MCP 层的限制（`raindown mcp` 的 actor 不能是 user 或保留身份、没有读取密钥的工具）保留，作为第一道防线。
 
 ## 唤醒绑定 token（add-m1-supervisor D6）
 
-supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任** `flow mcp --task`、`FLOW_TASK_ID` 或 `X-Flow-Actor`。
+supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任** `raindown mcp --task`、`RAINDOWN_TASK_ID` 或 `X-Raindown-Actor`。
 
 - **签发**：节点领取租约时，如果任务是唤醒任务（以账本中的 `supervisor.wake_started` 为准，不看角色名或 `inputs`），
   中枢签发一个 `fwk_` 开头的 token，随租约响应的可选字段 `lease.wake_token` 下发一次；其他任务不下发，旧节点忽略该字段。
-  节点把它作为 `FLOW_HUB_TOKEN` 注入该唤醒的 MCP 环境（tasks 5.3）。
+  节点把它作为 `RAINDOWN_HUB_TOKEN` 注入该唤醒的 MCP 环境（tasks 5.3）。
   具体做法：节点把 token 写进 `state/wake/<task>.<lease_id>.token`（目录 0700、文件 0600），只把路径作为
-  `FLOW_HUB_TOKEN_FILE` 交给 Flow MCP 进程（`flow mcp --actor supervisor --workspace <ws> --task <id>`，reply 唤醒另加
-  `--reply-only`）；`HubClient` 优先从这个文件读 token（高于 `FLOW_HUB_TOKEN`），文件读不到时失败、不回退到 user token。
+  `RAINDOWN_HUB_TOKEN_FILE` 交给 Raindown MCP 进程（`raindown mcp --actor supervisor --workspace <ws> --task <id>`，reply 唤醒另加
+  `--reply-only`）；`HubClient` 优先从这个文件读 token（高于 `RAINDOWN_HUB_TOKEN`），文件读不到时失败、不回退到 user token。
   token 本身不进任何进程的 argv 与 env（Agent SDK 把 MCP 配置以 `--mcp-config` 参数传给 Claude Code，argv 对本机所有用户
-  经 `ps` 可见），也不进日志、结果与活动；Claude 会话进程的 env 不含 `FLOW_HUB_TOKEN` 与 `FLOW_HUB_TOKEN_FILE`。
+  经 `ps` 可见），也不进日志、结果与活动；Claude 会话进程的 env 不含 `RAINDOWN_HUB_TOKEN` 与 `RAINDOWN_HUB_TOKEN_FILE`。
   任务结束（含失败、取消、放弃租约）即删除文件，节点启动时清理残留。没有下发 token 时任务 `failed(wake_token_missing)`；
   supervisor 角色必须是只读配置并设 `read_scope: cwd`（`supervisorRoleProblem`），否则 doctor 报错、中枢不唤醒、执行器
   `failed(supervisor_role_not_read)`；token 文件落在会话可读目录（cwd、任务私有目录）内时 `failed(wake_token_unsafe)`。
@@ -154,7 +154,7 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 - **角色有效类别**（D9，按角色配置与合同 `executor` 取更严格者，例如只读角色配 `pr-merge` 执行器按 merge 算；
   非 user 身份建的任务只要带 `verify` 至少按 write 算）：
   `kind: supervisor`（以及名为 supervisor 的角色，不论能否加载）只能由 hub 创建，user 得到 403 `role_not_allowed` 并提示改用
-  `flow supervisor wake`；`kind: merge` 只能由 hub 与 user 创建。
+  `raindown supervisor wake`；`kind: merge` 只能由 hub 与 user 创建。
 - **origin**（D2）：由中枢计算并写入 `task.created`，之后不变——中枢内部调用方显式给出（接受提案）时用它；`parent` 是唤醒任务时取该唤醒的
   origin（reply 唤醒不传）；`parent` 有 origin 时继承，但 hub、user、supervisor 之外的 AI 身份只在 parent 未结束时继承；
   其他没有 origin。不取自合同或请求中的任何字段。
@@ -203,9 +203,9 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 如果只读的 reviewer / triage 能创建 `role: dev` 的任务，就等于借 dev 提权。所以中枢在**创建任务时**按身份校验角色：
 
 - `user` 永远可以创建任何角色的任务，`creatable_by` 不影响 user；中枢也沿用原来的做法，不替 user 校验角色是否存在
-  （`flow task create` 与 MCP 的 `task_create` 在本机先查角色，未定义时返回 `unknown_role`）。
+  （`raindown task create` 与 MCP 的 `task_create` 在本机先查角色，未定义时返回 `unknown_role`）。
 - 其他身份（实际能到达这个接口的是 user token 降级的 AI 身份）：角色必须已定义且加载成功，否则 422 `unknown_role`
-  （语法或字段有错、未能加载的角色文件同样视为未定义，`flow doctor` 会报出错误）；身份必须匹配该角色的 `creatable_by`，
+  （语法或字段有错、未能加载的角色文件同样视为未定义，`raindown doctor` 会报出错误）；身份必须匹配该角色的 `creatable_by`，
   否则 403 `role_not_allowed`，信息中写明角色与身份，`details` 为 `{ field: "role", role, actor }`。拒绝时不产生事件。
 - `creatable_by` 缺省或为 `[]`：只有 user 可以创建（默认拒绝 AI 与节点）。
 - 用户在收件箱批准 AI 的 `task_create`（策略审批）不能覆盖 `creatable_by`；身份不匹配时，中枢仍返回 `role_not_allowed`。
@@ -218,11 +218,11 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
 默认模板中 dev 不写（只有 user），只读的 reviewer、triage 为 `["*"]`。
 
 **本机 AI 的实际身份**：claude-sdk、codex-exec 与 codex-orca 执行器均为新启动的 AI 子进程设置
-`FLOW_ACTOR=<角色名>`；claude-sdk 另注入 `flow mcp --actor <角色名>`。所以 reviewer 会话经 MCP 或 Bash 中的 CLI
+`RAINDOWN_ACTOR=<角色名>`；claude-sdk 另注入 `raindown mcp --actor <角色名>`。所以 reviewer 会话经 MCP 或 Bash 中的 CLI
 访问中枢时，身份都是 `reviewer`（triage 等其他角色同理用各自名字），不能通过 CLI 的 `--actor user` 覆盖。
-执行器内进程若 unset `FLOW_ACTOR` 或将它改写为 `user`，CLI 会回到 user 身份；这是默认身份，不是强制隔离，见下文“信任边界”。
+执行器内进程若 unset `RAINDOWN_ACTOR` 或将它改写为 `user`，CLI 会回到 user 身份；这是默认身份，不是强制隔离，见下文“信任边界”。
 角色名必须是合法且可声明的 AI 身份；`user` 等保留身份在角色加载时拒绝，doctor 报 error，执行器也会在启动前校验，不会静默替换名字。
-codex-orca 通过 Flow 生成的 Orca 终端启动命令设置环境变量；升级前已启动并被复用的会话需要重新启动才会获得它。
+codex-orca 通过 Raindown 生成的 Orca 终端启动命令设置环境变量；升级前已启动并被复用的会话需要重新启动才会获得它。
 它们**不匹配** `node:*`。只想放开特定身份时写精确名字，例如只允许 reviewer 执行器拆出分诊任务：
 
 ```yaml
@@ -236,8 +236,8 @@ creatable_by:
 - `*` 只覆盖能到达本机端口 `/v1/tasks` 的非 user 身份，即 user token 降级的本机 AI 身份。节点 token（`node:<id>`）
   属于可信计算基，只能走节点协议，创建任务一律 403 `scope_denied`；remote token 在本机端口一律 403 `remote_not_allowed`。
   变更 ⑤ 的远程入口另有自己的能力控制，不因为角色写了 `*` 就能创建任务。`node:*`、`remote:*` 模式先保留，供以后的入口使用。
-- `flow init` 不覆盖已有文件，**已存在的角色文件不会自动获得 `creatable_by`**，升级后这些角色只有 user 能创建；
-  `flow doctor` 对字段缺省或为空数组的角色给出“仅 user 可创建”的 info 提示。需要时手动加上，例如 `creatable_by: ["*"]` 或 `["reviewer"]`。
+- `raindown init` 不覆盖已有文件，**已存在的角色文件不会自动获得 `creatable_by`**，升级后这些角色只有 user 能创建；
+  `raindown doctor` 对字段缺省或为空数组的角色给出“仅 user 可创建”的 info 提示。需要时手动加上，例如 `creatable_by: ["*"]` 或 `["reviewer"]`。
 - 定时规则（`schedules.yaml` 与中枢内部规则）目前只写 `schedule.fired`（身份 `hub`）或回调收件箱，不创建任务，
   不经过这项校验。以后若由定时规则创建任务，必须经同一个任务服务，并且明确以哪个身份创建。
 - 和其他检查一样，这只约束经中枢创建的任务；能读 `state/hub.token` 的本机同用户进程仍可以 user 身份创建任何角色（见"信任边界"）。
@@ -249,16 +249,16 @@ creatable_by:
 
 登录流程：
 
-1. `flow ui` 用 user token 调用 `POST /v1/ui/login-code`，拿到一次性登录码（32 字节随机数），
+1. `raindown ui` 用 user token 调用 `POST /v1/ui/login-code`，拿到一次性登录码（32 字节随机数），
    中枢只在内存中保存它的 sha256 摘要，60 秒内有效、只能使用一次（无论成功与否，提交即作废）。
-2. `flow ui` 打开 `http://127.0.0.1:<端口>/ui/login?code=...`（macOS 用 `open`；`--print` 只输出链接）。
-3. `/ui/login` 校验登录码，写入会话 cookie `flow_ui_session`（HttpOnly、SameSite=Strict、Path=/ui、
+2. `raindown ui` 打开 `http://127.0.0.1:<端口>/ui/login?code=...`（macOS 用 `open`；`--print` 只输出链接）。
+3. `/ui/login` 校验登录码，写入会话 cookie `raindown_ui_session`（HttpOnly、SameSite=Strict、Path=/ui、
    Max-Age 7 天），303 跳转到 `/ui`，登录码不留在地址栏与历史记录中。会话同样只在内存中保存摘要；
-   **中枢重启后会话全部失效，需要重新运行 `flow ui`**。
+   **中枢重启后会话全部失效，需要重新运行 `raindown ui`**。
 
 | 接口 | 无会话 | 有效会话 | 额外校验 |
 |---|---|---|---|
-| `GET /ui` | 401，只提示"请运行 flow ui 登录"，不含条目 | 页面 | Host |
+| `GET /ui` | 401，只提示"请运行 raindown ui 登录"，不含条目 | 页面 | Host |
 | `GET /ui/login?code=` | 登录码无效或过期：401 | — | Host |
 | `GET /ui/items`（局部刷新片段） | 401 | 片段 | Host |
 | `POST /ui/items/:id/act` | 401 | 以 `user`、`via: web` 调用收件箱操作 | Host、Origin |
@@ -279,27 +279,27 @@ creatable_by:
 ## 命令
 
 ```sh
-flow hub token issue node:mac-mini --note "书房的 Mac mini"   # 只输出一次 token
-flow hub token issue grok --remote --note "Grok Bot"          # 给变更 ⑤ 的远程入口
-flow hub token list                                           # id、身份、状态、签发时间、最近使用、备注
-flow hub token revoke tok_0123456789ab                        # 立即生效
+raindown hub token issue node:mac-mini --note "书房的 Mac mini"   # 只输出一次 token
+raindown hub token issue grok --remote --note "Grok Bot"          # 给变更 ⑤ 的远程入口
+raindown hub token list                                           # id、身份、状态、签发时间、最近使用、备注
+raindown hub token revoke tok_0123456789ab                        # 立即生效
 ```
 
 三个命令都经中枢 HTTP 接口执行（中枢需在运行），并且只能由 user 执行。
 
 ## 各进程怎么带身份
 
-- **CLI**：读 `state/hub.token`，默认身份 `user`。环境变量 `FLOW_ACTOR` 声明了非 user 身份时，
+- **CLI**：读 `state/hub.token`，默认身份 `user`。环境变量 `RAINDOWN_ACTOR` 声明了非 user 身份时，
   **所有命令**（包括走 HubClient 访问中枢的命令）都以该身份执行，`--actor user` 或其他 `--actor`
   不能覆盖它。这只是第一道防线：同一用户的进程可以清掉这个环境变量，信任边界不变（见下文）。
 - **本机节点**：读 `state/hub.token`，**不声明身份**；中枢在注册与租约流程中按 `node_id` 记为 `node:<id>`。
-- **本机 MCP**：`flow mcp --actor <name>` 用 `state/hub.token` 并声明该 AI 身份（降级）。
-- **用绑定 token 的进程**：设置环境变量 `FLOW_HUB_TOKEN=<token>`；`HubClient` 与节点都会优先用它。
+- **本机 MCP**：`raindown mcp --actor <name>` 用 `state/hub.token` 并声明该 AI 身份（降级）。
+- **用绑定 token 的进程**：设置环境变量 `RAINDOWN_HUB_TOKEN=<token>`；`HubClient` 与节点都会优先用它。
   节点此时声明 `node:<id>`，必须与绑定身份一致。
 - **执行器与 worker 子进程**：节点 spawn 执行器、worker 与验收命令时，环境变量一律经
   `executorEnv()`（`packages/node/src/env.ts`，执行器从 `ExecutorContext.env` 拿到同一份），
-  其中去掉了 `FLOW_HUB_TOKEN`，任务里运行的代码拿不到节点的凭证。执行器再通过 `executorRoleEnv()`
-  校验角色身份并设置 `FLOW_ACTOR`，验收命令也使用合同的角色身份；codex-orca 在终端启动命令中设置它，同时移除 `FLOW_HUB_TOKEN`。
+  其中去掉了 `RAINDOWN_HUB_TOKEN`，任务里运行的代码拿不到节点的凭证。执行器再通过 `executorRoleEnv()`
+  校验角色身份并设置 `RAINDOWN_ACTOR`，验收命令也使用合同的角色身份；codex-orca 在终端启动命令中设置它，同时移除 `RAINDOWN_HUB_TOKEN`。
 - **中枢内部渠道**（Telegram、Web）：运行在中枢进程内，不经过 `/v1` 的 HTTP 鉴权，直接以 user 写事件并附 `via`。
   Web 页面先经过自己的会话与 Origin 校验（见上文"Web 页面"）。
 

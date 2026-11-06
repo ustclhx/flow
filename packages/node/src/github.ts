@@ -6,7 +6,7 @@ import {
   type RepoRef,
   type Result,
   sameRepo,
-} from '@flow/core'
+} from '@raindown/core'
 
 import { z } from 'zod'
 import { type CommandOutput, type CommandRunner, execRunner } from './codex-orca/orca.ts'

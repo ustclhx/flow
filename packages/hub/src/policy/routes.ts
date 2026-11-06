@@ -16,7 +16,7 @@ import {
   policyCheckRequest,
   redactSecrets,
   type TaskView,
-} from '@flow/core'
+} from '@raindown/core'
 import { Hono } from 'hono'
 import { errorResponse } from '../app.ts'
 import { jsonBody, respond } from '../ledger/routes.ts'
@@ -111,8 +111,8 @@ export function createPolicyRoutes(deps: {
 }): Hono {
   const now = deps.now ?? Date.now
   const app = new Hono()
-  // flow-home 的原路径与 realpath：其下 config/ 中的路径识别为 config.edit。
-  const flowHomes = (() => {
+  // raindown-home 的原路径与 realpath：其下 config/ 中的路径识别为 config.edit。
+  const raindownHomes = (() => {
     try {
       return [...new Set([deps.home, realpathSync(deps.home)])]
     } catch {
@@ -172,7 +172,7 @@ export function createPolicyRoutes(deps: {
     const expired = checkTaskScope(c, task_id, deps.leaseHolders)
     if (expired) return expired
     const actions = classifyAction(request, undefined, {
-      flowHomes,
+      raindownHomes,
       userHome: homedir(),
       hubPorts,
     })

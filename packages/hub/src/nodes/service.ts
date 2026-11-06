@@ -30,7 +30,7 @@ import {
   stripUntrustedReview,
   type TaskView,
   type WakeOrigin,
-} from '@flow/core'
+} from '@raindown/core'
 import type { z } from 'zod'
 import type { EventInput, LeaseRecord, LedgerStore } from '../ledger/store.ts'
 import { fieldIssues } from '../ledger/tasks.ts'

@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/events/task_proposal.rejected.schema.json",
+  "$id": "https://raindown.local/schemas/events/task_proposal.rejected.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {

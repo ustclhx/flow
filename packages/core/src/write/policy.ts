@@ -34,7 +34,7 @@ export type FileChange =
   /** 删除已有文件；`baseHash` 给出时必须与当前内容的哈希一致。 */
   | { op: 'delete'; path: string; baseHash?: string }
 
-/** brain 中由 Flow 维护、不能经文件操作直接写入的文件。 */
+/** brain 中由 Raindown 维护、不能经文件操作直接写入的文件。 */
 const BRAIN_INDEX = 'index.md'
 const BRAIN_LOG = 'log.md'
 const BRAIN_AGENTS = 'AGENTS.md'
@@ -79,10 +79,10 @@ export function classifyBrainPath(path: string): Result<never> | BrainFileKind {
     return fail('usage', 'invalid_path', `路径与保留名只差大小写，不允许：${path}`)
   }
   if (path === BRAIN_LOG) {
-    return fail('failure', 'log_append_only', 'log.md 只能由 Flow 在写入时追加，已有行不得修改')
+    return fail('failure', 'log_append_only', 'log.md 只能由 Raindown 在写入时追加，已有行不得修改')
   }
   if (path === BRAIN_INDEX) {
-    return fail('failure', 'index_generated', 'index.md 由 Flow 自动生成，不能直接写入')
+    return fail('failure', 'index_generated', 'index.md 由 Raindown 自动生成，不能直接写入')
   }
   if (path === BRAIN_AGENTS) return 'agents'
   if (path.startsWith(`${BRAIN_JOURNAL_DIR}/`)) {

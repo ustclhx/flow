@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ok, type TaskContractInput, taskContract } from '@flow/core'
+import { ok, type TaskContractInput, taskContract } from '@raindown/core'
 import {
   type EventInput,
   type LedgerStore,
@@ -42,8 +42,8 @@ export function stepClock(start = Date.parse('2026-10-24T00:00:00.000Z'), step =
 }
 
 export async function tempLedger(opts: OpenLedgerOptions = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'flow-ledger-'))
-  const path = join(dir, 'flow.db')
+  const dir = mkdtempSync(join(tmpdir(), 'raindown-ledger-'))
+  const path = join(dir, 'raindown.db')
   const store = await openLedger(path, { now: stepClock(), ...opts })
   return {
     dir,

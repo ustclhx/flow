@@ -2,22 +2,22 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { lstat, mkdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { fail, flowPaths, ok, type Result } from '@flow/core'
+import { fail, ok, type Result, raindownPaths } from '@raindown/core'
 
 /** 读任务继续使用原目录，保留已有会话以便恢复。 */
-export const readCodexHome = (home: string) => join(flowPaths(home).state, 'codex-read-home')
+export const readCodexHome = (home: string) => join(raindownPaths(home).state, 'codex-read-home')
 
 /**
  * 写任务与交互式 Codex 共用固定目录以便恢复会话；并发任务由独立 session 区分，
  * 无需再按角色划分目录，避免角色变化后丢失会话。
  */
-export const workCodexHome = (home: string) => join(flowPaths(home).state, 'codex-work-home')
+export const workCodexHome = (home: string) => join(raindownPaths(home).state, 'codex-work-home')
 
-const HOME_CONFIG = `# 由 Flow 生成，每次启动 Codex 前覆盖。
+const HOME_CONFIG = `# 由 Raindown 生成，每次启动 Codex 前覆盖。
 # 不含 MCP、notify、hooks 与项目信任记录，角色设置由 permissions.config 经 -c 传入。
 `
 
-// 隔离目录由 Flow 管理，不加载用户级扩展；尤其不能保留审批后积累的 allow 规则。
+// 隔离目录由 Raindown 管理，不加载用户级扩展；尤其不能保留审批后积累的 allow 规则。
 const HOME_EXTENSIONS = [
   'rules',
   'hooks.json',
@@ -41,7 +41,7 @@ async function sameRealPath(a: string, b: string): Promise<boolean> {
 
 /**
  * 实测 Codex 0.164：-c mcp_servers={} 与用户配置的表合并，无法清空已有 MCP；因此必须隔离整个目录。
- * 只从用户目录链接 auth.json；配置与扩展始终由 Flow 控制，会话等运行状态保留。
+ * 只从用户目录链接 auth.json；配置与扩展始终由 Raindown 控制，会话等运行状态保留。
  * Codex 若把 auth.json 链接替换成普通文件，保留该文件并拒绝启动，避免丢失刷新后的凭证。
  */
 export async function prepareCodexHome(dir: string, authSource: string): Promise<Result<string>> {
@@ -50,7 +50,7 @@ export async function prepareCodexHome(dir: string, authSource: string): Promise
     try {
       const stat = await lstat(dir)
       if (stat.isSymbolicLink() || !stat.isDirectory())
-        return bad(`${dir} 必须是 Flow 管理的普通目录，不能是符号链接或文件`)
+        return bad(`${dir} 必须是 Raindown 管理的普通目录，不能是符号链接或文件`)
     } catch (err) {
       if (!missing(err)) throw err
     }
@@ -60,7 +60,7 @@ export async function prepareCodexHome(dir: string, authSource: string): Promise
     // mkdir 后再次检查，避免使用刚被替换成链接的目录。
     const stat = await lstat(dir)
     if (stat.isSymbolicLink() || !stat.isDirectory())
-      return bad(`${dir} 必须是 Flow 管理的普通目录，不能是符号链接或文件`)
+      return bad(`${dir} 必须是 Raindown 管理的普通目录，不能是符号链接或文件`)
 
     const link = join(dir, 'auth.json')
     const target = join(resolve(authSource), 'auth.json')

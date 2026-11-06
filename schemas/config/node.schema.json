@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/config/node.schema.json",
+  "$id": "https://raindown.local/schemas/config/node.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -54,6 +54,6 @@
     }
   },
   "additionalProperties": false,
-  "title": "Flow node config",
+  "title": "Raindown node config",
   "description": "config/node.yaml"
 }

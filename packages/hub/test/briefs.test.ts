@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { briefHash, briefUpdateOp, type LedgerEvent, type WakeOrigin, wsBriefOp } from '@flow/core'
+import {
+  briefHash,
+  briefUpdateOp,
+  type LedgerEvent,
+  type WakeOrigin,
+  wsBriefOp,
+} from '@raindown/core'
 import { initTempHome, isolateHub } from '../../core/test/helpers.ts'
 import {
   briefContext,
@@ -21,7 +27,7 @@ const WS = 'ws/product-res'
 const WAKE_TOKEN = `fwk_${'w'.repeat(43)}`
 
 async function setup(binding: SupervisorBinding | null = null) {
-  const home = await initTempHome('flow-hub-brief-')
+  const home = await initTempHome('raindown-hub-brief-')
   // 所有请求都经注入的 fetch 交给进程内的中枢应用；另外隔离掉真实中枢以防万一。
   const restore = isolateHub(home)
   const { store, cleanup } = await tempLedger()
@@ -143,7 +149,7 @@ describe('brief_update 经中枢执行（supervisor "简报读写"）', () => {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${testToken}`,
-          'X-Flow-Actor': actor,
+          'X-Raindown-Actor': actor,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),

@@ -1,4 +1,4 @@
-import type { Database, LedgerEvent, Statement, TaskStatus } from '@flow/core'
+import type { Database, LedgerEvent, Statement, TaskStatus } from '@raindown/core'
 
 /**
  * 投影维护：唯一的 `apply(event)`（design D2）。

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { applyTelegramBinding, ok, parseChannelsConfig } from '@flow/core'
+import { applyTelegramBinding, ok, parseChannelsConfig } from '@raindown/core'
 import {
   CALLBACK_DATA_MAX,
   ChannelError,
@@ -377,7 +377,7 @@ describe('config/channels.yaml 与进度文件', () => {
   })
 
   test('offset 原子写入、0600；损坏时从头开始', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'flow-tg-state-'))
+    const dir = mkdtempSync(join(tmpdir(), 'raindown-tg-state-'))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
     const path = join(dir, 'state', 'telegram.json')
     expect(await loadTelegramState(path)).toEqual({ offset: 0, bot_id: null })

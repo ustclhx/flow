@@ -7,9 +7,9 @@ import {
   findExecutable,
   installDaemons,
   renderTable,
-  resolveFlowHome,
+  resolveRaindownHome,
   uninstallDaemons,
-} from '@flow/core'
+} from '@raindown/core'
 import { defineCommand } from '../command.ts'
 
 export function formatDaemonStatus(status: DaemonStatus): string {
@@ -31,6 +31,14 @@ export function formatDaemonStatus(status: DaemonStatus): string {
       ],
     )
     if (service.launchctlError) rows.push([`${service.label} launchctl`, service.launchctlError])
+  }
+  for (const service of status.legacyServices) {
+    if (service.installed || service.loaded) {
+      rows.push([
+        `${service.label}（旧服务）`,
+        `${service.loaded ? `已加载（PID ${service.pid}）` : '未加载'}；运行 raindown daemon install 清理旧服务`,
+      ])
+    }
   }
   if (status.health.ok) {
     rows.push(
@@ -54,7 +62,7 @@ export function formatDaemonStatus(status: DaemonStatus): string {
 
 /** 命令工厂让测试注入所有系统边界，默认注册表使用真实适配器。 */
 export function createDaemonCommands(overrides: Partial<DaemonOptions> = {}) {
-  const options = (): DaemonOptions => ({ home: resolveFlowHome(process.env), ...overrides })
+  const options = (): DaemonOptions => ({ home: resolveRaindownHome(process.env), ...overrides })
   return [
     defineCommand({
       name: 'daemon install',
@@ -69,13 +77,13 @@ export function createDaemonCommands(overrides: Partial<DaemonOptions> = {}) {
         })
       },
       human: (health) =>
-        `已安装 dev.flow.hub 和 dev.flow.node；中枢 ${health.version} 已就绪（账本序号 ${health.ledger_seq}）`,
+        `已安装 dev.raindown.hub 和 dev.raindown.node；中枢 ${health.version} 已就绪（账本序号 ${health.ledger_seq}）${health.removedLegacyLabels.length ? `；已停止并移除旧服务 ${health.removedLegacyLabels.join('、')}` : ''}`,
     }),
     defineCommand({
       name: 'daemon uninstall',
       summary: '停止并移除 launchd 中枢与节点，保留全部账本数据',
       run: () => uninstallDaemons(options()),
-      human: () => '已停止并移除 dev.flow.hub 和 dev.flow.node',
+      human: ({ labels }) => `已停止并移除 ${labels.join('、')}`,
     }),
     defineCommand({
       name: 'daemon status',

@@ -3,7 +3,8 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 
-export const DAEMON_LABELS = ['dev.flow.hub', 'dev.flow.node'] as const
+export const DAEMON_LABELS = ['dev.raindown.hub', 'dev.raindown.node'] as const
+export const LEGACY_DAEMON_LABELS = ['dev.flow.hub', 'dev.flow.node'] as const
 export const launchAgentsDirectory = () => join(homedir(), 'Library', 'LaunchAgents')
 
 export interface PlistOptions {
@@ -42,7 +43,7 @@ ${[options.bunPath, options.cliPath, ...options.command].map((arg) => `    ${str
   <integer>5</integer>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>FLOW_HOME</key>
+    <key>RAINDOWN_HOME</key>
     ${string(options.home)}
     <key>PATH</key>
     ${string(options.path)}
@@ -60,7 +61,7 @@ const executablePaths = z
   .tuple([z.string().refine(isAbsolute), z.string().refine(isAbsolute)])
   .rest(z.string())
 
-/** 只提取 Flow XML plist 的字符串参数，不求值 XML 的 DTD 或外部实体。 */
+/** 只提取 Raindown XML plist 的字符串参数，不求值 XML 的 DTD 或外部实体。 */
 export function parsePlistPaths(xml: string): { bunPath: string; cliPath: string } | null {
   const array = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)?.[1]
   if (!array || array.replace(/<string>[^<]*<\/string>/g, '').trim()) return null
@@ -98,8 +99,11 @@ const isFile = (path: string) => {
 }
 
 /** status 与 doctor 共用同一份路径诊断；未安装也不会读取账本。 */
-export function checkDaemonPlists(directory: string): PlistCheck[] {
-  return DAEMON_LABELS.map((label) => {
+export function checkDaemonPlists(
+  directory: string,
+  labels: readonly string[] = DAEMON_LABELS,
+): PlistCheck[] {
+  return labels.map((label) => {
     const plistPath = join(directory, `${label}.plist`)
     const check: PlistCheck = {
       label,

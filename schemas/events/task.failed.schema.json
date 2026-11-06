@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/events/task.failed.schema.json",
+  "$id": "https://raindown.local/schemas/events/task.failed.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -248,7 +248,7 @@
             "node_id"
           ],
           "additionalProperties": false,
-          "title": "Flow task result"
+          "title": "Raindown task result"
         },
         "message": {
           "description": "人或 supervisor 放弃时的说明",

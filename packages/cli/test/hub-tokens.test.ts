@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { flowPaths, HUB_TOKEN_ENV, HubClient, type Result } from '@flow/core'
-import { type RunningHub, runHub } from '@flow/hub'
+import { HUB_TOKEN_ENV, HubClient, type Result, raindownPaths } from '@raindown/core'
+import { type RunningHub, runHub } from '@raindown/hub'
 import { initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
 
 /**
- * `flow hub token issue|list|revoke`（add-m1-inbox 1.3，design D9）：真实中枢（随机端口）、临时 FLOW_HOME。
+ * `raindown hub token issue|list|revoke`（add-m1-inbox 1.3，design D9）：真实中枢（随机端口）、临时 RAINDOWN_HOME。
  */
 
 let home: string
@@ -26,13 +26,13 @@ const cli = async (...argv: string[]) => {
 }
 
 beforeAll(async () => {
-  home = await initTempHome('flow-hub-tokens-cli-')
-  for (const k of ['FLOW_HOME', 'FLOW_ACTOR', HUB_TOKEN_ENV]) saved[k] = process.env[k]
-  process.env.FLOW_HOME = home
-  delete process.env.FLOW_ACTOR
+  home = await initTempHome('raindown-hub-tokens-cli-')
+  for (const k of ['RAINDOWN_HOME', 'RAINDOWN_ACTOR', HUB_TOKEN_ENV]) saved[k] = process.env[k]
+  process.env.RAINDOWN_HOME = home
+  delete process.env.RAINDOWN_ACTOR
   delete process.env[HUB_TOKEN_ENV]
   hub = data(await runHub({ home, port: 0, logger: quiet, secrets: { watch: false } }))
-  await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
+  await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
 })
 
 afterAll(async () => {
@@ -44,7 +44,7 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true })
 })
 
-describe('flow hub token', () => {
+describe('raindown hub token', () => {
   test('issue 只输出一次明文；list 不含明文；revoke 立即生效', async () => {
     const issued = await cli('hub', 'token', 'issue', 'grok', '--note', 'Grok Bot', '--remote')
     expect(issued.code).toBe(0)
@@ -66,7 +66,7 @@ describe('flow hub token', () => {
       token: { id: string; actor: string }
       secret: string
     }
-    // 带绑定 token 的进程（FLOW_HUB_TOKEN）身份固定为 node:remote-1，且限于节点协议接口。
+    // 带绑定 token 的进程（RAINDOWN_HUB_TOKEN）身份固定为 node:remote-1，且限于节点协议接口。
     process.env[HUB_TOKEN_ENV] = secret
     try {
       const mismatch = await new HubClient({ home, actor: 'user' }).listTasks()
@@ -88,17 +88,17 @@ describe('flow hub token', () => {
     expect(after).toMatchObject({ ok: false, error: { code: 'unauthorized' } })
   })
 
-  test('三个命令都只允许 user：--actor 或 FLOW_ACTOR 声明非 user 时返回 user_only', async () => {
+  test('三个命令都只允许 user：--actor 或 RAINDOWN_ACTOR 声明非 user 时返回 user_only', async () => {
     const r1 = await cli('hub', 'token', 'issue', 'x1', '--actor', 'codex')
     expect(r1.doc).toMatchObject({ ok: false, error: { code: 'user_only' } })
-    process.env.FLOW_ACTOR = 'claude'
+    process.env.RAINDOWN_ACTOR = 'claude'
     try {
       const r2 = await cli('hub', 'token', 'list', '--actor', 'user')
       expect(r2.doc).toMatchObject({ ok: false, error: { code: 'user_only' } })
       const r3 = await cli('hub', 'token', 'revoke', 'tok_000000000000')
       expect(r3.doc).toMatchObject({ ok: false, error: { code: 'user_only' } })
     } finally {
-      delete process.env.FLOW_ACTOR
+      delete process.env.RAINDOWN_ACTOR
     }
     for (const actor of ['user', 'User']) {
       const r = await cli('hub', 'token', 'issue', actor, '--remote')
@@ -106,14 +106,14 @@ describe('flow hub token', () => {
     }
   })
 
-  test('FLOW_ACTOR 对所有走 HubClient 的命令统一生效，--actor user 不能覆盖', async () => {
-    process.env.FLOW_ACTOR = 'claude'
+  test('RAINDOWN_ACTOR 对所有走 HubClient 的命令统一生效，--actor user 不能覆盖', async () => {
+    process.env.RAINDOWN_ACTOR = 'claude'
     try {
       const created = await cli(
         'task',
         'create',
         '--goal',
-        '经 FLOW_ACTOR',
+        '经 RAINDOWN_ACTOR',
         '--workspace',
         'ws/product-res',
         '--role',
@@ -127,7 +127,7 @@ describe('flow hub token', () => {
         ok: false,
         error: { code: 'role_not_allowed', details: { role: 'dev', actor: 'claude' } },
       })
-      // 角色显式允许 claude 时可以创建，记录的创建者仍是 FLOW_ACTOR 声明的身份。
+      // 角色显式允许 claude 时可以创建，记录的创建者仍是 RAINDOWN_ACTOR 声明的身份。
       await writeFile(
         join(home, 'config/roles/helper.yaml'),
         'name: helper\nexecutor: fake\nprompt: 测试\ncreatable_by: ["claude"]\n',
@@ -136,7 +136,7 @@ describe('flow hub token', () => {
         'task',
         'create',
         '--goal',
-        '经 FLOW_ACTOR',
+        '经 RAINDOWN_ACTOR',
         '--workspace',
         'ws/product-res',
         '--role',
@@ -150,7 +150,7 @@ describe('flow hub token', () => {
       const rebuilt = await cli('hub', 'rebuild', '--actor', 'user')
       expect(rebuilt.doc).toMatchObject({ ok: false, error: { code: 'user_only' } })
     } finally {
-      delete process.env.FLOW_ACTOR
+      delete process.env.RAINDOWN_ACTOR
     }
     expect((await cli('hub', 'rebuild')).doc).toMatchObject({ ok: true })
   })

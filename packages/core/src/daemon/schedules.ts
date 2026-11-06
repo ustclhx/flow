@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { formatZodIssues } from '../validation-issue.ts'
 import { loadWorkspaces } from '../workspaces.ts'
@@ -19,7 +19,7 @@ export * from './schedule-schema.ts'
 export async function loadSchedulesConfig(home: string): Promise<Result<ScheduleConfig>> {
   let text: string
   try {
-    text = await readFile(flowPaths(home).schedulesConfig, 'utf8')
+    text = await readFile(raindownPaths(home).schedulesConfig, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ok({ rules: [], errors: [] })
     return fail('failure', 'read_failed', `无法读取 config/schedules.yaml：${String(err)}`)

@@ -3,24 +3,24 @@ import { mkdtempSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { BEGIN_MARKER, ok, type SyncTarget } from '@flow/core'
+import { BEGIN_MARKER, ok, type SyncTarget } from '@raindown/core'
 import { createAgentsSyncCommand } from '../src/commands/agents-sync.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
 
 describe('agents sync CLI', () => {
   let root: string
-  let previousFlowHome: string | undefined
+  let previousRaindownHome: string | undefined
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'flow-agents-cli-'))
-    previousFlowHome = process.env.FLOW_HOME
-    process.env.FLOW_HOME = join(root, 'flow-home')
+    root = await mkdtemp(join(tmpdir(), 'raindown-agents-cli-'))
+    previousRaindownHome = process.env.RAINDOWN_HOME
+    process.env.RAINDOWN_HOME = join(root, 'raindown-home')
   })
 
   afterEach(async () => {
-    if (previousFlowHome === undefined) delete process.env.FLOW_HOME
-    else process.env.FLOW_HOME = previousFlowHome
+    if (previousRaindownHome === undefined) delete process.env.RAINDOWN_HOME
+    else process.env.RAINDOWN_HOME = previousRaindownHome
     await rm(root, { recursive: true, force: true })
   })
 
@@ -127,16 +127,16 @@ describe('agents sync CLI', () => {
     expect(output.exitCode).toBe(1)
   })
 
-  test('默认命令已注册并读取 FLOW_HOME：未初始化时返回 not_initialized', async () => {
-    const prev = process.env.FLOW_HOME
-    process.env.FLOW_HOME = join(mkdtempSync(join(tmpdir(), 'flow-cli-sync-')), 'home')
+  test('默认命令已注册并读取 RAINDOWN_HOME：未初始化时返回 not_initialized', async () => {
+    const prev = process.env.RAINDOWN_HOME
+    process.env.RAINDOWN_HOME = join(mkdtempSync(join(tmpdir(), 'raindown-cli-sync-')), 'home')
     try {
       const output = await runCli(['agents', 'sync', '--json'], commands)
       expect(output.exitCode).toBe(1)
       expect(JSON.parse(output.stdout).error.code).toBe('not_initialized')
     } finally {
-      if (prev === undefined) delete process.env.FLOW_HOME
-      else process.env.FLOW_HOME = prev
+      if (prev === undefined) delete process.env.RAINDOWN_HOME
+      else process.env.RAINDOWN_HOME = prev
     }
   })
 

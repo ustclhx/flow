@@ -26,12 +26,12 @@ export const ORIGIN_URL = 'https://github.com/acme/demo.git'
 export const TASK_BRANCH = 'ustclhx/t-1'
 
 export function gitFixture(): GitFixture {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-git-env-')))
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-git-env-')))
   const home = join(root, 'home')
   mkdirSync(home, { recursive: true })
   writeFileSync(
     join(home, '.gitconfig'),
-    '[user]\n\tname = Flow Test\n\temail = flow@example.com\n[init]\n\tdefaultBranch = main\n[credential]\n\thelper = cache\n',
+    '[user]\n\tname = Raindown Test\n\temail = raindown@example.com\n[init]\n\tdefaultBranch = main\n[credential]\n\thelper = cache\n',
   )
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? '/usr/bin:/bin',

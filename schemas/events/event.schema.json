@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/events/event.schema.json",
+  "$id": "https://raindown.local/schemas/events/event.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
@@ -138,6 +138,10 @@
                       "level"
                     ],
                     "additionalProperties": false
+                  },
+                  "legacy_tool_action": {
+                    "type": "boolean",
+                    "const": true
                   }
                 },
                 "required": [
@@ -263,6 +267,10 @@
                             "level"
                           ],
                           "additionalProperties": false
+                        },
+                        "legacy_tool_action": {
+                          "type": "boolean",
+                          "const": true
                         }
                       },
                       "required": [
@@ -1192,7 +1200,7 @@
                 "timeout_s"
               ],
               "additionalProperties": false,
-              "title": "Flow task contract",
+              "title": "Raindown task contract",
               "description": "创建任务时提交的合同"
             },
             "origin": {
@@ -1604,7 +1612,7 @@
                 "node_id"
               ],
               "additionalProperties": false,
-              "title": "Flow task result",
+              "title": "Raindown task result",
               "description": "任务结束（done / failed）时的结果"
             }
           },
@@ -1874,7 +1882,7 @@
                 "node_id"
               ],
               "additionalProperties": false,
-              "title": "Flow task result"
+              "title": "Raindown task result"
             },
             "message": {
               "description": "人或 supervisor 放弃时的说明",
@@ -2665,7 +2673,7 @@
                 "node_id"
               ],
               "additionalProperties": false,
-              "title": "Flow task result"
+              "title": "Raindown task result"
             },
             "node_id": {
               "description": "由持有租约的节点确认取消时填写",
@@ -3498,7 +3506,7 @@
             "path": {
               "type": "string",
               "minLength": 1,
-              "description": "备份文件路径（相对 flow-home）"
+              "description": "备份文件路径（相对 raindown-home）"
             },
             "size_bytes": {
               "type": "integer",
@@ -5505,7 +5513,7 @@
                 "timeout_s"
               ],
               "additionalProperties": false,
-              "title": "Flow task contract",
+              "title": "Raindown task contract",
               "description": "创建任务时提交的合同"
             },
             "decision": {
@@ -6084,6 +6092,6 @@
       "title": "merge_request.rejected"
     }
   ],
-  "title": "Flow ledger event",
+  "title": "Raindown ledger event",
   "description": "账本事件；按 type 区分载荷"
 }

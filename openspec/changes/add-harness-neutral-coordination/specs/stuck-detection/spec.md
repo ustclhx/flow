@@ -18,7 +18,7 @@
 - **THEN** 任务以 `blocked(awaiting_approval)` 上报，说明中包含该命令
 
 #### Scenario: worker 结构化提问
-- **WHEN** worker 调用 `flow_report question` 后停下
+- **WHEN** worker 调用 `raindown_report question` 后停下
 - **THEN** 任务以 `blocked(question)` 上报，`basis` 为 `reported`
 
 #### Scenario: worktree 被删除

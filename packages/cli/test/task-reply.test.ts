@@ -2,22 +2,22 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from '
 import { rm, writeFile } from 'node:fs/promises'
 import {
   type FakeStep,
-  flowPaths,
   HubClient,
   invokeOperation,
   type Result,
+  raindownPaths,
   type TaskView,
   taskReplyOp,
-} from '@flow/core'
-import { type RunningHub, runHub } from '@flow/hub'
-import { type RunningNode, startNode } from '@flow/node'
+} from '@raindown/core'
+import { type RunningHub, runHub } from '@raindown/hub'
+import { type RunningNode, startNode } from '@raindown/node'
 import { callJson, connect, initTempHome } from '../../mcp/test/helpers.ts'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
 
 /**
  * `task_reply` 操作（add-m1-executors 1.3；task-interaction spec）：CLI 位置参数 / `--approve` / `--deny`
- * 与 MCP 共用一份定义；真实中枢（随机端口）+ 进程内节点 + fake 执行器。临时 FLOW_HOME，不碰 ~/flow-home。
+ * 与 MCP 共用一份定义；真实中枢（随机端口）+ 进程内节点 + fake 执行器。临时 RAINDOWN_HOME，不碰 ~/raindown-home。
  */
 
 let home: string
@@ -33,12 +33,12 @@ function data<T>(r: Result<T>): T {
 const client = () => new HubClient({ home, actor: 'user' })
 
 beforeAll(async () => {
-  home = await initTempHome('flow-task-reply-')
-  savedHome = process.env.FLOW_HOME
-  process.env.FLOW_HOME = home
-  await writeFile(flowPaths(home).hubConfig, 'lease_ttl_s: 5\n')
+  home = await initTempHome('raindown-task-reply-')
+  savedHome = process.env.RAINDOWN_HOME
+  process.env.RAINDOWN_HOME = home
+  await writeFile(raindownPaths(home).hubConfig, 'lease_ttl_s: 5\n')
   hub = data(await runHub({ home, port: 0, logger: { ...quiet, error() {} } as never }))
-  await writeFile(flowPaths(home).hubConfig, `port: ${hub.port}\nlease_ttl_s: 5\n`)
+  await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\nlease_ttl_s: 5\n`)
   node = data(
     await startNode({ home, hubUrl: hub.url, logger: quiet, nodeId: 'n-reply', concurrency: 8 }),
   )
@@ -47,8 +47,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await node?.stop()
   await hub?.stop()
-  if (savedHome === undefined) delete process.env.FLOW_HOME
-  else process.env.FLOW_HOME = savedHome
+  if (savedHome === undefined) delete process.env.RAINDOWN_HOME
+  else process.env.RAINDOWN_HOME = savedHome
   await rm(home, { recursive: true, force: true })
 })
 
@@ -88,7 +88,7 @@ const ask: FakeStep[] = [
 setDefaultTimeout(20_000)
 
 describe('task_reply', () => {
-  test('flow task reply <id> 文字：送达后任务完成，回复者为 user', async () => {
+  test('raindown task reply <id> 文字：送达后任务完成，回复者为 user', async () => {
     const id = await create(ask)
     await until(id, (t) => t.status === 'blocked', 'blocked')
     const r = await cli(id, '用', 'main', '分支')

@@ -65,10 +65,10 @@ export interface GitAuthor {
   email: string
 }
 
-/** Flow 提交的作者：`Flow (<actor>) <flow@localhost>`（design D6）。 */
-export const flowAuthor = (actor: string): GitAuthor => ({
-  name: `Flow (${actor})`,
-  email: 'flow@localhost',
+/** Raindown 提交的作者：`Raindown (<actor>) <raindown@localhost>`（design D6）。 */
+export const raindownAuthor = (actor: string): GitAuthor => ({
+  name: `Raindown (${actor})`,
+  email: 'raindown@localhost',
 })
 
 /** 以 `-c` 传入身份，不修改任何全局或仓库配置；关闭签名，避免自动提交被交互打断。 */
@@ -136,7 +136,7 @@ export interface CommitOptions extends GitOptions {
   /** 只提交这些路径（相对仓库根）；省略时提交已暂存的全部内容。 */
   paths?: string[]
   allowEmpty?: boolean
-  /** 跳过提交前钩子；只用于内容完全来自 Flow 模板的提交。 */
+  /** 跳过提交前钩子；只用于内容完全来自 Raindown 模板的提交。 */
   noVerify?: boolean
 }
 

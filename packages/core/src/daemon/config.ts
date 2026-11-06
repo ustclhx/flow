@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { relative } from 'node:path'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { capability } from '../ledger/common.ts'
 import { DEFAULT_HUB_PORT, HUB_HOSTNAME } from '../ledger/protocol.ts'
 import { fail, ok, type Result } from '../result.ts'
@@ -12,7 +12,7 @@ import { formatZodIssues } from '../validation-issue.ts'
 /**
  * `config/hub.yaml` 与 `config/node.yaml`（design D6、D10）。
  *
- * 放在 core 而不是 hub / node 各自的包里：中枢、节点、CLI（`flow daemon status`、
+ * 放在 core 而不是 hub / node 各自的包里：中枢、节点、CLI（`raindown daemon status`、
  * `HubClient` 解析中枢地址）都要读 `hub.yaml`，节点还要同时读两份；放在 core 只有一份定义，
  * 也能和其他契约一起导出到 `schemas/config/`。
  *
@@ -66,7 +66,7 @@ export const hubConfigSchema = z
       .default('03:30')
       .meta({ description: '每日备份的本地时间 HH:MM，默认 03:30' }),
   })
-  .meta({ title: 'Flow hub config', description: 'config/hub.yaml' })
+  .meta({ title: 'Raindown hub config', description: 'config/hub.yaml' })
 export type HubConfig = z.infer<typeof hubConfigSchema>
 
 export const NODE_RESERVED_DEFAULTS = { supervisor: 1, reply: 1 } as const
@@ -109,7 +109,7 @@ export const nodeConfigSchema = z
         '在 concurrency 之外为 supervisor 预留的执行槽（add-m1-supervisor D12）：普通槽满时仍为它们领取任务',
     }),
   })
-  .meta({ title: 'Flow node config', description: 'config/node.yaml' })
+  .meta({ title: 'Raindown node config', description: 'config/node.yaml' })
 export type NodeConfig = z.infer<typeof nodeConfigSchema>
 
 /** 读取并校验一份可选的 YAML 配置：文件不存在或为空时取全部默认值。 */
@@ -146,10 +146,10 @@ async function loadYamlConfig<S extends z.ZodType>(
 }
 
 export const loadHubConfig = (home: string): Promise<Result<HubConfig>> =>
-  loadYamlConfig(home, flowPaths(home).hubConfig, hubConfigSchema)
+  loadYamlConfig(home, raindownPaths(home).hubConfig, hubConfigSchema)
 
 export const loadNodeConfig = (home: string): Promise<Result<NodeConfig>> =>
-  loadYamlConfig(home, flowPaths(home).nodeConfig, nodeConfigSchema)
+  loadYamlConfig(home, raindownPaths(home).nodeConfig, nodeConfigSchema)
 
 /** 节点应连接的中枢地址：node.yaml 的 hub_url 优先，否则用回环地址加 hub.yaml 的端口。 */
 export const resolveHubUrl = (hub: Pick<HubConfig, 'port'>, node?: Pick<NodeConfig, 'hub_url'>) =>

@@ -14,16 +14,16 @@
 
 #### Scenario: 执行器未知
 - **WHEN** 某个角色的 `executor` 是 `gpt-cli`，而节点上没有这个执行器插件
-- **THEN** `flow doctor` 报告该角色引用了不存在的执行器
+- **THEN** `raindown doctor` 报告该角色引用了不存在的执行器
 
 ### Requirement: 默认角色
-`flow init` SHALL 补齐三个默认角色，已存在的文件不覆盖：
+`raindown init` SHALL 补齐三个默认角色，已存在的文件不覆盖：
 - `dev`：`codex-orca`，权限沿用用户当前的做法，即跳过 Codex 的审批与沙箱；
 - `reviewer`：`claude-sdk`，可写文档、不可改代码，可以评论 PR；文档限于 cwd 内 `docs/**/*.{md,mdx,txt,png,svg,jpg,jpeg,gif,webp}`（模板展开为多条）、`**/*.md`、`**/*.mdx`，禁止 NotebookEdit。提示词要求除非合同明确要求否则不提交、不推送，结论及所写文件列在最终回复；
 - `triage`：`codex-exec`，沙箱为只读。
 
 #### Scenario: 补齐默认角色
-- **WHEN** 在已初始化但没有 `config/roles/` 的 flow-home 上运行 `flow init`
+- **WHEN** 在已初始化但没有 `config/roles/` 的 raindown-home 上运行 `raindown init`
 - **THEN** 新增 `dev.yaml`、`reviewer.yaml`、`triage.yaml`，并在 config 仓库中提交
 
 ### Requirement: 任务按角色解析执行参数

@@ -12,23 +12,23 @@ export const COMMAND_ACTION_MAPPINGS: readonly CommandActionMapping[] = [
   { prefix: ['gh', 'pr', 'merge'], action: 'pr.merge' },
   { prefix: ['wrangler', 'deploy'], action: 'deploy' },
   { prefix: ['wrangler', 'pages', 'deploy'], action: 'deploy' },
-  { prefix: ['flow', 'secrets'], action: 'secrets' },
-  // flow CLI 与 flow MCP 工具等价（FLOW_TOOL_ACTIONS）：Bash 调 CLI 不能绕过受保护的动作。
-  { prefix: ['flow', 'task', 'create'], action: 'task.create' },
-  { prefix: ['flow', 'task', 'cancel'], action: 'task.cancel' },
-  { prefix: ['flow', 'task', 'reply'], action: 'task.reply' },
-  { prefix: ['flow', 'task', 'respond'], action: 'task.respond' },
-  { prefix: ['flow', 'inbox', 'act'], action: 'inbox.act' },
-  { prefix: ['flow', 'kb', 'proposals', 'accept'], action: 'proposal.decide' },
-  { prefix: ['flow', 'kb', 'proposals', 'reject'], action: 'proposal.decide' },
-  { prefix: ['flow', 'resource', 'transfer'], action: 'resource.transfer' },
-  // 管理命令：中枢、token、策略、守护进程、MCP 服务、节点与初始化（flow secrets 已映射为受保护的 secrets）。
-  { prefix: ['flow', 'hub'], action: 'flow.admin' },
-  { prefix: ['flow', 'policy'], action: 'flow.admin' },
-  { prefix: ['flow', 'daemon'], action: 'flow.admin' },
-  { prefix: ['flow', 'mcp'], action: 'flow.admin' },
-  { prefix: ['flow', 'node'], action: 'flow.admin' },
-  { prefix: ['flow', 'init'], action: 'flow.admin' },
+  { prefix: ['raindown', 'secrets'], action: 'secrets' },
+  // raindown CLI 与 raindown MCP 工具等价（RAINDOWN_TOOL_ACTIONS）：Bash 调 CLI 不能绕过受保护的动作。
+  { prefix: ['raindown', 'task', 'create'], action: 'task.create' },
+  { prefix: ['raindown', 'task', 'cancel'], action: 'task.cancel' },
+  { prefix: ['raindown', 'task', 'reply'], action: 'task.reply' },
+  { prefix: ['raindown', 'task', 'respond'], action: 'task.respond' },
+  { prefix: ['raindown', 'inbox', 'act'], action: 'inbox.act' },
+  { prefix: ['raindown', 'kb', 'proposals', 'accept'], action: 'proposal.decide' },
+  { prefix: ['raindown', 'kb', 'proposals', 'reject'], action: 'proposal.decide' },
+  { prefix: ['raindown', 'resource', 'transfer'], action: 'resource.transfer' },
+  // 管理命令：中枢、token、策略、守护进程、MCP 服务、节点与初始化（raindown secrets 已映射为受保护的 secrets）。
+  { prefix: ['raindown', 'hub'], action: 'raindown.admin' },
+  { prefix: ['raindown', 'policy'], action: 'raindown.admin' },
+  { prefix: ['raindown', 'daemon'], action: 'raindown.admin' },
+  { prefix: ['raindown', 'mcp'], action: 'raindown.admin' },
+  { prefix: ['raindown', 'node'], action: 'raindown.admin' },
+  { prefix: ['raindown', 'init'], action: 'raindown.admin' },
 ]
 
 /** 识别不确定时视为可能执行任意敏感动作；与判定端共用同一份保护列表。 */
@@ -42,11 +42,19 @@ export const SENSITIVE_ACTIONS = [
 ] as const
 
 /**
- * flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做决定的操作，额外识别为具体动作。
- * 只读和写入边界内的操作（见 claude-sdk 的 FLOW_MCP_AUTO_ALLOWED）不在此列。
+ * raindown MCP 工具（`mcp__raindown__<操作名>`）中会扩大权限或替用户做决定的操作，额外识别为具体动作。
+ * 只读和写入边界内的操作（见 claude-sdk 的 RAINDOWN_MCP_AUTO_ALLOWED）不在此列。
  */
-export const FLOW_MCP_TOOL_PREFIX = 'mcp__flow__'
-export const FLOW_TOOL_ACTIONS: Readonly<Record<string, string>> = {
+export const RAINDOWN_MCP_TOOL_PREFIX = 'mcp__raindown__'
+
+/** 旧命名只在策略边界归一，避免既有的限制规则因改名失效。 */
+export const normalizePolicyAction = (action: string): string =>
+  action.replace(/^flow\./, 'raindown.').replace(/^(tool:)?mcp__flow__/, '$1mcp__raindown__')
+
+/** 不完整的旧工具名前缀不能安全改写，仍须提示用户检查通配规则。 */
+export const hasLegacyPolicyAction = (action: string): boolean =>
+  /^flow(?:[.*]|$)/.test(action) || /^(?:tool:)?mcp__(?:flow(?:__|\*|$)|flo\*|fl\*)/.test(action)
+export const RAINDOWN_TOOL_ACTIONS: Readonly<Record<string, string>> = {
   task_create: 'task.create',
   task_cancel: 'task.cancel',
   task_reply: 'task.reply',
@@ -60,12 +68,12 @@ export const FLOW_TOOL_ACTIONS: Readonly<Record<string, string>> = {
 
 /**
  * 受保护的动作：只有具体 workspace 或角色 scope 加精确 action（不含通配符）的规则才能自动放行。
- * 包括识别不确定时的全部敏感动作，以及 flow MCP 中会扩大权限的操作。
+ * 包括识别不确定时的全部敏感动作，以及 raindown MCP 中会扩大权限的操作。
  */
 export const GUARDED_ACTIONS: readonly string[] = [
   ...SENSITIVE_ACTIONS,
-  ...new Set(Object.values(FLOW_TOOL_ACTIONS)),
-  'flow.admin',
+  ...new Set(Object.values(RAINDOWN_TOOL_ACTIONS)),
+  'raindown.admin',
 ]
 
 /**
@@ -570,8 +578,8 @@ export interface ActionRequest {
 }
 
 export interface ClassifyOptions {
-  /** flow-home 的路径（可给多个，例如原路径与 realpath）；其下 `config/` 中的路径识别为 config.edit。 */
-  flowHomes?: readonly string[]
+  /** raindown-home 的路径（可给多个，例如原路径与 realpath）；其下 `config/` 中的路径识别为 config.edit。 */
+  raindownHomes?: readonly string[]
   /** 用户主目录：展开命令中的 `~` 与 `$HOME`。 */
   userHome?: string
   /** 中枢端口（总是同时包含 7477 与 7478）：命令直接访问中枢时按不透明处理。 */
@@ -585,8 +593,8 @@ export const DEFAULT_HUB_PORTS = [7477, 7478] as const
 const POLICY_FILE_RE = /(^|\/)config\/policies\.yaml$/i
 /** glob、变量展开、命令替换：命令实际作用的文件无法静态确定。 */
 const DYNAMIC_RE = /[*?[]|\$[A-Za-z_{(]|`|[<>]\(/
-/** 与动态写法同时出现时才算：策略文件、`/config/` 路径段、flow-home（另加实际 flow-home 的 basename）。 */
-const CONFIG_HINT_RE = /polic|\/config\/|flow-home/i
+/** 与动态写法同时出现时才算：策略文件、`/config/` 路径段、raindown-home（另加实际 raindown-home 的 basename）。 */
+const CONFIG_HINT_RE = /polic|\/config\/|(?:raindown|flow)-home/i
 /** 非打印字符（换行、回车、制表符之外的控制字符与格式字符）：显示内容与实际执行可能不一致。 */
 const UNPRINTABLE_RE = /[\p{Cc}\p{Cf}\u2028\u2029]/u
 const ODD_WHITESPACE_RE = /[^\S \t\n]/u
@@ -595,12 +603,14 @@ const LOOPBACK_RE = /(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]|::1):(\d+)/gi
 const SCRIPT_FILE_RE = /\.(?:[cm]?[jt]s|[jt]sx)$/
 const PACKAGE_RUNNERS = new Set(['bunx', 'npx', 'pnpx'])
 const PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn'])
+const CLI_NAMES = new Set(['raindown', 'flow', '@raindown/cli', '@flow/cli'])
+const isRaindownCli = (word: string): boolean => CLI_NAMES.has(word)
 
 const lower = (p: string) => normalizePolicyPath(p).replace(/\/+$/, '').toLowerCase()
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
- * 词法归一（只用于识别 flow-home 与策略文件，不用于分词）：去掉引号与反斜杠，展开 `~`、`$HOME`、
+ * 词法归一（只用于识别 raindown-home 与策略文件，不用于分词）：去掉引号与反斜杠，展开 `~`、`$HOME`、
  * `${HOME}`，合并 `//` 与 `/./`，转小写。
  */
 export function normalizeCommandText(command: string, userHome?: string): string {
@@ -620,23 +630,23 @@ export function normalizeCommandText(command: string, userHome?: string): string
 }
 
 /**
- * 识别 flow CLI 的各种调用方式，返回 `['flow', ...参数]`（去掉以 - 开头的选项，与 CLI 的命令匹配一致）：
- * 执行文件 basename 为 flow；`bunx` / `npx` / `pnpx flow`；`bun x flow`、`bun [run] <脚本>.ts`；
- * `npm|pnpm|yarn exec|run|dlx|x flow`。`bun -e` / `--eval` / `-p` / `--print` 返回 opaque。
+ * 识别 raindown CLI 的各种调用方式，返回 `['raindown', ...参数]`（去掉以 - 开头的选项，与 CLI 的命令匹配一致）：
+ * 新旧执行文件 basename（raindown / flow）等价识别；`bunx` / `npx` / `pnpx raindown`；`bun x raindown`、`bun [run] <脚本>.ts`；
+ * `npm|pnpm|yarn exec|run|dlx|x raindown`。`bun -e` / `--eval` / `-p` / `--print` 返回 opaque。
  */
-function flowInvocation(words: readonly string[]): { words?: string[]; opaque: boolean } {
+function raindownInvocation(words: readonly string[]): { words?: string[]; opaque: boolean } {
   // 与 CLI 一致地去掉选项；`--actor <值>` 的值也去掉（宁可多识别，不漏掉其后的子命令）。
   const positional = (from: readonly string[]) =>
     from.filter((w, i) => !w.startsWith('-') && from[i - 1] !== '--actor')
-  const asFlow = (rest: readonly string[]) => ({
-    words: ['flow', ...positional(rest)],
+  const asRaindown = (rest: readonly string[]) => ({
+    words: ['raindown', ...positional(rest)],
     opaque: false,
   })
   const [exe, ...rest] = words
-  if (exe === 'flow') return asFlow(rest)
+  if (exe === 'raindown' || exe === 'flow') return asRaindown(rest)
   if (exe && PACKAGE_RUNNERS.has(exe)) {
     const args = positional(rest)
-    if (args[0] === 'flow' || args[0] === '@flow/cli') return asFlow(args.slice(1))
+    if (isRaindownCli(args[0] ?? '')) return asRaindown(args.slice(1))
     return { opaque: false }
   }
   if (exe === 'bun') {
@@ -645,17 +655,17 @@ function flowInvocation(words: readonly string[]): { words?: string[]; opaque: b
     if (args[0] === 'x') args = args.slice(1)
     else if (args[0] === 'run') args = args.slice(1)
     const head = args[0] ?? ''
-    if (head === 'flow' || head === '@flow/cli' || SCRIPT_FILE_RE.test(head)) {
-      return asFlow(args.slice(1))
+    if (isRaindownCli(head) || SCRIPT_FILE_RE.test(head)) {
+      return asRaindown(args.slice(1))
     }
     return { opaque: false }
   }
   if (exe && PACKAGE_MANAGERS.has(exe)) {
     const args = positional(rest)
-    if (['exec', 'run', 'dlx', 'x'].includes(args[0] ?? '') && args[1] === 'flow') {
-      return asFlow(args.slice(2))
+    if (['exec', 'run', 'dlx', 'x'].includes(args[0] ?? '') && isRaindownCli(args[1] ?? '')) {
+      return asRaindown(args.slice(2))
     }
-    if (exe === 'yarn' && args[0] === 'flow') return asFlow(args.slice(1))
+    if (exe === 'yarn' && isRaindownCli(args[0] ?? '')) return asRaindown(args.slice(1))
   }
   return { opaque: false }
 }
@@ -666,24 +676,30 @@ export function classifyAction(
   mappings: readonly CommandActionMapping[] = COMMAND_ACTION_MAPPINGS,
   opts: ClassifyOptions = {},
 ): string[] {
-  const actions = new Set([`tool:${request.tool}`])
-  const flowAction = request.tool.startsWith(FLOW_MCP_TOOL_PREFIX)
-    ? FLOW_TOOL_ACTIONS[request.tool.slice(FLOW_MCP_TOOL_PREFIX.length)]
+  const tool = normalizePolicyAction(request.tool)
+  const actions = new Set([`tool:${tool}`])
+  // 自定义映射也按新旧名称等价匹配，不能因调用方仍用旧前缀而漏掉动作。
+  mappings = mappings.map(({ prefix, action }) => ({
+    prefix: prefix[0] === 'flow' ? ['raindown', ...prefix.slice(1)] : prefix,
+    action: normalizePolicyAction(action),
+  }))
+  const raindownAction = tool.startsWith(RAINDOWN_MCP_TOOL_PREFIX)
+    ? RAINDOWN_TOOL_ACTIONS[tool.slice(RAINDOWN_MCP_TOOL_PREFIX.length)]
     : undefined
-  if (flowAction) actions.add(flowAction)
+  if (raindownAction) actions.add(raindownAction)
   const markOpaque = () => {
     for (const action of SENSITIVE_ACTIONS) actions.add(action)
   }
-  const homes = (opts.flowHomes ?? []).map(lower)
+  const homes = (opts.raindownHomes ?? []).map(lower)
   const configDirs = homes.map((home) => `${home}/config`)
   const userHome = opts.userHome ? lower(opts.userHome) : undefined
-  // flow-home 在命令中的写法：绝对路径、~ 写法、basename（含默认的 flow-home）作为一个路径段。
+  // raindown-home 在命令中的写法：绝对路径、~ 写法、basename（含默认的 raindown-home）作为一个路径段。
   const tildeHomes = userHome
     ? homes.filter((h) => h.startsWith(`${userHome}/`)).map((h) => `~${h.slice(userHome.length)}`)
     : []
-  const basenames = [...new Set(['flow-home', ...homes.map((h) => posix.basename(h))])].filter(
-    Boolean,
-  )
+  const basenames = [
+    ...new Set(['raindown-home', 'flow-home', ...homes.map((h) => posix.basename(h))]),
+  ].filter(Boolean)
   const segmentRe = new RegExp(
     `(?:^|[\\s/=:;|&(<>])(?:${basenames.map(escapeRe).join('|')})(?=/|$|[\\s;|&)<>])`,
   )
@@ -712,7 +728,7 @@ export function classifyAction(
     if (unprintable(command)) markOpaque()
     // 空格、制表符、换行之外的空白（NBSP、U+2000、U+3000、\r、\v……）：显示与 shell 分词可能不一致。
     if (ODD_WHITESPACE_RE.test(command)) markOpaque()
-    // 直接访问中枢（curl 127.0.0.1:7477/v1/…）绕过了 flow 工具的识别：按不透明处理。
+    // 直接访问中枢（curl 127.0.0.1:7477/v1/…）绕过了 raindown 工具的识别：按不透明处理。
     const loopbackPorts = [...folded.matchAll(LOOPBACK_RE)].map((m) => Number(m[1]))
     if (loopbackPorts.some((port) => ports.has(port))) markOpaque()
     if (
@@ -734,19 +750,23 @@ export function classifyAction(
       if (runsIndirectly(words)) markOpaque()
       if (nested.script !== undefined) pending.push(nested.script)
       if (expansionMayMatch(words, mappings)) markOpaque()
-      const flow = flowInvocation(words)
-      if (flow.opaque) markOpaque()
-      if (flow.words && expansionMayMatch(flow.words, mappings)) markOpaque()
+      const raindown = raindownInvocation(words)
+      if (raindown.opaque) markOpaque()
+      if (raindown.words && expansionMayMatch(raindown.words, mappings)) markOpaque()
       for (const { prefix, action } of mappings) {
         if (hasCommandPrefix(words, prefix)) actions.add(action)
-        if (flow.words && hasCommandPrefix(flow.words, prefix)) actions.add(action)
+        if (raindown.words && hasCommandPrefix(raindown.words, prefix)) actions.add(action)
       }
     }
   }
   for (const path of request.paths ?? []) {
     const p = lower(path)
     if (POLICY_FILE_RE.test(p)) actions.add('policy.edit')
-    if (configDirs.some((d) => p === d || p.startsWith(`${d}/`))) actions.add('config.edit')
+    if (
+      configDirs.some((d) => p === d || p.startsWith(`${d}/`)) ||
+      /(^|\/)(?:raindown|flow)-home\/config(?:\/|$)/.test(p)
+    )
+      actions.add('config.edit')
     // 路径本身带 glob 或变量且指向配置时同样无法确定目标。
     if (DYNAMIC_RE.test(path) && hintRe.test(path)) markOpaque()
     if (unprintable(path)) markOpaque()

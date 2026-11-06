@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fail, loadWorkspaces, ok, type Result, type TaskContract } from '@flow/core'
+import { fail, loadWorkspaces, ok, type Result, type TaskContract } from '@raindown/core'
 import { z } from 'zod'
 
 const workdirInputs = z.looseObject({ repo: z.string().min(1).optional() })
@@ -11,7 +11,7 @@ const normalizeRepo = (path: string) => {
 }
 
 /**
- * 合同 cwd 优先，其次 inputs.repo，最后取 workspace 唯一仓库；绝不回退到 flow-home。
+ * 合同 cwd 优先，其次 inputs.repo，最后取 workspace 唯一仓库；绝不回退到 raindown-home。
  * requireWorkspaceRepo 用于 codex-orca 的基础仓库：显式 cwd 也必须校验归属并规范化。
  */
 export async function resolveContractCwd(

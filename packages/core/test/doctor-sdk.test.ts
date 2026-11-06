@@ -11,14 +11,14 @@ afterEach(() => {
 })
 
 function fixture() {
-  const home = tempHome('flow-doctor-sdk-')
+  const home = tempHome('raindown-doctor-sdk-')
   homes.push(home)
   const nodeDir = join(home, 'packages/node')
   const nodePackageJson = join(nodeDir, 'package.json')
   writeText(
     nodePackageJson,
     JSON.stringify({
-      name: '@flow/node',
+      name: '@raindown/node',
       dependencies: { [SDK_PACKAGE]: '4.5.6' },
     }),
   )

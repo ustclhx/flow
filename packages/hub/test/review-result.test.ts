@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { type TaskView, taskContract } from '@flow/core'
+import { type TaskView, taskContract } from '@raindown/core'
 import { completionDrafts, type LeaseRecord } from '../src/index.ts'
 
 /** 中枢入账前丢弃不可能是审查结论的 result.review（add-m1-supervisor D10）。 */

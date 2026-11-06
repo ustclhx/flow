@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { execCommand } from './git.ts'
-import { flowPaths } from './home.ts'
+import { raindownPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import { CONFIG_GITLEAKS_TOML, SOPS_ALLOWLIST } from './templates.ts'
 import { withWriteLock } from './write/lock.ts'
@@ -33,7 +33,7 @@ const keyFile = (opts: SecretsOptions) =>
 
 async function sops(home: string, args: string[], opts: SecretsOptions, input?: string) {
   const r = await (opts.exec ?? execCommand)(opts.sopsBin ?? 'sops', args, {
-    cwd: flowPaths(home).config,
+    cwd: raindownPaths(home).config,
     env: { ...process.env, SOPS_AGE_KEY_FILE: keyFile(opts) },
     ...(input === undefined ? {} : { input }),
   })
@@ -48,8 +48,8 @@ async function sops(home: string, args: string[], opts: SecretsOptions, input?: 
 }
 
 async function readTree(home: string, opts: SecretsOptions): Promise<Result<SecretTree>> {
-  if (!existsSync(join(flowPaths(home).config, 'secrets.sops.yaml'))) {
-    return fail('failure', 'secrets_not_initialized', '请先运行 flow secrets init')
+  if (!existsSync(join(raindownPaths(home).config, 'secrets.sops.yaml'))) {
+    return fail('failure', 'secrets_not_initialized', '请先运行 raindown secrets init')
   }
   const decrypted = await sops(home, ['-d', '--output-type', 'json', 'secrets.sops.yaml'], opts)
   if (!decrypted.ok) return decrypted
@@ -116,9 +116,9 @@ export async function initSecrets(
 ): Promise<Result<{ notice: string }>> {
   try {
     return await withWriteLock(home, async () => {
-      const dir = flowPaths(home).config
+      const dir = raindownPaths(home).config
       if (!existsSync(join(dir, '.git')))
-        return fail('failure', 'not_initialized', '请先运行 flow init')
+        return fail('failure', 'not_initialized', '请先运行 raindown init')
       const rulesPath = join(dir, '.sops.yaml')
       const encryptedPath = join(dir, 'secrets.sops.yaml')
       if (existsSync(keyFile(opts)) && existsSync(rulesPath) && existsSync(encryptedPath)) {

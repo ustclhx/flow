@@ -1,4 +1,4 @@
-import type { LedgerEvent } from '@flow/core'
+import type { LedgerEvent } from '@raindown/core'
 
 /**
  * 账本对中枢其余部分（HTTP 层、SSE、备份、反应器）暴露的接口。

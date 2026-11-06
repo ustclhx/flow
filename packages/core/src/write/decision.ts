@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseFrontmatter } from '../frontmatter.ts'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { redactSecrets } from '../ledger/redact.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { renderEntry } from './api.ts'
@@ -136,7 +136,7 @@ export async function reviewDecision(
   }
   const notReady = checkRepoReady(home, 'brain')
   if (notReady) return notReady
-  const abs = join(flowPaths(home).brain, input.path)
+  const abs = join(raindownPaths(home).brain, input.path)
 
   const writeLocked = async (lock: WriteLock): Promise<Result<DecisionReviewReceipt>> => {
     let before: string

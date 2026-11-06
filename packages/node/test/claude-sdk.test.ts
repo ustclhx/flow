@@ -16,7 +16,7 @@ import {
   type Role,
   type TaskContract,
   taskResult,
-} from '@flow/core'
+} from '@raindown/core'
 import { DEFAULT_ROLE_FILES } from '../../core/src/role-templates.ts'
 import {
   type ClaudeQueryFn,
@@ -24,10 +24,10 @@ import {
   classifyClaudeSdk,
   createClaudeSdkExecutor,
   type ExecutorOutcome,
-  FLOW_MCP_AUTO_ALLOWED,
-  FLOW_MCP_AUTO_ALLOWED_PENDING,
   type NodeClock,
   projectInstructions,
+  RAINDOWN_MCP_AUTO_ALLOWED,
+  RAINDOWN_MCP_AUTO_ALLOWED_PENDING,
   READ_ROLE_TOOLS,
   readRoleMayUse,
   SUPERVISOR_MCP_AUTO_ALLOWED,
@@ -230,7 +230,7 @@ async function sdkBench(
   const { query, state } = mockSdk(script)
   const dc = deferredClock()
   const executor = createClaudeSdkExecutor({
-    home: '/tmp/flow-home-not-used',
+    home: '/tmp/raindown-home-not-used',
     clock: dc.clock,
     query,
     resolveRole: roleResolver(role),
@@ -256,7 +256,7 @@ const reply = (b: Bench, id: string, body: unknown) =>
 const MIN = 60_000
 
 // ---------------------------------------------------------------------------
-// 按角色运行 / 注入 Flow MCP / 结果
+// 按角色运行 / 注入 Raindown MCP / 结果
 // ---------------------------------------------------------------------------
 
 describe('按角色运行', () => {
@@ -292,8 +292,8 @@ describe('按角色运行', () => {
     expect(o?.cwd).toBe('/repo/demo')
     // 子进程环境来自节点（executorEnv），不含中枢凭证。
     expect(o?.env?.PATH).toBe(process.env.PATH)
-    expect(o?.env?.FLOW_ACTOR).toBe('reviewer')
-    expect(o?.env && 'FLOW_HUB_TOKEN' in o.env).toBe(false)
+    expect(o?.env?.RAINDOWN_ACTOR).toBe('reviewer')
+    expect(o?.env && 'RAINDOWN_HUB_TOKEN' in o.env).toBe(false)
     expect(o?.model).toBe('claude-opus-5-5')
     expect(o?.settingSources).toEqual(['project'])
     expect(o?.systemPrompt).toEqual({
@@ -311,7 +311,7 @@ describe('按角色运行', () => {
   })
 
   test('默认 reviewer 角色模板：权限模式、允许与禁止列表原样传给 SDK，模型默认 claude-opus-5-5', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'flow-claude-sdk-'))
+    const home = mkdtempSync(join(tmpdir(), 'raindown-claude-sdk-'))
     try {
       const dir = join(home, 'config', 'roles')
       mkdirSync(dir, { recursive: true })
@@ -328,7 +328,11 @@ describe('按角色运行', () => {
         yield say('好')
         yield result()
       })
-      const ex = createClaudeSdkExecutor({ home, query, flowCommand: ['bun', '/x/flow.ts'] })
+      const ex = createClaudeSdkExecutor({
+        home,
+        query,
+        raindownCommand: ['bun', '/x/raindown.ts'],
+      })
       for (const role of ['reviewer', 'plain']) {
         const run = ex.run(contract({ role }), ctx())
         for await (const _ of run.activity) {
@@ -346,18 +350,23 @@ describe('按角色运行', () => {
         'Grep',
         'Bash(gh pr comment:*)',
         'Bash(gh pr review:*)',
-        ...FLOW_MCP_AUTO_ALLOWED.map((n) => `mcp__flow__${n}`),
+        ...RAINDOWN_MCP_AUTO_ALLOWED.map((n) => `mcp__raindown__${n}`),
       ])
       expect(rev?.disallowedTools).toEqual(['NotebookEdit'])
       expect(rev?.hooks?.PreToolUse).toHaveLength(1)
       expect(String((rev?.systemPrompt as { append?: string } | undefined)?.append)).toContain(
         '可以新建或修改文档文件',
       )
-      expect(rev?.mcpServers?.flow).toEqual({
+      expect(rev?.mcpServers?.raindown).toEqual({
         type: 'stdio',
         command: 'bun',
-        args: ['/x/flow.ts', 'mcp', '--actor', 'reviewer'],
-        env: { FLOW_HOME: home },
+        args: ['/x/raindown.ts', 'mcp', '--actor', 'reviewer'],
+        env: {
+          RAINDOWN_HOME: home,
+          FLOW_HOME: home,
+          RAINDOWN_ACTOR: 'reviewer',
+          FLOW_ACTOR: 'reviewer',
+        },
       })
       expect(plain?.model).toBe('claude-opus-5-5')
       // 角色没写：默认 default，设置来源默认 ['project']。
@@ -383,51 +392,51 @@ describe('按角色运行', () => {
   })
 })
 
-describe('注入 Flow MCP', () => {
-  test('worker 写 journal：flow MCP 以 --actor <角色名> 启动，操作者是 reviewer，工具默认放行', async () => {
+describe('注入 Raindown MCP', () => {
+  test('worker 写 journal：raindown MCP 以 --actor <角色名> 启动，操作者是 reviewer，工具默认放行', async () => {
     const { b, state, create } = await sdkBench(async function* (io) {
       await io.nextUser()
-      yield toolUse('mcp__flow__kb_journal', { text: '审查了 PR #42' })
+      yield toolUse('mcp__raindown__kb_journal', { text: '审查了 PR #42' })
       yield say('已记录 journal')
       yield result()
     })
     const id = await create()
     await b.until(id, (t) => t.status === 'done')
-    const flow = state.calls[0]?.mcpServers?.flow
-    expect(flow).toMatchObject({
+    const raindown = state.calls[0]?.mcpServers?.raindown
+    expect(raindown).toMatchObject({
       type: 'stdio',
-      command: 'flow',
+      command: 'raindown',
       args: ['mcp', '--actor', 'reviewer'],
     })
     const allowed = state.calls[0]?.allowedTools ?? []
-    expect(allowed).toContain('mcp__flow__kb_journal')
-    // 不再整体放行 flow 服务；创建、取消任务等不在清单里。
-    expect(allowed).not.toContain('mcp__flow')
+    expect(allowed).toContain('mcp__raindown__kb_journal')
+    // 不再整体放行 raindown 服务；创建、取消任务等不在清单里。
+    expect(allowed).not.toContain('mcp__raindown')
     for (const tool of ['task_create', 'task_cancel', 'task_reply', 'kb_proposals_accept']) {
-      expect(allowed).not.toContain(`mcp__flow__${tool}`)
+      expect(allowed).not.toContain(`mcp__raindown__${tool}`)
     }
   })
 
-  test('放行清单与 flow 的实际工具名一致；PENDING 只列尚未实现的 supervisor 操作', () => {
+  test('放行清单与 raindown 的实际工具名一致；PENDING 只列尚未实现的 supervisor 操作', () => {
     const names = new Set(operations.map((op) => op.name))
-    for (const n of FLOW_MCP_AUTO_ALLOWED) expect(names.has(n)).toBe(true)
+    for (const n of RAINDOWN_MCP_AUTO_ALLOWED) expect(names.has(n)).toBe(true)
     for (const n of SUPERVISOR_MCP_AUTO_ALLOWED) {
-      expect(names.has(n) || FLOW_MCP_AUTO_ALLOWED_PENDING.includes(n)).toBe(true)
+      expect(names.has(n) || RAINDOWN_MCP_AUTO_ALLOWED_PENDING.includes(n)).toBe(true)
     }
     // 已实现的名字不能留在 PENDING 中；PENDING 只能是 supervisor 清单的子集。
-    for (const n of FLOW_MCP_AUTO_ALLOWED_PENDING) {
+    for (const n of RAINDOWN_MCP_AUTO_ALLOWED_PENDING) {
       expect(names.has(n)).toBe(false)
       expect(SUPERVISOR_MCP_AUTO_ALLOWED as readonly string[]).toContain(n)
     }
     // tasks 4.1：supervisor 专属工具不在通用清单，只读角色也不认；建任务、请求合并仍走策略。
     for (const n of SUPERVISOR_MCP_AUTO_ALLOWED) {
-      expect(FLOW_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
-      expect(readRoleMayUse(`mcp__flow__${n}`, false)).toBe(false)
+      expect(RAINDOWN_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
+      expect(readRoleMayUse(`mcp__raindown__${n}`, false)).toBe(false)
     }
     for (const n of ['task_create', 'pr_merge_request']) {
       // 4.8：pr_merge_request 已是真实工具，但不自动放行，supervisor 调用时仍走策略审批。
       expect(names.has(n)).toBe(true)
-      expect(FLOW_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
+      expect(RAINDOWN_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
       expect(SUPERVISOR_MCP_AUTO_ALLOWED as readonly string[]).not.toContain(n)
     }
   })
@@ -435,14 +444,14 @@ describe('注入 Flow MCP', () => {
   test('worker 创建任务需要审批：task_create 进 canUseTool，批准前不创建', async () => {
     const { b, state, create } = await sdkBench(async function* (io) {
       await io.nextUser()
-      const r = await io.ask('mcp__flow__task_create', { role: 'dev', goal: '改 main' })
+      const r = await io.ask('mcp__raindown__task_create', { role: 'dev', goal: '改 main' })
       yield say(r?.behavior === 'allow' ? '已创建' : '未创建')
       yield result()
     })
     const id = await create()
     const t = await b.until(id, (t) => t.status === 'blocked')
     expect(t.blocked?.reason).toBe('awaiting_approval')
-    expect(t.blocked?.message).toContain('mcp__flow__task_create')
+    expect(t.blocked?.message).toContain('mcp__raindown__task_create')
     expect(state.executed).toEqual([])
     await reply(b, id, { kind: 'deny', text: '不允许' })
     const done = await b.until(id, (t) => t.status === 'done')
@@ -527,7 +536,7 @@ describe('工具审批挂起等待', () => {
   })
 
   test('writable_paths 先于策略与用户审批：文档直接放行，其余写入直接拒绝', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'flow-reviewer-docs-'))
+    const repo = mkdtempSync(join(tmpdir(), 'raindown-reviewer-docs-'))
     let prechecks = 0
     try {
       const { query, state } = mockSdk(async function* (io) {
@@ -581,7 +590,7 @@ describe('工具审批挂起等待', () => {
   })
 
   test('SDK 提前放行时 PreToolUse 仍执行边界；只将成功的文件操作去重写入 artifacts', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'flow-reviewer-hooks-'))
+    const repo = mkdtempSync(join(tmpdir(), 'raindown-reviewer-hooks-'))
     try {
       const { query } = mockSdk(async function* (io) {
         await io.nextUser()
@@ -983,7 +992,7 @@ describe('权限模式与设置来源', () => {
   })
 
   test('审查不受被审查仓库的设置影响：setting_sources 为 [] 时不加载设置，CLAUDE.md / AGENTS.md 以纯文本追加（限长、脱敏）', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'flow-claude-sdk-repo-'))
+    const repo = mkdtempSync(join(tmpdir(), 'raindown-claude-sdk-repo-'))
     try {
       // 运行时拼出的令牌形状文本，不是真的密钥。
       const token = ['gh', 'p_', 'B'.repeat(36)].join('')
@@ -1138,7 +1147,7 @@ describe('健壮性', () => {
     expect(texts).toContain('fatal')
   })
 
-  test('取消：先 abort，等 SDK 子进程退出后再 close（flow MCP 孙进程随之结束）', async () => {
+  test('取消：先 abort，等 SDK 子进程退出后再 close（raindown MCP 孙进程随之结束）', async () => {
     const clock = new ManualClock()
     const { query, state } = mockSdk(async function* (io) {
       await io.nextUser()
@@ -1265,21 +1274,21 @@ function ctx(over: Record<string, unknown> = {}) {
   }
 }
 
-test('SDK 会话覆盖继承的 FLOW_ACTOR，重新过滤 token；user 角色不启动会话', async () => {
+test('SDK 会话覆盖继承的 RAINDOWN_ACTOR，重新过滤 token；user 角色不启动会话', async () => {
   for (const name of ['reviewer', 'user']) {
     const { query, state } = mockSdk(async function* (io) {
       await io.nextUser()
       yield result()
     })
     const ex = createClaudeSdkExecutor({
-      home: '/tmp/flow-home-not-used',
+      home: '/tmp/raindown-home-not-used',
       query,
       resolveRole: roleResolver({ ...reviewer(), name }),
     })
     const run = ex.run(
       contract({ role: name }),
       ctx({
-        env: { FLOW_ACTOR: 'user', FLOW_HUB_TOKEN: 'must-not-reach-worker' },
+        env: { RAINDOWN_ACTOR: 'user', RAINDOWN_HUB_TOKEN: 'must-not-reach-worker' },
       }),
     )
     const outcome = await run.done
@@ -1291,17 +1300,17 @@ test('SDK 会话覆盖继承的 FLOW_ACTOR，重新过滤 token；user 角色不
       expect(state.calls).toHaveLength(0)
     } else {
       expect(outcome.ok && outcome.data.outcome).toBe('done')
-      expect(state.calls[0]?.env).toEqual({ FLOW_ACTOR: 'reviewer' })
+      expect(state.calls[0]?.env).toEqual({ RAINDOWN_ACTOR: 'reviewer', FLOW_ACTOR: 'reviewer' })
     }
   }
 })
 
 describe('读边界 read_scope: cwd', () => {
-  test('PreToolUse 覆盖全部工具：越界与 Bash 拒绝、路径改写、与 writable_paths 同时生效、Flow MCP 按来源豁免', async () => {
-    const temp = realpathSync(mkdtempSync(join(tmpdir(), 'flow-read-scope-sdk-')))
+  test('PreToolUse 覆盖全部工具：越界与 Bash 拒绝、路径改写、与 writable_paths 同时生效、Raindown MCP 按来源豁免', async () => {
+    const temp = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-read-scope-sdk-')))
     const repo = join(temp, 'repo')
     const priv = join(temp, 'private')
-    const home = join(temp, 'flow-home')
+    const home = join(temp, 'raindown-home')
     mkdirSync(join(repo, 'docs'), { recursive: true })
     mkdirSync(priv)
     mkdirSync(join(home, 'state'), { recursive: true })
@@ -1345,7 +1354,7 @@ describe('读边界 read_scope: cwd', () => {
         // Spec 场景：读取中枢 token、用 Glob 越界。
         for (const [tool, input] of [
           ['Read', { file_path: join(home, 'state/hub.token') }],
-          ['Read', { file_path: '~/flow-home/state/hub.token' }],
+          ['Read', { file_path: '~/raindown-home/state/hub.token' }],
           ['Glob', { pattern: '/Users/x/.ssh/*' }],
           ['Glob', { pattern: '*', path: '~' }],
           ['Bash', { command: 'cat ~/.ssh/id_rsa' }],
@@ -1382,26 +1391,26 @@ describe('读边界 read_scope: cwd', () => {
           path: repo,
           glob: '!.*',
         })
-        // Flow MCP：名称与来源都对得上才豁免。
+        // Raindown MCP：名称与来源都对得上才豁免。
         const token = { path: join(home, 'state/hub.token') }
         expect(
-          await call('mcp__flow__kb_get', token, {
-            mcp_server: { name: 'flow', source: 'dynamic' },
+          await call('mcp__raindown__kb_get', token, {
+            mcp_server: { name: 'raindown', source: 'dynamic' },
           }),
         ).toEqual({})
-        expect(decision(await call('mcp__flow__kb_get', token))).toBe('deny')
+        expect(decision(await call('mcp__raindown__kb_get', token))).toBe('deny')
         expect(
           decision(
-            await call('mcp__flow__kb_get', token, {
-              mcp_server: { name: 'flow', source: 'project' },
+            await call('mcp__raindown__kb_get', token, {
+              mcp_server: { name: 'raindown', source: 'project' },
             }),
           ),
         ).toBe('deny')
-        // canUseTool 同样兜底拒绝；缺少 mcpServer 的 Flow 工具也不豁免。
+        // canUseTool 同样兜底拒绝；缺少 mcpServer 的 Raindown 工具也不豁免。
         expect(await io.ask('Read', { file_path: join(home, 'state/hub.token') })).toMatchObject({
           behavior: 'deny',
         })
-        expect(await io.ask('mcp__flow__kb_get', token)).toMatchObject({ behavior: 'deny' })
+        expect(await io.ask('mcp__raindown__kb_get', token)).toMatchObject({ behavior: 'deny' })
         yield result()
       })
       const ex = createClaudeSdkExecutor({
@@ -1486,16 +1495,16 @@ describe('supervisor 会话绑定', () => {
       inputs: { wake: { origin, generation: 1, events: [] } },
     } as Partial<TaskContract>)
 
-  /** 临时 flow-home 中的唤醒 token 文件与任务目录（互不包含）。 */
+  /** 临时 raindown-home 中的唤醒 token 文件与任务目录（互不包含）。 */
   function files() {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-sup-sdk-')))
-    const home = join(root, 'flow-home')
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-sup-sdk-')))
+    const home = join(root, 'raindown-home')
     const repo = join(root, 'repo')
     mkdirSync(join(home, 'state', 'wake'), { recursive: true })
     mkdirSync(repo)
     const tokenFile = join(home, 'state', 'wake', 't-1.l-1.token')
     writeFileSync(tokenFile, `${WAKE}\n`, { mode: 0o600 })
-    // 另一个 flow-home 的 state/wake 符号链接到 repo 内的目录。
+    // 另一个 raindown-home 的 state/wake 符号链接到 repo 内的目录。
     const linkedHome = join(root, 'linked-home')
     mkdirSync(join(repo, '.wake'))
     mkdirSync(join(linkedHome, 'state'), { recursive: true })
@@ -1516,7 +1525,7 @@ describe('supervisor 会话绑定', () => {
     }
   }
 
-  test('注入 --workspace --task、FLOW_WORKSPACE、FLOW_TASK_ID 与 FLOW_HUB_TOKEN_FILE；argv、env、活动与结果都不含 token', async () => {
+  test('注入 --workspace --task、RAINDOWN_WORKSPACE、RAINDOWN_TASK_ID 与 RAINDOWN_HUB_TOKEN_FILE；argv、env、活动与结果都不含 token', async () => {
     const f = files()
     try {
       const { query, state } = mockSdk(async function* (io) {
@@ -1549,13 +1558,13 @@ describe('supervisor 会话绑定', () => {
         home: f.home,
         query,
         resolveRole: roleResolver(supervisorRole()),
-        flowCommand: ['bun', '/x/flow.ts'],
+        raindownCommand: ['bun', '/x/raindown.ts'],
       })
       const run = ex.run(wakeContract(), {
         ...ctx({
           taskId: 't-1',
           cwd: f.repo,
-          env: { PATH: '/usr/bin', FLOW_HUB_TOKEN: 'leak', FLOW_HUB_TOKEN_FILE: '/leak' },
+          env: { PATH: '/usr/bin', RAINDOWN_HUB_TOKEN: 'leak', RAINDOWN_HUB_TOKEN_FILE: '/leak' },
         }),
         wakeTokenFile: f.tokenFile,
       })
@@ -1564,11 +1573,11 @@ describe('supervisor 会话绑定', () => {
       const done = await run.done
       expect(done.ok && done.data.outcome).toBe('done')
       const o = state.calls[0]
-      expect(o?.mcpServers?.flow).toEqual({
+      expect(o?.mcpServers?.raindown).toEqual({
         type: 'stdio',
         command: 'bun',
         args: [
-          '/x/flow.ts',
+          '/x/raindown.ts',
           'mcp',
           '--actor',
           'supervisor',
@@ -1578,19 +1587,30 @@ describe('supervisor 会话绑定', () => {
           't-1',
         ],
         env: {
+          RAINDOWN_HOME: f.home,
           FLOW_HOME: f.home,
+          RAINDOWN_ACTOR: 'supervisor',
+          FLOW_ACTOR: 'supervisor',
+          RAINDOWN_WORKSPACE: 'ws/product-res',
+          RAINDOWN_TASK_ID: 't-1',
+          RAINDOWN_HUB_TOKEN_FILE: f.tokenFile,
           FLOW_WORKSPACE: 'ws/product-res',
           FLOW_TASK_ID: 't-1',
           FLOW_HUB_TOKEN_FILE: f.tokenFile,
         },
       })
       // 会话进程的 env 不含任何中枢凭证或 token 文件路径，但带绑定信息。
+      expect(o?.env).not.toHaveProperty('RAINDOWN_HUB_TOKEN')
+      expect(o?.env).not.toHaveProperty('RAINDOWN_HUB_TOKEN_FILE')
       expect(o?.env).not.toHaveProperty('FLOW_HUB_TOKEN')
       expect(o?.env).not.toHaveProperty('FLOW_HUB_TOKEN_FILE')
       expect(o?.env).toMatchObject({
+        RAINDOWN_ACTOR: 'supervisor',
         FLOW_ACTOR: 'supervisor',
-        FLOW_WORKSPACE: 'ws/product-res',
         FLOW_TASK_ID: 't-1',
+        FLOW_WORKSPACE: 'ws/product-res',
+        RAINDOWN_WORKSPACE: 'ws/product-res',
+        RAINDOWN_TASK_ID: 't-1',
         ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
       })
       // 与只读角色一样锁定：只用注入的 MCP、内置工具白名单。
@@ -1608,9 +1628,9 @@ describe('supervisor 会话绑定', () => {
       expect(visible).not.toContain('fwk_')
       // supervisor 专属工具只在这里自动放行；task_create 仍走审批。
       for (const n of SUPERVISOR_MCP_AUTO_ALLOWED)
-        expect(o?.allowedTools).toContain(`mcp__flow__${n}`)
-      expect(o?.allowedTools).toContain('mcp__flow__brief_update')
-      expect(o?.allowedTools).not.toContain('mcp__flow__task_create')
+        expect(o?.allowedTools).toContain(`mcp__raindown__${n}`)
+      expect(o?.allowedTools).toContain('mcp__raindown__brief_update')
+      expect(o?.allowedTools).not.toContain('mcp__raindown__task_create')
     } finally {
       f.done()
     }
@@ -1633,7 +1653,9 @@ describe('supervisor 会话绑定', () => {
         wakeTokenFile: f.tokenFile,
       }).done
       expect(r.ok && r.data.outcome).toBe('done')
-      expect((state.calls[0]?.mcpServers?.flow as { args: string[] } | undefined)?.args).toEqual([
+      expect(
+        (state.calls[0]?.mcpServers?.raindown as { args: string[] } | undefined)?.args,
+      ).toEqual([
         'mcp',
         '--actor',
         'supervisor',
@@ -1729,19 +1751,24 @@ describe('supervisor 会话绑定', () => {
       yield result()
     })
     const ex = createClaudeSdkExecutor({
-      home: '/tmp/flow-home-x',
+      home: '/tmp/raindown-home-x',
       query,
       resolveRole: roleResolver(reviewer()),
     })
     const r = await ex.run(contract(), ctx()).done
     expect(r.ok && r.data.outcome).toBe('done')
-    expect(state.calls[0]?.mcpServers?.flow).toEqual({
+    expect(state.calls[0]?.mcpServers?.raindown).toEqual({
       type: 'stdio',
-      command: 'flow',
+      command: 'raindown',
       args: ['mcp', '--actor', 'reviewer'],
-      env: { FLOW_HOME: '/tmp/flow-home-x' },
+      env: {
+        RAINDOWN_HOME: '/tmp/raindown-home-x',
+        FLOW_HOME: '/tmp/raindown-home-x',
+        RAINDOWN_ACTOR: 'reviewer',
+        FLOW_ACTOR: 'reviewer',
+      },
     })
     for (const n of SUPERVISOR_MCP_AUTO_ALLOWED)
-      expect(state.calls[0]?.allowedTools).not.toContain(`mcp__flow__${n}`)
+      expect(state.calls[0]?.allowedTools).not.toContain(`mcp__raindown__${n}`)
   })
 })

@@ -9,7 +9,7 @@ import {
   type InboxItemView,
   ok,
   redactSecrets,
-} from '@flow/core'
+} from '@raindown/core'
 import { planPushes } from '../inbox/cadence.ts'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { HubClock } from '../server/clock.ts'
@@ -35,7 +35,7 @@ import {
  *   最长 5 分钟；期间记录警告，状态为 `backoff`；
  * - **单条消息的失败不卡住渠道**：插件抛 `ChannelError('message')` 时只记在这一条上，跳过它继续处理
  *   后面的，同一条连续 5 次后放弃；`ChannelError('permanent')` 立即放弃；同一条超时 3 次也放弃。
- *   放弃写 `inbox.pushed`（op=failed），投影视为已处理，条目视图与 `flow hub status` 中标出"推送失败"；
+ *   放弃写 `inbox.pushed`（op=failed），投影视为已处理，条目视图与 `raindown hub status` 中标出"推送失败"；
  * - **超时不重复推送**：超时后 abort 插件收到的 signal；原调用仍在进行时不重复发起同一条，
  *   它最终成功了照常记录。渠道返回无效的消息引用时按已发出记录（占位引用）并告警，不重发；
  * - **补推**：未推送成功的条目不写任何事件，保持 pending；渠道恢复后，`flush` 按推送节奏
@@ -48,7 +48,7 @@ import {
  * - **入站**：渠道把用户的操作交给 `onAction`，管理器按条目 id 或短 id 找到条目，调用 `act`
  *   （中枢里是 3.2 的 `actOnInbox`，以 user 身份执行），以渠道的 `via` 记录来源，然后刷新消息；
  * - **缺少密钥**：注册项的 `config` 中有未解析的 `secret://` 引用时，该渠道不启动（`disabled`），
- *   `flow hub status` 中报告缺少的路径；`refresh()` 在密钥变化后重试。
+ *   `raindown hub status` 中报告缺少的路径；`refresh()` 在密钥变化后重试。
  *
  * 消息级失败与超时的计数只在内存中：中枢重启后从零开始。
  */

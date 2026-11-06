@@ -5,7 +5,7 @@ import { HubClient } from '../daemon/client.ts'
 import { type BrainEntry, readBrainEntries } from '../entries.ts'
 import { renderTable } from '../format/table.ts'
 import { parseFrontmatter } from '../frontmatter.ts'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import type { BriefContextData } from '../ledger/protocol.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { effectiveRoleKind, loadRoles } from '../roles.ts'
@@ -108,7 +108,7 @@ export const resourceTransferOp = defineOperation({
         return fail('failure', 'function_owner', '职能 workspace 不能拥有资源')
       let content: string
       try {
-        content = await readFile(join(flowPaths(ctx.home).brain, path.data), 'utf8')
+        content = await readFile(join(raindownPaths(ctx.home).brain, path.data), 'utf8')
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT')
           return fail('failure', 'not_found', `资源不存在：${input.resource}`)
@@ -146,7 +146,7 @@ export const resourceTransferOp = defineOperation({
 
 /** 只识别 journal 的完整记录标题，正文中的 ws 字样不会被当作归属标记。 */
 async function recentJournal(home: string, workspace: string, limit: number): Promise<string[]> {
-  const dir = flowPaths(home).journal
+  const dir = raindownPaths(home).journal
   let files: string[]
   try {
     files = (await readdir(dir))

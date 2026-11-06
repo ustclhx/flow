@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   eventPayloads,
-  flowPaths,
   HubClient,
-  initFlowHome,
+  initRaindownHome,
   type PolicyCheckRequest,
   policyCheckData,
-} from '@flow/core'
+  raindownPaths,
+} from '@raindown/core'
 import { stringify } from 'yaml'
 import { z } from 'zod'
 import { type RunningHub, runHub } from '../src/index.ts'
@@ -26,16 +26,16 @@ afterEach(async () => {
 })
 
 async function setup(rules: unknown[] = []) {
-  root = mkdtempSync(join(tmpdir(), 'flow-policy-hub-'))
+  root = mkdtempSync(join(tmpdir(), 'raindown-policy-hub-'))
   const home = join(root, 'home')
-  must(await initFlowHome(home))
+  must(await initRaindownHome(home))
   mkdirSync(join(home, 'config', 'workspaces'), { recursive: true })
   writeFileSync(
     join(home, 'config', 'workspaces', 'xuanxue-saas.yaml'),
     'id: xuanxue-saas\nkind: product\nname: 测试\ndescription: 测试\nrepos: []\n',
   )
   const policies = (input: unknown[]) =>
-    writeFileSync(flowPaths(home).policiesConfig, stringify(input))
+    writeFileSync(raindownPaths(home).policiesConfig, stringify(input))
   policies(rules)
   const clock = new FakeClock(Date.now())
   hub = must(
@@ -47,8 +47,8 @@ async function setup(rules: unknown[] = []) {
       secrets: { watch: false },
     }),
   )
-  writeFileSync(flowPaths(home).hubConfig, `port: ${hub.port}\n`)
-  const token = readFileSync(flowPaths(home).hubToken, 'utf8').trim()
+  writeFileSync(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
+  const token = readFileSync(raindownPaths(home).hubToken, 'utf8').trim()
   const user = new HubClient({ home, actor: 'user', token })
   const task = must(
     await user.createTask({
@@ -69,7 +69,7 @@ async function setup(rules: unknown[] = []) {
       headers: {
         Authorization: `Bearer ${asToken}`,
         'Content-Type': 'application/json',
-        ...(actor ? { 'X-Flow-Actor': actor } : {}),
+        ...(actor ? { 'X-Raindown-Actor': actor } : {}),
       },
       body: JSON.stringify(body),
     })
@@ -285,7 +285,7 @@ test('不存在的任务返回 404，非法或超长请求返回 400；文件级
   expect((await raw({ ...request, command: 'x'.repeat(8193) })).status).toBe(400)
   expect((await raw({ ...request, paths: ['x'.repeat(2001)] })).status).toBe(400)
   expect((await raw({ ...request, dry_run: 'true' })).status).toBe(400)
-  writeFileSync(flowPaths(home).policiesConfig, '- [\n')
+  writeFileSync(raindownPaths(home).policiesConfig, '- [\n')
   expect((await raw(request)).status).toBe(500)
   expect(must(await user.status()).policies).toMatchObject({
     loaded: 0,

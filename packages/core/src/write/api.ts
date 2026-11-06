@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { BRAIN_JOURNAL_DIR } from '../entries.ts'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { entryId as entryIdSchema, WS_REF_RE } from '../schema/common.ts'
 import { localDate } from '../validate.ts'
@@ -98,7 +98,7 @@ export async function writeEntry(
 
   // 在锁内判断条目是否存在，避免判断与写入之间被别的进程插入。
   const writeLocked = async (lock: WriteLock): Promise<Result<WriteEntryReceipt>> => {
-    const exists = existsSync(join(flowPaths(home).brain, path.data))
+    const exists = existsSync(join(raindownPaths(home).brain, path.data))
     if (expectedBaseHash === null && exists) {
       return fail('failure', 'base_conflict', `条目已存在，不能新建：${input.id}`, {
         path: path.data,
@@ -152,7 +152,7 @@ export interface JournalInput {
 }
 
 export interface JournalReceipt extends WriteReceipt {
-  /** 相对 flow-home 的 journal 文件，例如 `brain/journal/2026-10-24.md`。 */
+  /** 相对 raindown-home 的 journal 文件，例如 `brain/journal/2026-10-24.md`。 */
   file: string
   date: string
   time: string
@@ -222,7 +222,7 @@ export interface CaptureInput {
 }
 
 export interface CaptureReceipt extends WriteReceipt {
-  /** 相对 flow-home 的新文件，例如 `raw/inbox/2026-10-24T140305-a1b2c3.md`。 */
+  /** 相对 raindown-home 的新文件，例如 `raw/inbox/2026-10-24T140305-a1b2c3.md`。 */
   file: string
 }
 

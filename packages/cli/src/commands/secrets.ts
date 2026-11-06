@@ -6,11 +6,11 @@ import {
   loadSecrets,
   ok,
   type Result,
-  resolveFlowHome,
+  resolveRaindownHome,
   type SecretsOptions,
   secretPathSchema,
   setSecret,
-} from '@flow/core'
+} from '@raindown/core'
 import { type Command, defineCommand } from '../command.ts'
 
 /** 交互输入由 readline 管理 raw mode，但所有终端回显都丢弃；提示单独写 stderr。 */
@@ -60,7 +60,7 @@ export function createSecretsCommands(
     readValue?: () => Promise<Result<string>>
   } = {},
 ): Command<unknown>[] {
-  const home = () => opts.home ?? resolveFlowHome(process.env)
+  const home = () => opts.home ?? resolveRaindownHome(process.env)
   const invalidArgs = () =>
     fail('usage', 'invalid_arguments', '只接受路径参数；密钥值必须从标准输入或不回显的提示读取')
   return [
@@ -99,10 +99,12 @@ export function createSecretsCommands(
       usage: 'secrets get <路径>',
       summary: '仅用户本人可读取密钥值',
       async run({ args, actor }) {
-        // 环境身份只能降级，--actor user 不能抹掉 FLOW_ACTOR 声明的 AI 身份。
+        // 两个环境身份都只能降级，直接调用命令也不能绕过限制。
         if (
           actor !== 'user' ||
-          (process.env.FLOW_ACTOR !== undefined && process.env.FLOW_ACTOR !== 'user')
+          [process.env.RAINDOWN_ACTOR, process.env.FLOW_ACTOR].some(
+            (value) => value !== undefined && value !== 'user',
+          )
         ) {
           return fail('failure', 'user_only', '只有 user 可以读取密钥值')
         }

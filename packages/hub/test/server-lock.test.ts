@@ -4,21 +4,21 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { flowPaths } from '@flow/core'
+import { raindownPaths } from '@raindown/core'
 import { acquireHubLock } from '../src/index.ts'
 
 let home: string
 let previousHome: string | undefined
 const children: ChildProcessWithoutNullStreams[] = []
 beforeEach(async () => {
-  home = await mkdtemp(join(tmpdir(), 'flow-hub-lock-'))
-  previousHome = process.env.FLOW_HOME
-  process.env.FLOW_HOME = home
+  home = await mkdtemp(join(tmpdir(), 'raindown-hub-lock-'))
+  previousHome = process.env.RAINDOWN_HOME
+  process.env.RAINDOWN_HOME = home
 })
 afterEach(async () => {
   for (const proc of children.splice(0)) if (proc.exitCode === null) proc.kill('SIGKILL')
-  if (previousHome === undefined) delete process.env.FLOW_HOME
-  else process.env.FLOW_HOME = previousHome
+  if (previousHome === undefined) delete process.env.RAINDOWN_HOME
+  else process.env.RAINDOWN_HOME = previousHome
   await rm(home, { recursive: true, force: true })
 })
 
@@ -32,7 +32,7 @@ const contenderScript = `
   const lines = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
   console.log('ready');
   await lines.next();
-  const result = await acquireHubLock(process.env.FLOW_HOME);
+  const result = await acquireHubLock(process.env.RAINDOWN_HOME);
   const summary = result.ok ? { ok: true } : { ok: false, error: result.error };
   globalThis.Bun?.gc(true);
   console.log(JSON.stringify(summary));
@@ -49,7 +49,7 @@ interface Contender {
 function spawnContender(): Contender {
   const proc = spawn(process.execPath, ['-e', contenderScript], {
     cwd: join(import.meta.dir, '..'),
-    env: { ...process.env, FLOW_HOME: home },
+    env: { ...process.env, RAINDOWN_HOME: home },
     stdio: 'pipe',
   })
   children.push(proc)
@@ -96,7 +96,7 @@ describe('中枢单实例锁', () => {
       await first.data.release()
     }
     await first.data.release()
-    await expect(stat(flowPaths(home).hubPid)).rejects.toMatchObject(missing)
+    await expect(stat(raindownPaths(home).hubPid)).rejects.toMatchObject(missing)
     const next = await acquireHubLock(home)
     expect(next.ok).toBe(true)
     if (next.ok) await next.data.release()
@@ -105,7 +105,7 @@ describe('中枢单实例锁', () => {
   test('取得锁后写入 hub.pid；释放只删除自己写的记录', async () => {
     const acquired = await acquireHubLock(home)
     if (!acquired.ok) throw new Error(acquired.error.message)
-    const paths = flowPaths(home)
+    const paths = raindownPaths(home)
     expect(acquired.data.path).toBe(paths.hubLock)
     expect(JSON.parse(await readFile(paths.hubPid, 'utf8'))).toMatchObject({ pid: process.pid })
     expect((await stat(paths.hubPid)).mode & 0o777).toBe(0o600)
@@ -116,7 +116,7 @@ describe('中枢单实例锁', () => {
   })
 
   test('同进程并发取锁恰好一个成功；崩溃遗留的 hub.pid 与旧版守护文件不影响取锁', async () => {
-    const paths = flowPaths(home)
+    const paths = raindownPaths(home)
     const dead = spawn(process.execPath, ['-e', ''])
     await new Promise((resolve) => dead.once('exit', resolve))
     const initial = await acquireHubLock(home)
@@ -161,7 +161,7 @@ describe('中枢单实例锁', () => {
     expect(await Promise.all(contenders.map((contender) => contender.exited))).toEqual(
       contenders.map(() => 0),
     )
-    await expect(stat(flowPaths(home).hubPid)).rejects.toMatchObject(missing)
+    await expect(stat(raindownPaths(home).hubPid)).rejects.toMatchObject(missing)
     const next = await acquireHubLock(home)
     expect(next.ok).toBe(true)
     if (next.ok) await next.data.release()
@@ -177,15 +177,15 @@ describe('中枢单实例锁', () => {
     holder.proc.kill('SIGKILL')
     await holder.exited
     // 崩溃遗留的 hub.pid 仍在，但不影响取锁，新持有者会覆盖它。
-    expect(JSON.parse(await readFile(flowPaths(home).hubPid, 'utf8')).pid).toBe(holder.proc.pid)
+    expect(JSON.parse(await readFile(raindownPaths(home).hubPid, 'utf8')).pid).toBe(holder.proc.pid)
     const acquired = await acquireHubLock(home)
     if (!acquired.ok) throw new Error(acquired.error.message)
-    expect(JSON.parse(await readFile(flowPaths(home).hubPid, 'utf8')).pid).toBe(process.pid)
+    expect(JSON.parse(await readFile(raindownPaths(home).hubPid, 'utf8')).pid).toBe(process.pid)
     await acquired.data.release()
   })
 
   test('hub.pid 损坏或失效时：无持有者可取锁并覆盖；有持有者仍拒绝但不报 pid', async () => {
-    const paths = flowPaths(home)
+    const paths = raindownPaths(home)
     const holder = await acquireHubLock(home)
     if (!holder.ok) throw new Error(holder.error.message)
     await writeFile(paths.hubPid, 'broken')

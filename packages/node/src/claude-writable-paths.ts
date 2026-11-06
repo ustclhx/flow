@@ -18,7 +18,7 @@ export const CLAUDE_READ_ONLY_TOOLS = [
 export const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const
 const fileInput = z.looseObject({ file_path: z.string().min(1) })
 
-/** 与 Flow 策略路径相同的简化 glob：* 不跨目录，** 跨目录，? 匹配单字符。 */
+/** 与 Raindown 策略路径相同的简化 glob：* 不跨目录，** 跨目录，? 匹配单字符。 */
 function matches(pattern: string, path: string): boolean {
   let source = ''
   for (let i = 0; i < pattern.length; i++) {

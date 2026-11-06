@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { link, mkdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
 
 /**
@@ -46,7 +46,7 @@ const CORRUPT_STALE_MS = 5_000
 /** 接管守护本身遗留超过这个年龄（持有者在接管途中崩溃）时可以清除。 */
 const STEAL_GUARD_STALE_MS = 5_000
 
-export const writeLockPath = (home: string): string => join(flowPaths(home).state, 'write.lock')
+export const writeLockPath = (home: string): string => join(raindownPaths(home).state, 'write.lock')
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -147,7 +147,7 @@ export async function acquireWriteLock(
   const deadline = Date.now() + timeoutMs
   let holder: LockInfo | null = null
   try {
-    await mkdir(flowPaths(home).state, { recursive: true })
+    await mkdir(raindownPaths(home).state, { recursive: true })
     for (;;) {
       info.acquired_at = new Date().toISOString()
       if (await atomicCreate(path, `${JSON.stringify(info)}\n`)) {

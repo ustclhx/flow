@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/protocol/policy-check.response.schema.json",
+  "$id": "https://raindown.local/schemas/protocol/policy-check.response.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -109,6 +109,10 @@
                   "level"
                 ],
                 "additionalProperties": false
+              },
+              "legacy_tool_action": {
+                "type": "boolean",
+                "const": true
               }
             },
             "required": [
@@ -234,6 +238,10 @@
                         "level"
                       ],
                       "additionalProperties": false
+                    },
+                    "legacy_tool_action": {
+                      "type": "boolean",
+                      "const": true
                     }
                   },
                   "required": [

@@ -8,7 +8,6 @@ import {
   decisionPathFor,
   type EventOf,
   fail,
-  flowPaths,
   INBOX_BODY_MAX,
   INBOX_TITLE_MAX,
   type InboxItemView,
@@ -17,6 +16,7 @@ import {
   ok,
   parseFrontmatter,
   type Result,
+  raindownPaths,
   renderDecision,
   resolveInboxLevel,
   SUPERVISOR_ACTOR,
@@ -24,7 +24,7 @@ import {
   type TaskProposeRequest,
   type TaskView,
   writeEntry,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   checkRepoInWorkspace,
   reservedCapabilitiesIn,
@@ -316,7 +316,7 @@ export async function acceptTaskProposal(
   }
 
   if (p.decision && decisionPath) {
-    const abs = join(flowPaths(deps.home).brain, decisionPath)
+    const abs = join(raindownPaths(deps.home).brain, decisionPath)
     if (existsSync(abs)) {
       // 重试：已由本任务写过则跳过；被别的内容占用则拒绝（不覆盖）。归属按 frontmatter 精确比较。
       const fm = parseFrontmatter(readFileSync(abs, 'utf8'))

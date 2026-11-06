@@ -3,8 +3,8 @@ import { readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isMap, parseDocument } from 'yaml'
 import { z } from 'zod'
-import { flowAuthor, git, gitCommit } from '../git.ts'
-import { flowPaths } from '../home.ts'
+import { git, gitCommit, raindownAuthor } from '../git.ts'
+import { raindownPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { withWriteLock } from '../write/lock.ts'
 
@@ -15,7 +15,7 @@ import { withWriteLock } from '../write/lock.ts'
  * telegram:
  *   bot_token: secret://telegram/bot-token   # 缺省即为这个引用；只接受 secret:// 引用
  *   proxy: http://127.0.0.1:7890             # 可选；缺省时取 HTTPS_PROXY 环境变量
- *   chat_id: 123456789                       # 由 `flow telegram link` 绑定时写入
+ *   chat_id: 123456789                       # 由 `raindown telegram link` 绑定时写入
  *   user_id: 123456789                       # 同上：绑定时记录的 Telegram 用户 id
  *   # enabled: false                         # 完全停用 Telegram 渠道（重启中枢后生效）
  * ```
@@ -59,7 +59,7 @@ export const channelsConfigSchema = z
   .strictObject({
     telegram: telegramChannelConfigSchema.optional(),
   })
-  .meta({ title: 'Flow channels config', description: 'config/channels.yaml：推送渠道配置' })
+  .meta({ title: 'Raindown channels config', description: 'config/channels.yaml：推送渠道配置' })
 export type ChannelsConfig = z.infer<typeof channelsConfigSchema>
 
 const FILE = 'config/channels.yaml'
@@ -84,7 +84,7 @@ export function parseChannelsConfig(input: unknown): Result<ChannelsConfig> {
 export async function loadChannelsConfig(home: string): Promise<Result<ChannelsConfig>> {
   let text: string
   try {
-    text = await readFile(flowPaths(home).channelsConfig, 'utf8')
+    text = await readFile(raindownPaths(home).channelsConfig, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ok({})
     return fail('failure', 'read_failed', `无法读取 ${FILE}`)
@@ -136,15 +136,15 @@ export function applyTelegramBinding(
 }
 
 /**
- * 把 Telegram 绑定写入 `config/channels.yaml`（`null` 表示解除绑定）并在 config 仓库提交（作者 `Flow (user)`：
- * 绑定由用户本人用 `flow telegram link` 申请的一次性码完成）。持有写锁；提交失败时恢复原文件。
+ * 把 Telegram 绑定写入 `config/channels.yaml`（`null` 表示解除绑定）并在 config 仓库提交（作者 `Raindown (user)`：
+ * 绑定由用户本人用 `raindown telegram link` 申请的一次性码完成）。持有写锁；提交失败时恢复原文件。
  */
 export async function saveTelegramBinding(
   home: string,
   binding: TelegramBinding | null,
 ): Promise<Result<void>> {
-  const dir = flowPaths(home).config
-  const abs = flowPaths(home).channelsConfig
+  const dir = raindownPaths(home).config
+  const abs = raindownPaths(home).channelsConfig
   return withWriteLock(home, async () => {
     let before: string | null
     try {
@@ -159,13 +159,13 @@ export async function saveTelegramBinding(
     const next = applyTelegramBinding(before, binding)
     if (!next.ok) return next
     if (next.data === before) return ok(undefined)
-    const tmp = join(dir, `.channels.yaml.flow-${randomUUID()}.tmp`)
+    const tmp = join(dir, `.channels.yaml.raindown-${randomUUID()}.tmp`)
     try {
       await writeFile(tmp, next.data, { flag: 'wx' })
       await rename(tmp, abs)
       const committed = await gitCommit(dir, {
         paths: ['channels.yaml'],
-        author: flowAuthor('user'),
+        author: raindownAuthor('user'),
         message: binding ? 'channels: 绑定 Telegram chat' : 'channels: 解除 Telegram 绑定',
       })
       if (committed.ok) return ok(undefined)

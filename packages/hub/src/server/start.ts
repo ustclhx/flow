@@ -1,4 +1,6 @@
-import { fail, loadHubConfig, ok, type Result } from '@flow/core'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { fail, loadHubConfig, ok, type Result, raindownPaths } from '@raindown/core'
 import { createHubApp, type HubDeps } from '../app.ts'
 import type { LedgerMaintenance, LedgerReader } from '../ledger/port.ts'
 import { type RunningServer, type Runtime, serve } from '../serve.ts'
@@ -79,6 +81,20 @@ export async function startHub(options: StartHubOptions): Promise<Result<Running
     return stopping
   }
   try {
+    const paths = raindownPaths(options.home)
+    const legacyDb = join(paths.state, 'flow.db')
+    if (!existsSync(paths.ledgerDb) && existsSync(legacyDb)) {
+      await stop()
+      // shell 单引号转义确保含空格或引号的 home 仍可直接使用迁移命令。
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+      const oldPath = quote(legacyDb)
+      const newPath = quote(paths.ledgerDb)
+      return fail(
+        'failure',
+        'legacy_database_migration_required',
+        `发现旧账本 ${legacyDb}，拒绝创建空账本。先停止全部 hub/node（launchd 用户运行 raindown daemon uninstall），确认服务已停止后执行：\nmv ${oldPath} ${newPath}\nfor suffix in -wal -shm; do if [ -e ${oldPath}"$suffix" ]; then mv ${oldPath}"$suffix" ${newPath}"$suffix"; fi; done\n迁移完成后运行 raindown daemon install 或 raindown hub start。`,
+      )
+    }
     const token = await ensureHubToken(options.home)
     if (!token.ok) {
       await stop()

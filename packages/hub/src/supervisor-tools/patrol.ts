@@ -5,7 +5,6 @@ import {
   BRAIN_JOURNAL_DIR,
   clipText,
   fail,
-  flowPaths,
   git,
   INBOX_BODY_MAX,
   INBOX_TITLE_MAX,
@@ -15,9 +14,10 @@ import {
   type PatrolReportData,
   type PatrolReportRequest,
   type Result,
+  raindownPaths,
   redactSecrets,
   SUPERVISOR_ACTOR,
-} from '@flow/core'
+} from '@raindown/core'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
 import type { SupervisorToolsDeps } from './common.ts'
@@ -96,12 +96,12 @@ async function existingJournal(
     const rel = `${BRAIN_JOURNAL_DIR}/${date}.md`
     let text: string
     try {
-      text = await readFile(join(flowPaths(home).brain, rel), 'utf8')
+      text = await readFile(join(raindownPaths(home).brain, rel), 'utf8')
     } catch {
       continue
     }
     if (!record.test(text)) continue
-    const log = await git(flowPaths(home).brain, ['log', '-1', '--format=%H', '--', rel])
+    const log = await git(raindownPaths(home).brain, ['log', '-1', '--format=%H', '--', rel])
     return { file: `brain/${rel}`, sha: log.stdout.trim() }
   }
   return null

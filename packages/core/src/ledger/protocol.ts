@@ -54,7 +54,7 @@ import {
  * 约定：
  * - 全部路径以 `/v1` 开头，只监听 127.0.0.1。
  * - 除 `GET /v1/health` 外都需要 `Authorization: Bearer <token>`。操作者由 token 决定（design D9）：
- *   `state/hub.token` 是 user，可用 `X-Flow-Actor` 降级声明非 user 身份；绑定 token 的身份固定，
+ *   `state/hub.token` 是 user，可用 `X-Raindown-Actor` 降级声明非 user 身份；绑定 token 的身份固定，
  *   请求头与之不一致时返回 403 `actor_mismatch`。
  * - 成功响应：`{ ok: true, data }`；失败响应与 CLI `--json` 一致：
  *   `{ ok: false, error: { kind, code, message, details?, retryable } }`（见 `toJsonDocument`）。
@@ -78,7 +78,7 @@ export const HUB_HOSTNAME = '127.0.0.1'
 
 export const HEADERS = {
   authorization: 'Authorization',
-  actor: 'X-Flow-Actor',
+  actor: 'X-Raindown-Actor',
   lastEventId: 'Last-Event-ID',
 } as const
 
@@ -160,7 +160,7 @@ export const errorBody = z
       retryable: z.boolean(),
     }),
   })
-  .meta({ title: 'Flow API error', description: '失败响应，与 CLI --json 的失败形态一致' })
+  .meta({ title: 'Raindown API error', description: '失败响应，与 CLI --json 的失败形态一致' })
 export type ErrorBody = z.infer<typeof errorBody>
 
 /** 成功响应信封。 */
@@ -191,17 +191,18 @@ export const secretsStatus = z.object({
 })
 export type SecretsStatusData = z.infer<typeof secretsStatus>
 
+const policyStatusIssue = z.object({
+  file: z.string(),
+  rule_index: z.number().int().min(0).optional(),
+  field: z.string().optional(),
+  code: z.string(),
+  message: z.string(),
+})
+
 export const policiesStatus = z.object({
   loaded: z.number().int().min(0),
-  errors: z.array(
-    z.object({
-      file: z.string(),
-      rule_index: z.number().int().min(0).optional(),
-      field: z.string().optional(),
-      code: z.string(),
-      message: z.string(),
-    }),
-  ),
+  errors: z.array(policyStatusIssue),
+  warnings: z.array(policyStatusIssue).optional(),
 })
 
 /** 推送渠道的状态（notify-channel；add-m1-inbox 4.1）。 */
@@ -273,7 +274,7 @@ export const isReservedName = (a: string) =>
 export const isNodeActor = (a: string) => a.toLowerCase().startsWith('node:')
 
 /**
- * user token 用 `X-Flow-Actor` 降级时可以声明的身份：除精确的 `user` 外，
+ * user token 用 `X-Raindown-Actor` 降级时可以声明的身份：除精确的 `user` 外，
  * 不能是保留身份或其大小写变体，也不能是 `node:*`。
  */
 export const isDeclarableActor = (a: string) =>
@@ -281,14 +282,14 @@ export const isDeclarableActor = (a: string) =>
 
 /**
  * 只由中枢按租约签发唤醒绑定 token 认定的身份（add-m1-supervisor D6）：`supervisor`（不区分大小写）。
- * 它仍是合法的角色名与 `flow mcp --actor`（本机第一道防线不变），但在中枢 HTTP 鉴权中
- * user token 不能用 `X-Flow-Actor` 降级声明它，也不能签发为绑定 token。
+ * 它仍是合法的角色名与 `raindown mcp --actor`（本机第一道防线不变），但在中枢 HTTP 鉴权中
+ * user token 不能用 `X-Raindown-Actor` 降级声明它，也不能签发为绑定 token。
  */
 export const HUB_ISSUED_ACTORS = ['supervisor'] as const
 export const isHubIssuedActor = (a: string) =>
   (HUB_ISSUED_ACTORS as readonly string[]).includes(a.toLowerCase())
 
-/** 中枢 HTTP 上 user token 可以用 `X-Flow-Actor` 声明的身份：可声明、且不是中枢签发的身份。 */
+/** 中枢 HTTP 上 user token 可以用 `X-Raindown-Actor` 声明的身份：可声明、且不是中枢签发的身份。 */
 export const isHttpDeclarableActor = (a: string) => isDeclarableActor(a) && !isHubIssuedActor(a)
 
 export const hubTokenId = z
@@ -360,7 +361,7 @@ export const revokeTokenData = z
 export type RevokeTokenData = z.infer<typeof revokeTokenData>
 
 /**
- * Web 页面的一次性登录码（add-m1-inbox 6.1，design D5）：`flow ui` 申请后打开
+ * Web 页面的一次性登录码（add-m1-inbox 6.1，design D5）：`raindown ui` 申请后打开
  * `/ui/login?code=...`。登录码只在内存中以摘要保存，60 秒内有效、只能使用一次；仅 user。
  */
 export const uiLoginCodeData = z
@@ -373,7 +374,7 @@ export const uiLoginCodeData = z
 export type UiLoginCodeData = z.infer<typeof uiLoginCodeData>
 
 /**
- * Telegram 绑定码（add-m1-inbox 5.1，telegram-channel "绑定用户本人"）：`flow telegram link` 申请，
+ * Telegram 绑定码（add-m1-inbox 5.1，telegram-channel "绑定用户本人"）：`raindown telegram link` 申请，
  * 用户在 Telegram 中给 bot 发送 `/link <绑定码>`（或打开 `link_url`）。绑定码至少 64 位随机，
  * 只在中枢内存中以摘要保存，10 分钟内有效，只能使用一次；仅 user。
  */
@@ -426,7 +427,7 @@ export const createTaskRequest = taskContract
       .optional()
       .meta({ description: '工作目录（节点上的绝对路径，允许 ~/ 开头并由节点展开）' }),
   })
-  .meta({ title: 'Flow task contract', description: '创建任务时提交的合同' })
+  .meta({ title: 'Raindown task contract', description: '创建任务时提交的合同' })
 export const createTaskData = z
   .object({
     task: taskView,
@@ -591,7 +592,7 @@ export const nodeView = z
       .meta({ description: '最近一次活动；非事件派生，重建后为 null' }),
     active_leases: z.number().int().min(0),
   })
-  .meta({ title: 'Flow node' })
+  .meta({ title: 'Raindown node' })
 export type NodeView = z.infer<typeof nodeView>
 
 export const registerNodeData = z.object({ node: nodeView }).meta({ title: 'POST /v1/nodes 响应' })

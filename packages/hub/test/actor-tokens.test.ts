@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { flowPaths, initFlowHome } from '@flow/core'
+import { initRaindownHome, raindownPaths } from '@raindown/core'
 import {
   BOUND_TOKEN_PREFIX,
   hubTokensPath,
@@ -29,10 +29,10 @@ afterEach(async () => {
 })
 
 async function setupHome(): Promise<string> {
-  const root = mkdtempSync(join(tmpdir(), 'flow-hub-tokens-'))
+  const root = mkdtempSync(join(tmpdir(), 'raindown-hub-tokens-'))
   roots.push(root)
   const home = join(root, 'home')
-  const init = await initFlowHome(home)
+  const init = await initRaindownHome(home)
   if (!init.ok) throw new Error(init.error.message)
   mkdirSync(join(home, 'config', 'workspaces'), { recursive: true })
   writeFileSync(
@@ -40,13 +40,13 @@ async function setupHome(): Promise<string> {
     'id: demo\nkind: product\nname: Demo\ndescription: 测试\nrepos: []\n',
   )
   // 预置今天（及明天，防跨午夜）的备份文件：启动时不补做备份，hub.backup_done 不会打乱"不产生事件"的计数。
-  const backups = flowPaths(home).backups
+  const backups = raindownPaths(home).backups
   mkdirSync(backups, { recursive: true })
   for (const offset of [0, 1]) {
     const d = new Date(Date.now() + offset * 86_400_000)
     const p2 = (n: number) => String(n).padStart(2, '0')
     const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`
-    writeFileSync(join(backups, `flow-${stamp}-000000.db`), '')
+    writeFileSync(join(backups, `raindown-${stamp}-000000.db`), '')
   }
   return home
 }
@@ -66,7 +66,7 @@ async function start() {
   })
   if (!started.ok) throw new Error(started.error.message)
   hub = started.data
-  const userToken = readFileSync(flowPaths(home).hubToken, 'utf8').trim()
+  const userToken = readFileSync(raindownPaths(home).hubToken, 'utf8').trim()
   const url = hub.url
   const call = async (
     path: string,
@@ -77,7 +77,7 @@ async function start() {
       method: o.body === undefined ? 'GET' : 'POST',
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(o.actor === undefined ? {} : { 'X-Flow-Actor': o.actor }),
+        ...(o.actor === undefined ? {} : { 'X-Raindown-Actor': o.actor }),
         'Content-Type': 'application/json',
       },
       ...(o.body === undefined ? {} : { body: JSON.stringify(o.body) }),
@@ -262,7 +262,7 @@ describe('Token 认证（hub-daemon 增量）', () => {
 
   test('token 文件损坏时中枢拒绝启动', async () => {
     const home = await setupHome()
-    mkdirSync(flowPaths(home).state, { recursive: true })
+    mkdirSync(raindownPaths(home).state, { recursive: true })
     writeFileSync(hubTokensPath(home), '{"version":1,"tokens":[{"id":"x"}]}')
     const r = await runHub({ home, port: 0, logger: { info() {}, warn() {} } })
     expect(r).toMatchObject({ ok: false, error: { code: 'invalid_hub_tokens' } })
@@ -294,7 +294,7 @@ describe('Token 认证（hub-daemon 增量）', () => {
     const store = opened.data
     const kept = await store.issue({ actor: 'node:kept' })
     if (!kept.ok) throw new Error(kept.error.message)
-    const state = flowPaths(home).state
+    const state = raindownPaths(home).state
     chmodSync(state, 0o500)
     try {
       const [x, y] = await Promise.all([
@@ -396,7 +396,7 @@ describe('角色创建权限（config/roles 的 creatable_by）', () => {
       )
     }
     expect(await seq()).toBe(before)
-    // claude-sdk 执行器经 `flow mcp --actor reviewer` 访问中枢，身份就是 reviewer。
+    // claude-sdk 执行器经 `raindown mcp --actor reviewer` 访问中枢，身份就是 reviewer。
     for (const role of ['reviewer', 'triage']) {
       const r = await call('/v1/tasks', { actor: 'reviewer', body: body(role) })
       expect(r).toMatchObject({
@@ -469,7 +469,7 @@ describe('角色创建权限（config/roles 的 creatable_by）', () => {
         body: {
           error: {
             code: 'unknown_role',
-            message: `角色 ${role} 未定义或加载失败，运行 flow doctor 查看`,
+            message: `角色 ${role} 未定义或加载失败，运行 raindown doctor 查看`,
             details: { role },
           },
         },
@@ -490,7 +490,7 @@ describe('角色创建权限（config/roles 的 creatable_by）', () => {
       body: {
         error: {
           code: 'unknown_role',
-          message: '角色 dev 未定义或加载失败，运行 flow doctor 查看',
+          message: '角色 dev 未定义或加载失败，运行 raindown doctor 查看',
         },
       },
     })

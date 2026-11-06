@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { flowPaths } from './home.ts'
+import { raindownPaths } from './home.ts'
 import { executorType } from './ledger/common.ts'
 import { isDeclarableActor } from './ledger/protocol.ts'
 import type { TaskContract } from './ledger/task.ts'
@@ -74,7 +74,7 @@ export const writablePaths = z.array(z.string().min(1)).meta({
 
 export const readScope = z.enum(['cwd']).meta({
   description:
-    '仅 claude-sdk 可配置，其他执行器报配置错误；cwd：所有工具的路径类参数只能落在合同 cwd 与任务私有目录内，拒绝 ~、..、隐藏路径段、绝对 glob 与符号链接越界，只允许白名单内置工具与字段（Bash、WebFetch、非 Flow 的 MCP 等一律拒绝）；Flow MCP 不受影响',
+    '仅 claude-sdk 可配置，其他执行器报配置错误；cwd：所有工具的路径类参数只能落在合同 cwd 与任务私有目录内，拒绝 ~、..、隐藏路径段、绝对 glob 与符号链接越界，只允许白名单内置工具与字段（Bash、WebFetch、非 Raindown 的 MCP 等一律拒绝）；Raindown MCP 不受影响',
 })
 
 export const roleSchema = z
@@ -139,18 +139,18 @@ export const roleSchema = z
       })
     }
   })
-  .meta({ title: 'Flow role config', description: 'config/roles/<name>.yaml' })
+  .meta({ title: 'Raindown role config', description: 'config/roles/<name>.yaml' })
 export type Role = z.infer<typeof roleSchema>
 
 export interface RoleSet {
   roles: Role[]
-  /** 出错文件不会加载；路径相对 flow-home，字段路径以点连接。 */
+  /** 出错文件不会加载；路径相对 raindown-home，字段路径以点连接。 */
   errors: ValidationIssue[]
 }
 
 /** 目录不存在时返回空集；逐文件加载，单个文件错误不影响其他角色。 */
 export async function loadRoles(home: string): Promise<Result<RoleSet>> {
-  const dir = flowPaths(home).roles
+  const dir = raindownPaths(home).roles
   let names: string[]
   try {
     names = (await readdir(dir)).filter((n) => n.endsWith('.yaml') && !n.startsWith('.')).sort()
@@ -218,7 +218,7 @@ const KIND_RANK: Record<RoleKind, number> = { read: 0, write: 1, merge: 2, super
 const CLAUDE_WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'])
 /**
  * claude-sdk 推断为 read 时 `disallowedTools` 必须逐项列出的工具（design D9）：没有禁用的工具会进入
- * Flow 审批，可能被 auto 规则或 supervisor 代回复放行。
+ * Raindown 审批，可能被 auto 规则或 supervisor 代回复放行。
  */
 export const CLAUDE_READ_REQUIRED_DISALLOWED = [
   'Bash',

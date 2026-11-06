@@ -23,8 +23,8 @@
 - **THEN** 阶段为"等 supervisor"，而不是"等人授权"
 
 ### Requirement: 阶段的展示
-`flow task list`、`flow task show`、收件箱条目与 `flow supervisor status` SHALL 显示阶段名称；`flow task list` MUST 支持按阶段过滤，并默认把"等人……"的任务排在最前。
+`raindown task list`、`raindown task show`、收件箱条目与 `raindown supervisor status` SHALL 显示阶段名称；`raindown task list` MUST 支持按阶段过滤，并默认把"等人……"的任务排在最前。
 
 #### Scenario: 只看等我的任务
-- **WHEN** 用户执行 `flow task list --stage waiting-human`
+- **WHEN** 用户执行 `raindown task list --stage waiting-human`
 - **THEN** 只列出阶段为等人授权、等人回答或等人审阅的任务

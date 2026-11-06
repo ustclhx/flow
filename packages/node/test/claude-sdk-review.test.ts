@@ -8,7 +8,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import { ok, type Result, type Role, type TaskContract, taskResult } from '@flow/core'
+import { ok, type Result, type Role, type TaskContract, taskResult } from '@raindown/core'
 import {
   type ClaudeQueryFn,
   type ClaudeSdkExecutorOptions,
@@ -172,7 +172,7 @@ async function runOnce(
     home: r.home,
     query,
     resolveRole: roleResolver(prReviewer()),
-    flowCommand: ['flow'],
+    raindownCommand: ['raindown'],
     gh,
     git: { env: gitEnv },
     readProjectFile: async () => undefined,
@@ -277,8 +277,8 @@ describe('审查准备', () => {
     // 结束后移除 worktree 与私有目录，登记仓库里不留 worktree 记录。
     expect(existsSync(reviewDir(r))).toBe(false)
     expect(sh(r.repo, 'worktree', 'list')).not.toContain('worktree')
-    // 任务专用 ref 已删除；会话不加载任何设置来源，只用 Flow MCP，git 覆盖经环境注入。
-    expect(sh(r.repo, 'for-each-ref', 'refs/flow/')).toBe('')
+    // 任务专用 ref 已删除；会话不加载任何设置来源，只用 Raindown MCP，git 覆盖经环境注入。
+    expect(sh(r.repo, 'for-each-ref', 'refs/raindown/')).toBe('')
     expect(o?.settingSources).toEqual([])
     expect(o?.strictMcpConfig).toBe(true)
     expect(o?.env?.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
@@ -649,8 +649,8 @@ describe('只读角色由执行器强制（5.7）', () => {
           'Write',
           'WebFetch',
           'Agent',
-          'mcp__flow__task_create',
-          'mcp__flow__task_reply',
+          'mcp__raindown__task_create',
+          'mcp__raindown__task_reply',
           'mcp__other__x',
           'StructuredOutput',
         ])
@@ -681,7 +681,7 @@ describe('只读角色由执行器强制（5.7）', () => {
       prompt: '只读',
       permissions: {
         setting_sources: [],
-        allowedTools: ['Read', 'Grep(src/**)', 'mcp__flow__task_create', 'mcp__other__write'],
+        allowedTools: ['Read', 'Grep(src/**)', 'mcp__raindown__task_create', 'mcp__other__write'],
         disallowedTools: ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
       },
     }
@@ -690,9 +690,9 @@ describe('只读角色由执行器强制（5.7）', () => {
       r,
       async function* (io) {
         for (const [tool, mcp] of [
-          ['mcp__flow__task_create', { name: 'flow', source: 'dynamic' }],
+          ['mcp__raindown__task_create', { name: 'raindown', source: 'dynamic' }],
           ['mcp__other__write', { name: 'other', source: 'project' }],
-          ['mcp__flow__kb_search', { name: 'flow', source: 'dynamic' }],
+          ['mcp__raindown__kb_search', { name: 'raindown', source: 'dynamic' }],
           ['Bash', undefined],
           ['Read', undefined],
         ] as const)
@@ -711,14 +711,14 @@ describe('只读角色由执行器强制（5.7）', () => {
     const o = calls[0]
     expect(o?.allowedTools).toContain('Read')
     expect(o?.allowedTools).toContain('Grep(src/**)')
-    expect(o?.allowedTools).not.toContain('mcp__flow__task_create')
+    expect(o?.allowedTools).not.toContain('mcp__raindown__task_create')
     expect(o?.allowedTools).not.toContain('mcp__other__write')
     expect(o?.strictMcpConfig).toBe(true)
     expect(o?.env?.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
     expect(decisions).toEqual({
-      mcp__flow__task_create: 'deny',
+      mcp__raindown__task_create: 'deny',
       mcp__other__write: 'deny',
-      mcp__flow__kb_search: 'pass',
+      mcp__raindown__kb_search: 'pass',
       Bash: 'deny',
       Read: 'pass',
     })
@@ -747,18 +747,18 @@ describe('只读角色由执行器强制（5.7）', () => {
     expect(prechecks).toEqual(['Bash'])
   })
 
-  test('readRoleMayUse：白名单、结构化输出开关与 Flow MCP 自动放行清单', () => {
+  test('readRoleMayUse：白名单、结构化输出开关与 Raindown MCP 自动放行清单', () => {
     for (const t of READ_ROLE_TOOLS) expect(readRoleMayUse(t, false)).toBe(true)
     expect(readRoleMayUse('StructuredOutput', false)).toBe(false)
     expect(readRoleMayUse('StructuredOutput', true)).toBe(true)
-    expect(readRoleMayUse('mcp__flow__kb_search', false)).toBe(true)
-    expect(readRoleMayUse('mcp__flow__kb_search', false, { name: 'flow', source: 'dynamic' })).toBe(
-      true,
-    )
-    expect(readRoleMayUse('mcp__flow__kb_search', false, { name: 'flow', source: 'project' })).toBe(
-      false,
-    )
-    expect(readRoleMayUse('mcp__flow__task_create', false)).toBe(false)
+    expect(readRoleMayUse('mcp__raindown__kb_search', false)).toBe(true)
+    expect(
+      readRoleMayUse('mcp__raindown__kb_search', false, { name: 'raindown', source: 'dynamic' }),
+    ).toBe(true)
+    expect(
+      readRoleMayUse('mcp__raindown__kb_search', false, { name: 'raindown', source: 'project' }),
+    ).toBe(false)
+    expect(readRoleMayUse('mcp__raindown__task_create', false)).toBe(false)
     expect(readRoleMayUse('Bash', true)).toBe(false)
   })
 })

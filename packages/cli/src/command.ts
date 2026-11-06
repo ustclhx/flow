@@ -1,4 +1,4 @@
-import type { FlowError, Result } from '@flow/core'
+import type { RaindownError, Result } from '@raindown/core'
 
 export interface OptionSpec {
   type: 'string' | 'boolean'
@@ -14,7 +14,7 @@ export interface CommandContext {
   options: Record<string, string | boolean | string[] | undefined>
   /** 操作者标识；CLI 默认是 `user`（design D8）。 */
   actor: string
-  /** 是否显式给出了 `--actor`（`flow mcp` 要求必须显式指定）。 */
+  /** 是否显式给出了 `--actor`（`raindown mcp` 要求必须显式指定）。 */
   actorGiven?: boolean
 }
 
@@ -28,7 +28,7 @@ export interface Command<T = unknown> {
   /** 人类可读输出；省略时以缩进 JSON 输出 data。 */
   human?(data: T): string
   /** 失败时的补充输出，例如批量操作已经完成的仓库报告。 */
-  humanError?(error: FlowError): string
+  humanError?(error: RaindownError): string
 }
 
 export const defineCommand = <T>(command: Command<T>): Command<T> => command

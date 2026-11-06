@@ -5,13 +5,13 @@ import {
   loadHubConfig,
   ok,
   type Result,
-  resolveFlowHome,
   resolveHubUrl,
-} from '@flow/core'
+  resolveRaindownHome,
+} from '@raindown/core'
 import { defineCommand } from '../command.ts'
 
 /**
- * `flow ui`（add-m1-inbox 6.1，design D5）：向中枢申请一次性登录码，在浏览器中打开
+ * `raindown ui`（add-m1-inbox 6.1，design D5）：向中枢申请一次性登录码，在浏览器中打开
  * `http://127.0.0.1:<端口>/ui/login?code=...`。登录码 60 秒内有效、只能使用一次。
  */
 
@@ -51,7 +51,7 @@ export function createUiCommand(opener: UrlOpener = systemOpener) {
       print: { type: 'boolean', description: '只输出登录链接，不打开浏览器' },
     },
     run: async ({ actor, options }) => {
-      const home = resolveFlowHome(process.env)
+      const home = resolveRaindownHome(process.env)
       const config = await loadHubConfig(home)
       if (!config.ok) return config
       const issued = await new HubClient({ home, actor }).uiLoginCode()

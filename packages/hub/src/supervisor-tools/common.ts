@@ -6,7 +6,7 @@ import {
   loadWorkspaces,
   type Result,
   SUPERVISOR_ACTOR,
-} from '@flow/core'
+} from '@raindown/core'
 import type { Context } from 'hono'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { RepoCheckOptions, RoleForKind } from '../ledger/supervisor-checks.ts'
@@ -23,7 +23,7 @@ import type { DelegationService } from '../supervisor/delegation.ts'
  * supervisor 的提问、任务提案与决策回看（add-m1-supervisor design D7、D11；tasks 4.4–4.7）共用的依赖与身份核对。
  *
  * 调用方身份一律取自鉴权中间件按唤醒绑定 token（D6）认定的结果，不信任请求体、`--task`、
- * `FLOW_TASK_ID` 或 `X-Flow-Actor`。
+ * `RAINDOWN_TASK_ID` 或 `X-Raindown-Actor`。
  */
 
 export interface SupervisorToolsDeps {
@@ -39,7 +39,7 @@ export interface SupervisorToolsDeps {
   supervisorActive: (workspace: string) => Promise<boolean>
   repoCheck?: RepoCheckOptions
   /**
-   * 全部角色（合并请求按有效类别 merge 查找唯一的 merger 角色，D10）；缺省读 flow-home 的 `config/roles/`。
+   * 全部角色（合并请求按有效类别 merge 查找唯一的 merger 角色，D10）；缺省读 raindown-home 的 `config/roles/`。
    */
   mergeRoles?: () => Promise<Result<RoleForKind[]>>
   /**
@@ -93,7 +93,7 @@ export function checkWakeCaller(
   return { ok: true, data: wake }
 }
 
-/** 基于 flow-home：workspace 启用 supervisor 且存在有效类别为 supervisor 的角色（每次调用重新读取）。 */
+/** 基于 raindown-home：workspace 启用 supervisor 且存在有效类别为 supervisor 的角色（每次调用重新读取）。 */
 export function supervisorActiveFromHome(home: string): (workspace: string) => Promise<boolean> {
   return async (ref) => {
     const ws = await loadWorkspaces(home)

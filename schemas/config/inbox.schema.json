@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/config/inbox.schema.json",
+  "$id": "https://raindown.local/schemas/config/inbox.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -143,6 +143,6 @@
     }
   },
   "additionalProperties": false,
-  "title": "Flow inbox config",
+  "title": "Raindown inbox config",
   "description": "config/inbox.yaml：收件箱配置"
 }

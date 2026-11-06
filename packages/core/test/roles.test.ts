@@ -27,7 +27,7 @@ const role = { name: 'dev', executor: 'fake', prompt: '完成任务并报告结�
 
 describe('角色配置', () => {
   test('内联提示词、全部可选字段和执行器专用权限内容原样保留', async () => {
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     const configured = {
       ...role,
       model: 'custom-model',
@@ -40,7 +40,7 @@ describe('角色配置', () => {
   })
 
   test('引用 Markdown 提示词：读取同目录文件', async () => {
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     const prompt = '# 开发角色\n完成任务并运行验收。\n'
     writeText(join(home, 'config/roles/dev.yaml'), stringify({ ...role, prompt: 'dev.md' }))
     writeText(join(home, 'config/roles/dev.md'), prompt)
@@ -51,7 +51,7 @@ describe('角色配置', () => {
   })
 
   test('提示词文件缺失时报 prompt_file_missing，不加载该角色且不影响其他角色', async () => {
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     writeText(join(home, 'config/roles/dev.yaml'), stringify({ ...role, prompt: 'dev.md' }))
     writeText(join(home, 'config/roles/triage.yaml'), stringify({ ...role, name: 'triage' }))
     expect(data(await loadRoles(home))).toEqual({
@@ -68,14 +68,14 @@ describe('角色配置', () => {
   })
 
   test('只解析同目录文件名，不读取路径指向的 Markdown', async () => {
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     writeText(join(home, 'config/outside.md'), '目录外提示词')
     writeText(join(home, 'config/roles/dev.yaml'), stringify({ ...role, prompt: '../outside.md' }))
     expect(data(await loadRoles(home)).roles[0]?.prompt).toBe('../outside.md')
   })
 
   test('目录缺失返回空集，目录无法读取返回失败', async () => {
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     expect(data(await loadRoles(home))).toEqual({ roles: [], errors: [] })
     writeText(join(home, 'config/roles'), '不是目录')
     const result = await loadRoles(home)
@@ -84,7 +84,7 @@ describe('角色配置', () => {
   })
 
   test('逐文件隔离 YAML、字段与读取错误，保留合法角色并报告文件和字段', async () => {
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     const dir = join(home, 'config/roles')
     writeText(join(dir, 'dev.yaml'), stringify(role))
     writeText(join(dir, 'broken.yaml'), 'name: [\n')
@@ -186,7 +186,7 @@ describe('角色配置', () => {
   })
 
   test('writable_paths 只属于 claude-sdk；其他执行器加载时报告字段错误', async () => {
-    const home = tempHome('flow-role-writable-')
+    const home = tempHome('raindown-role-writable-')
     for (const executor of ['codex-orca', 'codex-exec']) {
       writeText(
         join(home, 'config/roles', `${executor}.yaml`),
@@ -217,7 +217,7 @@ describe('角色配置', () => {
     expect(roleSchema.safeParse({ ...sdk, permissions: { read_scope: 'cwd' } }).success).toBe(true)
     for (const read_scope of ['home', '', true, ['cwd']])
       expect(roleSchema.safeParse({ ...sdk, permissions: { read_scope } }).success).toBe(false)
-    const home = tempHome('flow-role-read-scope-')
+    const home = tempHome('raindown-role-read-scope-')
     for (const executor of ['codex-orca', 'codex-exec']) {
       writeText(
         join(home, 'config/roles', `${executor}.yaml`),
@@ -273,7 +273,7 @@ describe('creatable_by（角色创建权限）', () => {
   })
 
   test('默认模板：dev 与 pr-reviewer 为 [supervisor]，reviewer 与 triage 为 ["*"]，supervisor 与 merger 不写', async () => {
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     for (const [name, text] of Object.entries(DEFAULT_ROLE_FILES)) {
       writeText(join(home, 'config/roles', name), text)
     }
@@ -414,7 +414,7 @@ describe('角色有效类别（D9）', () => {
   })
 
   test('默认 reviewer 配有 writable_paths：有效类别为 write', async () => {
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     for (const [name, text] of Object.entries(DEFAULT_ROLE_FILES)) {
       writeText(join(home, 'config/roles', name), text)
     }
@@ -492,7 +492,7 @@ describe('角色有效类别（D9）', () => {
     }
     expect(roleSchema.safeParse({ ...sdk, name: 'boss', kind: 'read' }).success).toBe(true)
 
-    const home = tempHome('flow-roles-')
+    const home = tempHome('raindown-roles-')
     writeText(
       join(home, 'config/roles/supervisor.yaml'),
       stringify({ ...role, name: 'supervisor', executor: 'codex-orca' }),
@@ -541,7 +541,7 @@ describe('角色有效类别（D9）', () => {
     expect(
       supervisorRoleProblem(of('claude-sdk', { ...supRead, allowedTools: ['Bash'] }, 'supervisor')),
     ).toContain('read')
-    // flow init 的 supervisor 模板满足要求。
+    // raindown init 的 supervisor 模板满足要求。
     const tpl = parse(DEFAULT_ROLE_FILES['supervisor.yaml'] ?? '') as Role
     expect(supervisorRoleProblem(tpl)).toBeUndefined()
   })

@@ -5,7 +5,7 @@ import {
   type InboxItemView,
   type InboxVia,
   redactSecrets,
-} from '@flow/core'
+} from '@raindown/core'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { ChannelMessage, OutboundItem } from './types.ts'
 

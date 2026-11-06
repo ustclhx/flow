@@ -3,7 +3,6 @@ import { join, relative } from 'node:path'
 import {
   clipText,
   fail,
-  flowPaths,
   type InboxVia,
   type LedgerEvent,
   loadWorkspaces,
@@ -12,6 +11,7 @@ import {
   type QueueDropReason,
   type Result,
   type Role,
+  raindownPaths,
   type SupervisorStatusData,
   type SupervisorWakeData,
   type SupervisorWorkspaceStatus,
@@ -22,7 +22,7 @@ import {
   type WakeEventInput,
   type WakeOrigin,
   type WakeSummary,
-} from '@flow/core'
+} from '@raindown/core'
 import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import type { TaskService, WorkspaceInfo, WorkspaceLookup } from '../ledger/tasks.ts'
 import type { HubClock } from '../server/clock.ts'
@@ -140,13 +140,13 @@ export interface WakeScheduler {
   idle(): Promise<void>
   /** 立即为某 workspace 调度一次（等待完成）。 */
   pump(workspace: string): Promise<void>
-  /** `flow ask` / `/ask` / `flow supervisor wake <ws> [<说明>]`：写 user.instruction 并调度。 */
+  /** `raindown ask` / `/ask` / `raindown supervisor wake <ws> [<说明>]`：写 user.instruction 并调度。 */
   instruct(
     workspace: string,
     text: string | undefined,
     via: InboxVia,
   ): Promise<Result<SupervisorWakeData>>
-  /** `flow supervisor wake <ws> --release <queue>`。 */
+  /** `raindown supervisor wake <ws> --release <queue>`。 */
   release(workspace: string, queue: TaskOrigin): Promise<Result<SupervisorWakeData>>
   status(workspace?: string): Promise<Result<SupervisorStatusData>>
   /** 投影（测试与诊断）。 */
@@ -156,7 +156,7 @@ export interface WakeScheduler {
 export type WorkspaceFileState = 'missing' | 'invalid' | 'ok'
 
 /**
- * 按 flow-home 判断某 workspace 定义文件的状态（每次重新读取）。`ws/global` 恒为 ok。
+ * 按 raindown-home 判断某 workspace 定义文件的状态（每次重新读取）。`ws/global` 恒为 ok。
  * - 文件 `config/workspaces/<id>.yaml|yml` 都不存在 → missing；
  * - 整体加载失败、文件存在但不在加载结果中，或 issues / warnings 中有指向该文件的问题 → invalid；
  * - 否则 ok。
@@ -183,7 +183,7 @@ export function workspaceConfigFromHome(
     const loaded = await loadWorkspaces(home)
     const ws = loaded.ok ? (loaded.data.workspaces.find((w) => w.ref === ref) ?? null) : null
     if (ref === 'ws/global') return { state: 'ok', ws }
-    const dir = flowPaths(home).workspaces
+    const dir = raindownPaths(home).workspaces
     const files = ['yaml', 'yml']
       .map((ext) => join(dir, `${wsId(ref)}.${ext}`))
       .filter((f) => existsSync(f))
@@ -296,7 +296,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
       return {
         ok: false,
         code: ws ? 'supervisor_disabled' : 'unknown_workspace',
-        reason: `config/workspaces/${wsId(ref)}.yaml 有错误，暂时无法确认 ${ref} 的配置（运行 flow doctor 查看）`,
+        reason: `config/workspaces/${wsId(ref)}.yaml 有错误，暂时无法确认 ${ref} 的配置（运行 raindown doctor 查看）`,
         drop: 'workspaces_invalid',
       }
     }
@@ -321,7 +321,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     const role = await o.supervisorRole()
     if (!role.ok) return off(`supervisor 角色不可用：${role.error.message}`, 'role_invalid')
     if (!role.data) {
-      return off('没有 kind: supervisor 角色（运行 flow init 补齐角色模板）', 'no_role')
+      return off('没有 kind: supervisor 角色（运行 raindown init 补齐角色模板）', 'no_role')
     }
     if (ws.repos.length === 0) {
       return off(`${ref} 没有登记仓库，supervisor 唤醒没有工作目录`, 'no_repo')
@@ -386,7 +386,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         title: `${ref} 今日唤醒已达上限，${queue} 队列的事件在等待`,
         body: [
           `今天的${what}已达 ${max} 次（supervisor.limits.${key}），${queue} 队列的新事件留在队列中，明天自动继续。`,
-          `需要现在处理：flow supervisor wake ${id} --release ${queue}（放行一次，不计入上限）。`,
+          `需要现在处理：raindown supervisor wake ${id} --release ${queue}（放行一次，不计入上限）。`,
         ].join('\n'),
         actions: [],
       },
@@ -418,7 +418,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
           [
             `唤醒任务 ${wakeId} 失败（连续第 ${failures} 次）${why ? `：${why}` : ''}。`,
             `${queue} 队列已暂停：新事件继续排队，${new Date(until).toLocaleString()} 自动恢复一次。`,
-            `立即放行：flow supervisor wake ${id} --release ${queue}`,
+            `立即放行：raindown supervisor wake ${id} --release ${queue}`,
           ].join('\n'),
           4000,
         ),
@@ -439,7 +439,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         reason: 'wake_create_failed',
         title: `${ref} 的 supervisor 唤醒无法创建`,
         body: clipText(
-          `已连续 ${failures} 次创建唤醒任务失败：${error}\n中枢会按退避继续重试；可运行 flow supervisor status ${wsId(ref)} 查看，或 flow doctor 检查配置。`,
+          `已连续 ${failures} 次创建唤醒任务失败：${error}\n中枢会按退避继续重试；可运行 raindown supervisor status ${wsId(ref)} 查看，或 raindown doctor 检查配置。`,
           4000,
         ),
         actions: [],
@@ -485,7 +485,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         reason: 'wake_unavailable',
         title: `${ref} 的 supervisor 超过 24 小时无法唤醒，已丢弃积压的事件`,
         body: clipText(
-          `${reason}\n超过 24 小时仍未恢复，早于宽限期的指令与事件已丢弃（之后到达的仍在排队）。修好后运行 flow doctor 检查，再用 flow ask 重新下达需要的指令。`,
+          `${reason}\n超过 24 小时仍未恢复，早于宽限期的指令与事件已丢弃（之后到达的仍在排队）。修好后运行 raindown doctor 检查，再用 raindown ask 重新下达需要的指令。`,
           4000,
         ),
         actions: [],
@@ -1022,7 +1022,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
       ...base,
       state: 'queued',
       reason: 'unavailable',
-      message: '已排队，暂时无法唤醒（见 flow supervisor status）',
+      message: '已排队，暂时无法唤醒（见 raindown supervisor status）',
     })
   }
 

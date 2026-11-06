@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/protocol/tasks-create.request.schema.json",
+  "$id": "https://raindown.local/schemas/protocol/tasks-create.request.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -778,6 +778,6 @@
     "executor"
   ],
   "additionalProperties": false,
-  "title": "Flow task contract",
+  "title": "Raindown task contract",
   "description": "创建任务时提交的合同"
 }

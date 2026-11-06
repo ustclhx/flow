@@ -2,11 +2,11 @@ import {
   fail,
   loadSyncTargets,
   type Result,
-  resolveFlowHome,
+  resolveRaindownHome,
   type SyncReport,
   type SyncTarget,
   syncAgentsFiles,
-} from '@flow/core'
+} from '@raindown/core'
 import { defineCommand } from '../command.ts'
 
 function humanReport(report: SyncReport): string {
@@ -20,7 +20,7 @@ function humanReport(report: SyncReport): string {
 export function createAgentsSyncCommand(loadTargets: () => Promise<Result<SyncTarget[]>>) {
   return defineCommand<SyncReport>({
     name: 'agents sync',
-    summary: '同步项目 AGENTS.md 的 Flow 受管区块',
+    summary: '同步项目 AGENTS.md 的 Raindown 受管区块',
     usage: 'agents sync [--check]',
     options: { check: { type: 'boolean', description: '只检查区块是否过时，不写入文件' } },
     run: async ({ args, options }) => {
@@ -37,4 +37,4 @@ export function createAgentsSyncCommand(loadTargets: () => Promise<Result<SyncTa
   })
 }
 
-export default createAgentsSyncCommand(() => loadSyncTargets(resolveFlowHome(process.env)))
+export default createAgentsSyncCommand(() => loadSyncTargets(resolveRaindownHome(process.env)))

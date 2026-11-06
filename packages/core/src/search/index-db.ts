@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type BrainEntry, entryIdOf, listEntryFiles, readBrainEntries } from '../entries.ts'
 import { parseFrontmatter } from '../frontmatter.ts'
-import { flowPaths } from '../home.ts'
+import { raindownPaths } from '../home.ts'
 import { fail, ok, type Result } from '../result.ts'
 import type { GetOutput, QueryOutput, SearchInput, SearchOutput } from '../schema/search.ts'
 import { type Database, openDatabase, type SqlValue } from '../sqlite.ts'
@@ -35,7 +35,7 @@ function journalEntry(home: string, name: string, body: string): BrainEntry {
   return {
     id,
     file: `brain/${id}.md`,
-    absPath: join(flowPaths(home).journal, name),
+    absPath: join(raindownPaths(home).journal, name),
     frontmatter: { type: 'journal', title: id, summary: '' },
     body,
   }
@@ -43,7 +43,7 @@ function journalEntry(home: string, name: string, body: string): BrainEntry {
 
 async function journalFiles(home: string): Promise<string[]> {
   try {
-    return (await readdir(flowPaths(home).journal, { withFileTypes: true }))
+    return (await readdir(raindownPaths(home).journal, { withFileTypes: true }))
       .filter((e) => e.isFile() && JOURNAL_FILE.test(e.name))
       .map((e) => e.name)
       .sort()
@@ -77,7 +77,7 @@ function ensureSchema(db: Database): void {
 export async function syncIndex(home: string): Promise<Result<undefined>> {
   let db: Database | undefined
   try {
-    const paths = flowPaths(home)
+    const paths = raindownPaths(home)
     // 先发现 brain 文件，避免未初始化时创建 state/。
     const files = await listEntryFiles(paths.brain)
     const documents: { entry: BrainEntry; hash: string; mtime: number }[] = []
@@ -148,7 +148,7 @@ export async function syncIndex(home: string): Promise<Result<undefined>> {
     return ok(undefined)
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return fail('failure', 'not_initialized', '未找到 brain，请先运行 flow init')
+      return fail('failure', 'not_initialized', '未找到 brain，请先运行 raindown init')
     }
     return fail('failure', 'index_failed', `同步检索索引失败：${(err as Error).message}`)
   } finally {
@@ -172,7 +172,7 @@ function excerpt(text: string, query: string): string {
 export async function searchIndex(home: string, input: SearchInput): Promise<Result<SearchOutput>> {
   const synced = await syncIndex(home)
   if (!synced.ok) return synced
-  const db = await openDatabase(join(flowPaths(home).state, 'index.db'))
+  const db = await openDatabase(join(raindownPaths(home).state, 'index.db'))
   try {
     const query = input.query.trim()
     const short = Array.from(query).length < 3
@@ -234,7 +234,7 @@ export async function queryIndex(home: string, filters: string[]): Promise<Resul
   }
   const synced = await syncIndex(home)
   if (!synced.ok) return synced
-  const db = await openDatabase(join(flowPaths(home).state, 'index.db'))
+  const db = await openDatabase(join(raindownPaths(home).state, 'index.db'))
   try {
     const conditions = parsed.map(
       () => 'EXISTS (SELECT 1 FROM fields f WHERE f.entry_id = e.id AND f.key = ? AND f.value = ?)',
@@ -262,7 +262,11 @@ export async function getEntry(home: string, id: string): Promise<Result<GetOutp
   if (!entry && id.startsWith('journal/')) {
     const name = `${id.slice('journal/'.length)}.md`
     if ((await journalFiles(home)).includes(name)) {
-      entry = journalEntry(home, name, await readFile(join(flowPaths(home).journal, name), 'utf8'))
+      entry = journalEntry(
+        home,
+        name,
+        await readFile(join(raindownPaths(home).journal, name), 'utf8'),
+      )
     }
   }
   if (!entry) return fail('failure', 'not_found', `未找到条目：${id}`)

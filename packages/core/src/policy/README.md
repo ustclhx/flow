@@ -4,6 +4,8 @@
 缺失或空文件等同空数组；文件读取、YAML 语法、顶层类型错误返回失败。单条规则错误收集到
 `errors`，不影响其他规则。`rule_index` 为从 0 开始的原始数组索引，错误消息同时给出从 1
 开始的序号；`field: '$'` 表示整条规则。schema 不检查角色或 workspace 是否已注册。
+旧动作 `flow.admin`、`tool:mcp__flow__<操作名>` 在加载时归一为新名称，规则档位和索引保留；
+迁移提示单独收集到 `warnings`（`legacy_policy_action`），不作为错误排除规则，也不改写配置文件。
 
 ```yaml
 - scope: dev
@@ -17,7 +19,7 @@
     paths: ['src/**/*.ts']
 ```
 
-`classifyAction({ tool, command?, paths? })` 始终包含 `tool:<原工具名>`；提供命令时按
+`classifyAction({ tool, command?, paths? })` 始终包含 `tool:<工具名>`（旧 MCP 前缀归一为新名称）；提供命令时按
 `COMMAND_ACTION_MAPPINGS` 识别，调用方可传第二个参数扩展映射表。支持环境变量赋值、
 `sudo` / `env` / `command` / `timeout` / `nice` / `nohup` / `time` / `exec` /
 `stdbuf` / `xargs` 包装、执行文件绝对路径、空格、引号、反斜杠续行与串联命令。
@@ -41,21 +43,21 @@ shell 解释器、`eval`、`source`、点号命令与 Python/Node/Ruby/Perl 解�
 输出文字或备份文件名等可能的误报。路径与命令文本的这些比较都**不区分大小写**
 （APFS 默认不区分大小写，`CONFIG/Policies.yaml` 指向同一个文件）。
 命令或路径中出现 glob 字符（`*` `?` `[`）、变量展开（`$x`、`${…}`）或命令替换，并且同时
-出现 `polic`、`/config/` 路径段、`flow-home` 或实际 flow-home 的 basename（不区分大小写）时，
+出现 `polic`、`/config/` 路径段、`raindown-home` 或实际 raindown-home 的 basename（不区分大小写）时，
 实际作用的文件无法静态确定（`polic*.yaml`、`${p}ies.yaml`、`policies.yam?`），按
 `shell.opaque` 处理，因而包含 `policy.edit`。不再用宽泛的 `config` 子串，`tsconfig.json`、
 `vite.config.*` 与 glob 同时出现不算不透明。
 命令或路径含非打印字符（换行、回车、制表符之外的控制字符、零宽与双向覆盖等格式字符）时
 同样按不透明处理。
 
-第三个参数 `{ flowHomes, userHome, hubPorts }`（中枢传入自身 home 及其 realpath、
+第三个参数 `{ raindownHomes, userHome, hubPorts }`（中枢传入自身 home 及其 realpath、
 `os.homedir()` 与配置的端口）：
-- 路径：落在 flow-home 的 `config/` 目录下的任何路径增加 `config.edit`；
+- 路径：落在 raindown-home 的 `config/` 目录下的任何路径增加 `config.edit`；
 - 命令：先做词法归一（`normalizeCommandText`：去掉引号与反斜杠，展开 `~`、`$HOME`、
-  `${HOME}`，合并 `//` 与 `/./`，转小写），之后只要出现 flow-home 的绝对路径、它的 `~`
-  写法，或 flow-home 的 basename（包括默认的 `flow-home`）作为一个路径段出现，就增加
-  `config.edit`。这是保守的：`cd ~/flow-home && echo > config/roles/dev.yaml` 这类相对路径
-  写法无法静态解析 cwd，所以只要提到 flow-home 就算；
+  `${HOME}`，合并 `//` 与 `/./`，转小写），之后只要出现 raindown-home 的绝对路径、它的 `~`
+  写法，或 raindown-home 的 basename（包括默认的 `raindown-home`）作为一个路径段出现，就增加
+  `config.edit`。这是保守的：`cd ~/raindown-home && echo > config/roles/dev.yaml` 这类相对路径
+  写法无法静态解析 cwd，所以只要提到 raindown-home 就算；
 - 命令文本中出现 `127.0.0.1` / `localhost` / `0.0.0.0` / `[::1]` 加中枢端口，或 `/v1/`
   加中枢端口（总是包含 7477 与 7478）时，视为直接访问中枢，按 `shell.opaque` 处理。
 
@@ -63,16 +65,18 @@ roles、remote.yaml 等与策略文件一样是提权面，不只 policies.yaml�
 core 不访问文件系统或解析符号链接；节点在预检前对每个路径做 realpath（文件不存在时对
 最近的已存在祖先目录做 realpath 再拼回其余部分），原路径与解析后的路径都送去判定。
 
-flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做决定的操作额外识别为具体
-动作（`FLOW_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、
+raindown MCP 工具（`mcp__raindown__<操作名>`）中会扩大权限或替用户做决定的操作额外识别为具体
+动作（`RAINDOWN_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、
 `task_reply` → `task.reply`、`task_respond` → `task.respond`、`kb_proposals_accept` / `kb_proposals_reject` → `proposal.decide`、
-`resource_transfer` → `resource.transfer`。Bash 调 flow CLI 时识别为同样的动作
-（`flow task create|cancel|reply|respond`、`flow kb proposals accept|reject`、`flow resource transfer`）；
-`flow hub`、`flow policy`、`flow daemon`、`flow mcp`、`flow node`、`flow init` 识别为
-`flow.admin`，`flow secrets` 识别为 `secrets`。flow 可执行文件按 basename 识别
-（`/Users/x/.bun/bin/flow`），`bunx|npx|pnpx flow`、`bun x flow`、`bun [run] <脚本>.ts`、
-`npm|pnpm|yarn exec|run|dlx flow` 同样识别；选项（以及 `--actor` 的值）不影响匹配，
-与 CLI 的命令匹配方式一致。`bun -e` / `--eval` / `-p` / `--print` 按不透明处理。
+`resource_transfer` → `resource.transfer`。Bash 调 raindown CLI 时识别为同样的动作
+（`raindown task create|cancel|reply|respond`、`raindown kb proposals accept|reject`、`raindown resource transfer`）；
+`raindown hub`、`raindown policy`、`raindown daemon`、`raindown mcp`、`raindown node`、`raindown init` 识别为
+`raindown.admin`，`raindown secrets` 识别为 `secrets`。raindown 可执行文件按 basename 识别
+（`/Users/x/.bun/bin/raindown`），`bunx|npx|pnpx raindown`、`bun x raindown`、`bun [run] <脚本>.ts`、
+`npm|pnpm|yarn exec|run|dlx raindown` 同样识别；选项（以及 `--actor` 的值）不影响匹配，
+与 CLI 的命令匹配方式一致。旧 `flow` CLI 与 `@flow/cli` 在上述调用方式中等价识别，
+自定义命令映射中的旧 `flow` 前缀与 `flow.admin` 动作同样归一；`flow-home/config/` 与命令中
+出现的旧 `flow-home` 路径继续受保护。`bun -e` / `--eval` / `-p` / `--print` 按不透明处理。
 
 ### 升级顺序：新条件与旧节点
 
@@ -111,7 +115,7 @@ flow MCP 工具（`mcp__flow__<操作名>`）中会扩大权限或替用户做�
 
 `decide(config.rules, request)` 是纯函数。workspace 使用完整的 `ws/<id>`。
 `tool:<名称>` 只作为兜底：请求中存在任何非 `tool:` 开头的具体动作（包括 `shell.opaque`）
-时，只按具体动作判定，工具动作明细的 `level` 为 `skipped`、命中规则为空，不参与档位
+时，通常只按具体动作判定，工具动作明细的 `level` 为 `skipped`、命中规则为空，不参与档位
 合并或汇总命中规则。没有具体动作时才按工具动作判定，例如 `ls` 可由 `tool:Bash` 的
 `auto` 规则放行。每个参与判定的动作分别按 workspace、角色、全局排序，同层精确 action
 优先，其余通配模式一律并列，最后
@@ -215,7 +219,7 @@ gh 实际解析的仓库由节点检查（`packages/node/src/push-env.ts`，所�
 **codex-orca 与 claude-sdk 的 `git push`、`gh pr create` 暂不委托给 supervisor**（`push_to`、
 `gh_scope` 不满足，交给用户）；白名单模板中的这两类规则要等执行器能提供可信的执行目录后才会生效。
 
-`flow init` 生成的 `config/policies.yaml` 带一组注释掉的模板：supervisor 角色的 `task.create`
+`raindown init` 生成的 `config/policies.yaml` 带一组注释掉的模板：supervisor 角色的 `task.create`
 auto（scope 用角色名 `supervisor`；workspace 由 D5 的 parent 与仓库检查约束，同一 workspace 的
 ws 级 `task.create` 规则会覆盖它），以及代回复白名单（`tool:CodexCommand` 与 `tool:Bash` 的
 `pnpm check|test|lint` 前缀、带 `gh_scope` 的 `pr.create` 与 `gh pr view|diff`、带 `push_to` 的
@@ -230,12 +234,12 @@ ws 级 `task.create` 规则会覆盖它），以及代回复白名单（`tool:Co
 由中枢决定是否委托（不在代回复范围内时按 `draft-approve` 交给用户）。
 **安全底线是：敏感动作只能由显式规则放行，识别不确定时按敏感处理。**
 **受保护的动作**（`GUARDED_ACTIONS`）：`shell.opaque`、`pr.merge`、`deploy`、`secrets`、
-`policy.edit`、`config.edit`、`flow.admin`，以及上述 flow 工具的具体动作，均只有具体 workspace 或角色
+`policy.edit`、`config.edit`、`raindown.admin`，以及上述 raindown 工具的具体动作，均只有具体 workspace 或角色
 scope 加精确 action（不含通配符）的规则才能自动放行；不透明请求必须逐一满足全部动作的
 显式授权。
 
 **受保护的工具**（`GUARDED_TOOLS` / `isGuardedTool`）：`tool:CodexCommand`（Codex 请求越出
-沙箱执行）、所有 `tool:mcp__*`（flow 自己的工具与以后接入的第三方 MCP）、`tool:WebFetch`、
+沙箱执行）、所有 `tool:mcp__*`（raindown 自己的工具与以后接入的第三方 MCP）、`tool:WebFetch`、
 `tool:WebSearch`（外发数据）、`tool:Task` / `tool:Agent`（派生子 agent，继承并放大权限）、`tool:Verify`（非 user 身份建任务时合同中的验收命令，在沙箱外执行；建任务时逐条判定，只有 auto / auto-report 且每个词都在白名单内时放行（普通词与 `--name=` 的值按 `,`、`=` 切段，每段是可带 `./` 开头的相对路径，各段以字母数字或 `_` 开头和结尾、不含 `..`；选项为 `-x`、`--name`、`--name.sub` 或 `--name=<普通词>`；glob、空格、`@scope/pkg`、`:`、`~`、绝对路径一律拒绝。白名单只校验词的形态，不校验选项含义：启用 pnpm 以外的前缀前，先确认该命令没有 `go test -exec`、`cargo --config` 这类执行程序或写配置的选项），否则 `verify_not_allowed`，见 add-m1-supervisor D5）。
 请求涉及这些工具时，参与判定的每个动作（工具本身或从命令识别出的具体动作）都只有 action
 不含通配符的规则才能自动放行；`*`、`tool:*`、`tool:mcp__*` 这类通配规则最多判为
@@ -265,10 +269,10 @@ level, matched_rules, actions }`：`request.actions` 是动作 id，外层 `acti
 请求命令最多 8192 字符、路径最多 200 项且每项最多 2000 字符，超出返回 400，不把
 截断输入用于判定。入账时命令、路径与命中规则的同类条件按自由文本脱敏，并限长到
 2000 字符；响应采用同样脱敏、限长后的规则明细，dry run 也不例外。超长命令仍使用完整的合法输入判定。
-单条规则错误跳过并由 `flow hub status` 报告；文件级读取、YAML 或顶层类型错误使
+单条规则错误跳过并由 `raindown hub status` 报告；文件级读取、YAML 或顶层类型错误使
 检查返回 500 `internal_error`，status 报告加载错误，节点按 D2 保守交给用户。
 
-人工调试使用 `flow policy check --task <id> --tool Bash --command "git push"`，
+人工调试使用 `raindown policy check --task <id> --tool Bash --command "git push"`，
 路径通过可重复的 `--path` 传入。CLI 默认传 `dry_run: true`，只返回判定，不写事件，避免
 把调试的 auto-report 结果记为真实放行并产生 Digest；加 `--record` 才传 false 并入账。
 只有 user 能使用 dry run；节点省略该字段或传 false 均入账，传 true 返回 400
@@ -283,3 +287,5 @@ Digest 和收件箱条目由任务 3.1 的反应器生成。
 作为 `paths`（编辑类工具缺少路径时不预检）；codex-orca 以工具名 `CodexCommand` 加授权弹窗中
 严格解析出的命令（`approvalForPrecheck`）预检，发回车前重读终端核对弹窗与命令未变；
 fake 执行器的 `approval` 步骤用于端到端测试。codex-exec 无头运行、没有交互审批，不接入。
+
+改名兼容：只有从 `tool:mcp__flow__` 规范化而来的规则带 `legacy_tool_action` 来源标记，其限制档位（notify、draft-approve）在识别出具体动作后仍参与保守合并。直接用新名编写的工具规则保持原有具体动作优先语义，工具规则仍不能代替具体动作规则授予自动放行。`mcp__flow__*` 与 `flow.*` 可安全规范化；`mcp__flow*`、`mcp__fl*` 等歧义前缀保持原文并报告迁移警告。

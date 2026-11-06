@@ -17,7 +17,7 @@ jobs:
       GITLEAKS_VERSION: 8.30.1
       SOPS_VERSION: 3.13.3
       AGE_VERSION: 1.3.2
-      FLOW_REQUIRE_SOPS_TESTS: "1"
+      RAINDOWN_REQUIRE_SOPS_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
 

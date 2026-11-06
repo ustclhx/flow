@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { fail, ok, type Result, VERSION } from '@flow/core'
+import { fail, ok, type Result, VERSION } from '@raindown/core'
 import type { Command, OptionSpec } from './command.ts'
 import { type Rendered, render } from './output.ts'
 
@@ -50,12 +50,14 @@ export async function runCli(
     return render(ok(commandHelp(command)), { json, human: (d) => d })
   }
   const args = parsed.positionals.slice(command.name.split(' ').length)
+  const resolvedActor = resolveActor(actor, env)
+  if (!resolvedActor.ok) return render(resolvedActor, { json })
   let result: Result<unknown>
   try {
     result = await command.run({
       args,
       options: options as Record<string, string | boolean | string[] | undefined>,
-      ...resolveActor(actor, env),
+      ...resolvedActor.data,
     })
   } catch (err) {
     result = fail('failure', 'internal_error', (err as Error).message)
@@ -67,19 +69,19 @@ export async function runCli(
   })
 }
 
-/**
- * 命令的操作者身份。`FLOW_ACTOR` 声明了非 user 身份时只能降级：所有命令（包括经 HubClient
- * 访问中枢的命令）都以该身份执行，`--actor user` 或其他 `--actor` 都不能覆盖它。
- * 这是第一道防线；中枢仍按 token 决定身份（docs/hub-auth.md），信任边界不变。
- */
+/** 新旧环境身份同时保留限制，显式 --actor 不能覆盖非 user 身份。 */
 export function resolveActor(
   flag: unknown,
   env: NodeJS.ProcessEnv,
-): { actor: string; actorGiven: boolean } {
-  const fromEnv = env.FLOW_ACTOR?.trim()
-  if (fromEnv && fromEnv !== 'user') return { actor: fromEnv, actorGiven: true }
+): Result<{ actor: string; actorGiven: boolean }> {
+  const restricted = [env.RAINDOWN_ACTOR?.trim(), env.FLOW_ACTOR?.trim()].filter(
+    (actor): actor is string => Boolean(actor && actor !== 'user'),
+  )
+  if (new Set(restricted).size > 1)
+    return fail('usage', 'actor_conflict', 'RAINDOWN_ACTOR 与 FLOW_ACTOR 声明了不同的非 user 身份')
+  if (restricted[0]) return ok({ actor: restricted[0], actorGiven: true })
   const given = typeof flag === 'string' && flag !== ''
-  return { actor: given ? flag : 'user', actorGiven: given }
+  return ok({ actor: given ? flag : 'user', actorGiven: given })
 }
 
 /** 取能匹配的最长命令路径，例如 `kb proposals accept` 优先于 `kb proposals`。 */
@@ -100,9 +102,9 @@ function helpText(commands: Command<unknown>[]): string {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((c) => `  ${c.name.padEnd(width)}  ${c.summary}`)
   return [
-    `flow ${VERSION}`,
+    `raindown ${VERSION}`,
     '',
-    '用法：flow <命令> [选项]',
+    '用法：raindown <命令> [选项]',
     '',
     '命令：',
     ...lines,
@@ -115,7 +117,10 @@ function commandHelp(c: Command<unknown>): string {
   const opts = Object.entries(c.options ?? {}).map(
     ([k, v]) => `  --${k}${v.type === 'string' ? ' <value>' : ''}  ${v.description ?? ''}`,
   )
-  return [`flow ${c.usage ?? c.name}`, '', c.summary, ...(opts.length ? ['', ...opts] : [])].join(
-    '\n',
-  )
+  return [
+    `raindown ${c.usage ?? c.name}`,
+    '',
+    c.summary,
+    ...(opts.length ? ['', ...opts] : []),
+  ].join('\n')
 }

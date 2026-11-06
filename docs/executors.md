@@ -1,7 +1,7 @@
 # 执行器与角色
 
-节点按任务合同的 `executor` 选择执行器，按 `role` 读取 `$FLOW_HOME/config/roles/<name>.yaml`。
-`flow init` 补齐下面的三个默认角色，以及 ④ 新增的 `supervisor`（AI 主管，见 [supervisor.md](supervisor.md)）、`pr-reviewer`（只读 PR 审查，claude-sdk）、`merger`（合并，pr-merge 执行器）和同名提示词文件，已有文件不覆盖。
+节点按任务合同的 `executor` 选择执行器，按 `role` 读取 `$RAINDOWN_HOME/config/roles/<name>.yaml`。
+`raindown init` 补齐下面的三个默认角色，以及 ④ 新增的 `supervisor`（AI 主管，见 [supervisor.md](supervisor.md)）、`pr-reviewer`（只读 PR 审查，claude-sdk）、`merger`（合并，pr-merge 执行器）和同名提示词文件，已有文件不覆盖。
 
 | 执行器 | 默认角色 | 适用场景 | 依赖与交互 |
 | --- | --- | --- | --- |
@@ -10,19 +10,19 @@
 | `codex-exec` | `triage` | 在只读沙箱中收集证据、做分诊 | Codex CLI 的 `exec --json` 和 `exec resume`；提问后结束一轮，回复后恢复同一会话 |
 | `pr-merge` | `merger` | 合并已审查通过的 PR 并等待主分支流水线；不调用模型，只由中枢（或 user）创建 | gh；只能在本机节点运行，见下文「merger：pr-merge」 |
 
-中枢和节点需要运行；前台命令分别是 `flow hub start`、`flow node start`，各占一个终端。
+中枢和节点需要运行；前台命令分别是 `raindown hub start`、`raindown node start`，各占一个终端。
 常驻方式见 [守护进程](daemon.md)。Orca 模式的仓库必须登记在合同所属 workspace 的 `repos` 中，
-并已导入 Orca；节点还需要能访问远端仓库的 git、gh 环境。Flow 不负责合并 PR 或清理 worktree。
+并已导入 Orca；节点还需要能访问远端仓库的 git、gh 环境。Raindown 不负责合并 PR 或清理 worktree。
 
 ## Codex 配置隔离
 
-Flow 启动的所有 Codex worker（`codex-orca` 和 `codex-exec` 的全部角色）都显式使用 Flow 管理的 `CODEX_HOME`，
+Raindown 启动的所有 Codex worker（`codex-orca` 和 `codex-exec` 的全部角色）都显式使用 Raindown 管理的 `CODEX_HOME`，
 不加载用户 Codex 目录中的配置、放行规则、MCP 服务器、hooks、notify、项目信任表和全局 `AGENTS.md`。
 用户级的模型、provider 等设置也不会继承；角色需要的设置写在 `permissions.config`（经 `-c` 传入），
 模型与推理强度也可以用角色的 `model` / `effort`。
 
-- 有效类别为 read 的 `codex-exec`：`<flow-home>/state/codex-read-home/`；
-- `codex-orca` 和其他 `codex-exec`：`<flow-home>/state/codex-work-home/`。
+- 有效类别为 read 的 `codex-exec`：`<raindown-home>/state/codex-read-home/`；
+- `codex-orca` 和其他 `codex-exec`：`<raindown-home>/state/codex-work-home/`。
 
 目录按读写类别固定，保留会话记录供 `exec resume <session id>` 和 Orca 终端重挂接使用；
 并发任务由 Codex 的会话 id 区分，无需为每个角色复制目录。Orca 在任务状态中记录启动时的隔离目录，
@@ -30,15 +30,15 @@ Flow 启动的所有 Codex worker（`codex-orca` 和 `codex-exec` 的全部角�
 需要先关闭旧终端后重试。句柄失效后的替换终端还须匹配已记录的 pty/incarnation 身份；
 缺少原身份时持续重试，交给节点的无进展检测处理，避免误接用户另开的 Codex。用户目录中的旧会话不会复制到隔离目录。
 
-每次启动前，Flow 原子覆盖隔离目录中的 `config.toml`（只有注释，不含 MCP、notify、hooks、信任记录或 `auto_review`），
-并清除其中的 `rules/` 和 Flow 不生成的扩展。清除而非保留的原因是：这里属于 Flow 的运行状态，
+每次启动前，Raindown 原子覆盖隔离目录中的 `config.toml`（只有注释，不含 MCP、notify、hooks、信任记录或 `auto_review`），
+并清除其中的 `rules/` 和 Raindown 不生成的扩展。清除而非保留的原因是：这里属于 Raindown 的运行状态，
 上次任务积累的“总是允许”规则不能授权下个任务。`approvals_reviewer=user` 的命令行默认行为保持不变，
 角色显式配置仍优先。
 
 唯一共享的用户文件是 `auth.json`：来源取节点/worker 环境的 `CODEX_HOME`，缺省 `~/.codex`。
-Flow 通过临时符号链接加 rename 原子替换，避免并发启动时短暂丢失链接；不会复制或输出凭证内容。
+Raindown 通过临时符号链接加 rename 原子替换，避免并发启动时短暂丢失链接；不会复制或输出凭证内容。
 源目录没有 `auth.json` 时不创建链接，也不回退加载用户配置。Codex 原地刷新凭证可能写回源文件；
-若它将隔离目录中的链接替换成普通文件，Flow 保留该文件并报 `codex_home_failed`，提示确认合并凭证后再删除。
+若它将隔离目录中的链接替换成普通文件，Raindown 保留该文件并报 `codex_home_failed`，提示确认合并凭证后再删除。
 用户 `CODEX_HOME` 指向隔离目录（含真实路径相同的别名），或隔离目录本身是符号链接时同样拒绝启动，避免改写用户目录。
 
 Codex 0.166.0 实测（2026-11-06，全部使用临时 HOME、CODEX_HOME 和 git 仓库，无真实凭证或模型请求）：
@@ -61,7 +61,7 @@ Codex 0.166.0 实测（2026-11-06，全部使用临时 HOME、CODEX_HOME 和 git
 本次只处理用户层继承；项目 `.codex/` 仍是后续需要收紧的边界：worker 可以写这里，规则可能在后续加载时绕过审批。
 启动前检查项目规则只能发现当时已有的文件，无法约束后续写入，故本次不加入这种检查。
 没有验证外部修改规则后当前线程会自动热重载，不能据此作此断言。
-后续建议为 Flow worker 增加可靠的项目配置/规则来源限制，再评估自动信任行为。
+后续建议为 Raindown worker 增加可靠的项目配置/规则来源限制，再评估自动信任行为。
 官方行为说明见 [Config basics](https://learn.chatgpt.com/docs/config-file/config-basic) 和
 [Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)；升级 Codex 后应复测。
 
@@ -70,8 +70,8 @@ Codex 0.166.0 实测（2026-11-06，全部使用临时 HOME、CODEX_HOME 和 git
 在**节点实际使用的环境**中运行：
 
 ```sh
-flow doctor
-flow doctor --json
+raindown doctor
+raindown doctor --json
 ```
 
 | 检查标识 | 检查内容 |
@@ -79,7 +79,7 @@ flow doctor --json
 | `tool.codex` | PATH 中的可执行文件、`codex --version` 的退出码与版本；最低验证版本 `0.164.0` |
 | `tool.orca` | PATH 中的可执行文件、`orca --version` 的退出码与版本；最低验证版本 `1.4.218` |
 | `orca.app` | `orca terminal list --json` 返回成功信封和 terminals 数组；失败时提示启动 Orca 应用 |
-| `tool.claude-sdk` | 能 import `@anthropic-ai/claude-agent-sdk`、存在 query 导出、包版本可解析；从 `@flow/node` 的 package.json 位置解析 SDK，并读取其中声明的期望版本 |
+| `tool.claude-sdk` | 能 import `@anthropic-ai/claude-agent-sdk`、存在 query 导出、包版本可解析；从 `@raindown/node` 的 package.json 位置解析 SDK，并读取其中声明的期望版本 |
 | `tool.claude` | SDK 默认使用的当前平台原生 CLI 文件存在且可执行；PATH 上另装的 claude 不会替代缺失的 SDK 原生包 |
 | `claude.credentials` | `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN` 之一非空，或 Claude 配置目录下存在 `.credentials.json` |
 | `role.<name>.creatable_by` | 角色的 `creatable_by` 缺省或为 `[]` 时给 info 提示：仅 user 可创建该角色的任务（见下文） |
@@ -97,7 +97,7 @@ macOS 登录可能仅在 Keychain 中：没有上述来源、但存在系统 sec
 - 角色的 `creatable_by` 缺省或为空数组：`info`，不影响退出码；
 - 原有的目录、git、gitleaks、角色配置错误仍为 `error`。只有 info / warning 时退出码为 0。
 
-`flow init` 默认生成三个真实角色，所以刚初始化的环境会要求全部依赖。
+`raindown init` 默认生成三个真实角色，所以刚初始化的环境会要求全部依赖。
 仅用 fake 的测试环境可以移除临时目录中的默认角色 YAML，改为 fake 角色。
 每条外部探测命令有 10 秒超时；测试通过注入命令执行、二进制查找与 SDK 探测来运行，不依赖 CI 安装这些工具。
 
@@ -108,7 +108,7 @@ macOS 登录可能仅在 Keychain 中：没有上述来源、但存在系统 sec
 
 ```yaml
 creatable_by:
-  - reviewer        # 精确值：reviewer 执行器（flow mcp --actor reviewer）的身份
+  - reviewer        # 精确值：reviewer 执行器（raindown mcp --actor reviewer）的身份
   - "agent:claude"  # 精确值
 # - "*"            # 任意非 user 身份
 ```
@@ -116,11 +116,11 @@ creatable_by:
 - `user` 永远可以创建；字段缺省时只有 `user` 可以创建，AI 和节点会得到 403 `role_not_allowed`。
 - 默认模板：dev 不写（只有 user 能派发开发任务，AI 不能借 dev 跳过审批和沙箱）；reviewer、triage 为 `["*"]`，
   任何非 user 身份都可以拆出审查、分诊子任务。
-- 本机 AI 的身份由执行器设置的 `FLOW_ACTOR=<角色名>` 声明（claude-sdk 另注入 `flow mcp --actor <角色名>`）：reviewer 执行器的身份是 `reviewer`，不是 `node:*`。
+- 本机 AI 的身份由执行器设置的 `RAINDOWN_ACTOR=<角色名>` 声明（claude-sdk 另注入 `raindown mcp --actor <角色名>`）：reviewer 执行器的身份是 `reviewer`，不是 `node:*`。
   要只放开某个执行器，写它的角色名，例如 `creatable_by: [reviewer]`。
 - 节点 token 和 remote token 在本机端口都不能创建任务（`scope_denied`、`remote_not_allowed`），`*` 不会放开它们。
-- `flow init` 不覆盖已有角色文件，升级前创建的 reviewer、triage 没有这个字段（只有 user 能创建），
-  需要时手动补上；`flow doctor` 会对缺少字段的角色给出 info 提示（不是错误，不影响退出码）。
+- `raindown init` 不覆盖已有角色文件，升级前创建的 reviewer、triage 没有这个字段（只有 user 能创建），
+  需要时手动补上；`raindown doctor` 会对缺少字段的角色给出 info 提示（不是错误，不影响退出码）。
 - 给高权限角色（例如跳过审批的 dev）加 `creatable_by` 等于允许这些身份间接取得该权限，应和 `permissions` 一起审查。
 
 
@@ -144,10 +144,10 @@ permissions:
 这两个默认值组合会变成 `--dangerously-bypass-approvals-and-sandbox`，沿用用户原来的脚本做法。
 `permissions.config` 是额外的 Codex `-c key=value`，值支持字符串、数字和布尔值。
 它会影响 Codex 的实际权限和行为，应与审批、沙箱字段一起审查。
-`approval` 未设置或不为 `never` 时，Flow 在角色未显式配置 reviewer 的情况下默认传入 `-c approvals_reviewer=user`，
-确保授权请求交给 Flow；用户级 `auto_review` 也通过隔离目录排除。
+`approval` 未设置或不为 `never` 时，Raindown 在角色未显式配置 reviewer 的情况下默认传入 `-c approvals_reviewer=user`，
+确保授权请求交给 Raindown；用户级 `auto_review` 也通过隔离目录排除。
 未传 `-a` 时，Codex 使用隔离环境及角色 `permissions.config` 中的审批策略。
-角色的 `permissions.config.approvals_reviewer` 可覆盖这个默认值；Flow 不修改用户的 Codex 配置文件。
+角色的 `permissions.config.approvals_reviewer` 可覆盖这个默认值；Raindown 不修改用户的 Codex 配置文件。
 Codex profile（`profile=...` 或 `-p`）中的同名设置可能覆盖顶层 `-c`，该优先级尚未验证。
 
 收紧权限时可以另建临时角色 `dev-approval.yaml`，并复制一份 dev 提示词或继续引用 `dev.md`：
@@ -200,15 +200,15 @@ permissions:
 ```
 
 - `permissionMode` 默认 `default`：未被 SDK 权限规则直接放行的调用进入 `canUseTool`。
-  节点先做 Flow 策略预检，需要人决定时报告 `blocked(awaiting_approval)`，等待回复；
+  节点先做 Raindown 策略预检，需要人决定时报告 `blocked(awaiting_approval)`，等待回复；
   `auto` 可能由 SDK 自动放行，`bypassPermissions` 跳过 SDK 权限审批，只有明确理解后才显式设置。
 - `setting_sources` 传给 SDK 的 `settingSources`，可选 `user`、`project`、`local`，缺省为 `['project']`。
   reviewer 特意使用 `[]`：被审查仓库的 `.claude/settings.json` 可能包含直接执行命令的 hooks，
-  或在 Flow 审批前就生效的 `permissions.allow`。不加载项目设置才能避免这些规则影响审查权限。
-  不含 `project` 时，Flow 将 cwd 下 `CLAUDE.md`、`AGENTS.md` 作为限长、脱敏的纯文本追加到提示词。
+  或在 Raindown 审批前就生效的 `permissions.allow`。不加载项目设置才能避免这些规则影响审查权限。
+  不含 `project` 时，Raindown 将 cwd 下 `CLAUDE.md`、`AGENTS.md` 作为限长、脱敏的纯文本追加到提示词。
 - `allowedTools` 是 SDK 的免询问工具规则，`disallowedTools` 禁用指定工具，reviewer 保留 `NotebookEdit` 禁令。
 - `writable_paths` 仅适用于 `claude-sdk`；其他执行器（包括 `codex-orca`、`codex-exec`）配置它会报配置错误。
-  它是 Flow 的文件工具路径白名单，适用于 `Write`、`Edit`、`MultiEdit`；`NotebookEdit` 始终拒绝。
+  它是 Raindown 的文件工具路径白名单，适用于 `Write`、`Edit`、`MultiEdit`；`NotebookEdit` 始终拒绝。
   路径相对合同 cwd，支持 `*`（不跨目录）、`**`（跨目录）、`?`（单字符），不支持花括号扩展，其余字符按字面匹配；默认模板已按扩展名展开。
   默认 reviewer 可直接写 `docs/` 下的 md、mdx、txt、png、svg、jpg、jpeg、gif、webp，
   以及任意目录（含根目录）的 `*.md`、`*.mdx`。
@@ -219,15 +219,15 @@ permissions:
   每个路径段在比较隐藏名称和指令文件名前，先做 `normalize('NFKC').toUpperCase().toLowerCase()`，
   防止 `AGENTſ.md`、`copilot-instructionſ.md`、全角字符等 Unicode 折叠变体绕过；实际写入路径保持原样，中文文档名仍允许。
   这也适用于符号链接目标，避免不可信 PR 诱导 reviewer 改写后续开发代理会加载的指令或命令。
-  白名单以外的文件写入直接拒绝，不走 Flow 策略预检或用户审批；`[]` 禁止所有文件工具写入。
-  字段缺省不新增写入授权，沿用旧角色的 SDK 权限和 Flow 审批行为；已有 reviewer 的 Edit/Write 禁令仍然生效。
+  白名单以外的文件写入直接拒绝，不走 Raindown 策略预检或用户审批；`[]` 禁止所有文件工具写入。
+  字段缺省不新增写入授权，沿用旧角色的 SDK 权限和 Raindown 审批行为；已有 reviewer 的 Edit/Write 禁令仍然生效。
 - `canUseTool` 负责文件工具的直接放行或拒绝；同一校验也安装在 SDK `PreToolUse` hook 中，
   避免 `allowedTools`、权限模式或会话批准提前放行而跳过边界。SDK 的显式禁用规则仍生效。
   `PreToolUse` 省略 matcher，匹配所有工具：非 `mcp__` 前缀的未知工具只要输入包含 `file_path`、`notebook_path` 或 `path`，
   就直接拒绝，即使字段值不合法；已处理的文件写工具按白名单判定，已知只读工具仍走 SDK 原权限流程。
   只读清单按 SDK 0.3.310 内置名称列为 Read、Glob、Grep、LSP、ListMcpResourcesTool、ReadMcpResourceTool、
   ReadMcpResourceDirTool（当前 SDK 无 LS）。MCP 的 path 可能是资源标识，故不套用这个未知文件工具兜底，
-  保留既有允许规则、Flow 策略和用户审批；这不意味着自动放行 MCP 调用。
+  保留既有允许规则、Raindown 策略和用户审批；这不意味着自动放行 MCP 调用。
   只在成功的 `PostToolUse` 后，将文件绝对路径去重列入 result 的 `artifacts`（`kind: file`）；
   仅获授权、被拒绝或执行失败的调用不算产物，不统计 Bash 或其他工具的写入。
 - `read_scope: cwd`（add-m1-supervisor D6）仅适用于 `claude-sdk`；其他执行器配置它会报配置错误，取值目前只有 `cwd`。
@@ -237,7 +237,7 @@ permissions:
   - 只认白名单工具并按字段白名单校验：Read、NotebookRead、Glob、Grep、Edit、MultiEdit、Write、NotebookEdit、TodoWrite、ToolSearch、
     WaitForMcpServers（只有服务器名列表 `servers`，按不涉及路径的值放行）；只产生输出的 StructuredOutput 只在会话配置了
     结构化输出（审查任务的 `outputFormat`）时放行，否则拒绝；带白名单外字段（包括 `FILE_PATH`、`filePath` 之类的变体）即拒绝。
-    其他工具一律拒绝，包括 Bash、PowerShell、Monitor、Agent、WebFetch、WebSearch、LSP、Skill、MCP 资源工具和非 Flow 的 MCP 工具；
+    其他工具一律拒绝，包括 Bash、PowerShell、Monitor、Agent、WebFetch、WebSearch、LSP、Skill、MCP 资源工具和非 Raindown 的 MCP 工具；
   - 路径字段只能落在合同 cwd（相对路径相对它解析，cwd 自身可读）或节点注入的任务私有目录（只按绝对路径匹配）内；
     拒绝以 `~` 开头（CLI 会展开为 home）、首尾有空白、含 `..` 段或 NUL、以 `.` 开头的路径段（按 NFKC 折叠比较）、越界，
     以及逐段解析后越界或落到隐藏段的符号链接；Read、NotebookRead 和 Glob/Grep 的 `path` 必须已存在。
@@ -246,14 +246,14 @@ permissions:
   - Glob/Grep 未给 `path` 时显式补上合同 cwd 的真实路径；
   - Glob 的 `pattern`、Grep 的 `glob` 不得为绝对路径或以 `~` 开头，不得含 `..`、反斜杠或字符类 `[...]`；
     按空白拆开的每个片段中，任何段及花括号、括号分支都不得以 `.`、`/`、`?` 开头；
-  - 隐藏条目：CLI 的 Grep 固定带 `--hidden`。Flow 在 `glob` 末尾追加 `!.*`；CLI 按空白（以及不含成对花括号时按逗号）
+  - 隐藏条目：CLI 的 Grep 固定带 `--hidden`。Raindown 在 `glob` 末尾追加 `!.*`；CLI 按空白（以及不含成对花括号时按逗号）
     把 `glob` 拆成多个 `--glob`，之后只再追加排除规则，而 rg 的 override 以最后命中的一条为准，因此用户片段不能覆盖这条排除。
     开启 `.github` 选项并在 cwd 根下搜索时，再追加 `/.github` 放回根下的 `.github`（没有正向片段时先补 `*`）。
-    Glob 默认带 `--hidden --no-ignore`，Flow 为会话设置 `CLAUDE_CODE_GLOB_HIDDEN=false`、`CLAUDE_CODE_GLOB_NO_IGNORE=false`；
-  - hook 收到的会话 cwd 与合同 cwd 的真实路径不一致时，拒绝全部非 Flow 工具；
-  - Flow MCP 工具不受影响，条件是工具名为 `mcp__flow__*`，且 SDK 提供的 MCP 来源名为 `flow`、`source` 为 `dynamic`
+    Glob 默认带 `--hidden --no-ignore`，Raindown 为会话设置 `CLAUDE_CODE_GLOB_HIDDEN=false`、`CLAUDE_CODE_GLOB_NO_IGNORE=false`；
+  - hook 收到的会话 cwd 与合同 cwd 的真实路径不一致时，拒绝全部非 Raindown 工具；
+  - Raindown MCP 工具不受影响，条件是工具名为 `mcp__raindown__*`，且 SDK 提供的 MCP 来源名为 `raindown`、`source` 为 `dynamic`
     （执行器经 `--mcp-config` 注入的进程服务器）或 `sdk`；缺少来源信息时不豁免，`canUseTool` 也按同样的规则核对。
-  读边界只拒绝或改写，从不放行：通过检查的调用仍走 SDK 权限、Flow 策略与审批；同时设置 `writable_paths` 时先判读边界，再按写白名单放行或拒绝。
+  读边界只拒绝或改写，从不放行：通过检查的调用仍走 SDK 权限、Raindown 策略与审批；同时设置 `writable_paths` 时先判读边界，再按写白名单放行或拒绝。
   审查任务可由节点通过 `ExecutorContext.readScope` 注入私有目录，并打开 `allowDotGithub` 允许读 cwd 根下的 `.github/`（其中的隐藏段仍拒绝），默认关闭。
   残余风险（以 CLI 2.1.310 的实现为依据，未运行真实 Claude）：
   - Glob 的 `pattern` 本身作为 rg 的正向 `--glob` 传入，正向 override 优先于隐藏过滤，所以 `**/*` 这类模式仍可能列出 cwd 内隐藏文件的**名称**
@@ -265,7 +265,7 @@ permissions:
   这不是操作系统级文件隔离，任意命令、MCP 工具和外部进程的间接写入仍应结合沙箱与授权范围约束。
 - 可选 `maxTurns` 限制轮次；`approval_timeout_minutes` 默认 1440（24 小时），超过后任务以 `approval_timeout` 失败。
 
-`flow init` 不覆盖已有 `reviewer.yaml` 或 `reviewer.md`。已有用户需要手动更新：上面的完整 YAML
+`raindown init` 不覆盖已有 `reviewer.yaml` 或 `reviewer.md`。已有用户需要手动更新：上面的完整 YAML
 可以直接复制为角色文件；也可以在现有 `permissions` 中移除 `disallowedTools` 的 Edit、Write，并合并：
 
 ```yaml
@@ -296,7 +296,7 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
 `README.md` 未详细定义路径匹配。官方[权限规则文档](https://code.claude.com/docs/en/permissions#read-and-edit)
 说明 `Edit(path)` 覆盖所有内置文件编辑工具（包括 Write、NotebookEdit 和旧 MultiEdit）；
 `Write(path)`、`NotebookEdit(path)`、`MultiEdit(path)` 规则会被接受但不匹配。
-原生允许规则也不能表达白名单之外一律拒绝的补集，因此使用 Flow 的 `writable_paths`，不生成 SDK 路径允许规则。
+原生允许规则也不能表达白名单之外一律拒绝的补集，因此使用 Raindown 的 `writable_paths`，不生成 SDK 路径允许规则。
 官方 [SDK 权限流程](https://code.claude.com/docs/en/agent-sdk/permissions#how-permissions-are-evaluated)
 说明 hooks 先于权限模式和允许规则，而 `canUseTool` 仅处理前序未决定的请求。
 全工具 hook 使用省略 matcher 的写法：本地 SDK 0.3.310 的 `sdk.d.ts` 中 `HookCallbackMatcher.matcher?: string`
@@ -304,22 +304,22 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
 明确说明，无 matcher 的 hook 会接收该类型的每个事件。因此不依赖 `.*` 正则来表达全工具匹配。
 以上由类型定义和文档确认，未运行真实 Claude 或调用模型 API。
 
-执行器自动注入 `flow mcp --actor reviewer`（其他角色用各自名字）。Flow MCP 的固定放行清单为：
+执行器自动注入 `raindown mcp --actor reviewer`（其他角色用各自名字）。Raindown MCP 的固定放行清单为：
 `kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、`ws_brief`、`brief_update`、`task_list`、`task_show`，
-工具全名带 `mcp__flow__` 前缀。这些写入仍受 AI 写入边界限制，提交提案不等于接受提案；`brief_update` 只写 supervisor 自己的简报笔记，身份、workspace 与 `base_hash` 由中枢核对。
+工具全名带 `mcp__raindown__` 前缀。这些写入仍受 AI 写入边界限制，提交提案不等于接受提案；`brief_update` 只写 supervisor 自己的简报笔记，身份、workspace 与 `base_hash` 由中枢核对。
 `task_create` 可借 dev 角色扩大权限（中枢另按 `creatable_by` 拒绝，见上文），`task_cancel`、`task_reply` 可干预任务，
 接受/拒绝提案、转移资源及以后新增的工具也不在固定清单中。不要用宽泛的 allowedTools 绕过这层审批。
 `task_reply` 另有用户身份限制：worker 不能代替用户批准自己。
 
 ### pr-reviewer：审查准备与结构化输出（add-m1-supervisor D10）
 
-模板见 `flow init` 生成的 `pr-reviewer.yaml`：`kind: read`、`setting_sources: []`、`read_scope: cwd`，没有 Bash 与写工具。
+模板见 `raindown init` 生成的 `pr-reviewer.yaml`：`kind: read`、`setting_sources: []`、`read_scope: cwd`，没有 Bash 与写工具。
 合同带 `inputs.review = {pr, focus?}` 时，claude-sdk 执行器先读节点上的 workspace 配置（读不到该 workspace 时
 `failed(review_prep_failed)`，不当作普通任务运行）。角色属于 `supervisor.reviewer_roles`（默认 `[pr-reviewer]`）时，
 会话前由确定性代码完成准备，模型不参与：
 
 0. **审查角色必须是只读配置（fail-closed）**：执行器为 claude-sdk、有效类别为 read、`setting_sources` 显式为 `[]`、
-   `read_scope: cwd`，任一不满足即 `failed(review_role_not_read)`，不检出 PR、不启动会话。`flow doctor` 对
+   `read_scope: cwd`，任一不满足即 `failed(review_role_not_read)`，不检出 PR、不启动会话。`raindown doctor` 对
    `reviewer_roles` 中不满足的已有角色报 error（例如把默认 reviewer 加进去）；
 1. 合同 cwd（或 `inputs.repo`）必须是本 workspace 登记的仓库；PR 链接的 host/owner/repo 必须等于该仓库 `remote.origin.url`
    配置原值解析出的仓库（不经 insteadOf 改写，必须恰好一个地址），否则任务启动前 `failed(repo_not_in_workspace)`。
@@ -327,7 +327,7 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
    host 相同：**`~/.ssh/config` 中的主机别名（例如 `git@github-work:owner/repo`）会被判为 `repo_not_in_workspace`**，
    需要把 origin 改成真实主机名；
 2. `gh pr view <链接>` 读取 PR，核对编号与链接（大小写不敏感），fork PR（`isCrossRepository`）一律 `failed(repo_not_in_workspace)`，记录当前 `headRefOid`；`gh pr diff` 写入任务私有目录的 `pr.diff`；
-3. `git fetch origin +pull/<n>/head:refs/flow/review/<task-id>`（任务专用 ref，不依赖 FETCH_HEAD），该 ref 必须等于记录的
+3. `git fetch origin +pull/<n>/head:refs/raindown/review/<task-id>`（任务专用 ref，不依赖 FETCH_HEAD），该 ref 必须等于记录的
    head（准备期间有新提交时 `failed(head_moved)`），再 `git worktree add --detach` 检出到任务私有目录下的 `worktree/` 作为会话 cwd；
 4. 检出时不运行任何由配置驱动的程序：`-c core.hooksPath=/dev/null`、`-c core.fsmonitor=false`，并对
    `git config --get-regexp '^filter\.'` 列出的每个 filter driver 加 `-c filter.<名>.smudge= -c filter.<名>.clean=
@@ -336,7 +336,7 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
    （实测 git 对这些空值会报 `cannot run :` 而不执行任何程序，相关 diff 失败而不是运行配置里的命令）；环境设
    `GIT_LFS_SKIP_SMUDGE=1`。会话环境用 `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` 注入同样的覆盖
    （接在已有条目之后）与 `GIT_LFS_SKIP_SMUDGE=1`，Claude Code 自己运行的 `git status` 等也不会触发它们；
-5. 会话无条件 `settingSources: []`、`strictMcpConfig: true`（只用注入的 Flow MCP），并设 `ENABLE_CLAUDEAI_MCP_SERVERS=false`
+5. 会话无条件 `settingSources: []`、`strictMcpConfig: true`（只用注入的 Raindown MCP），并设 `ENABLE_CLAUDEAI_MCP_SERVERS=false`
    关闭 claude.ai connector；`read_scope` 允许 worktree（含根下 `.github/`）与私有目录；首条消息写明 PR、head 与 diff 路径；
    项目约定（CLAUDE.md / AGENTS.md）从登记仓库读取，不从 PR 的检出读取，PR 不能借此改写系统提示词；
 6. SDK `outputFormat: {type: 'json_schema'}`（schema 即 `schemas/tasks/review-output.schema.json`），`StructuredOutput`
@@ -344,7 +344,7 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
    不允许多余字段），`reviewed_sha` 由执行器填入第 2 步记录的 head；结构化输出缺失、不合规或 `error_max_structured_output_retries`
    → `failed(review_output_invalid)`。`summary` 仍是最后一段文字（没有文字时由结论生成）；
 7. 任务结束（任何结果）后移除 worktree、任务专用 ref 与私有目录；节点启动时清理本节点残留的私有目录并 `git worktree prune`。
-   私有目录为 `<flow-home>/state/review/<node-id>/<task-id>/`。
+   私有目录为 `<raindown-home>/state/review/<node-id>/<task-id>/`。
 
 审查任务恢复执行（回复后重新排队）时不恢复旧会话：旧会话可能看过另一个 head，回复附在新的任务说明之后，重新准备。
 不在 `reviewer_roles` 中的角色即使带 `inputs.review` 也按普通任务运行，不做准备。中枢入账时，结果不是 done、合同没有
@@ -356,10 +356,10 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
 
 有效类别（D9，doctor 显示）只是配置层判断，执行器另外强制：
 
-- claude-sdk：SDK `tools` 选项只提供 Read、Grep、Glob、ToolSearch、WaitForMcpServers（Flow MCP 不受 `tools` 影响）；
-  `allowedTools` 只保留 `readRoleMayUse` 为真的条目（规则取括号前的工具名），写工具、Bash 与 `mcp__flow__task_create` 之类的
+- claude-sdk：SDK `tools` 选项只提供 Read、Grep、Glob、ToolSearch、WaitForMcpServers（Raindown MCP 不受 `tools` 影响）；
+  `allowedTools` 只保留 `readRoleMayUse` 为真的条目（规则取括号前的工具名），写工具、Bash 与 `mcp__raindown__task_create` 之类的
   MCP 写操作即使写在 `allowedTools` 中也被滤掉；始终安装（不论有没有 `read_scope`）省略 matcher 的 PreToolUse 钩子，对
-  `readRoleMayUse` 为假的调用直接拒绝；`canUseTool` 同样拒绝、不做策略预检、不进审批。允许的 Flow 工具只有自动放行清单中的那些；
+  `readRoleMayUse` 为假的调用直接拒绝；`canUseTool` 同样拒绝、不做策略预检、不进审批。允许的 Raindown 工具只有自动放行清单中的那些；
   StructuredOutput 只在配置了结构化输出时可用。会话设 `strictMcpConfig: true` 与 `ENABLE_CLAUDEAI_MCP_SERVERS=false`：
   不加载 `.mcp.json`、用户设置、插件中的 MCP 服务器与 claude.ai connector。
 - codex-exec：继续使用 `codex-read-home` 和只读沙箱；完整的配置隔离、凭证链接与恢复约定见上文「Codex 配置隔离」。
@@ -462,16 +462,16 @@ merger 合同：`parent` 为审查任务、origin 取自开出 PR 的任务（in
 **timeout_s**：merger 合同的 `timeout_s` 不得小于 2400 秒（40 分钟：核对与合并之外还要等最长 30 分钟的流水线），
 否则执行器在合并前以 `timeout_too_short` 失败；角色文件不支持 `timeout_s`，由创建 merger 任务的中枢保证（缺省 3600）。
 
-**pr-merge 只能在本机节点上运行**：远程节点、以及用绑定 token（`FLOW_HUB_TOKEN`，`node:<id>` 身份）运行的节点读不到审查任务与
+**pr-merge 只能在本机节点上运行**：远程节点、以及用绑定 token（`RAINDOWN_HUB_TOKEN`，`node:<id>` 身份）运行的节点读不到审查任务与
 任务列表，核对必然失败（`merge_not_eligible` / `review_not_approved`），不能执行合并。
 
 审查任务与任务列表（`status=done` 的可信审查，以及各未结束状态的同 PR 审查）经中枢 `GET /v1/tasks/:id`、`GET /v1/tasks`
-读取。执行器自己按 flow-home 构造中枢客户端，不声明 `X-Flow-Actor`：本机节点以 user token 访问，身份为 user
+读取。执行器自己按 raindown-home 构造中枢客户端，不声明 `X-Raindown-Actor`：本机节点以 user token 访问，身份为 user
 （与 G5 "节点接口只允许 user 与 node:*" 的要求一致；这两个是任务接口，不是节点协议接口）；用绑定 token
-（`FLOW_HUB_TOKEN`，`node:<id>` 身份）运行的节点读不到它们，按核对失败处理。pr-merge 应在本机节点上运行。
+（`RAINDOWN_HUB_TOKEN`，`node:<id>` 身份）运行的节点读不到它们，按核对失败处理。pr-merge 应在本机节点上运行。
 
 gh 版本：按已验证的 gh 2.102.0 要求（需要 `gh api graphql --hostname`、`gh pr merge --match-head-commit`、
-`gh run list --commit`、`gh pr view --json autoMergeRequest`）；更早的版本未测试，`flow doctor` 不检查 gh 版本。
+`gh run list --commit`、`gh pr view --json autoMergeRequest`）；更早的版本未测试，`raindown doctor` 不检查 gh 版本。
 
 ## 安全边界
 
@@ -480,7 +480,7 @@ gh 版本：按已验证的 gh 2.102.0 要求（需要 `gh api graphql --hostnam
 宽泛的 Bash 自动放行实质上允许任意代码，真正的边界应放在沙箱、工具权限和文件系统/网络隔离上。
 
 默认 dev 会跳过 Codex 审批和沙箱，可以以节点的系统用户权限执行命令、读写文件和访问网络，
-不会保证每个危险动作都经过 Flow。只给可信仓库和已授权任务使用，收紧时使用上面的临时角色。
+不会保证每个危险动作都经过 Raindown。只给可信仓库和已授权任务使用，收紧时使用上面的临时角色。
 同一系统用户下能读取中枢 user token 的进程还可以取得用户身份，见 [中枢鉴权的信任边界](hub-auth.md#信任边界)。
 角色、workspace 和 policies 配置本身也属于提权面。
 
@@ -500,17 +500,17 @@ reviewer 直接在合同 cwd 中写文档，通常就是用户的主检出；不
 原来的 `~/.claude/scripts/orca-codex/dispatch-codex.sh` 负责建 worktree、写任务说明和启动 Codex，
 `watch-codex.sh` 负责读终端、发现停止后手工处理。迁移后对应为：
 
-| 原来的步骤 | Flow 对应 |
+| 原来的步骤 | Raindown 对应 |
 | --- | --- |
-| dispatch-codex.sh 手工派发 | `flow task create --file <合同>`；节点按 dev 角色建 worktree、渲染说明并启动 Codex |
+| dispatch-codex.sh 手工派发 | `raindown task create --file <合同>`；节点按 dev 角色建 worktree、渲染说明并启动 Codex |
 | watch-codex.sh 循环读终端 | 节点默认每 30 秒轮询；连续两次无忙碌标记后判断 PR、审批、提问等状态 |
-| 人工看终端是否完成 | `flow task show <id>` 查看合同、结果、PR 产物、验收与事件；任务说明保存在 `state/tasks/<id>/spec.md` |
-| 人工向终端回答 | `flow task reply <id> "用方案 A"`，或 `--approve` / `--deny` |
-| 分散查看卡住的 worker | `flow inbox` 集中查看待处理条目 |
+| 人工看终端是否完成 | `raindown task show <id>` 查看合同、结果、PR 产物、验收与事件；任务说明保存在 `state/tasks/<id>/spec.md` |
+| 人工向终端回答 | `raindown task reply <id> "用方案 A"`，或 `--approve` / `--deny` |
+| 分散查看卡住的 worker | `raindown inbox` 集中查看待处理条目 |
 
 迁移步骤：
 
-1. 在选定的 FLOW_HOME 初始化角色；确认 `config/workspaces/product-res.yaml` 的 `repos` 包含实际仓库绝对路径，
+1. 在选定的 RAINDOWN_HOME 初始化角色；确认 `config/workspaces/product-res.yaml` 的 `repos` 包含实际仓库绝对路径，
    仓库也已导入 Orca。启动 Orca 应用、中枢和节点，再运行 doctor。
 2. 将原来传给脚本的说明保存为 `contract.json`。下面是 dev 合同的最小结构，目标应明确范围与完成条件：
 
@@ -523,10 +523,10 @@ reviewer 直接在合同 cwd 中写文档，通常就是用户的主检出；不
 }
 ```
 
-3. 运行 `flow task create --file contract.json`，记下返回的任务 id。
+3. 运行 `raindown task create --file contract.json`，记下返回的任务 id。
    三种执行器共用合同工作目录规则：显式 `cwd` 优先；否则使用属于该 workspace repos 的 `inputs.repo`；
    两者都没有时，取 workspace 唯一仓库。没有仓库或有多个仓库时必须写 `cwd` 或 `inputs.repo`，
-   否则任务以 `failed`（`repo_not_in_workspace`）结束，不再回退到 flow-home。
+   否则任务以 `failed`（`repo_not_in_workspace`）结束，不再回退到 raindown-home。
    合同 `cwd` 必须是绝对路径，允许 `~/` 开头并由节点展开；相对路径在合同校验时拒绝。codex-orca 仍以 `inputs.repo`（其次 `cwd`）选择基础仓库并校验归属，再创建 worktree。
    可加 `inputs.scope: ["README.md"]` 明确修改范围，`context` 引用知识，
    `verify: [{"cmd":["bun","test"]}]` 指定验收命令（应换成该仓库实际的检查）。
@@ -537,51 +537,51 @@ reviewer 直接在合同 cwd 中写文档，通常就是用户的主检出；不
 4. 用返回的 id 替换下面的 `<id>`。仅 blocked 任务能回复；提问必须用文字，批准不能附带文字，拒绝可以附理由：
 
 ```sh
-flow task show <id>
-flow inbox
-flow task reply <id> "用方案 A"
-flow task reply <id> --approve
-flow task reply <id> --deny "不要推送，先补测试"
+raindown task show <id>
+raindown inbox
+raindown task reply <id> "用方案 A"
+raindown task reply <id> --approve
+raindown task reply <id> --deny "不要推送，先补测试"
 ```
 
 交互式执行器在下一次续约送达回复并恢复运行；codex-exec 会重新排队恢复会话。
 原脚本可以保留，但不要同时监控或向同一个任务发送输入。确认流程可用后，用户再自行更新个人派发约定；
-Flow 不调用、不修改 `~/.claude/scripts` 或个人 CLAUDE.md。
+Raindown 不调用、不修改 `~/.claude/scripts` 或个人 CLAUDE.md。
 
 ## 临时环境验证命令
 
 在仓库根目录、有 bun / git / gitleaks 的环境中，下面的冒烟流程只使用 fake 执行器，
 不运行 Codex、Orca 或 Claude，不访问个人 `.codex` / `.claude`；不安装或调整 launchd 服务。
-`flow` 函数指向当前 checkout 的 CLI。doctor 仍会只读检查已安装的 Flow plist 路径。
+`raindown` 函数指向当前 checkout 的 CLI。doctor 仍会只读检查已安装的 Raindown plist 路径。
 端口 17477 需要空闲；两个后台 PID 只用于停止本次启动的前台进程。
 
 ```sh
-FLOW_DEMO_DIR="$(mktemp -d)"
-export FLOW_HOME="$FLOW_DEMO_DIR/home"
-flow() { bun packages/cli/src/main.ts "$@"; }
-flow init
-rm "$FLOW_HOME/config/roles/dev.yaml" "$FLOW_HOME/config/roles/reviewer.yaml" "$FLOW_HOME/config/roles/triage.yaml"
-cat > "$FLOW_HOME/config/roles/demo.yaml" <<'YAML'
+RAINDOWN_DEMO_DIR="$(mktemp -d)"
+export RAINDOWN_HOME="$RAINDOWN_DEMO_DIR/home"
+raindown() { bun packages/cli/src/main.ts "$@"; }
+raindown init
+rm "$RAINDOWN_HOME/config/roles/dev.yaml" "$RAINDOWN_HOME/config/roles/reviewer.yaml" "$RAINDOWN_HOME/config/roles/triage.yaml"
+cat > "$RAINDOWN_HOME/config/roles/demo.yaml" <<'YAML'
 name: demo
 executor: fake
 prompt: 临时验证，不调用真实执行器
 YAML
-cat > "$FLOW_HOME/config/workspaces/demo.yaml" <<'YAML'
+cat > "$RAINDOWN_HOME/config/workspaces/demo.yaml" <<'YAML'
 id: demo
 kind: product
 name: 演示
 description: 临时验证
 repos: []
 YAML
-printf 'port: 17477\nlease_ttl_s: 5\n' > "$FLOW_HOME/config/hub.yaml"
-flow doctor
-flow doctor --json
-bun packages/cli/src/main.ts hub start > "$FLOW_DEMO_DIR/hub.log" 2>&1 &
-FLOW_DEMO_HUB_PID=$!
-until flow hub status >/dev/null 2>&1; do sleep 0.1; done
-bun packages/cli/src/main.ts node start > "$FLOW_DEMO_DIR/node.log" 2>&1 &
-FLOW_DEMO_NODE_PID=$!
-cat > "$FLOW_DEMO_DIR/contract.json" <<'JSON'
+printf 'port: 17477\nlease_ttl_s: 5\n' > "$RAINDOWN_HOME/config/hub.yaml"
+raindown doctor
+raindown doctor --json
+bun packages/cli/src/main.ts hub start > "$RAINDOWN_DEMO_DIR/hub.log" 2>&1 &
+RAINDOWN_DEMO_HUB_PID=$!
+until raindown hub status >/dev/null 2>&1; do sleep 0.1; done
+bun packages/cli/src/main.ts node start > "$RAINDOWN_DEMO_DIR/node.log" 2>&1 &
+RAINDOWN_DEMO_NODE_PID=$!
+cat > "$RAINDOWN_DEMO_DIR/contract.json" <<'JSON'
 {
   "goal": "验证提问后回复的流程",
   "workspace": "ws/demo",
@@ -597,22 +597,22 @@ cat > "$FLOW_DEMO_DIR/contract.json" <<'JSON'
   }
 }
 JSON
-flow task create --file "$FLOW_DEMO_DIR/contract.json" --json > "$FLOW_DEMO_DIR/task.json"
-FLOW_DEMO_TASK_ID="$(bun -e 'console.log((await Bun.file(process.argv[1]).json()).data.task.id)' "$FLOW_DEMO_DIR/task.json")"
-until flow task show "$FLOW_DEMO_TASK_ID" --json | bun -e 'process.exit((await Bun.stdin.json()).data.task.status === "blocked" ? 0 : 1)'; do sleep 0.1; done
-flow task show "$FLOW_DEMO_TASK_ID"
-flow inbox
-flow task reply "$FLOW_DEMO_TASK_ID" "用方案 A"
-until flow task show "$FLOW_DEMO_TASK_ID" --json | bun -e 'process.exit((await Bun.stdin.json()).data.task.status === "done" ? 0 : 1)'; do sleep 0.1; done
-flow task show "$FLOW_DEMO_TASK_ID"
-kill "$FLOW_DEMO_NODE_PID" "$FLOW_DEMO_HUB_PID"
-wait "$FLOW_DEMO_NODE_PID" "$FLOW_DEMO_HUB_PID"
+raindown task create --file "$RAINDOWN_DEMO_DIR/contract.json" --json > "$RAINDOWN_DEMO_DIR/task.json"
+RAINDOWN_DEMO_TASK_ID="$(bun -e 'console.log((await Bun.file(process.argv[1]).json()).data.task.id)' "$RAINDOWN_DEMO_DIR/task.json")"
+until raindown task show "$RAINDOWN_DEMO_TASK_ID" --json | bun -e 'process.exit((await Bun.stdin.json()).data.task.status === "blocked" ? 0 : 1)'; do sleep 0.1; done
+raindown task show "$RAINDOWN_DEMO_TASK_ID"
+raindown inbox
+raindown task reply "$RAINDOWN_DEMO_TASK_ID" "用方案 A"
+until raindown task show "$RAINDOWN_DEMO_TASK_ID" --json | bun -e 'process.exit((await Bun.stdin.json()).data.task.status === "done" ? 0 : 1)'; do sleep 0.1; done
+raindown task show "$RAINDOWN_DEMO_TASK_ID"
+kill "$RAINDOWN_DEMO_NODE_PID" "$RAINDOWN_DEMO_HUB_PID"
+wait "$RAINDOWN_DEMO_NODE_PID" "$RAINDOWN_DEMO_HUB_PID"
 ```
 
 成功时 doctor 退出 0，真实执行器检查为 info；create 返回 queued，随后 blocked(question)，
 文字回复后重新排队，最终 done，摘要为“已按方案 A 完成”。重新领取可能需等待一次默认 30 秒长轮询。
 临时目录保留供检查日志。
-执行完后应在新的终端继续日常工作，避免沿用本次导出的临时 FLOW_HOME。
+执行完后应在新的终端继续日常工作，避免沿用本次导出的临时 RAINDOWN_HOME。
 
 ## 真实环境验证（任务 6.1、6.2）
 
@@ -644,7 +644,7 @@ codex-exec 的提问与 resume，均在真实 harness 上走通。挂起中的�
   ④ 的 pr-reviewer 改由节点准备私有临时 worktree，角色本身没有 shell（D10）。
 - **Codex 沙箱内的常见越界**：本地端口监听（测试）和访问 GitHub API（开 PR）都需要越出沙箱，
   使用 `on-request` 的 dev-approval 任务因此出现了两次授权请求。④ 的代回复（D15，见 PR #43）把这类白名单内的请求交给 supervisor。
-- 6.2 的提问暴露出 product-res 自身的既有测试失败（`scripts/create-project.test.mjs` 期望值），与 Flow 无关，
+- 6.2 的提问暴露出 product-res 自身的既有测试失败（`scripts/create-project.test.mjs` 期望值），与 Raindown 无关，
   triage 的建议是修正测试期望。
 
 临时角色 `dev-approval` 在验证后已从 `config/roles/` 删除，未提交到 config 仓库。
@@ -652,10 +652,10 @@ codex-exec 的提问与 resume，均在真实 harness 上走通。挂起中的�
 本机已知环境：`~/.codex/config.toml` 信任了 home 目录，并启用了 `approvals_reviewer = "auto_review"`。
 因此新 worktree 不一定出现信任提示；此前 `on-request` 角色也可能由 Codex 自审批准授权请求。
 这不能用来证明信任提示处理或审批送达已被覆盖。6.2 验收时另建了上面的 dev-approval 角色，
-当时在 `permissions.config` 中显式设 `approvals_reviewer: user`；现在 Flow 默认即设为 `user`，显式设置仅用于覆盖默认值。
+当时在 `permissions.config` 中显式设 `approvals_reviewer: user`；现在 Raindown 默认即设为 `user`，显式设置仅用于覆盖默认值。
 验证审批送达时仍需选择确实需要越出沙箱的操作，再用 task reply 的 approve 走完闭环。
 不要为此修改个人 Codex 配置或取消现有 home 信任。
 
-reviewer 的 canUseTool 审批需要选择不在 allowedTools 中、也未被 Flow 策略自动放行的工具请求；
+reviewer 的 canUseTool 审批需要选择不在 allowedTools 中、也未被 Raindown 策略自动放行的工具请求；
 triage 则需先得到一条真实提问，再用文字回复验证 exec resume。Codex TUI 文本会随版本变化，
 识别问题应附脱敏的终端片段，更新 fixture 后再验证。

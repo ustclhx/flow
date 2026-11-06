@@ -38,7 +38,7 @@ function runWriter(home: string, actor: string, startAt: number, lines: number) 
 
 describe('写锁', () => {
   test('获取后锁文件记录 pid 与时间戳，释放后删除', async () => {
-    const home = tempHome('flow-lock-')
+    const home = tempHome('raindown-lock-')
     const r = await acquireWriteLock(home)
     if (!r.ok) throw new Error(r.error.message)
     const info = JSON.parse(readFileSync(writeLockPath(home), 'utf8'))
@@ -51,7 +51,7 @@ describe('写锁', () => {
   })
 
   test('锁被占用时等待超时，返回可重试的 lock_timeout（退出码 3）', async () => {
-    const home = tempHome('flow-lock-')
+    const home = tempHome('raindown-lock-')
     const held = await acquireWriteLock(home)
     if (!held.ok) throw new Error(held.error.message)
     const started = Date.now()
@@ -79,7 +79,7 @@ describe('写锁', () => {
   })
 
   test('锁释放后等待者立即获得锁', async () => {
-    const home = tempHome('flow-lock-')
+    const home = tempHome('raindown-lock-')
     const held = await acquireWriteLock(home)
     if (!held.ok) throw new Error(held.error.message)
     setTimeout(() => void held.data.release(), 100)
@@ -89,7 +89,7 @@ describe('写锁', () => {
   })
 
   test('持锁进程已崩溃（pid 不存在）的陈旧锁可以被接管', async () => {
-    const home = tempHome('flow-lock-')
+    const home = tempHome('raindown-lock-')
     mkdirSync(join(home, 'state'), { recursive: true })
     const stale = {
       pid: await deadPid(),
@@ -105,7 +105,7 @@ describe('写锁', () => {
   })
 
   test('存活进程持有的锁不会被接管', async () => {
-    const home = tempHome('flow-lock-')
+    const home = tempHome('raindown-lock-')
     mkdirSync(join(home, 'state'), { recursive: true })
     // 父进程（bun test 的启动者）一定存活。
     const alive = { pid: process.ppid, host: hostname(), acquired_at: 'x', token: 'alive' }
@@ -117,7 +117,7 @@ describe('写锁', () => {
   })
 
   test('无法解析的陈旧锁文件超过一定时间后可以被接管', async () => {
-    const home = tempHome('flow-lock-')
+    const home = tempHome('raindown-lock-')
     mkdirSync(join(home, 'state'), { recursive: true })
     writeFileSync(writeLockPath(home), 'garbage')
     const old = new Date(Date.now() - 60_000)
@@ -128,7 +128,7 @@ describe('写锁', () => {
   })
 
   test('释放时只删除自己的锁', async () => {
-    const home = tempHome('flow-lock-')
+    const home = tempHome('raindown-lock-')
     const r = await acquireWriteLock(home)
     if (!r.ok) throw new Error(r.error.message)
     writeFileSync(
@@ -140,7 +140,7 @@ describe('写锁', () => {
   })
 
   test('withWriteLock 在回调抛错时也释放锁', async () => {
-    const home = tempHome('flow-lock-')
+    const home = tempHome('raindown-lock-')
     await expect(
       withWriteLock(home, async () => {
         throw new Error('boom')
@@ -150,7 +150,7 @@ describe('写锁', () => {
   })
 
   test('两个真实子进程并发追加 journal：两条记录都完整写入、互不交错，各一次提交', async () => {
-    const home = await initTempHome('flow-lock-concurrent-')
+    const home = await initTempHome('raindown-lock-concurrent-')
     const brain = join(home, 'brain')
     const before = await commitCount(brain)
     const startAt = Date.now() + 800

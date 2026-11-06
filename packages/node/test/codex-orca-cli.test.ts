@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { taskContract } from '@flow/core'
+import { taskContract } from '@raindown/core'
 import { buildCodexCommand, resolveTaskRepo } from '../src/codex-orca/executor.ts'
 import { createGhCli, createOrcaCli, execRunner, orcaErrorCode } from '../src/codex-orca/orca.ts'
 import { CHILD_ENV_DENYLIST } from '../src/env.ts'
@@ -47,7 +47,7 @@ interface FakeResponse {
 
 /** 在临时目录写一个假 CLI，返回它的路径、环境和调用记录。 */
 function fakeCli(name: string, responses: Record<string, FakeResponse[]>) {
-  const dir = mkdtempSync(join(tmpdir(), `flow-fake-${name}-`))
+  const dir = mkdtempSync(join(tmpdir(), `raindown-fake-${name}-`))
   roots.push(dir)
   const bin = join(dir, name)
   writeFileSync(bin, `#!${process.execPath}\n${FAKE_BIN}`)
@@ -73,7 +73,7 @@ describe('orca 封装', () => {
     expect(
       buildCodexCommand({
         codexBin: 'codex',
-        codexHome: '/flow/state/codex-work-home',
+        codexHome: '/raindown/state/codex-work-home',
         worktreePath: '/repo',
         specPath: '/spec.md',
         role: { name: 'dev', permissions: { writable_paths: ['docs/**'] } },
@@ -91,14 +91,14 @@ describe('orca 封装', () => {
     const f = fakeCli('orca', { 'worktree create': [fx('orca/worktree-create.json')] })
     const orca = createOrcaCli({ bin: f.bin, env: f.env })
     const r = await orca.worktreeCreate({
-      repo: '/repos/flow',
+      repo: '/repos/raindown',
       name: 't-1',
       baseBranch: 'origin/main',
     })
     expect(r).toEqual({
       ok: true,
       data: expect.objectContaining({
-        path: '/Users/user/orca/workspaces/flow/tmp-tui-capture',
+        path: '/Users/user/orca/workspaces/raindown/tmp-tui-capture',
         branch: 'refs/heads/example-user/tmp-tui-capture',
       }),
     })
@@ -107,7 +107,7 @@ describe('orca 封装', () => {
         'worktree',
         'create',
         '--repo',
-        'path:/repos/flow',
+        'path:/repos/raindown',
         '--name',
         't-1',
         '--base-branch',
@@ -123,13 +123,13 @@ describe('orca 封装', () => {
   test('terminal list：按 worktree 列出终端，带 worktreePath 与 agentIdentity', async () => {
     const f = fakeCli('orca', { 'terminal list': [fx('orca/terminal-list.json')] })
     const orca = createOrcaCli({ bin: f.bin, env: f.env })
-    const r = await orca.terminalList({ worktreePath: '/Users/user/orca/workspaces/flow/t-1' })
+    const r = await orca.terminalList({ worktreePath: '/Users/user/orca/workspaces/raindown/t-1' })
     expect(r.ok && r.data.map((t) => [t.handle.slice(-2), t.agentIdentity])).toEqual([
       ['02', 'codex'],
       ['05', undefined],
     ])
     expect(f.calls()).toEqual([
-      ['terminal', 'list', '--worktree', 'path:/Users/user/orca/workspaces/flow/t-1', '--json'],
+      ['terminal', 'list', '--worktree', 'path:/Users/user/orca/workspaces/raindown/t-1', '--json'],
     ])
   })
 
@@ -257,7 +257,7 @@ describe('orca 封装', () => {
     expect(!shape.ok && shape.error.code).toBe('orca_bad_output')
     expect(orcaErrorCode(shape)).toBeUndefined()
 
-    const missing = createOrcaCli({ bin: join(tmpdir(), 'flow-no-such-orca-bin') })
+    const missing = createOrcaCli({ bin: join(tmpdir(), 'raindown-no-such-orca-bin') })
     const r = await missing.terminalRead({ handle: 'x' })
     expect(!r.ok && r.error.code).toBe('orca_not_found')
   })
@@ -374,7 +374,7 @@ describe('启动 Codex 的命令', () => {
   test('bypass 角色：与 run-codex.sh 等价，任务说明经文件传入', () => {
     const r = buildCodexCommand({
       codexBin: 'codex',
-      codexHome: '/flow/state/codex-work-home',
+      codexHome: '/raindown/state/codex-work-home',
       worktreePath: '/wt/t 1',
       specPath: '/home/state/tasks/t-1/spec.md',
       role: {
@@ -391,31 +391,31 @@ describe('启动 Codex 的命令', () => {
     expect(r).toEqual({
       ok: true,
       data:
-        "cd '/wt/t 1' && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev CODEX_HOME=/flow/state/codex-work-home codex -m gpt-6.1-sol -c model_reasoning_effort=high " +
+        "cd '/wt/t 1' && exec env -u RAINDOWN_HUB_TOKEN -u RAINDOWN_HUB_TOKEN_FILE -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE RAINDOWN_ACTOR=dev FLOW_ACTOR=dev CODEX_HOME=/raindown/state/codex-work-home codex -m gpt-6.1-sol -c model_reasoning_effort=high " +
         '-c service_tier=priority --dangerously-bypass-approvals-and-sandbox ' +
         '"$(cat /home/state/tasks/t-1/spec.md)"',
     })
   })
 
-  test('on-request 角色：-a 与 -s，并默认将授权弹窗交给 Flow', () => {
+  test('on-request 角色：-a 与 -s，并默认将授权弹窗交给 Raindown', () => {
     const r = buildCodexCommand({
       codexBin: 'codex',
-      codexHome: '/flow/state/codex-work-home',
+      codexHome: '/raindown/state/codex-work-home',
       worktreePath: '/wt',
       specPath: '/s.md',
       role: { name: 'dev', permissions: { approval: 'on-request', sandbox: 'workspace-write' } },
     })
     expect(r.ok && r.data).toBe(
-      'cd /wt && exec env -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE FLOW_ACTOR=dev CODEX_HOME=/flow/state/codex-work-home codex -c approvals_reviewer=user -a on-request -s workspace-write "$(cat /s.md)"',
+      'cd /wt && exec env -u RAINDOWN_HUB_TOKEN -u RAINDOWN_HUB_TOKEN_FILE -u FLOW_HUB_TOKEN -u FLOW_HUB_TOKEN_FILE RAINDOWN_ACTOR=dev FLOW_ACTOR=dev CODEX_HOME=/raindown/state/codex-work-home codex -c approvals_reviewer=user -a on-request -s workspace-write "$(cat /s.md)"',
     )
   })
 
   test.each([{}, { config: { approval_policy: 'on-request' } }])(
-    '未设置 approval 时仍默认将授权弹窗交给 Flow：%j',
+    '未设置 approval 时仍默认将授权弹窗交给 Raindown：%j',
     (permissions) => {
       const r = buildCodexCommand({
         codexBin: 'codex',
-        codexHome: '/flow/state/codex-work-home',
+        codexHome: '/raindown/state/codex-work-home',
         worktreePath: '/wt',
         specPath: '/s.md',
         role: { name: 'dev', permissions },
@@ -428,7 +428,7 @@ describe('启动 Codex 的命令', () => {
   test('approval=never 时不默认追加 reviewer', () => {
     const r = buildCodexCommand({
       codexBin: 'codex',
-      codexHome: '/flow/state/codex-work-home',
+      codexHome: '/raindown/state/codex-work-home',
       worktreePath: '/wt',
       specPath: '/s.md',
       role: { name: 'dev', permissions: { approval: 'never', sandbox: 'workspace-write' } },
@@ -442,7 +442,7 @@ describe('启动 Codex 的命令', () => {
     (reviewer) => {
       const r = buildCodexCommand({
         codexBin: 'codex',
-        codexHome: '/flow/state/codex-work-home',
+        codexHome: '/raindown/state/codex-work-home',
         worktreePath: '/wt',
         specPath: '/s.md',
         role: {
@@ -466,11 +466,14 @@ describe('启动 Codex 的命令', () => {
 })
 
 test('Orca 启动命令把角色身份传给实际子进程，并覆盖终端继承值', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'flow-orca-env-'))
+  const dir = mkdtempSync(join(tmpdir(), 'raindown-orca-env-'))
   roots.push(dir)
   const bin = join(dir, 'fake-codex')
   const specPath = join(dir, 'spec.md')
-  writeFileSync(bin, '#!/bin/sh\nprintf "%s\\n%s" "$FLOW_ACTOR" "$CODEX_HOME"\n')
+  writeFileSync(
+    bin,
+    '#!/bin/sh\nprintf "%s\\n%s\\n%s" "$RAINDOWN_ACTOR" "$FLOW_ACTOR" "$CODEX_HOME"\n',
+  )
   chmodSync(bin, 0o755)
   writeFileSync(specPath, '临时任务')
   const command = buildCodexCommand({
@@ -483,16 +486,21 @@ test('Orca 启动命令把角色身份传给实际子进程，并覆盖终端继
   if (!command.ok) throw new Error(command.error.message)
   const out = await execRunner('sh', ['-c', command.data], {
     timeoutMs: 5000,
-    env: { ...process.env, FLOW_ACTOR: 'user', CODEX_HOME: '/legacy-codex-home' },
+    env: {
+      ...process.env,
+      RAINDOWN_ACTOR: 'user',
+      FLOW_ACTOR: 'stale-role',
+      CODEX_HOME: '/legacy-codex-home',
+    },
   })
   expect(out.code).toBe(0)
-  expect(out.stdout).toBe(`dev\n${join(dir, 'isolated home')}`)
+  expect(out.stdout).toBe(`dev\ndev\n${join(dir, 'isolated home')}`)
 })
 
 test('Orca 启动命令移除完整 denylist，并拒绝包含 = 的 codexBin', () => {
   const base = {
     codexBin: 'codex',
-    codexHome: '/flow/state/codex-work-home',
+    codexHome: '/raindown/state/codex-work-home',
     worktreePath: '/wt',
     specPath: '/s.md',
     role: { name: 'dev' },
@@ -500,7 +508,7 @@ test('Orca 启动命令移除完整 denylist，并拒绝包含 = 的 codexBin', 
   const command = buildCodexCommand(base)
   if (!command.ok) throw new Error(command.error.message)
   for (const key of CHILD_ENV_DENYLIST) expect(command.data).toContain(`-u ${key}`)
-  for (const codexBin of ['FLOW_ACTOR=user', '/tmp/codex=custom']) {
+  for (const codexBin of ['RAINDOWN_ACTOR=user', '/tmp/codex=custom']) {
     expect(buildCodexCommand({ ...base, codexBin })).toMatchObject({
       ok: false,
       error: { code: 'invalid_codex_bin' },

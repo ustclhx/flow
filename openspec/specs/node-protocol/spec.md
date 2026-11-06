@@ -6,10 +6,10 @@
 ## Requirements
 
 ### Requirement: 节点注册
-节点启动时 SHALL 向中枢注册，提交节点 id、主机名、版本，以及能力列表（例如 `executor:codex-orca`、`repo:/Users/hxlee/workspace/product-res`、`browser`）。中枢 SHALL 记录节点最近一次的活动时间，并通过 `flow node list` 展示。
+节点启动时 SHALL 向中枢注册，提交节点 id、主机名、版本，以及能力列表（例如 `executor:codex-orca`、`repo:/Users/hxlee/workspace/product-res`、`browser`）。中枢 SHALL 记录节点最近一次的活动时间，并通过 `raindown node list` 展示。
 
 #### Scenario: 查看节点
-- **WHEN** 本机节点启动后，用户运行 `flow node list`
+- **WHEN** 本机节点启动后，用户运行 `raindown node list`
 - **THEN** 输出包含该节点的 id、能力和最近一次的活动时间
 
 ### Requirement: 按能力领取租约

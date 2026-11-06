@@ -3,13 +3,14 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { z } from 'zod'
-import { checkDaemonPlists, launchAgentsDirectory } from './daemon/plist.ts'
+import { checkDaemonPlists, LEGACY_DAEMON_LABELS, launchAgentsDirectory } from './daemon/plist.ts'
 import { checkPatrolRules } from './doctor-patrol.ts'
 import { type DoctorSdk, inspectClaudeSdk } from './doctor-sdk.ts'
 import { reservedNameVariants } from './entries.ts'
 import type { execCommand } from './git.ts'
 import { isRepoRoot } from './git.ts'
-import { type Env, flowPaths, GIT_REPOS } from './home.ts'
+import { type Env, GIT_REPOS, type RaindownHomeSource, raindownPaths } from './home.ts'
+import { loadPoliciesConfig } from './policy/config.ts'
 import { fail, ok, type Result } from './result.ts'
 import {
   CLAUDE_READ_REQUIRED_DISALLOWED,
@@ -36,7 +37,7 @@ export const MIN_VERSIONS = {
   orca: '1.4.218',
 } as const
 
-const INIT_HINT = '运行 flow init 补齐（已有文件不会被覆盖）'
+const INIT_HINT = '运行 raindown init 补齐（已有文件不会被覆盖）'
 
 export const INSTALL_HINTS = {
   codex: '安装或更新 Codex CLI，并确保 codex 在节点的 PATH 中',
@@ -59,8 +60,8 @@ export interface DoctorCheck {
 
 export interface DoctorReport {
   home: string
-  /** `FLOW_HOME` 或 `default`。 */
-  homeSource: 'FLOW_HOME' | 'default'
+  /** 新旧环境变量或默认目录。 */
+  homeSource: RaindownHomeSource
   ok: boolean
   checks: DoctorCheck[]
 }
@@ -239,9 +240,9 @@ async function checkExecutors(
         Boolean(sdk),
         sdk
           ? `Claude Agent SDK ${sdk.version} 可 import（node 声明：${sdk.expectedVersion}）`
-          : 'Claude Agent SDK 未安装（无法从 @flow/node 解析）',
+          : 'Claude Agent SDK 未安装（无法从 @raindown/node 解析）',
         claudeRoles,
-        '在 Flow 仓库运行 bun install --frozen-lockfile，安装 @flow/node 声明的 SDK',
+        '在 Raindown 仓库运行 bun install --frozen-lockfile，安装 @raindown/node 声明的 SDK',
       ),
     )
   } catch {
@@ -251,7 +252,7 @@ async function checkExecutors(
         false,
         'Claude Agent SDK 无法 import 或包版本无法解析',
         claudeRoles,
-        '在 Flow 仓库运行 bun install --frozen-lockfile，确保 @anthropic-ai/claude-agent-sdk 安装完整',
+        '在 Raindown 仓库运行 bun install --frozen-lockfile，确保 @anthropic-ai/claude-agent-sdk 安装完整',
       ),
     )
   }
@@ -295,7 +296,7 @@ async function checkExecutors(
 }
 
 /**
- * 检查 flow-home 与外部依赖（flow-home spec：状态检查）。
+ * 检查 raindown-home 与外部依赖（raindown-home spec：状态检查）。
  * 有 error 未通过时返回 `doctor_failed` 失败，details 中带完整报告。
  */
 export async function runDoctor(
@@ -306,8 +307,17 @@ export async function runDoctor(
   const env = opts.env ?? process.env
   const run = opts.runCommand ?? doctorCommand
   const find = opts.findExecutable ?? findExecutable
-  const paths = flowPaths(home)
+  const paths = raindownPaths(home)
   const checks: DoctorCheck[] = []
+  if (homeSource === 'FLOW_HOME' || homeSource === 'legacy-default') {
+    checks.push({
+      id: 'home.legacy',
+      ok: false,
+      severity: 'warning',
+      message: `正在使用旧数据目录（${homeSource === 'FLOW_HOME' ? 'FLOW_HOME' : '~/flow-home'}）：${home}`,
+      hint: '确认数据备份后手动迁移到 ~/raindown-home，并使用 RAINDOWN_HOME；不会自动移动或复制数据',
+    })
+  }
 
   const gitTool = await checkTool('git', ['--version'], env, run, find)
   const gitleaksTool = await checkTool('gitleaks', ['version'], env, run, find)
@@ -316,8 +326,8 @@ export async function runDoctor(
 
   checks.push(
     existsSync(home)
-      ? { id: 'home', ok: true, message: `flow-home：${home}` }
-      : { id: 'home', ok: false, message: `flow-home 不存在：${home}`, hint: INIT_HINT },
+      ? { id: 'home', ok: true, message: `raindown-home：${home}` }
+      : { id: 'home', ok: false, message: `raindown-home 不存在：${home}`, hint: INIT_HINT },
   )
 
   for (const sub of ['config', 'brain', 'raw', 'state'] as const) {
@@ -370,7 +380,7 @@ export async function runDoctor(
             id: 'state.untracked',
             ok: false,
             message: 'state/ 位于某个 git 仓库内，但它不应被纳入版本管理',
-            hint: '把 flow-home 移出任何 git 仓库，或删除包含 state/ 的仓库',
+            hint: '把 raindown-home 移出任何 git 仓库，或删除包含 state/ 的仓库',
           }
         : { id: 'state.untracked', ok: true, message: 'state/ 不在 git 中' },
     )
@@ -409,7 +419,7 @@ export async function runDoctor(
         id: `roles.config.${error.file}.${error.field ?? ''}`,
         ok: false,
         message: `${error.file}${error.field ? `：${error.field}` : ''}：${error.message}`,
-        hint: '修正角色配置后重新运行 flow doctor',
+        hint: '修正角色配置后重新运行 raindown doctor',
       })
     }
     for (const role of roles.data.roles) {
@@ -435,6 +445,24 @@ export async function runDoctor(
     checks.push(...checkRoleKinds(roles.data.roles))
   }
 
+  const policies = await loadPoliciesConfig(home)
+  if (!policies.ok) {
+    checks.push({ id: 'policies.config', ok: false, message: policies.error.message })
+  } else {
+    for (const issue of [...policies.data.errors, ...policies.data.warnings]) {
+      const warning = policies.data.warnings.includes(issue)
+      checks.push({
+        id: `policies.config.${issue.rule_index}.${issue.field ?? ''}`,
+        ok: false,
+        severity: warning ? 'warning' : 'error',
+        message: `${issue.file}：${issue.message}`,
+        hint: warning
+          ? '按提示将旧策略动作改为 Raindown 名称；兼容期间旧规则仍生效'
+          : '修正策略配置后重新运行 raindown doctor',
+      })
+    }
+  }
+
   checks.push(...(await checkWorkspaces(home, roles.ok ? roles.data.roles : undefined)))
   checks.push(...(await checkPatrolRules(home, roles.ok ? roles.data.roles : undefined)))
 
@@ -448,7 +476,21 @@ export async function runDoctor(
       message:
         plist.error ??
         `${plist.label}：bun ${plist.bunExists ? '有效' : '失效'}（${plist.bunPath}），入口 ${plist.cliExists ? '有效' : '失效'}（${plist.cliPath}）`,
-      hint: '重新运行 flow daemon install 更新 plist 中的路径',
+      hint: '重新运行 raindown daemon install 更新 plist 中的路径',
+    })
+  }
+
+  for (const plist of checkDaemonPlists(
+    opts.launchAgentsDir ?? launchAgentsDirectory(),
+    LEGACY_DAEMON_LABELS,
+  )) {
+    if (!plist.installed) continue
+    checks.push({
+      id: `daemon.legacy.${plist.label}`,
+      ok: false,
+      severity: 'warning',
+      message: `检测到旧 launchd 服务 ${plist.label}（${plist.plistPath}）`,
+      hint: '确认旧服务已停止后运行 raindown daemon install，避免新旧服务同时运行',
     })
   }
 
@@ -492,14 +534,14 @@ async function checkWorkspaces(home: string, roles?: Role[]): Promise<DoctorChec
         ok: false,
         severity: 'error' as const,
         message: `${issue.file}：${issue.field}：${issue.message}`,
-        hint: `审查角色参考 flow init 生成的 pr-reviewer.yaml（kind: read、setting_sources: []、read_scope: cwd）；${claudeReadHint}`,
+        hint: `审查角色参考 raindown init 生成的 pr-reviewer.yaml（kind: read、setting_sources: []、read_scope: cwd）；${claudeReadHint}`,
       }))
     : []
   const checks: DoctorCheck[] = loaded.data.issues.map((issue) => ({
     id: `workspaces.config.${issue.file}.${issue.field ?? ''}`,
     ok: false,
     message: `${issue.file}${issue.field ? `：${issue.field}` : ''}：${issue.message}`,
-    hint: '修正 workspace 配置后重新运行 flow doctor；有问题的文件不会被加载',
+    hint: '修正 workspace 配置后重新运行 raindown doctor；有问题的文件不会被加载',
   }))
   for (const issue of loaded.data.warnings) {
     checks.push({
@@ -507,7 +549,7 @@ async function checkWorkspaces(home: string, roles?: Role[]): Promise<DoctorChec
       ok: false,
       severity: 'warning',
       message: `${issue.file}${issue.field ? `：${issue.field}` : ''}：${issue.message}（supervisor 视为未启用）`,
-      hint: '修正 supervisor 段后重新运行 flow doctor；该 workspace 其余配置照常生效',
+      hint: '修正 supervisor 段后重新运行 raindown doctor；该 workspace 其余配置照常生效',
     })
   }
   for (const ws of loaded.data.workspaces) {
@@ -592,7 +634,7 @@ function checkRoleKinds(roles: Role[]): DoctorCheck[] {
       severity: 'error',
       message: `${supervisor.error.message}；中枢不会唤醒 supervisor`,
       hint: writable
-        ? `supervisor 只应有 Read、Grep、Glob 与 Flow MCP，并设 read_scope: cwd（参考 flow init 生成的 supervisor.yaml）；${claudeReadHint}`
+        ? `supervisor 只应有 Read、Grep、Glob 与 Raindown MCP，并设 read_scope: cwd（参考 raindown init 生成的 supervisor.yaml）；${claudeReadHint}`
         : '只保留一个 kind: supervisor 角色',
     })
     if (!writable) return checks
@@ -657,9 +699,13 @@ async function checkHook(
 }
 
 export function formatDoctorReport(r: DoctorReport): string {
-  const lines = [
-    `flow-home：${r.home}（来源：${r.homeSource === 'FLOW_HOME' ? 'FLOW_HOME' : '默认'}）`,
-  ]
+  const sources: Record<RaindownHomeSource, string> = {
+    RAINDOWN_HOME: 'RAINDOWN_HOME',
+    FLOW_HOME: 'FLOW_HOME',
+    default: '~/raindown-home（默认）',
+    'legacy-default': '~/flow-home（旧默认）',
+  }
+  const lines = [`raindown-home：${r.home}（来源：${sources[r.homeSource]}）`]
   for (const c of r.checks) {
     const tag = c.ok
       ? '[ok]  '

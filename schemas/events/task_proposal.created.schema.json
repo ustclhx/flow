@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/events/task_proposal.created.schema.json",
+  "$id": "https://raindown.local/schemas/events/task_proposal.created.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
@@ -840,7 +840,7 @@
             "timeout_s"
           ],
           "additionalProperties": false,
-          "title": "Flow task contract",
+          "title": "Raindown task contract",
           "description": "创建任务时提交的合同"
         },
         "decision": {

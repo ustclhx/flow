@@ -1,4 +1,4 @@
-import { exitCodeOf, type FlowError, type Result, toJsonDocument } from '@flow/core'
+import { exitCodeOf, type RaindownError, type Result, toJsonDocument } from '@raindown/core'
 
 export interface Rendered {
   stdout: string
@@ -13,7 +13,11 @@ export interface Rendered {
  */
 export function render<T>(
   result: Result<T>,
-  opts: { json: boolean; human?: (data: T) => string; humanError?: (error: FlowError) => string },
+  opts: {
+    json: boolean
+    human?: (data: T) => string
+    humanError?: (error: RaindownError) => string
+  },
 ): Rendered {
   const exitCode = exitCodeOf(result)
   if (opts.json) {

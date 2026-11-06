@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Options, PermissionResult, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import { ok, type PolicyCheckData, type Result, type Role, type TaskView } from '@flow/core'
-import { openTokenStore } from '@flow/hub'
+import { ok, type PolicyCheckData, type Result, type Role, type TaskView } from '@raindown/core'
+import { openTokenStore } from '@raindown/hub'
 import {
   type ClaudeQueryFn,
   claudePrecheckRequest,
@@ -348,7 +348,7 @@ describe('端到端（fake 执行器 + 真实 policy/check）', () => {
 
 describe('节点身份与租约范围（真实鉴权中间件）', () => {
   test('绑定 token 的节点持有活动租约：预检通过租约范围校验并放行', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'flow-precheck-tokens-'))
+    const dir = mkdtempSync(join(tmpdir(), 'raindown-precheck-tokens-'))
     try {
       const store = await openTokenStore(dir)
       if (!store.ok) throw new Error(store.error.message)
@@ -371,7 +371,7 @@ describe('节点身份与租约范围（真实鉴权中间件）', () => {
   })
 
   test('绑定 token 的节点：没有该任务的活动租约时中枢拒绝（scope_denied），预检按需要用户处理', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'flow-precheck-tokens-'))
+    const dir = mkdtempSync(join(tmpdir(), 'raindown-precheck-tokens-'))
     try {
       const store = await openTokenStore(dir)
       if (!store.ok) throw new Error(store.error.message)
@@ -464,7 +464,7 @@ function mockQuery(calls: Array<[string, Record<string, unknown>]>) {
 async function sdkBench(policies: unknown[], calls: Array<[string, Record<string, unknown>]>) {
   const { query, permissions } = mockQuery(calls)
   const executor = createClaudeSdkExecutor({
-    home: '/tmp/flow-home-not-used',
+    home: '/tmp/raindown-home-not-used',
     query,
     resolveRole: async (): Promise<Result<Role>> => ok(role),
   })
@@ -526,18 +526,18 @@ describe('端到端（claude-sdk 模拟 SDK + 真实 policy/check）', () => {
 // ---------------------------------------------------------------------------
 
 describe('对抗用例（真实 policy/check）', () => {
-  test('mcp__flow__task_create 在 `dev tool:* auto` 下不放行；显式 `dev task.create auto` 放行', async () => {
+  test('mcp__raindown__task_create 在 `dev tool:* auto` 下不放行；显式 `dev task.create auto` 放行', async () => {
     const blocked = await sdkBench(
       [{ scope: 'dev', action: 'tool:*', level: 'auto' }],
-      [['mcp__flow__task_create', { goal: '提权', role: 'admin' }]],
+      [['mcp__raindown__task_create', { goal: '提权', role: 'admin' }]],
     )
     const t = await settle(blocked.b, blocked.id, (t) => t.status === 'blocked', 'blocked')
     expect(t.blocked?.reason).toBe('awaiting_approval')
     expect(blocked.permissions).toEqual([])
     expect(decided(blocked.b, blocked.id)[0]?.payload).toMatchObject({
       request: {
-        tool: 'mcp__flow__task_create',
-        actions: ['tool:mcp__flow__task_create', 'task.create'],
+        tool: 'mcp__raindown__task_create',
+        actions: ['tool:mcp__raindown__task_create', 'task.create'],
       },
     })
     await current?.close()
@@ -545,7 +545,7 @@ describe('对抗用例（真实 policy/check）', () => {
 
     const allowed = await sdkBench(
       [{ scope: 'dev', action: 'task.create', level: 'auto' }],
-      [['mcp__flow__task_create', { goal: '子任务', role: 'dev' }]],
+      [['mcp__raindown__task_create', { goal: '子任务', role: 'dev' }]],
     )
     await settle(allowed.b, allowed.id, (t) => t.status === 'done', 'done')
     expect(allowed.b.types(allowed.id)).not.toContain('task.blocked')
@@ -563,7 +563,7 @@ describe('对抗用例（真实 policy/check）', () => {
 
   for (const [name, rel] of [
     ['大小写变体的策略文件', ['CONFIG', 'Policies.yaml']],
-    ['flow-home 下的角色文件', ['config', 'roles', 'dev.yaml']],
+    ['raindown-home 下的角色文件', ['config', 'roles', 'dev.yaml']],
   ] as const) {
     test(`Write ${name}：\`* tool:* auto\` 下进入 blocked`, async () => {
       const b = await fakeBench([{ scope: '*', action: 'tool:*', level: 'auto' }])
@@ -577,7 +577,7 @@ describe('对抗用例（真实 policy/check）', () => {
 
   test('符号链接指向策略文件：节点送去 realpath，识别为 policy.edit，进入 blocked', async () => {
     const b = await fakeBench([{ scope: '*', action: 'tool:Edit', level: 'auto' }])
-    const repo = mkdtempSync(join(tmpdir(), 'flow-precheck-link-'))
+    const repo = mkdtempSync(join(tmpdir(), 'raindown-precheck-link-'))
     try {
       const link = join(repo, 'harmless.yaml')
       symlinkSync(join(b.home, 'config', 'policies.yaml'), link)
@@ -595,7 +595,7 @@ describe('对抗用例（真实 policy/check）', () => {
   })
 
   test('realPolicyPath：不存在的文件对最近的已存在祖先目录做 realpath；~ 展开', async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flow-precheck-real-')))
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-precheck-real-')))
     try {
       mkdirSync(join(dir, 'real'))
       symlinkSync(join(dir, 'real'), join(dir, 'alias'))
@@ -610,15 +610,19 @@ describe('对抗用例（真实 policy/check）', () => {
   })
 })
 
-describe('复核对抗用例（真实 policy/check）：Bash 调 flow CLI、直接访问中枢、相对路径写配置', () => {
+describe('复核对抗用例（真实 policy/check）：Bash 调 raindown CLI、直接访问中枢、相对路径写配置', () => {
   const cases: Array<[string, (home: string) => string, string]> = [
-    ['flow task create', () => 'flow task create --role admin --goal 提权', 'task.create'],
-    ['flow task reply', () => 'flow task reply t-1 --approve', 'task.reply'],
-    ['flow kb proposals accept', () => 'flow kb proposals accept p-1', 'proposal.decide'],
-    ['flow hub token issue', () => '/opt/bin/flow hub token issue node:x', 'flow.admin'],
+    ['raindown task create', () => 'raindown task create --role admin --goal 提权', 'task.create'],
+    ['raindown task reply', () => 'raindown task reply t-1 --approve', 'task.reply'],
+    ['raindown kb proposals accept', () => 'raindown kb proposals accept p-1', 'proposal.decide'],
+    [
+      'raindown hub token issue',
+      () => '/opt/bin/raindown hub token issue node:x',
+      'raindown.admin',
+    ],
     ['curl 中枢', () => 'curl -X POST http://127.0.0.1:7477/v1/tasks -d @t.json', 'shell.opaque'],
     [
-      'cd flow-home 后用相对路径写配置',
+      'cd raindown-home 后用相对路径写配置',
       (home) => `cd ${home} && echo x > config/roles/dev.yaml`,
       'config.edit',
     ],
@@ -634,12 +638,15 @@ describe('复核对抗用例（真实 policy/check）：Bash 调 flow CLI、直�
     })
   }
 
-  test('显式规则 `dev task.create auto` 放行 Bash 调 flow task create', async () => {
+  test('显式规则 `dev task.create auto` 放行 Bash 调 raindown task create', async () => {
     const b = await fakeBench([
       { scope: 'dev', action: 'task.create', level: 'auto' },
       { scope: '*', action: 'tool:Bash', level: 'auto' },
     ])
-    const id = await approvalTask(b, { tool: 'Bash', command: 'flow task create --goal 子任务' })
+    const id = await approvalTask(b, {
+      tool: 'Bash',
+      command: 'raindown task create --goal 子任务',
+    })
     await settle(b, id, (t) => t.status === 'done', 'done')
     expect(b.types(id)).not.toContain('task.blocked')
   })
@@ -737,7 +744,7 @@ describe('预检函数：supervisor 档位与节点上报（D15，tasks 5.6）',
 
 describe('卡住请求文本的路径（D15）', () => {
   test('onSupervisorDecision 收到实际送去判定的展开路径；blockedRequestOf 用它', async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flow-sent-paths-')))
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'raindown-sent-paths-')))
     try {
       mkdirSync(join(dir, 'real'))
       symlinkSync(join(dir, 'real'), join(dir, 'link'))

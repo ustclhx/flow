@@ -8,7 +8,7 @@ import {
   TASK_STATUSES,
   type TaskStatus,
   taskView,
-} from '@flow/core'
+} from '@raindown/core'
 import { type LedgerStore, openLedger } from '../src/index.ts'
 import {
   contract,

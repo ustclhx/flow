@@ -49,7 +49,7 @@ describe('scanForSecrets', () => {
   })
 })
 
-describe('Flow 写入前扫描', () => {
+describe('Raindown 写入前扫描', () => {
   test('agent 在 journal 里粘贴了 key：写入被拒绝，错误只给位置和类型，不含原文', async () => {
     const home = await initTempHome()
     const brain = join(home, 'brain')

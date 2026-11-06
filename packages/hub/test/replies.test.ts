@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDatabase } from '@flow/core'
+import { openDatabase } from '@raindown/core'
 import {
   createNodeProtocol,
   createTaskService,
@@ -562,9 +562,9 @@ describe('回复卡住的任务（task-interaction）', () => {
 
 describe('旧账本迁移', () => {
   test('缺少 resume_json 列的旧库打开时补列', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'flow-ledger-migrate-'))
+    const dir = mkdtempSync(join(tmpdir(), 'raindown-ledger-migrate-'))
     try {
-      const path = join(dir, 'flow.db')
+      const path = join(dir, 'raindown.db')
       const db = await openDatabase(path)
       // 旧版 DDL：去掉 resume_json（以及 ④ 的 origin、branch、worktree）列与 replies 表。
       db.exec(

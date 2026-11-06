@@ -6,7 +6,7 @@ import {
   inboxListData,
   inboxListQuery,
   ok,
-} from '@flow/core'
+} from '@raindown/core'
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import { actOnInbox, type InboxActionDeps } from './actions.ts'

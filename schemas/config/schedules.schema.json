@@ -1,5 +1,5 @@
 {
-  "$id": "https://flow.local/schemas/config/schedules.schema.json",
+  "$id": "https://raindown.local/schemas/config/schedules.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "array",
   "items": {
@@ -39,6 +39,6 @@
     ],
     "additionalProperties": false
   },
-  "title": "Flow schedules config",
+  "title": "Raindown schedules config",
   "description": "config/schedules.yaml：定时规则数组"
 }

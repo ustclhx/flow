@@ -70,5 +70,5 @@ test('存在格式错误的条目时拒绝生成目标', async () => {
   writeEntry(home, 'notes/bad', { type: 'note' })
   const result = await loadSyncTargets(home)
   expect(result.ok).toBe(false)
-  if (!result.ok) expect(result.error.code).toBe('invalid_flow_home')
+  if (!result.ok) expect(result.error.code).toBe('invalid_raindown_home')
 })

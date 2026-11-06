@@ -357,7 +357,7 @@ export const eventPayloads = {
     extended_leases: z.number().int().min(0),
   }),
   'hub.backup_done': z.strictObject({
-    path: z.string().min(1).meta({ description: '备份文件路径（相对 flow-home）' }),
+    path: z.string().min(1).meta({ description: '备份文件路径（相对 raindown-home）' }),
     size_bytes: z.number().int().min(0),
     duration_ms: z.number().int().min(0),
     removed: z.array(z.string()).default([]).meta({ description: '按保留份数删除的旧备份' }),
@@ -425,7 +425,7 @@ export const eventPayloads = {
    * - `op: update`：条目关闭后消息已改为"已处理"，`item_ids` 是这次同步了关闭状态的条目；
    * - `op: failed`：放弃推送（消息级失败连续 5 次、永久错误或超时 3 次），`reason` 说明原因。
    *   没有 `ref` 时是发送失败（这些条目不再推送到该渠道）；有 `ref` 时是该消息的"已处理"同步失败。
-   *   投影把它视为已处理，条目视图与 `flow hub status` 中标出"推送失败"。
+   *   投影把它视为已处理，条目视图与 `raindown hub status` 中标出"推送失败"。
    * 投影维护 `pushed_at`、`channels`（channel_refs_json）与 `channel_messages`，可重建。
    * 条目关闭后仍可写入（推送与关闭可能交错）。
    */
@@ -465,7 +465,7 @@ export const eventPayloads = {
     to_chat: chatDigestSchema.meta({ description: '新 chat id 的摘要' }),
     via: inboxVia,
   }),
-  /** 渠道解除绑定（`flow telegram unlink`）。 */
+  /** 渠道解除绑定（`raindown telegram unlink`）。 */
   'channel.unlinked': z.strictObject({
     channel: channelId,
     chat: chatDigestSchema.meta({ description: '解除绑定的 chat id 的摘要' }),
@@ -496,7 +496,7 @@ export const eventPayloads = {
     text: z.string().min(1).max(INBOX_BODY_MAX).meta({ description: '答复原文或所选选项' }),
     via: inboxVia.optional(),
   }),
-  /** 用户手动放行一条普通唤醒队列（`flow supervisor wake <ws> --release <queue>`，D3）。 */
+  /** 用户手动放行一条普通唤醒队列（`raindown supervisor wake <ws> --release <queue>`，D3）。 */
   'supervisor.release': z.strictObject({ queue: supervisorQueue }),
   /**
    * 中枢丢弃一条普通唤醒队列中的积压（G10 审查）：该 workspace 稳定地不可唤醒（未启用、global、
@@ -686,7 +686,7 @@ export const ledgerEvent = z
       ...(typeof eventVariants)[number][],
     ],
   )
-  .meta({ title: 'Flow ledger event', description: '账本事件；按 type 区分载荷' })
+  .meta({ title: 'Raindown ledger event', description: '账本事件；按 type 区分载荷' })
 
 /** 待写入的事件：没有 seq 与 ts，由中枢写入时分配。 */
 export const ledgerEventDraft = z
@@ -697,7 +697,7 @@ export const ledgerEventDraft = z
       ...(typeof draftVariants)[number][],
     ],
   )
-  .meta({ title: 'Flow ledger event draft' })
+  .meta({ title: 'Raindown ledger event draft' })
 
 /** 单个类型的事件 schema（含信封），用于导出 `schemas/events/<type>.schema.json`。 */
 export const eventSchemas = Object.fromEntries(

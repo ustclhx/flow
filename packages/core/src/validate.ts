@@ -1,5 +1,5 @@
 import { readBrainEntries, reservedNameVariants } from './entries.ts'
-import { flowPaths } from './home.ts'
+import { raindownPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import { isCalendarDate, WS_REF_RE } from './schema/common.ts'
 import { entrySchemas, isEntryType, isFactType, isResourceType } from './schema/entries.ts'
@@ -52,7 +52,7 @@ const WORKSPACE_FIELDS = ['workspace'] as const
 
 /**
  * 单个条目 frontmatter 的错误级检查：type、schema 必填字段、owner 与 workspace 引用。
- * `flow kb validate` 与统一写入路径共用这一套规则，保证两边判断一致。
+ * `raindown kb validate` 与统一写入路径共用这一套规则，保证两边判断一致。
  */
 export function checkEntryFrontmatter(
   fm: Record<string, unknown>,
@@ -119,7 +119,7 @@ export async function validateBrain(
   const warnings: ValidationIssue[] = [...wsResult.data.warnings]
   const stale: VerificationItem[] = []
   const neverVerified: VerificationItem[] = []
-  for (const name of await reservedNameVariants(flowPaths(home).brain)) {
+  for (const name of await reservedNameVariants(raindownPaths(home).brain)) {
     warnings.push({
       file: `brain/${name}`,
       code: 'reserved_name_variant',

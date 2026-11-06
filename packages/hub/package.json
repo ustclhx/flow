@@ -1,5 +1,5 @@
 {
-  "name": "@flow/hub",
+  "name": "@raindown/hub",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@flow/core": "workspace:*",
+    "@raindown/core": "workspace:*",
     "@hono/node-server": "^2.1.5",
     "croner": "^10.0.1",
     "hono": "^4.13.13",

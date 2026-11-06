@@ -8,7 +8,7 @@ import {
   redactSecrets,
   registerNodeData,
   renewLeaseData,
-} from '@flow/core'
+} from '@raindown/core'
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import type { NodeService } from './service.ts'

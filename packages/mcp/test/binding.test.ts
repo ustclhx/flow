@@ -2,12 +2,12 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { join } from 'node:path'
-import { flowPaths, operations } from '@flow/core'
-import { createFlowMcpServer, FlowMcpConfigError, resolveMcpBinding } from '../src/index.ts'
+import { operations, raindownPaths } from '@raindown/core'
+import { createRaindownMcpServer, RaindownMcpConfigError, resolveMcpBinding } from '../src/index.ts'
 import { callJson, connect, initTempHome } from './helpers.ts'
 
 /**
- * add-m1-supervisor 4.1：`flow mcp --workspace --task` 会话绑定（knowledge-access "MCP 会话按 workspace 绑定"）。
+ * add-m1-supervisor 4.1：`raindown mcp --workspace --task` 会话绑定（knowledge-access "MCP 会话按 workspace 绑定"）。
  * 经中枢的请求发往一个本地的记录服务器（不是真实中枢），只检查 MCP 发出的请求体。
  */
 
@@ -17,7 +17,7 @@ afterEach(async () => {
 })
 
 async function home() {
-  const h = await initTempHome('flow-mcp-binding-')
+  const h = await initTempHome('raindown-mcp-binding-')
   cleanups.push(() => rmSync(join(h, '..'), { recursive: true, force: true }))
   return h
 }
@@ -45,7 +45,7 @@ async function recordingHub(h: string) {
   })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
   const port = (server.address() as { port: number }).port
-  const paths = flowPaths(h)
+  const paths = raindownPaths(h)
   writeFileSync(paths.hubConfig, `port: ${port}\n`)
   mkdirSync(paths.state, { recursive: true })
   writeFileSync(paths.hubToken, `${'t'.repeat(43)}\n`)
@@ -87,9 +87,9 @@ describe('绑定参数', () => {
       expect(r.ok).toBe(false)
       if (!r.ok) expect(r.error).toMatchObject({ kind: 'usage', code: 'invalid_binding' })
     }
-    expect(() => createFlowMcpServer({ actor: 'supervisor', binding: { task: 't-1' } })).toThrow(
-      FlowMcpConfigError,
-    )
+    expect(() =>
+      createRaindownMcpServer({ actor: 'supervisor', binding: { task: 't-1' } }),
+    ).toThrow(RaindownMcpConfigError)
   })
 })
 
@@ -268,16 +268,19 @@ describe('reply 唤醒（--reply-only）', () => {
   })
 })
 
-describe('FLOW_HUB_TOKEN_FILE（add-m1-supervisor D6）', () => {
-  test('优先于 FLOW_HUB_TOKEN 与 state/hub.token；文件不存在时失败，不回退到 user token', async () => {
+describe('RAINDOWN_HUB_TOKEN_FILE（add-m1-supervisor D6）', () => {
+  test('优先于 RAINDOWN_HUB_TOKEN 与 state/hub.token；文件不存在时失败，不回退到 user token', async () => {
     const h = await home()
     const requests = await recordingHub(h)
     const file = join(h, '..', 'wake.token')
     writeFileSync(file, `${'f'.repeat(43)}\n`, { mode: 0o600 })
-    const saved = { file: process.env.FLOW_HUB_TOKEN_FILE, token: process.env.FLOW_HUB_TOKEN }
+    const saved = {
+      file: process.env.RAINDOWN_HUB_TOKEN_FILE,
+      token: process.env.RAINDOWN_HUB_TOKEN,
+    }
     try {
-      process.env.FLOW_HUB_TOKEN_FILE = file
-      process.env.FLOW_HUB_TOKEN = 'e'.repeat(43)
+      process.env.RAINDOWN_HUB_TOKEN_FILE = file
+      process.env.RAINDOWN_HUB_TOKEN = 'e'.repeat(43)
       const client = await connect({ actor: 'supervisor', home: h })
       await callJson(client, 'task_create', contract())
       expect(requests.at(-1)?.auth).toBe(`Bearer ${'f'.repeat(43)}`)
@@ -287,8 +290,8 @@ describe('FLOW_HUB_TOKEN_FILE（add-m1-supervisor D6）', () => {
       expect(requests).toHaveLength(1)
     } finally {
       for (const [k, v] of [
-        ['FLOW_HUB_TOKEN_FILE', saved.file],
-        ['FLOW_HUB_TOKEN', saved.token],
+        ['RAINDOWN_HUB_TOKEN_FILE', saved.file],
+        ['RAINDOWN_HUB_TOKEN', saved.token],
       ] as const) {
         if (v === undefined) delete process.env[k]
         else process.env[k] = v

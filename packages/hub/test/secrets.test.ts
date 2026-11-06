@@ -5,17 +5,18 @@ import { dirname, join } from 'node:path'
 import {
   ACTIVITY_TEXT_MAX,
   execCommand,
-  flowPaths,
   HubClient,
-  initFlowHome,
+  initRaindownHome,
   initSecrets,
   ok,
+  raindownPaths,
+  readRaindownEnv,
   redactSecrets,
   registerKnownSecrets,
   sanitizeMessage,
   sanitizeTail,
   setSecret,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   createHubSecrets,
   type HubLogger,
@@ -31,7 +32,7 @@ import {
 // 测试里不写像真密钥的字面量：运行时拼接出形似 Telegram bot token 的值。
 const fakeBotToken = () => `${'7'.repeat(10)}:${['AAH', 'not', 'real', 'x'.repeat(24)].join('')}`
 const LABEL = '[secret:telegram/bot-token]'
-const flowToken = `fht_${'Q'.repeat(43)}`
+const raindownToken = `fht_${'Q'.repeat(43)}`
 const ghToken = `ghp_${'R1'.repeat(18)}`
 
 const roots: string[] = []
@@ -43,10 +44,10 @@ afterEach(async () => {
 })
 
 async function setupHome(): Promise<string> {
-  const root = mkdtempSync(join(tmpdir(), 'flow-hub-secrets-'))
+  const root = mkdtempSync(join(tmpdir(), 'raindown-hub-secrets-'))
   roots.push(root)
   const home = join(root, 'home')
-  const init = await initFlowHome(home)
+  const init = await initRaindownHome(home)
   if (!init.ok) throw new Error(init.error.message)
   mkdirSync(join(home, 'config', 'workspaces'), { recursive: true })
   writeFileSync(
@@ -58,10 +59,10 @@ async function setupHome(): Promise<string> {
 
 /** 只需要文件存在：真正的解密由注入的 load 完成。 */
 const fakeEncrypted = (home: string) =>
-  writeFileSync(join(flowPaths(home).config, 'secrets.sops.yaml'), 'sops: {}\n')
+  writeFileSync(join(raindownPaths(home).config, 'secrets.sops.yaml'), 'sops: {}\n')
 const channels = (home: string) =>
   writeFileSync(
-    join(flowPaths(home).config, 'channels.yaml'),
+    join(raindownPaths(home).config, 'channels.yaml'),
     'telegram:\n  enabled: true\n  bot_token: secret://telegram/bot-token\n',
   )
 
@@ -209,7 +210,7 @@ describe('secret:// 解析', () => {
 })
 
 describe('中枢集成', () => {
-  test('flow hub status 报告缺少的密钥路径，其余功能照常', async () => {
+  test('raindown hub status 报告缺少的密钥路径，其余功能照常', async () => {
     const home = await setupHome()
     fakeEncrypted(home)
     channels(home)
@@ -251,14 +252,14 @@ describe('中枢集成', () => {
     })
     if (!started.ok) throw new Error(started.error.message)
     hub = started.data
-    const token = readFileSync(flowPaths(home).hubToken, 'utf8').trim()
+    const token = readFileSync(raindownPaths(home).hubToken, 'utf8').trim()
     // 本机节点：user token、不声明身份。
     const call = async (path: string, body?: unknown, actor = '') => {
       const res = await fetch(`${hub?.url}${path}`, {
         method: body === undefined ? 'GET' : 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          ...(actor ? { 'X-Flow-Actor': actor } : {}),
+          ...(actor ? { 'X-Raindown-Actor': actor } : {}),
           'Content-Type': 'application/json',
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -270,7 +271,7 @@ describe('中枢集成', () => {
       }
     }
     // 合同中出现高置信度的疑似密钥：拒绝创建（secret_suspected），不悄悄改写，信息里不带值。
-    for (const leaked of [ghToken, flowToken]) {
+    for (const leaked of [ghToken, raindownToken]) {
       const rejected = await call(
         '/v1/tasks',
         { goal: `推送 ${leaked}`, workspace: 'ws/demo', role: 'dev', executor: 'fake' },
@@ -307,7 +308,7 @@ describe('中枢集成', () => {
       lease_token,
       activity: [
         { ts, kind: 'output', text: `bot token: ${value}` },
-        { ts, kind: 'output', text: `push with ${ghToken} and ${flowToken}` },
+        { ts, kind: 'output', text: `push with ${ghToken} and ${raindownToken}` },
         { ts, kind: 'output', text: `${'y'.repeat(10_000)}${ghToken}` },
       ],
     })
@@ -330,13 +331,13 @@ describe('中枢集成', () => {
     await hub.stop()
     hub = undefined
 
-    const ledger = await openLedger(flowPaths(home).ledgerDb)
+    const ledger = await openLedger(raindownPaths(home).ledgerDb)
     try {
       const events = ledger.eventsAfter(0)
       const all = JSON.stringify(events)
       expect(all).not.toContain(value)
       expect(all).not.toContain(ghToken)
-      expect(all).not.toContain(flowToken)
+      expect(all).not.toContain(raindownToken)
       const blocked = events.find((e) => e.type === 'task.blocked')
       expect(blocked?.payload).toMatchObject({
         message: `卡住了 ${LABEL}`,
@@ -355,7 +356,7 @@ describe('中枢集成', () => {
       const activity = ledger.taskActivity(task?.task_id as string)
       expect(activity.map((a) => a.text).slice(0, 2)).toEqual([
         `bot token: ${LABEL}`,
-        'push with [REDACTED:github-token] and [REDACTED:flow-hub-token]',
+        'push with [REDACTED:github-token] and [REDACTED:raindown-hub-token]',
       ])
       // 活动文本限长到 ACTIVITY_TEXT_MAX，截断后的部分不会入账。
       expect(activity[2]?.text?.length).toBe(ACTIVITY_TEXT_MAX)
@@ -369,7 +370,7 @@ describe('中枢集成', () => {
 
 // 真实 sops：本机未安装时跳过，CI（已安装 sops/age）中必须运行。
 const hasSops = (await execCommand('sops', ['--version'])).code === 0
-if (process.env.FLOW_REQUIRE_SOPS_TESTS === '1' && !hasSops)
+if (readRaindownEnv('RAINDOWN_REQUIRE_SOPS_TESTS') === '1' && !hasSops)
   throw new Error('CI 必须安装 sops 并运行真实密钥测试')
 
 describe('真实 sops + age', () => {
@@ -383,10 +384,10 @@ describe('真实 sops + age', () => {
       const value = fakeBotToken()
       expect((await setSecret(home, 'telegram/bot-token', value, opts)).ok).toBe(true)
       writeFileSync(
-        join(flowPaths(home).config, 'channels.yaml'),
+        join(raindownPaths(home).config, 'channels.yaml'),
         'telegram:\n  bot_token: secret://telegram/bot-token\nother: secret://not/set\n',
       )
-      const { loadSecrets } = await import('@flow/core')
+      const { loadSecrets } = await import('@raindown/core')
       const secrets = createHubSecrets({ home, load: (h) => loadSecrets(h, opts) })
       expect(await secrets.reload()).toEqual({
         loaded: 1,

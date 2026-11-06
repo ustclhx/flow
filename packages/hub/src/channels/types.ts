@@ -6,7 +6,7 @@ import type {
   InboxSource,
   InboxVia,
   Result,
-} from '@flow/core'
+} from '@raindown/core'
 
 /**
  * 推送渠道插件接口（notify-channel "渠道插件接口"；add-m1-inbox 4.1）。
@@ -118,7 +118,7 @@ export interface ChannelPlugin {
   /**
    * 可选：插件自己报告的健康状况。`disabled` 非空时（例如 Telegram 返回 401，token 无效），
    * 管理器不再调用该插件、状态报告为 `disabled` 并附上原因；密钥变化（`refresh()`）后重新创建插件。
-   * `ignored` 是被忽略的入站访问次数（例如陌生 chat 的消息），在 `flow hub status` 中报告。
+   * `ignored` 是被忽略的入站访问次数（例如陌生 chat 的消息），在 `raindown hub status` 中报告。
    */
   health?(): ChannelHealth
 }
@@ -134,7 +134,7 @@ export interface ChannelHealth {
 
 /**
  * 渠道的注册项。`config` 中可以有 `secret://` 引用：管理器先解析，缺少密钥时该渠道不启动，
- * 在 `flow hub status` 中报告缺少的路径（secret-provider "token 未配置"）。
+ * 在 `raindown hub status` 中报告缺少的路径（secret-provider "token 未配置"）。
  */
 export interface ChannelSpec<C = unknown> {
   id: string
@@ -150,7 +150,7 @@ export type InboxActFn = (
   via: InboxVia,
 ) => Promise<Result<unknown>>
 
-/** 渠道状态（`flow hub status`）。 */
+/** 渠道状态（`raindown hub status`）。 */
 export interface ChannelStatus {
   id: string
   /**

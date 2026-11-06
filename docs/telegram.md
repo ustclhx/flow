@@ -17,26 +17,26 @@ telegram:
 
 ## 绑定、改绑与解除绑定
 
-- `flow telegram link` 申请一次性绑定码（仅 user）：约 79 位随机，10 分钟内有效，只能用一次，中枢内存里只存摘要。
+- `raindown telegram link` 申请一次性绑定码（仅 user）：约 79 位随机，10 分钟内有效，只能用一次，中枢内存里只存摘要。
   把 `/link <码>` 发给 bot，或打开输出里的 t.me 链接。
 - 绑定码按 chat 限流：同一个 chat 每分钟最多 5 次错误尝试，超出后忽略该 chat 10 分钟。一个 chat 刷错误码
   不影响别的 chat，也不会清掉已发出的码；格式不合法的码（例如路人点开旧链接）不计数，直接忽略。
-- **已绑定时**，`flow telegram link` 必须加 `--rebind` 才会发码。改绑兑换成功后：
-  1. 先给原 chat 发通知："渠道已改绑到另一个 Telegram 账号，若非本人操作请立即运行 `flow telegram unlink`
+- **已绑定时**，`raindown telegram link` 必须加 `--rebind` 才会发码。改绑兑换成功后：
+  1. 先给原 chat 发通知："渠道已改绑到另一个 Telegram 账号，若非本人操作请立即运行 `raindown telegram unlink`
      并吊销 bot token"；
   2. 再切换绑定；
   3. 写一条账本事件 `channel.rebound`（actor `user`，via `telegram`），只记旧、新 chat id 的摘要，不记明文 id；
-     `flow hub status` 显示最近一次改绑的时间。
-- `flow telegram unlink`（仅 user）删除 `chat_id` 与 `user_id` 并提交，立即生效，并写 `channel.unlinked`。
+     `raindown hub status` 显示最近一次改绑的时间。
+- `raindown telegram unlink`（仅 user）删除 `chat_id` 与 `user_id` 并提交，立即生效，并写 `channel.unlinked`。
 - 绑定后，只处理该**私聊**里该**用户**的消息和按钮；其他 chat、群聊、from.id 不符、bot 账号一律忽略
   （不回复），只计数并记日志。
 
 ### 已知边界：本机进程都能申请改绑码
 
 `/v1/telegram/link-code` 与 `/v1/telegram/unlink` 只接受 user 身份，用 user token 降级声明的 AI 身份
-（`X-Flow-Actor`）返回 `user_only`。但本机上能读 `state/hub.token` 的进程（包括 worker）都能以 user 身份
+（`X-Raindown-Actor`）返回 `user_only`。但本机上能读 `state/hub.token` 的进程（包括 worker）都能以 user 身份
 申请改绑码（见 `docs/hub-auth.md` 的信任边界）。所以改绑**一定**先通知原 chat：收到不是自己发起的改绑通知时，
-立即运行 `flow telegram unlink`，并按下一节处理。
+立即运行 `raindown telegram unlink`，并按下一节处理。
 
 ## bot token 泄露
 
@@ -46,10 +46,10 @@ telegram:
   而按钮点下去仍然执行原来的操作；
 - **劫持送达**：自己调用 getUpdates 或设置 webhook，抢走你的回复和按钮点击，或者冒充 bot 给你发消息。
 
-所以一旦怀疑泄露，必须**立即在 @BotFather 吊销 token**（`/revoke`），再用 `flow secrets set telegram/bot-token`
+所以一旦怀疑泄露，必须**立即在 @BotFather 吊销 token**（`/revoke`），再用 `raindown secrets set telegram/bot-token`
 换上新的。
 
-中枢会报告泄露的迹象（`flow hub status` 中 telegram 渠道的 ⚠ 警告），但只告警，不会自动删除 webhook：
+中枢会报告泄露的迹象（`raindown hub status` 中 telegram 渠道的 ⚠ 警告），但只告警，不会自动删除 webhook：
 
 - getUpdates 返回 409，并区分两种情况：另一个程序也在用这个 token 轮询；或 bot 被设置了 webhook；
 - 启动时 getWebhookInfo 发现 bot 设置了 webhook。

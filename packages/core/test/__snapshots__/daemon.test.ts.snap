@@ -6,7 +6,7 @@ exports[`plist 两个服务的 plist 快照包含启动、重启、环境和日�
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.flow.hub</string>
+  <string>dev.raindown.hub</string>
   <key>ProgramArguments</key>
   <array>
     <string>/opt/bun</string>
@@ -22,15 +22,15 @@ exports[`plist 两个服务的 plist 快照包含启动、重启、环境和日�
   <integer>5</integer>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>FLOW_HOME</key>
-    <string>/flow</string>
+    <key>RAINDOWN_HOME</key>
+    <string>/raindown</string>
     <key>PATH</key>
     <string>/opt:/usr/bin</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>/flow/state/logs/hub.log</string>
+  <string>/raindown/state/logs/hub.log</string>
   <key>StandardErrorPath</key>
-  <string>/flow/state/logs/hub.log</string>
+  <string>/raindown/state/logs/hub.log</string>
 </dict>
 </plist>
 "
@@ -42,7 +42,7 @@ exports[`plist 两个服务的 plist 快照包含启动、重启、环境和日�
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.flow.node</string>
+  <string>dev.raindown.node</string>
   <key>ProgramArguments</key>
   <array>
     <string>/opt/bun</string>
@@ -58,15 +58,15 @@ exports[`plist 两个服务的 plist 快照包含启动、重启、环境和日�
   <integer>5</integer>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>FLOW_HOME</key>
-    <string>/flow</string>
+    <key>RAINDOWN_HOME</key>
+    <string>/raindown</string>
     <key>PATH</key>
     <string>/opt:/usr/bin</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>/flow/state/logs/node.log</string>
+  <string>/raindown/state/logs/node.log</string>
   <key>StandardErrorPath</key>
-  <string>/flow/state/logs/node.log</string>
+  <string>/raindown/state/logs/node.log</string>
 </dict>
 </plist>
 "
@@ -93,7 +93,7 @@ exports[`plist XML 特殊字符在所有字符串中转义，路径解析仅解�
   <integer>5</integer>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>FLOW_HOME</key>
+    <key>RAINDOWN_HOME</key>
     <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>
     <key>PATH</key>
     <string>/a&amp;&lt;&gt;&quot;&apos;/&amp;lt;</string>

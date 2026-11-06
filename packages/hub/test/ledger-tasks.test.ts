@@ -13,7 +13,7 @@ import {
   rebuildData,
   showTaskData,
   taskContract,
-} from '@flow/core'
+} from '@raindown/core'
 import {
   createHubApp,
   createNodeProtocol,
@@ -52,7 +52,7 @@ async function setup() {
     roles: anyRole,
     newTaskId: () => `t-test-${++n}`,
   })
-  // 经过真实的鉴权中间件：身份由 user token 决定，X-Flow-Actor 只能降级。
+  // 经过真实的鉴权中间件：身份由 user token 决定，X-Raindown-Actor 只能降级。
   const app = createHubApp({
     token: testToken,
     mount: [{ path: '/', app: createTaskRoutes({ ledger: l.store, tasks }) }],
@@ -89,7 +89,9 @@ describe('generateTaskId', () => {
 describe('任务合同（POST /v1/tasks）', () => {
   test('创建：201，task.created 记录操作者，默认值已补齐', async () => {
     const { call, store } = await setup()
-    const res = await call('POST', '/v1/tasks', contractInput(), { 'X-Flow-Actor': 'agent:claude' })
+    const res = await call('POST', '/v1/tasks', contractInput(), {
+      'X-Raindown-Actor': 'agent:claude',
+    })
     expect(res.status).toBe(201)
     const { data } = okBody(createTaskData).parse(await res.json())
     expect(data.created).toBe(true)
@@ -103,11 +105,11 @@ describe('任务合同（POST /v1/tasks）', () => {
     expect(store.eventsAfter(0)).toMatchObject([{ type: 'task.created', actor: 'agent:claude' }])
   })
 
-  test('user token 不声明 X-Flow-Actor 时操作者为 user；格式不合法时 400', async () => {
+  test('user token 不声明 X-Raindown-Actor 时操作者为 user；格式不合法时 400', async () => {
     const { call } = await setup()
     const res = await call('POST', '/v1/tasks', contractInput())
     expect(okBody(createTaskData).parse(await res.json()).data.task.created_by).toBe('user')
-    const bad = await call('POST', '/v1/tasks', contractInput(), { 'X-Flow-Actor': 'a b' })
+    const bad = await call('POST', '/v1/tasks', contractInput(), { 'X-Raindown-Actor': 'a b' })
     expect(bad.status).toBe(400)
   })
 
@@ -161,8 +163,8 @@ describe('任务合同（POST /v1/tasks）', () => {
     }
   })
 
-  test('workspaceCheckFromHome：读取临时 flow-home 的 config/workspaces', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'flow-home-'))
+  test('workspaceCheckFromHome：读取临时 raindown-home 的 config/workspaces', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'raindown-home-'))
     cleanups.push(() => rmSync(home, { recursive: true, force: true }))
     const { mkdirSync, writeFileSync } = await import('node:fs')
     mkdirSync(join(home, 'config', 'workspaces'), { recursive: true })
@@ -290,7 +292,7 @@ describe('取消（POST /v1/tasks/:id/cancel）', () => {
       'POST',
       `/v1/tasks/${t.id}/cancel`,
       { reason: '不要了' },
-      { 'X-Flow-Actor': 'user' },
+      { 'X-Raindown-Actor': 'user' },
     )
     expect(res.status).toBe(200)
     const { data } = okBody(cancelTaskData).parse(await res.json())
@@ -311,7 +313,7 @@ describe('取消（POST /v1/tasks/:id/cancel）', () => {
     const { call, tasks, store } = await setup()
     const t = must(await tasks.createTask(contractInput(), { actor: 'user' })).task
     startTask(store, t.id)
-    const res = await call('POST', `/v1/tasks/${t.id}/cancel`, {}, { 'X-Flow-Actor': 'user' })
+    const res = await call('POST', `/v1/tasks/${t.id}/cancel`, {}, { 'X-Raindown-Actor': 'user' })
     const { data } = okBody(cancelTaskData).parse(await res.json())
     expect(data.task).toMatchObject({ status: 'running', cancel_requested: true })
     const seq = store.seq()
@@ -404,7 +406,7 @@ describe('POST /v1/hub/rebuild（投影可重建）', () => {
       }))
     const before = pick(must(tasks.listTasks()).tasks)
     const seq = store.seq()
-    const res = await call('POST', '/v1/hub/rebuild', undefined, { 'X-Flow-Actor': 'user' })
+    const res = await call('POST', '/v1/hub/rebuild', undefined, { 'X-Raindown-Actor': 'user' })
     expect(res.status).toBe(200)
     const { data } = okBody(rebuildData).parse(await res.json())
     expect(data).toMatchObject({ events_replayed: seq, ledger_seq: seq + 1 })

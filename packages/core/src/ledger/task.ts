@@ -652,7 +652,7 @@ export const taskContract = z
       })
     }
   })
-  .meta({ title: 'Flow task contract', description: '创建任务时提交的合同' })
+  .meta({ title: 'Raindown task contract', description: '创建任务时提交的合同' })
 
 /** 合同（已补默认值）。 */
 export type TaskContract = z.infer<typeof taskContract>
@@ -739,7 +739,7 @@ export const taskResult = z
       description: '审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信',
     }),
   })
-  .meta({ title: 'Flow task result', description: '任务结束（done / failed）时的结果' })
+  .meta({ title: 'Raindown task result', description: '任务结束（done / failed）时的结果' })
 export type TaskResult = z.infer<typeof taskResult>
 export type TaskResultInput = z.input<typeof taskResult>
 
@@ -850,5 +850,5 @@ export const taskView = z
       .nullable()
       .meta({ description: '最近一次活动（续约上报）时间；非事件派生，重建后为 null' }),
   })
-  .meta({ title: 'Flow task', description: '任务的当前状态（由事件投影得到）' })
+  .meta({ title: 'Raindown task', description: '任务的当前状态（由事件投影得到）' })
 export type TaskView = z.infer<typeof taskView>

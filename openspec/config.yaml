@@ -5,7 +5,7 @@ context: |
   All artifacts must be written in zh.
   Keep OpenSpec structural headings and SHALL/MUST keywords in English.
   产品需求来源是 docs/prd.md；MVP 范围与里程碑见 docs/prd.md §16。
-  平台代码（本仓库）与用户数据严格分离：用户数据位于 ~/flow-home（config/、brain/、raw/、state/），不进入本仓库。
+  平台代码（本仓库）与用户数据严格分离：用户数据位于 ~/raindown-home（config/、brain/、raw/、state/），不进入本仓库。
   单用户、不做多租户；以可开源、可被他人自行部署为设计约束。
 
 # Per-artifact rules (optional)

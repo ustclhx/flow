@@ -1,7 +1,7 @@
 # secret-hygiene Specification
 
 ## Purpose
-保证密钥不进入 Flow 管理的知识库、原始资料和配置仓库，并约定密钥引用的写法，为后续的密钥提供器打好基础。
+保证密钥不进入 Raindown 管理的知识库、原始资料和配置仓库，并约定密钥引用的写法，为后续的密钥提供器打好基础。
 
 ## Requirements
 
@@ -12,7 +12,7 @@
 - **WHEN** 用户在 brain 中写入一个 Stripe 密钥，然后执行 `git commit`
 - **THEN** 提交被阻止，输出指出该文件和行号
 
-### Requirement: Flow 写入前扫描
+### Requirement: Raindown 写入前扫描
 系统 SHALL 在任何写入（journal、随手记、提案、提案合入、runbook）落盘之前扫描待写内容；发现疑似密钥时 MUST 拒绝写入，并返回错误说明，错误信息 MUST NOT 回显密钥原文。
 
 #### Scenario: agent 在 journal 里粘贴了 key

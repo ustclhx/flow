@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { errorBody, healthData, okBody, VERSION } from '@flow/core'
+import { errorBody, healthData, okBody, VERSION } from '@raindown/core'
 import { createHubApp, serve } from '../src/index.ts'
 
 describe('GET /v1/health', () => {

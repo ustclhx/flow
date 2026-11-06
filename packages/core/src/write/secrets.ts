@@ -22,7 +22,7 @@ export interface SecretFinding {
 }
 
 export interface ScanOptions {
-  /** gitleaks 配置文件；不存在或省略时使用 Flow 的默认配置（放行 `secret://` 引用）。 */
+  /** gitleaks 配置文件；不存在或省略时使用 Raindown 的默认配置（放行 `secret://` 引用）。 */
   configPath?: string
   /** gitleaks 可执行文件，默认 `gitleaks`；测试中可指向不存在的路径。 */
   gitleaksBin?: string

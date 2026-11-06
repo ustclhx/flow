@@ -1,4 +1,4 @@
-import { redactSecrets } from '@flow/core'
+import { redactSecrets } from '@raindown/core'
 import type { StuckSnapshot, StuckVerdict } from '../executor.ts'
 
 /**
