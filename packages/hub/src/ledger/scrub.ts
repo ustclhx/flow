@@ -44,6 +44,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
     ['actions', '*', 'matched_rules', '*', 'rule', 'when', 'paths', '*'],
   ],
   'task.attempt_ended': [['last_report']],
+  'task.policy_changed': [['note']],
   'task.created': [
     ['mandate', 'matched_rules', '*', 'rule', 'when', 'command_prefix'],
     ['mandate', 'matched_rules', '*', 'rule', 'when', 'paths', '*'],
@@ -100,6 +101,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
  */
 export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string, number>>>> = {
   'task.attempt_ended': { last_report: 16_384 },
+  'task.policy_changed': { note: 2000 },
   'task.blocked': { diff_stat: DIFF_STAT_MAX, 'request.reason': 2000 },
   'task.reply_escalated': { note: 2000 },
   'task.replied': { reason: 2000 },

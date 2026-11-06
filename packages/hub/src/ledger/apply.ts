@@ -181,6 +181,13 @@ export function createApplier(db: Database): Applier {
         }
         setStatus(e, 'running', ', blocked_json = NULL')
         return
+      case 'task.reply_fetched':
+        stmt('UPDATE replies SET fetched_at = COALESCE(fetched_at, ?) WHERE id = ?').run(
+          e.ts,
+          e.payload.reply_id,
+        )
+        touchTask(e, '')
+        return
       case 'task.reply_dropped':
         stmt(`UPDATE replies SET state = 'dropped' WHERE id = ?`).run(e.payload.reply_id)
         return

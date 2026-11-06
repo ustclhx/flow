@@ -22,11 +22,23 @@
 是否仍启用、角色的 `creatable_by` 是否仍允许它，角色不存在返回 `role_missing`。
 hub 合并管线通过 mandate 的源唤醒追溯 supervisor，只重新检查启用状态；合并角色仍由 hub/user 创建。
 旧任务使用账本中的 `created_by`。
-授权来源与创建者分开：直接 supervisor 派生任务取唤醒的 `instruction/autonomous`，定时唤醒为 `schedule`；
-hub 审查/合并管线分别记 `pipeline:review`、`pipeline:merge`，接受提案仍保留提出草稿的唤醒与指令。
+授权来源 `mandate.origin` 与创建者、任务业务字段 `origin` 分开。中枢目前产生以下来源：
+
+- `user`：用户直接创建、接受提案，或用户指令触发的 supervisor 唤醒；
+- `supervisor:instruction`、`supervisor:autonomous`：supervisor 分别在指令、自主唤醒中直接创建任务；
+- `schedule`：定时事件触发的 supervisor 唤醒；
+- `pipeline:review`、`pipeline:merge`：hub 的审查、合并管线；
+- `supervisor`：其他内部事件触发的 supervisor 唤醒，包括代回复唤醒；
+- `hub`：没有指定管线来源的其他 hub 创建任务。
+
+其他 AI 身份创建任务时，来源保留该 actor 的原始字符串；字段保持开放字符串以兼容这些身份及旧账本，
+不把未知来源当作 supervisor 授权。已有任务的旧来源不改写。接受提案仍保留提出草稿的唤醒与指令；
+业务字段 `origin` 的 `instruction/autonomous` 取值与继承规则不变。
 任务创建在策略文件损坏时沿用原有创建权限检查，以最近有效快照或空规则记录 mandate；验收命令的策略拒绝语义不变。
 进行中的代批在策略变化、委托前与 `task_respond` 前重新判定；原命中规则删除或新规则不再允许 supervisor
-时转交用户，待送达的 supervisor 批准通过同一转交事件标记为丢弃。记录保留原决定/委托的 `policy_version`，
+时转交用户，尚未交付的 supervisor 批准通过同一转交事件标记为丢弃。续约首次下发回复前，
+`task.reply_fetched` 事件记录 `ReplyView.fetched_at`：已交付的批准不能撤回，未交付的批准可以撤回；
+迟到的 ack 只作为交付记录缺失时的兜底。记录保留原决定/委托的 `policy_version`，
 策略变化引起的转交另记 `to_version`。
 
 ```yaml

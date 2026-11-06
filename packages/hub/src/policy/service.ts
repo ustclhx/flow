@@ -118,6 +118,7 @@ export function createPolicyService(o: {
           const pending = ledger.pendingReply(task.id)
           const delegation = ledger.activeDelegation(task.id)
           const pendingApproval = pending?.by === 'supervisor' && pending.kind === 'approve'
+          let handoffNote: string | undefined
           let escalation: EventInput | undefined
           if (
             delegation?.kind === 'awaiting_approval' &&
@@ -129,6 +130,11 @@ export function createPolicyService(o: {
             if (decision?.type === 'policy.decided') {
               const authorization = approvalAuthorization(config.rules, task, decision)
               if (!authorization.allowed) {
+                const alreadyFetched = pendingApproval && pending.fetched_at != null
+                if (alreadyFetched)
+                  handoffNote =
+                    '批准在撤回生效前已交给节点，不能撤回；正在等待节点确认实际送达结果。'
+
                 for (const rule of [
                   ...decision.payload.matched_rules,
                   ...authorization.matched_rules,
@@ -151,8 +157,8 @@ export function createPolicyService(o: {
                     ...(version ? { policy_version: version } : {}),
                     to_version: config.version,
                     matched_rules: decision.payload.matched_rules,
-                    ...(pendingApproval ? { dropped_reply_id: pending.id } : {}),
-                    note: `当前策略已不再允许 supervisor 代批（策略变化 #${policySeq}）`,
+                    ...(pendingApproval && !alreadyFetched ? { dropped_reply_id: pending.id } : {}),
+                    note: `当前策略已不再允许 supervisor 代批（策略变化 #${policySeq}）${handoffNote ? `；${handoffNote}` : ''}`,
                   },
                 }
               }
@@ -164,7 +170,11 @@ export function createPolicyService(o: {
               type: 'task.policy_changed',
               task_id: task.id,
               workspace: task.workspace,
-              payload: { policy_seq: policySeq, rules: [...affected] },
+              payload: {
+                policy_seq: policySeq,
+                rules: [...affected],
+                ...(handoffNote ? { note: handoffNote } : {}),
+              },
             })
           if (escalation) drafts.push(escalation)
           for (const draft of drafts) {

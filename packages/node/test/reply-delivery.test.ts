@@ -1,5 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
-import { type DeliveredReply, NO_ADAPTER_CAPABILITIES, ok, type Result } from '@raindown/core'
+import {
+  type DeliveredReply,
+  NO_ADAPTER_CAPABILITIES,
+  ok,
+  type RenewLeaseData,
+  type Result,
+} from '@raindown/core'
 import { createInboxReactor } from '@raindown/hub'
 import {
   ActivityQueue,
@@ -20,6 +26,10 @@ afterEach(async () => {
 for (const outcome of ['dropped', 'delivered'] as const) {
   test(`${outcome}旧回执幂等返回blocked时保留当前卡住，用户回复仍可送达`, async () => {
     const activity = new ActivityQueue()
+    let completeInitialPrecheck: () => void = () => {}
+    const initialPrecheck = new Promise<void>((resolve) => {
+      completeInitialPrecheck = resolve
+    })
     const deliveries: string[] = []
     let finish: (result: Result<ExecutorOutcome>) => void = () => {}
     const done = new Promise<Result<ExecutorOutcome>>((resolve) => {
@@ -42,6 +52,7 @@ for (const outcome of ['dropped', 'delivered'] as const) {
               decision_id: verdict.decision_id,
             }),
           )
+          completeInitialPrecheck()
         })
         return {
           activity,
@@ -58,6 +69,7 @@ for (const outcome of ['dropped', 'delivered'] as const) {
       },
     }
     let acknowledgements = 0
+    let legacyReplyDelivered = false
     const blockReports: unknown[] = []
     const b = await bench(
       {
@@ -69,6 +81,33 @@ for (const outcome of ['dropped', 'delivered'] as const) {
         if (url.endsWith('/renew')) {
           const body = JSON.parse(String(init?.body))
           if (body.blocked) blockReports.push(body.blocked)
+          const pending = b.ledger.getReply('r-old')
+          if (outcome === 'dropped' && !legacyReplyDelivered && pending?.state === 'pending') {
+            // 模拟升级前的旧中枢交付：续约正常生效，但尚无 reply_fetched 事件。
+            // 之后恢复真实服务，验证升级后的中枢如何确认旧版在途回复。
+            const lease = b.ledger.getLease(url.split('/').at(-2) as string)
+            if (!lease) throw new Error('没有旧版交付对应的租约')
+            const block = b.events(lease.task_id).findLast((event) => event.type === 'task.blocked')
+            if (!block) throw new Error('没有旧版交付对应的授权卡住')
+            const expiresAt = new Date(b.clock.now() + lease.ttl_s * 1000).toISOString()
+            expect(b.ledger.renewLease(lease.lease_id, expiresAt)).toBe(true)
+            b.ledger.touchNode(lease.node_id)
+            b.ledger.recordActivity(lease.task_id, body.activity)
+            legacyReplyDelivered = true
+            const data: RenewLeaseData = {
+              lease_id: lease.lease_id,
+              expires_at: expiresAt,
+              cancel_requested: b.task(lease.task_id).cancel_requested,
+              reply: {
+                reply_id: pending.id,
+                block_seq: block.seq,
+                kind: pending.kind,
+                by: pending.by,
+                ...(pending.text === null ? {} : { text: pending.text }),
+              },
+            }
+            return new Response(JSON.stringify(ok(data)))
+          }
         }
         if (!url.endsWith('/ack-reply')) return undefined
         acknowledgements++
@@ -94,6 +133,8 @@ for (const outcome of ['dropped', 'delivered'] as const) {
     )
     current = b
     const id = await b.create({ executor: 'probe' })
+    // 策略读取使用真实 I/O；先等预检完成，避免虚拟时钟触发 5 秒超时。
+    await initialPrecheck
     await b.until(id, (task) => task.status === 'blocked')
     const block = b.events(id).find((event) => event.type === 'task.blocked')
     if (block?.type !== 'task.blocked') throw new Error('没有授权卡住')
@@ -126,7 +167,9 @@ for (const outcome of ['dropped', 'delivered'] as const) {
     ).toBe(true)
     await b.until(id, () => deliveries.length === 1)
     if (outcome === 'dropped') {
-      // 批准已交给节点，但策略撤回先于节点的 request_changed 确认入账。
+      // 旧中枢交付没有 fetched 记录，升级后的策略撤回仍早于旧 request_changed 回执。
+      expect(legacyReplyDelivered).toBe(true)
+      expect(b.ledger.getReply('r-old')?.fetched_at).toBeUndefined()
       expect(
         b.ledger.append(
           {

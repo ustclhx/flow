@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -10,7 +11,7 @@ import {
   type TaskStatus,
 } from '@raindown/core'
 import { stringify } from 'yaml'
-import { createInboxReactor, type LedgerStore } from '../src/index.ts'
+import { createInboxReactor, createNodeService, type LedgerStore } from '../src/index.ts'
 import { auditRules, createPolicyService, type PolicyService } from '../src/policy/service.ts'
 import { drafts, must, startTask, sys, tempLedger, WS } from './ledger-helpers.ts'
 import { FakeClock } from './server-fixtures.ts'
@@ -87,6 +88,7 @@ function createTask(
   id: string,
   status: TaskStatus,
   matchedRules: IndexedPolicyRule[] = [rule],
+  leaseToken?: string,
 ) {
   const d = drafts(id)
   must(
@@ -107,7 +109,24 @@ function createTask(
     ),
   )
   if (status === 'queued') return
-  startTask(store, id)
+  if (leaseToken) {
+    must(
+      store.appendMany(
+        [
+          d['task.started'],
+          {
+            ...d['lease.granted'],
+            payload: {
+              ...d['lease.granted'].payload,
+              token_sha256: createHash('sha256').update(leaseToken).digest('hex'),
+              expires_at: '2026-11-06T01:00:00.000Z',
+            },
+          },
+        ],
+        sys,
+      ),
+    )
+  } else startTask(store, id)
   if (status === 'blocked') must(store.append(d['task.blocked'], { actor: 'node:n1' }))
   if (status === 'verifying') must(store.append(d['task.verifying'], { actor: 'node:n1' }))
   if (status === 'done') must(store.append(d['task.done'], { actor: 'node:n1' }))
@@ -442,8 +461,8 @@ test('审查7：恢复只读取最近策略启动基线之后的策略变化，�
   )
 })
 
-function delegateApproval(store: LedgerStore, id: string, version: string) {
-  createTask(store, id, 'running', [])
+function delegateApproval(store: LedgerStore, id: string, version: string, leaseToken?: string) {
+  createTask(store, id, 'running', [], leaseToken)
   const base = { task_id: id, workspace: WS }
   const decision = must(
     store.append(
@@ -557,4 +576,227 @@ test('审查3：待送达的supervisor批准因规则删除或新增限制被撤
       },
     })
   }
+})
+
+async function pendingApproval(id: string) {
+  const context = await setup()
+  const { store, service, clock } = context
+  must(await service.load())
+  const token = 'test-policy-approval-lease-token-0001'
+  const base = delegateApproval(store, id, service.version(), token)
+  const replyId = `r-${id}`
+  must(
+    store.append(
+      {
+        type: 'task.replied',
+        task_id: id,
+        workspace: WS,
+        payload: {
+          reply_id: replyId,
+          kind: 'approve',
+          via: 'supervisor',
+          reason: '批准测试',
+          policy_version: service.version(),
+        },
+      },
+      { actor: 'supervisor' },
+    ),
+  )
+  const nodes = (ledger: LedgerStore = store) => {
+    const node = createNodeService({ ledger, clock, leaseTtlS: 60, leaseWaitMaxS: 0 })
+    cleanups.push(() => node.close())
+    return node
+  }
+  return {
+    ...context,
+    ...base,
+    replyId,
+    nodes,
+    leaseId: `l-${id}-1`,
+    leaseToken: token,
+  }
+}
+
+test('批准经续约交给节点后持久记录交付边界，策略撤回保留pending且送达确认可恢复运行', async () => {
+  const c = await pendingApproval('t-fetched')
+  const node = c.nodes()
+  const reactor = createInboxReactor({ ledger: c.store })
+  reactor.start()
+  cleanups.push(() => reactor.stop())
+  const renew = () => must(node.renew(c.leaseId, { lease_token: c.leaseToken }))
+  expect(renew().reply).toMatchObject({ reply_id: c.replyId, block_seq: c.block_seq })
+  expect(renew().reply?.reply_id).toBe(c.replyId)
+  const fetched = c.store
+    .taskEvents(c.task_id)
+    .filter((event) => event.type === 'task.reply_fetched')
+  expect(fetched).toHaveLength(1)
+  expect(fetched[0]).toMatchObject({
+    actor: 'hub',
+    payload: { reply_id: c.replyId, lease_id: c.leaseId },
+  })
+  expect(c.store.getReply(c.replyId)).toMatchObject({
+    state: 'pending',
+    fetched_at: fetched[0]?.ts,
+  })
+  must(c.store.rebuild())
+  expect(c.store.getReply(c.replyId)).toMatchObject({ fetched_at: fetched[0]?.ts })
+  expect(renew().reply?.reply_id).toBe(c.replyId)
+  expect(
+    c.store.taskEvents(c.task_id).filter((event) => event.type === 'task.reply_fetched'),
+  ).toHaveLength(1)
+
+  c.write([])
+  must(await c.service.load())
+  await reactor.idle()
+  expect(c.store.getReply(c.replyId)?.state).toBe('pending')
+  expect(c.store.pendingReply(c.task_id)?.id).toBe(c.replyId)
+  expect(c.store.activeDelegation(c.task_id)).toBeNull()
+  const taskEvents = c.store.taskEvents(c.task_id)
+  expect(taskEvents.findLast((event) => event.type === 'task.policy_changed')).toMatchObject({
+    payload: { note: expect.stringContaining('批准在撤回生效前已交给节点') },
+  })
+  const escalation = taskEvents.findLast((event) => event.type === 'task.reply_escalated')
+  expect(escalation).toMatchObject({
+    payload: {
+      reason: 'policy_changed',
+      note: expect.stringContaining('批准在撤回生效前已交给节点'),
+    },
+  })
+  expect(escalation?.payload).not.toHaveProperty('dropped_reply_id')
+  const notifications = c.store.listInboxItems({ state: 'open' })
+  expect(notifications.find((item) => item.source === 'policy')?.body).toContain(
+    '批准在撤回生效前已交给节点',
+  )
+  expect(c.store.getInboxItem(`blk.${c.block_seq}`)?.body).toContain('批准在撤回生效前已交给节点')
+  const delivered = must(
+    node.ackReply(c.leaseId, {
+      lease_token: c.leaseToken,
+      reply_id: c.replyId,
+      outcome: 'delivered',
+    }),
+  )
+  expect(delivered.task.status).toBe('running')
+  expect(c.store.getReply(c.replyId)?.state).toBe('delivered')
+  const seq = c.store.seq()
+  must(
+    node.ackReply(c.leaseId, {
+      lease_token: c.leaseToken,
+      reply_id: c.replyId,
+      outcome: 'delivered',
+    }),
+  )
+  expect(c.store.seq()).toBe(seq)
+})
+
+function legacyPolicyWithdraw(c: Awaited<ReturnType<typeof pendingApproval>>) {
+  const changed = must(
+    c.store.append(
+      {
+        type: 'policy.changed',
+        payload: {
+          from: c.service.version(),
+          to: policyVersion([]),
+          added: [],
+          removed: [policyRuleHash(rule)],
+        },
+      },
+      sys,
+    ),
+  )
+  must(
+    c.store.appendMany(
+      [
+        {
+          type: 'task.policy_changed',
+          task_id: c.task_id,
+          workspace: WS,
+          payload: { policy_seq: changed.seq, rules: [policyRuleHash(rule)] },
+        },
+        {
+          type: 'task.reply_escalated',
+          task_id: c.task_id,
+          workspace: WS,
+          payload: {
+            reason: 'policy_changed',
+            block_seq: c.block_seq,
+            dropped_reply_id: c.replyId,
+            policy_version: c.service.version(),
+            to_version: policyVersion([]),
+          },
+        },
+      ],
+      sys,
+    ),
+  )
+  expect(c.store.getReply(c.replyId)?.state).toBe('dropped')
+}
+
+test('旧版本策略撤回已丢弃批准时，当前回合的迟到delivered确认保留实际送达事实', async () => {
+  const c = await pendingApproval('t-legacy-delivered')
+  const node = c.nodes()
+  legacyPolicyWithdraw(c)
+  const delivered = must(
+    node.ackReply(c.leaseId, {
+      lease_token: c.leaseToken,
+      reply_id: c.replyId,
+      outcome: 'delivered',
+    }),
+  )
+  expect(delivered.task.status).toBe('running')
+  expect(c.store.getReply(c.replyId)?.state).toBe('delivered')
+  expect(c.store.taskEvents(c.task_id).at(-1)).toMatchObject({
+    type: 'task.unblocked',
+    payload: {
+      reply_id: c.replyId,
+      note: expect.stringContaining('批准在撤回生效前已交给节点'),
+    },
+  })
+})
+
+test('旧策略撤回批准的迟到delivered确认不能解锁后来的新blocked回合', async () => {
+  const c = await pendingApproval('t-legacy-stale-round')
+  const node = c.nodes()
+  legacyPolicyWithdraw(c)
+  must(node.renew(c.leaseId, { lease_token: c.leaseToken, resumed: {} }))
+  must(
+    node.renew(c.leaseId, {
+      lease_token: c.leaseToken,
+      blocked: { request_id: 'next-round', reason: 'awaiting_approval', message: '新的待批请求' },
+    }),
+  )
+  expect(
+    node.ackReply(c.leaseId, {
+      lease_token: c.leaseToken,
+      reply_id: c.replyId,
+      outcome: 'delivered',
+    }),
+  ).toMatchObject({ ok: false, error: { code: 'invalid_transition' } })
+  expect(c.store.getTask(c.task_id)).toMatchObject({
+    status: 'blocked',
+    blocked: { message: '新的待批请求' },
+  })
+  expect(c.store.getReply(c.replyId)?.state).toBe('dropped')
+})
+
+test('交付标记落账失败时续约不向节点回传批准，重试成功后才交付', async () => {
+  const c = await pendingApproval('t-fetch-write-failed')
+  let reject = true
+  const node = c.nodes({
+    ...c.store,
+    append(event, options) {
+      return reject && event.type === 'task.reply_fetched'
+        ? fail('failure', 'write_failed', '模拟交付标记失败')
+        : c.store.append(event, options)
+    },
+  })
+  expect(node.renew(c.leaseId, { lease_token: c.leaseToken })).toMatchObject({
+    ok: false,
+    error: { code: 'write_failed' },
+  })
+  expect(
+    c.store.taskEvents(c.task_id).filter((event) => event.type === 'task.reply_fetched'),
+  ).toHaveLength(0)
+  expect(c.store.getReply(c.replyId)?.state).toBe('pending')
+  reject = false
+  expect(must(node.renew(c.leaseId, { lease_token: c.leaseToken })).reply?.reply_id).toBe(c.replyId)
 })

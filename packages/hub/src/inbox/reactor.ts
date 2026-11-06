@@ -494,7 +494,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         source_seq: e.seq,
         title: clipText(`[${ws}] 任务授权策略已变化：${e.task_id}`, INBOX_TITLE_MAX),
         body: clipText(
-          `策略变化事件 #${e.payload.policy_seq}；任务 ${e.task_id} 依赖的规则已删除或修改：${e.payload.rules.join('、')}。任务继续保留。`,
+          `${e.payload.note ? `${e.payload.note}\n\n` : ''}策略变化事件 #${e.payload.policy_seq}；任务 ${e.task_id} 依赖的规则已删除或修改：${e.payload.rules.join('、')}。任务继续保留。`,
           INBOX_BODY_MAX,
         ),
       },

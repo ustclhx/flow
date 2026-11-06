@@ -656,7 +656,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         created_by: opts.actor,
         origin:
           opts.mandateOrigin ??
-          callerWake?.origin ??
+          (callerWake ? `supervisor:${callerWake.origin}` : undefined) ??
           (isHub && review !== undefined ? 'pipeline:review' : opts.actor),
         ...(provenanceWake ? { wake_task: provenanceWake.task_id } : {}),
         ...(instructionSeq === undefined ? {} : { instruction_seq: instructionSeq }),

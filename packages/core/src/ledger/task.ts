@@ -847,6 +847,10 @@ export const replyView = z
     by: z.string(),
     created_at: timestamp,
     state: replyState,
+    fetched_at: timestamp
+      .nullable()
+      .optional()
+      .meta({ description: '中枢首次交给持有租约的节点的时间' }),
     delivered_at: timestamp.nullable().meta({ description: '送达或随重新排队附上的时间' }),
   })
   .meta({ title: 'Task reply view' })

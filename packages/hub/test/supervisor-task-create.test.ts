@@ -717,7 +717,9 @@ describe('supervisor 建任务的检查（2.4，D5）', () => {
     const triage = await s.supCreate(a.token, { parent: a.id, role: 'triage' })
     expect(triage.code).toBe('ok')
     expect(triage.body.data?.task?.origin).toBe('autonomous')
-    expect(s.store.getTask(triage.body.data?.task?.id ?? '')?.mandate?.origin).toBe('autonomous')
+    expect(s.store.getTask(triage.body.data?.task?.id ?? '')?.mandate?.origin).toBe(
+      'supervisor:autonomous',
+    )
     // 默认 reviewer（无只读配置）是 write
     expect((await s.supCreate(a.token, { parent: a.id, role: 'reviewer' })).code).toBe(
       'proposal_required',
@@ -1398,7 +1400,7 @@ describe('创建时固化授权依据', () => {
     if (!task) throw new Error('任务投影不存在')
     expect(task.mandate).toMatchObject({
       created_by: 'supervisor',
-      origin: 'instruction',
+      origin: 'supervisor:instruction',
       wake_task: wake.id,
       instruction_seq: instruction.seq,
       policy_version: must(await loadPoliciesConfig(s.raindownHome)).version,

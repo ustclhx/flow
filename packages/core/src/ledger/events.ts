@@ -219,6 +219,7 @@ export const eventPayloads = {
   'task.policy_changed': z.strictObject({
     policy_seq: z.number().int().min(1),
     rules: z.array(policyRuleHashSchema),
+    note: z.string().max(2000).optional(),
   }),
   'task.started': z.strictObject({
     node_id: nodeId,
@@ -282,6 +283,7 @@ export const eventPayloads = {
       description: 'worker 自行恢复时尚未送达、因此被丢弃的回复（供收件箱通知回复者）',
     }),
   }),
+  'task.reply_fetched': z.strictObject({ reply_id: replyId, lease_id: leaseId }),
   'task.replied': z
     .strictObject({
       reply_id: replyId,
@@ -690,6 +692,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task.out_of_band': 'task',
   'task.unblocked': 'task',
   'task.replied': 'task',
+  'task.reply_fetched': 'task',
   'task.requeued_with_reply': 'task',
   'task.requeued': 'task',
   'task.cancel_requested': 'task',
@@ -860,6 +863,7 @@ export const TASK_EVENT_RULES: Readonly<
   },
   'task.unblocked': { from: ['blocked'], to: 'running' },
   'task.replied': { from: ['blocked'], to: 'unchanged' },
+  'task.reply_fetched': { from: ['blocked'], to: 'unchanged' },
   'task.requeued_with_reply': { from: ['blocked'], to: 'queued' },
   'task.requeued': { from: ['blocked', 'running', 'verifying', 'failed'], to: 'queued' },
   // blocked：交互式执行器卡住期间仍持有租约（D7a），可以请求取消、租约也可能过期。

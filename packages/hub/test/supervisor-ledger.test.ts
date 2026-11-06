@@ -468,6 +468,136 @@ describe('task.reply_escalated', () => {
     expect(code(tasks.replyTask(task.id, { kind: 'approve' }, { actor: 'user' }))).toBe('ok')
   })
 
+  test('节点取走批准后仍 pending，首次取走时间可重放且禁止策略撤回', async () => {
+    const { store, task, blocked } = await approvalReply()
+    must(
+      store.append(
+        {
+          type: 'task.replied',
+          task_id: task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-policy', kind: 'approve', via: 'supervisor' },
+        },
+        { actor: 'supervisor' },
+      ),
+    )
+    expect(store.getReply('r-policy')).not.toHaveProperty('fetched_at')
+    const fetched = {
+      type: 'task.reply_fetched',
+      task_id: task.id,
+      workspace: WS,
+      payload: { reply_id: 'r-policy', lease_id: `l-${task.id}-1` },
+    } as EventInput
+    expect(code(store.append(fetched, node))).toBe('actor_mismatch')
+    expect(
+      store.append(
+        { ...fetched, payload: { reply_id: 'r-policy', lease_id: 'l-other' } } as EventInput,
+        hub,
+      ).ok,
+    ).toBe(false)
+    const event = must(store.append(fetched, hub))
+    expect(store.getReply('r-policy')).toMatchObject({ state: 'pending', fetched_at: event.ts })
+    expect(store.append(fetched, hub).ok).toBe(false)
+    expect(withdraw(store, task.id, blocked.seq).ok).toBe(false)
+    expect(store.getTask(task.id)?.status).toBe('blocked')
+    const before = store.snapshot({ includeSoft: false })
+    must(store.rebuild())
+    expect(store.snapshot({ includeSoft: false })).toEqual(before)
+    expect(store.getReply('r-policy')?.fetched_at).toBe(event.ts)
+  })
+
+  test('策略撤回后的迟到送达回执可恢复本轮，其他丢弃或新一轮卡住不能恢复', async () => {
+    const { store, task, blocked } = await approvalReply()
+    must(
+      store.append(
+        {
+          type: 'task.replied',
+          task_id: task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-policy', kind: 'approve', via: 'supervisor' },
+        },
+        { actor: 'supervisor' },
+      ),
+    )
+    must(withdraw(store, task.id, blocked.seq))
+    const ack = {
+      type: 'task.unblocked',
+      task_id: task.id,
+      workspace: WS,
+      payload: { reply_id: 'r-policy' },
+    } as EventInput
+    must(store.append(ack, node))
+    expect(store.getReply('r-policy')?.state).toBe('delivered')
+    const before = store.snapshot({ includeSoft: false })
+    must(store.rebuild())
+    expect(store.snapshot({ includeSoft: false })).toEqual(before)
+    block(store, task.id)
+    expect(store.append(ack, node).ok).toBe(false)
+
+    const nextRound = await approvalReply()
+    must(
+      nextRound.store.append(
+        {
+          type: 'task.replied',
+          task_id: nextRound.task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-old', kind: 'approve', via: 'supervisor' },
+        },
+        { actor: 'supervisor' },
+      ),
+    )
+    must(withdraw(nextRound.store, nextRound.task.id, nextRound.blocked.seq, 'r-old'))
+    must(nextRound.store.append(drafts(nextRound.task.id)['task.unblocked'], node))
+    block(nextRound.store, nextRound.task.id)
+    expect(nextRound.store.getReply('r-old')?.state).toBe('dropped')
+    expect(
+      nextRound.store.append(
+        {
+          type: 'task.unblocked',
+          task_id: nextRound.task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-old' },
+        },
+        node,
+      ).ok,
+    ).toBe(false)
+
+    const second = await approvalReply()
+    must(
+      second.store.append(
+        {
+          type: 'task.replied',
+          task_id: second.task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-other', kind: 'approve', via: 'supervisor' },
+        },
+        { actor: 'supervisor' },
+      ),
+    )
+    must(
+      second.store.append(
+        {
+          type: 'task.reply_dropped',
+          task_id: second.task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-other', reason: 'round_closed', message: '回合已关闭' },
+        },
+        hub,
+      ),
+    )
+    expect(
+      second.store.append(
+        {
+          type: 'task.unblocked',
+          task_id: second.task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-other' },
+        },
+        node,
+      ).ok,
+    ).toBe(false)
+  })
+
   test('策略撤回不能指向其他任务、用户回复或 supervisor 的非批准回复', async () => {
     for (const [actor, kind] of [
       ['user', 'approve'],
@@ -800,7 +930,7 @@ describe('scrub', () => {
   })
 })
 
-describe('旧账本迁移：origin、branch 与 mandate 列', () => {
+describe('旧账本迁移：origin、branch、mandate 与 fetched_at 列', () => {
   test('有 resume_json 的旧库打开后补列，可写入 origin、分支与授权依据', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'raindown-ledger-migrate-sup-'))
     try {
@@ -810,8 +940,10 @@ describe('旧账本迁移：origin、branch 与 mandate 列', () => {
         LEDGER_DDL.replace(
           ',\n  origin           TEXT,\n  mandate_json     TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
           '\n',
-        ),
+        ).replace(',\n  fetched_at   TEXT', ''),
       )
+      const replyCols = db.prepare('PRAGMA table_info(replies)').all() as { name: string }[]
+      expect(replyCols.map((c) => c.name)).not.toContain('fetched_at')
       const cols = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
       expect(cols.map((c) => c.name)).toContain('resume_json')
       expect(cols.map((c) => c.name)).not.toContain('mandate_json')
@@ -855,6 +987,31 @@ describe('旧账本迁移：origin、branch 与 mandate 列', () => {
           branch: 'ustclhx/t-old',
           worktree: '/w/t-old',
         })
+        block(store, 't-old')
+        must(
+          store.append(
+            {
+              type: 'task.replied',
+              task_id: 't-old',
+              workspace: WS,
+              payload: { reply_id: 'r-old', kind: 'text', text: '继续' },
+            },
+            { actor: 'user' },
+          ),
+        )
+        expect(store.getReply('r-old')).not.toHaveProperty('fetched_at')
+        must(
+          store.append(
+            {
+              type: 'task.reply_fetched',
+              task_id: 't-old',
+              workspace: WS,
+              payload: { reply_id: 'r-old', lease_id: 'l-t-old-1' },
+            },
+            hub,
+          ),
+        )
+        expect(store.getReply('r-old')?.fetched_at).toBeString()
       } finally {
         store.close()
       }

@@ -48,6 +48,10 @@
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           }
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 2000
         }
       },
       "required": [

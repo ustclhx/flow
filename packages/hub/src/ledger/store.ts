@@ -320,6 +320,7 @@ interface ReplyRow {
   by: string
   created_at: string
   state: ReplyView['state']
+  fetched_at: string | null
   delivered_at: string | null
 }
 
@@ -331,6 +332,7 @@ const rowToReply = (r: ReplyRow): ReplyView => ({
   by: r.by,
   created_at: r.created_at,
   state: r.state,
+  ...(r.fetched_at == null ? {} : { fetched_at: r.fetched_at }),
   delivered_at: r.delivered_at,
 })
 
@@ -505,6 +507,7 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'policy.changed': ['hub'],
   'task.policy_changed': ['hub'],
   'task.reply_delegated': ['hub'],
+  'task.reply_fetched': ['hub'],
   // 回复只有用户本人与 supervisor（经 task_respond、落在有效委托上）能写（D15）。
   'task.replied': ['user', 'supervisor'],
 }
@@ -543,18 +546,45 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     !!get("SELECT 1 FROM leases WHERE task_id = ? AND state = 'active'", taskId ?? null)
   const noLease = (from: TaskStatus | null, type: string, why: string) =>
     fail('failure', 'invalid_transition', why, { from, type })
-  /** 事件引用的回复必须是该任务尚未送达的回复。 */
-  const pendingReplyOf = (draft: {
-    task_id?: string | undefined
-    payload: { reply_id?: string | undefined }
-  }) => {
-    const r = get<{ task_id: string; state: string }>(
-      'SELECT task_id, state FROM replies WHERE id = ?',
+  /** 待送达回复可以消费；策略撤回与节点交付交错时，迟到的本轮送达回执仍须如实入账。 */
+  const pendingReplyOf = (
+    draft: Extract<
+      LedgerEventDraft,
+      {
+        type: 'task.unblocked' | 'task.requeued_with_reply' | 'task.reply_fetched'
+      }
+    >,
+  ) => {
+    const r = get<{ task_id: string; state: string; by: string; kind: string }>(
+      'SELECT task_id, state, by, kind FROM replies WHERE id = ?',
       draft.payload.reply_id ?? null,
     )
-    return r && r.task_id === draft.task_id && r.state === 'pending'
-      ? ok(null)
-      : invalidEvent(`回复 ${draft.payload.reply_id} 不是该任务待送达的回复`)
+    if (r && r.task_id === draft.task_id) {
+      if (r.state === 'pending') return ok(null)
+      if (
+        draft.type === 'task.unblocked' &&
+        r.state === 'dropped' &&
+        r.by === SUPERVISOR &&
+        r.kind === 'approve'
+      ) {
+        const block = lastBlocked(draft.task_id)
+        if (
+          block &&
+          get(
+            `SELECT 1 FROM events WHERE task_id = ? AND type = 'task.reply_escalated'
+             AND json_extract(payload_json, '$.reason') = 'policy_changed'
+             AND json_extract(payload_json, '$.dropped_reply_id') = ?
+             AND json_extract(payload_json, '$.block_seq') = ? AND seq < ?`,
+            draft.task_id ?? null,
+            draft.payload.reply_id ?? null,
+            block.seq,
+            before,
+          )
+        )
+          return ok(null)
+      }
+    }
+    return invalidEvent(`回复 ${draft.payload.reply_id} 不是该任务待送达的回复`)
   }
 
   /**
@@ -838,6 +868,22 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'task.reply_fetched': {
+        const pending = pendingReplyOf(draft)
+        if (!pending.ok) return pending
+        const reply = get<{ fetched_at: string | null }>(
+          'SELECT fetched_at FROM replies WHERE id = ?',
+          draft.payload.reply_id,
+        )
+        if (reply?.fetched_at != null) return invalidEvent('这条回复已经交给节点')
+        const lease = get<{ task_id: string; state: string }>(
+          'SELECT task_id, state FROM leases WHERE lease_id = ?',
+          draft.payload.lease_id,
+        )
+        return lease && lease.task_id === draft.task_id && lease.state === 'active'
+          ? ok(null)
+          : invalidEvent(`租约 ${draft.payload.lease_id} 不是该任务的活动租约`)
+      }
       case 'task.replied': {
         if (get('SELECT 1 FROM replies WHERE id = ?', draft.payload.reply_id)) {
           return invalidEvent(`回复 ${draft.payload.reply_id} 已存在`)
@@ -972,8 +1018,14 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           return invalidEvent('只有策略变化转交可以撤回批准或记录新策略版本')
         }
         if (p.dropped_reply_id !== undefined) {
-          const reply = get<{ task_id: string; state: string; by: string; kind: string }>(
-            'SELECT task_id, state, by, kind FROM replies WHERE id = ?',
+          const reply = get<{
+            task_id: string
+            state: string
+            by: string
+            kind: string
+            fetched_at: string | null
+          }>(
+            'SELECT task_id, state, by, kind, fetched_at FROM replies WHERE id = ?',
             p.dropped_reply_id,
           )
           if (
@@ -981,6 +1033,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
             !reply ||
             reply.task_id !== draft.task_id ||
             reply.state !== 'pending' ||
+            reply.fetched_at !== null ||
             reply.by !== SUPERVISOR ||
             reply.kind !== 'approve'
           ) {

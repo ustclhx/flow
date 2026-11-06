@@ -89,6 +89,10 @@ const samples: Record<
     valid: { ...task, payload: { note: '用 main', reply_id: 'r-1' } },
     invalid: { ...task, payload: { note: 1 } },
   },
+  'task.reply_fetched': {
+    valid: { ...task, payload: { reply_id: 'r-1', lease_id: 'l1' } },
+    invalid: { ...task, payload: { reply_id: 'bad', lease_id: 'l1' } },
+  },
   'task.replied': {
     valid: { ...task, payload: { reply_id: 'r-1', kind: 'text', text: '用 main' } },
     invalid: { ...task, payload: { reply_id: 'r-1', kind: 'text' } },
@@ -490,6 +494,7 @@ describe('事件触发的状态转换', () => {
     'task.reply_dropped': TASK_STATUSES.map((status) => [status, status]),
     'task.unblocked': [['blocked', 'running']],
     'task.replied': [['blocked', 'blocked']],
+    'task.reply_fetched': [['blocked', 'blocked']],
     'task.requeued_with_reply': [['blocked', 'queued']],
     'task.requeued': [
       ['blocked', 'queued'],

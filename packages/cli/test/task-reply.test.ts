@@ -102,8 +102,9 @@ describe('task_reply', () => {
     expect(shown.replies).toMatchObject([{ state: 'delivered', by: 'user' }])
     // 收件箱条目的开关事件也在任务时间线上，这里只看任务自身的事件。
     const lifecycle = shown.events.map((e) => e.type).filter((t) => !t.startsWith('inbox.'))
-    expect(lifecycle.slice(-4)).toEqual([
+    expect(lifecycle.slice(-5)).toEqual([
       'task.replied',
+      'task.reply_fetched',
       'task.unblocked',
       'task.done',
       'task.attempt_ended',
