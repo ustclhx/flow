@@ -2199,6 +2199,22 @@ describe('PR 直通的输入（harness-neutral 8.4）', () => {
     },
   )
 
+  test('授权回合打开或文字回复已发 Esc 尚未送完时不送入（不能替用户回答）', async () => {
+    const s = await start({}, (o) => o.show('approval'))
+    await ready(s)
+    await s.poll(3)
+    // 已上报授权停下：回合打开。即使屏幕随后显示普通输入框，也不把输入打进去。
+    const state = JSON.parse(
+      readFileSync(join(h?.home ?? '', 'state/tasks/t-orca-1/orca.json'), 'utf8'),
+    )
+    expect(state.approval_round?.closed).toBe(false)
+    s.orca.reads.splice(0)
+    s.orca.show('question')
+    expect(await s.run.inject?.(input(5))).toBe('not_now')
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
+  })
+
   test('派工输入：新终端从 spec 读取（放在恢复提示之后），不再另行送入', async () => {
     const recovery: TaskRecovery = { previous_end: { attempt: 1, reason: 'done' }, prs: [] }
     const s = await start({}, (o) => o.show('question'), { recovery, inputs: [input(4)] })

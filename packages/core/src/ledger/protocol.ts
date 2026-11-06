@@ -25,7 +25,7 @@ import {
   taskProposalDecision,
   taskProposalId,
 } from './events.ts'
-import { deliveredInput } from './pr-input.ts'
+import { deliveredInput, lenientInputs } from './pr-input.ts'
 import {
   prSubscriptionView,
   unsubscribeTaskData,
@@ -840,10 +840,14 @@ export const leaseGrant = z
       .meta({ description: '任务带着回复重新排队时，本次执行要带上的回复与会话 id' }),
     // 恢复上下文只是提示；较新中枢扩展字段或原因时，旧节点仍须接受租约。
     recovery: taskRecovery.optional().catch(undefined),
-    inputs: z.array(deliveredInput).max(200).optional().catch(undefined).meta({
-      description:
-        '任务未运行期间到达的输入（PR 直通，harness-neutral 8.4）：适配器放在派工输入开头；旧节点忽略',
-    }),
+    inputs: z
+      .preprocess(lenientInputs, z.array(deliveredInput).max(200))
+      .optional()
+      .catch(undefined)
+      .meta({
+        description:
+          '任务未运行期间到达的输入（PR 直通，harness-neutral 8.4）：适配器放在派工输入开头；旧节点忽略',
+      }),
     dispatch_token: z
       .string()
       .min(16)
@@ -926,6 +930,10 @@ export const renewLeaseRequest = z
       description:
         '已送进运行中 worker 的输入（响应 inputs 的 input_seq）；中枢写 task.input_delivered',
     }),
+    inputs_dispatched: z.array(z.number().int().positive()).min(1).max(200).optional().meta({
+      description:
+        '已随派工输入交给执行器的输入（lease.inputs 的 input_seq）；中枢确认后才记为送达',
+    }),
     branch: z
       .strictObject({
         branch: taskBranch,
@@ -975,7 +983,7 @@ export const renewLeaseData = z
       description:
         '任务处于 blocked 时最早一条未送达的回复；节点交给执行器后用 ack-reply 确认，确认前每次续约都会返回它',
     }),
-    inputs: z.array(deliveredInput).default([]).meta({
+    inputs: z.preprocess(lenientInputs, z.array(deliveredInput).default([])).meta({
       description:
         '待送达的输入（PR 直通，harness-neutral 8.4）：只发给能中途注入的执行器；不解除 blocked。节点送达后在下一次续约的 inputs_delivered 确认，确认前每次续约都会返回',
     }),

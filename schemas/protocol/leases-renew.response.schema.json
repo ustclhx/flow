@@ -232,8 +232,8 @@
           ]
         },
         "inputs": {
-          "default": [],
           "description": "待送达的输入（PR 直通，harness-neutral 8.4）：只发给能中途注入的执行器；不解除 blocked。节点送达后在下一次续约的 inputs_delivered 确认，确认前每次续约都会返回",
+          "default": [],
           "type": "array",
           "items": {
             "type": "object",

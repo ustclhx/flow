@@ -81,15 +81,53 @@ test('任务未运行期间到达的输入随下一次派工下发', async () =>
   const id = await b.create(fake({ outcome: 'failed', message: '先失败一次' }))
   await b.until(id, (t) => t.status === 'failed')
   subscribe(b, id)
-  // 已结束的任务只接受名单内的人类评论（这里直接写入，恢复由中枢的直通负责）。
-  const seq = prEvent(b, id, { actor: 'acme', allowed: true, text: '请补一个测试' })
-  const retried = await b.tasks.retryTask(id, { actor: 'user' })
-  if (!retried.ok) throw new Error(retried.error.message)
+  // 已结束的任务只因名单内的人类评论恢复：输入与 task.requeued{input} 同一事务（中枢直通的写法）。
+  const event = b.ledger.append(
+    {
+      type: 'pr.event',
+      workspace: WS,
+      payload: {
+        pr: PR,
+        kind: 'issue_comment',
+        actor: 'acme',
+        actor_kind: 'human',
+        allowed: true,
+        text: '请补一个测试',
+        url: `${PR}#issuecomment-99`,
+        cursor: '2026-10-25T08:00:00.000Z|99',
+      },
+    },
+    { actor: 'hub' },
+  )
+  if (!event.ok) throw new Error(event.error.message)
+  const resumed = b.ledger.appendMany(
+    [
+      {
+        type: 'task.input_added',
+        task_id: id,
+        workspace: WS,
+        payload: { source: 'pr', pr_event_seq: event.data.seq },
+      },
+      {
+        type: 'task.requeued',
+        task_id: id,
+        workspace: WS,
+        payload: { reason: 'input', pr_event_seq: event.data.seq },
+      },
+    ],
+    { actor: 'hub' },
+  )
+  if (!resumed.ok) throw new Error(resumed.error.message)
+  const seq = resumed.data[0]?.seq
   await b.until(id, (t) => t.attempt === 2)
-  await b.clock.advance(1000)
+  for (let i = 0; i < 3; i++) await b.clock.advance(20_000)
   const dispatched = b.ledger.taskActivity(id).filter((a) => a.text?.startsWith(`派工输入 ${seq}`))
   expect(dispatched).toHaveLength(1)
   expect(dispatched[0]?.text).toContain('允许名单内的用户 acme')
   expect(dispatched[0]?.text).toContain('请补一个测试')
+  // 节点确认后才记为送达（随派工）。
   expect(b.ledger.pendingTaskInputs(id)).toEqual([])
+  expect(b.events(id).filter((e) => e.type === 'task.input_delivered')).toMatchObject([
+    { payload: { input_seqs: [seq], via: 'dispatch' } },
+  ])
 })

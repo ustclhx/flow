@@ -441,12 +441,17 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     })
   }
 
+  const executorOf = (nodeId: string, task: TaskView) =>
+    ledger.getNode(nodeId)?.executors.find((e) => e.type === task.contract.executor)
+
   /** 节点为该任务注册的执行器能否在运行中注入输入；不能时输入排队到下一次派工。 */
   function injectsWhileRunning(nodeId: string, task: TaskView): boolean {
-    const executor = ledger
-      .getNode(nodeId)
-      ?.executors.find((e) => e.type === task.contract.executor)
-    return executor?.adapter_capabilities.inject_while_running === true
+    return executorOf(nodeId, task)?.adapter_capabilities.inject_while_running === true
+  }
+
+  /** 节点是否声明会处理派工的 inputs 并确认；旧节点不下发，输入保持待送达。 */
+  function acceptsDispatchInputs(nodeId: string, task: TaskView): boolean {
+    return executorOf(nodeId, task)?.task_inputs === true
   }
 
   /** 恢复回复只属于紧接该次重新排队的派工，不能跨过其他派工或手动重新排队。 */
@@ -468,8 +473,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     // resume 只交给紧接着的这一次执行：task.started 会在投影里清空它（PR #16 审查第 1 条）。
     const resume = ledger.taskResume(task.id)
     const recovery = recoveryForTask(ledger, task)
-    // 尚未送达的输入随这次派工下发；task.started 在投影中把它们标记为已随派工送达。
-    const inputs = pendingInputs(task.id, 200)
+    // 尚未送达的输入随这次派工下发；节点在执行器拿到它们后经续约确认（inputs_dispatched）才记为送达。
+    const inputs = acceptsDispatchInputs(nodeId, task) ? pendingInputs(task.id, 200) : []
     const leaseId = newLeaseId()
     const token = newLeaseToken()
     const attempt = task.attempt + 1
@@ -704,22 +709,26 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       if (!consumed.ok) return consumed
       const steps = renewSteps(task, lease, req.data, consumed.data)
       if (!steps.ok) return steps
-      // 节点确认已送进 worker 的输入（重复确认幂等：只记仍待送达的那些）。
-      if (req.data.inputs_delivered?.length) {
-        const pending = new Set(ledger.pendingTaskInputs(task.id, 1000).map((i) => i.seq))
-        const seqs = [...new Set(req.data.inputs_delivered)].filter((seq) => pending.has(seq))
-        if (seqs.length) {
-          const acked = ledger.append(
-            {
-              type: 'task.input_delivered',
-              task_id: task.id,
-              workspace: task.workspace,
-              payload: { input_seqs: seqs, lease_id: lease.lease_id },
-            },
-            { actor: 'hub' },
-          )
-          if (!acked.ok) return acked
-        }
+      // 节点确认已交给执行器的输入（重复确认幂等：只记仍待送达的那些）。
+      const pendingSeqs = () => new Set(ledger.pendingTaskInputs(task.id, 1000).map((i) => i.seq))
+      for (const [via, list] of [
+        ['dispatch', req.data.inputs_dispatched],
+        ['running', req.data.inputs_delivered],
+      ] as const) {
+        if (!list?.length) continue
+        const pending = pendingSeqs()
+        const seqs = [...new Set(list)].filter((seq) => pending.has(seq))
+        if (!seqs.length) continue
+        const acked = ledger.append(
+          {
+            type: 'task.input_delivered',
+            task_id: task.id,
+            workspace: task.workspace,
+            payload: { input_seqs: seqs, lease_id: lease.lease_id, via },
+          },
+          { actor: 'hub' },
+        )
+        if (!acked.ok) return acked
       }
       const expiresAt = iso(clock.now() + lease.ttl_s * 1000)
       ledger.renewLease(lease.lease_id, expiresAt)
@@ -789,8 +798,11 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
             }
           : null,
         // 输入与回复同一通道下发，但不解除 blocked；不能中途注入的执行器等下一次派工。
+        // 任务卡住（提问、待授权）时扣留：输入不能被当成对提问的回答或授权弹窗上的按键。
         inputs:
-          !after.cancel_requested && injectsWhileRunning(lease.node_id, after)
+          !after.cancel_requested &&
+          (after.status === 'running' || after.status === 'verifying') &&
+          injectsWhileRunning(lease.node_id, after)
             ? pendingInputs(task.id, 10)
             : [],
       })

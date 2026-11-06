@@ -557,28 +557,36 @@ worker 目前用中枢所在机器的 `gh` 登录在 PR 上发评论与审查—
 ### 直通送达
 
 - 每条 `pr.event` 按订阅分发，**不唤醒 supervisor**（包括 CI 失败、审查 changes_requested）：
-  未结束的订阅任务都收到一条 `task.input_added{source:'pr', pr_event_seq}`；
-- 运行中的任务经续约下发，与回复同一通道但**不解除 blocked**；节点送进 worker 后在下一次续约确认（`task.input_delivered`）。
-  codex-orca 只在普通输入框空闲时送入，停在授权弹窗、信任弹窗或忙碌时等下一次；claude-sdk 推入流式输入；
-  不能中途注入的执行器（codex-exec）排队到下一次派工，与恢复提示一起放在派工输入开头；
+  只有**事件之前就已订阅**的未结束任务收到 `task.input_added{source:'pr', pr_event_seq}`（后来才订阅的任务不会收到更早的事件）；
+- 运行中的任务经续约下发；**任务卡住（提问、待授权）时扣留**，恢复运行后再给——输入不能被当成对提问的回答或授权弹窗上的按键。
+  节点送进 worker 后在下一次续约确认（`task.input_delivered`）。codex-orca 只在普通输入框空闲、且没有打开的授权回合或送到一半的回复时送入；
+  claude-sdk 推入流式输入；不能中途注入的执行器（codex-exec）排队到下一次派工，与恢复提示一起放在派工输入开头；
+- 随派工下发的输入在节点确认后才记为送达（续约的 `inputs_dispatched`）；旧节点不声明处理派工输入，中枢不下发，输入保持待送达；
 - 送达内容由中枢统一渲染：原文与来源放进 `<untrusted-pr-event>` 数据块（JSON 序列化并转义 `<`、`>`、反引号，与恢复事实、原始指令相同），
   标明来源、作者与是否在名单内；超长时截断并附字符数与读取指针（任务凭证只能读送给本任务的 PR 事件）；
-- 直通只是上下文：不改任务的授权依据（mandate）与合同，策略判定也不因此放宽。
+- 直通只是上下文：不改任务的授权依据（mandate）与合同，策略判定也不因此放宽；
+- 每条事件处理完写 `pr.dispatched` 检查点，中枢重启后只处理检查点之后的事件。
 
 ### 已结束的任务因评论恢复
 
-- 只有**名单内用户的人类评论**能恢复已结束（done / failed）的订阅任务；机器人、CI 与名单外用户的内容不恢复；
-- 恢复前按当前策略重新校验授权（由 supervisor 创建的任务要求 supervisor 仍启用、角色仍允许 supervisor 创建）。
-  通过则写 `task.requeued{reason:'input'}` 开始新派工，带恢复提示与这条评论；
-  不通过则任务保持结束，评论改为唤醒 supervisor（`pr.wake_requested{reason:'resume_rejected'}`），supervisor 不可用时进收件箱（来源 `pr_comment`）。
+- 只有**名单内人类的 PR 评论或代码行评论**能恢复已结束（done / failed）的订阅任务；机器人、CI、审查正文与名单外用户的内容不恢复；共享身份下一律不恢复；
+- 恢复前依次核对，任一不满足则任务保持结束，评论改为唤醒 supervisor（`pr.wake_requested{reason:'resume_rejected'}`），supervisor 不可用时进收件箱（来源 `pr_comment`）：
+  - PR 仍为 open（已合并或关闭时不恢复）；
+  - 该开发任务没有进行中的合并请求（待批准）或未结束的 merger 任务；
+  - 每个任务 24 小时内最多恢复 `github.resume_per_day` 次（默认 3），超出时**只进收件箱**；
+  - 按当前策略重新校验授权（由 supervisor 创建的任务要求 supervisor 仍启用、角色仍允许 supervisor 创建）；
+- 通过则写 `task.requeued{reason:'input'}` 开始新派工，带恢复提示与这条评论；该任务此前的"卡住唤醒"去重随之清除。
 
 ### 交回与没有订阅任务的评论
 
 - worker 收到名单内用户超出任务范围、或属于另一件工作的请求时，用 `raindown_report` 的 `handback{pr_event_seq, reason}` 交回。
   中枢只接受本任务收到过的、名单内人类评论，否则返回 `handback_invalid`；交回写 `pr.wake_requested{reason:'handback'}`，
-  进入 supervisor 的 instruction 唤醒队列，唤醒输入里有该评论与 worker 的理由；
+  进入 supervisor 的 instruction 唤醒队列，唤醒输入里有该评论，worker 的理由标为不可信的 worker 文本并转义；
 - 没有任何订阅任务接收的名单内评论（例如订阅它的任务都已取消）同样唤醒 supervisor（`no_subscriber`），supervisor 不可用时进收件箱；
-- 账本兜底：`pr.wake_requested` 与"已结束任务的恢复"都只接受指向名单内人类评论的事件，即使中枢其他环节出错也不会因陌生人的评论唤醒或恢复。
+- PR 评论引起的唤醒来源记为 `instruction:pr`（`supervisor.wake_started.source: pr`）：保留 instruction 队列优先级，但
+  不满足 `auto_merge`（在这类唤醒里请求、或其开发任务建于这类唤醒的合并都交给你批准），受 `observe` 约束（与 autonomous 相同），
+  新任务不继承来源任务的原始指令；
+- 账本兜底：`pr.wake_requested` 与"已结束任务的恢复"都只接受指向名单内人类评论的事件；已结束任务上的输入必须与恢复同一事务写入。
 
 ### `allowed_users` 的安全含义
 

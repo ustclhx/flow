@@ -118,11 +118,6 @@ export function createApplier(db: Database): Applier {
         return
       }
       case 'task.started':
-        // 派工开始：尚未送达的输入随这次派工的输入下发（租约授予时已放进 lease.inputs）。
-        stmt(
-          `UPDATE task_inputs SET state = 'dispatch', delivered_at = ?, lease_id = ?
-           WHERE task_id = ? AND state = 'pending'`,
-        ).run(e.ts, e.payload.lease_id, e.task_id ?? null)
         setStatus(
           e,
           'running',
@@ -463,13 +458,14 @@ export function createApplier(db: Database): Applier {
       case 'task.input_delivered':
         for (const seq of e.payload.input_seqs) {
           stmt(
-            `UPDATE task_inputs SET state = 'running', delivered_at = ?, lease_id = ?
+            `UPDATE task_inputs SET state = ?, delivered_at = ?, lease_id = ?
              WHERE seq = ? AND task_id = ? AND state = 'pending'`,
-          ).run(e.ts, e.payload.lease_id, seq, e.task_id ?? null)
+          ).run(e.payload.via ?? 'running', e.ts, e.payload.lease_id, seq, e.task_id ?? null)
         }
         touchTask(e, '')
         return
       case 'pr.wake_requested':
+      case 'pr.dispatched':
         return
       case 'pr.subscribed':
         stmt(

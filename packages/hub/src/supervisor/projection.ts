@@ -281,6 +281,14 @@ export class WakeProjection {
         break
       case 'supervisor.wake_started':
         return this.started(e)
+      case 'task.requeued':
+        // 因 PR 评论恢复（新一轮工作）：清掉该任务卡住唤醒的去重，新一轮的卡住照常唤醒。
+        if (e.payload.reason === 'input' && e.task_id !== undefined) {
+          for (const key of [...this.blockedSeen]) {
+            if (key.startsWith(`${e.task_id}\n`)) this.blockedSeen.delete(key)
+          }
+        }
+        break
       case 'supervisor.release': {
         if (e.workspace === undefined) return null
         const q = this.workspace(e.workspace).queues[e.payload.queue]

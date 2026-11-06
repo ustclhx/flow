@@ -159,8 +159,16 @@ test('交回的评论唤醒 supervisor（instruction），输入里有评论与 
       actor: 'acme',
       allowed: true,
       text: '顺带加一个导出 CSV 的功能',
-      note: '导出 CSV 是另一件工作，超出本任务范围',
+      // worker 的理由是不可信的 worker 文本：转义后单独标注。
+      worker_note: { untrusted: true, text: '"导出 CSV 是另一件工作，超出本任务范围"' },
     },
   })
-  expect(input?.summary).toContain('worker 的交回理由：导出 CSV 是另一件工作')
+  expect(input?.summary).toContain(
+    'worker 的交回理由（不可信的 worker 文本）：<untrusted-worker-note>"导出 CSV 是另一件工作',
+  )
+  // 来源 instruction:pr：保留 instruction 队列，但唤醒标记为 PR 来源。
+  expect(s.store.wakeOf(wake?.task_id ?? '')?.source).toBe('pr')
+  expect(s.store.getTask(wake?.task_id ?? '')?.contract.inputs?.wake?.note).toContain(
+    '来源 instruction:pr',
+  )
 })

@@ -387,6 +387,8 @@ class LeaseRunner {
   /** 已送进 worker 的输入（按 input_seq 只送一次）与待随续约确认的输入（harness-neutral 8.4）。 */
   private injected = new Set<number>()
   private inputAcks: number[] = []
+  /** 随派工输入交给执行器、待随续约确认的输入（中枢确认后才记为送达）。 */
+  private dispatchAcks: number[] = []
   private injecting: Promise<void> | undefined
   /** 执行器已结束：之后不再重新计时。 */
   private runEnded = false
@@ -500,6 +502,7 @@ class LeaseRunner {
     const branch = this.pendingBranch
     const outOfBand = this.outOfBand.splice(0, 100)
     const inputAcks = this.inputAcks.splice(0, 50)
+    const dispatchAcks = this.dispatchAcks.splice(0, 200)
     // 同批信号已带 report_seq 时不混发（report_conflict 须与之一致），留到下一次续约。
     const staleAck =
       signal && 'report_seq' in signal && signal.report_seq !== undefined
@@ -516,6 +519,7 @@ class LeaseRunner {
       ...(branch ? { branch } : {}),
       ...(outOfBand.length > 0 ? { out_of_band: outOfBand } : {}),
       ...(inputAcks.length > 0 ? { inputs_delivered: inputAcks } : {}),
+      ...(dispatchAcks.length > 0 ? { inputs_dispatched: dispatchAcks } : {}),
     })
     if (this.released) return
     if (r.ok && staleAck !== undefined && this.staleReportSeq === staleAck)
@@ -532,6 +536,7 @@ class LeaseRunner {
         this.buffer.unshift(...batch)
         this.outOfBand.unshift(...outOfBand)
         this.inputAcks.unshift(...inputAcks)
+        this.dispatchAcks.unshift(...dispatchAcks)
         // 重试仍从队首发送，先确认恢复再上报后续的新回合。
         if (signal) this.signals.unshift(signal)
         this.scheduleRenew(Math.min(this.intervalMs, this.env.retryMs))
@@ -544,6 +549,7 @@ class LeaseRunner {
         this.buffer.unshift(...batch)
         this.outOfBand.unshift(...outOfBand)
         this.inputAcks.unshift(...inputAcks)
+        this.dispatchAcks.unshift(...dispatchAcks)
         if (signal) this.signals.unshift(signal)
         this.scheduleRenew(0)
         return
@@ -563,6 +569,7 @@ class LeaseRunner {
       this.signals.length > 0 ||
       this.outOfBand.length > 0 ||
       this.inputAcks.length > 0 ||
+      this.dispatchAcks.length > 0 ||
       this.staleReportSeq !== undefined
     )
       this.renewAgain = true
@@ -1351,6 +1358,11 @@ class LeaseRunner {
             : {}),
         })
         const run = this.run
+        // 派工输入已交给执行器：不再中途重复注入，并随下一次续约确认（中枢据此记为送达）。
+        for (const input of grant.inputs ?? []) {
+          this.injected.add(input.input_seq)
+          this.dispatchAcks.push(input.input_seq)
+        }
         const forced = new Promise<Result<ExecutorOutcome>>((resolve) => {
           this.forceDone = resolve
         })

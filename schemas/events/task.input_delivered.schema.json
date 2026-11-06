@@ -39,7 +39,7 @@
       "properties": {
         "input_seqs": {
           "minItems": 1,
-          "maxItems": 50,
+          "maxItems": 200,
           "type": "array",
           "items": {
             "type": "integer",
@@ -51,6 +51,14 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
           "description": "租约 id，由中枢在分配任务时生成"
+        },
+        "via": {
+          "description": "running 送进运行中的 worker；dispatch 随派工输入交给执行器（节点确认后才记为送达）",
+          "type": "string",
+          "enum": [
+            "running",
+            "dispatch"
+          ]
         }
       },
       "required": [

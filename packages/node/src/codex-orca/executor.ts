@@ -1151,8 +1151,14 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (!handle) return 'not_now'
         const st = replyState(`input-${input.input_seq}`)
         if (st.done) return 'delivered'
+        // 有打开的授权回合、或回复已发 Esc 尚未送完时，输入框里的文字属于那次回复：不能插入输入。
+        const replyInProgress = Object.values(state.replies).some(
+          (r) => r.esc_sent === true && r.done !== true,
+        )
         if (
           inflight.size > 0 ||
+          (approvalRound !== undefined && !approvalRound.closed) ||
+          replyInProgress ||
           (ctx.resume && !resumeReplyHandled) ||
           (recoveryText !== undefined && !replyState(recoveryId).done)
         )

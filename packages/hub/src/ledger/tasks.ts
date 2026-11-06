@@ -827,6 +827,14 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       } else if (
         !instruction &&
         instructions.length === 0 &&
+        provenanceWake?.origin === 'instruction' &&
+        callerWake?.source === 'pr'
+      ) {
+        // PR 评论引起的唤醒（instruction:pr）：新任务不继承来源任务的原始指令。
+        instructionNote = '本次唤醒来自 PR 评论，新任务不继承来源任务的原始指令'
+      } else if (
+        !instruction &&
+        instructions.length === 0 &&
         provenanceWake?.origin === 'instruction'
       ) {
         const candidates = new Map<string, TaskView>()
@@ -941,7 +949,11 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       // 记录的是"本会执行"的动作；workspace 已在唤醒分支中读取（这里没有 await）。
       if (
         callerWake &&
-        observeAutonomous(callerWake.origin, (workspace as WorkspaceInfo | null)?.supervisor)
+        observeAutonomous(
+          callerWake.origin,
+          (workspace as WorkspaceInfo | null)?.supervisor,
+          callerWake.source,
+        )
       ) {
         // 结构化字段在前、目标放最后：摘要截断时优先保留角色、执行器与仓库。
         const { idempotency_key: _key, goal, ...shown } = contract

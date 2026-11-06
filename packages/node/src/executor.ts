@@ -192,6 +192,11 @@ export interface ExecutorPlugin {
   mode?: 'interactive' | 'headless'
   /** 适配器的交互能力；区别于 registry.capabilities() 的 executor:<type> 派送标签。 */
   adapterCapabilities: AdapterCapabilities
+  /**
+   * 执行器是否把派工的 `ctx.inputs` 放进输入（PR 直通）；缺省为 true。为 false 时节点不向中枢声明，
+   * 中枢不随派工下发输入。
+   */
+  taskInputs?: boolean
   /** 执行器额外要求节点具备的能力（例如 `browser`）。 */
   requires?: readonly string[]
   run(contract: TaskContract, ctx: ExecutorContext): ExecutorRun
@@ -245,6 +250,7 @@ export function createExecutorRegistry(plugins: readonly ExecutorPlugin[]): Exec
         type: p.type,
         ...(p.mode ? { mode: p.mode } : {}),
         adapter_capabilities: p.adapterCapabilities,
+        task_inputs: p.taskInputs !== false,
       })),
   }
 }

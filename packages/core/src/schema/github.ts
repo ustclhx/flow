@@ -30,6 +30,9 @@ export const githubConfigSchema = z
       description:
         '其评论算请求的 GitHub 用户（按数字 id 比较）；缺省为该 PR 所属登记仓库 origin 的 owner（仅当 owner 是个人账号），否则为空名单。名单外用户与机器人的内容只作为不可信上下文',
     }),
+    resume_per_day: z.number().int().min(0).max(100).optional().meta({
+      description: '每个任务每天最多因 PR 评论恢复的次数，超出后评论进收件箱；默认 3',
+    }),
     worker_identity: githubActorLogin.optional().meta({
       description:
         'worker 在 GitHub 上使用的独立身份（bot 账号或 App）；它发的内容标为 agent，永不算请求。当前版本该设置不解除共享身份限制：worker 仍以本机 gh 登录发评论，需等 bot 凭证注入 worker 的后续变更',
@@ -39,3 +42,5 @@ export const githubConfigSchema = z
 export type GithubConfig = z.infer<typeof githubConfigSchema>
 
 export const defaultGithubConfig = (): GithubConfig => ({ watch: false })
+/** 每个任务每天因 PR 评论恢复的默认上限。 */
+export const DEFAULT_RESUME_PER_DAY = 3

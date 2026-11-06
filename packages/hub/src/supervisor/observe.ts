@@ -20,11 +20,21 @@ import { HUB_ACTOR } from '../ledger/supervisor-checks.ts'
 
 export type ObservedAction = 'task_create' | 'task_propose' | 'pr_merge_request'
 
-/** 该唤醒的写类动作是否只记录（autonomous 唤醒且 `supervisor.observe.autonomous` 开启）。 */
+/**
+ * 该唤醒的写类动作是否只记录：autonomous 唤醒，或合并了 PR 评论的唤醒（来源 instruction:pr，
+ * 与 autonomous 同样对待），且 `supervisor.observe.autonomous` 开启。
+ */
 export const observeAutonomous = (
   origin: string | undefined,
   config: Pick<SupervisorConfig, 'observe'> | null | undefined,
-): boolean => origin === 'autonomous' && config?.observe.autonomous === true
+  source?: 'pr',
+): boolean => (origin === 'autonomous' || source === 'pr') && config?.observe.autonomous === true
+
+/** 唤醒是否合并了 PR 评论（来源 instruction:pr）。 */
+export const prSourcedWake = (
+  ledger: Pick<LedgerStore, 'wakeOf'>,
+  wakeTaskId: string | undefined,
+): boolean => wakeTaskId !== undefined && ledger.wakeOf(wakeTaskId)?.source === 'pr'
 
 /** 参数摘要：JSON 序列化后遮蔽疑似密钥，再截断到 `OBSERVED_ARGS_MAX`（先遮蔽后截断，避免切开密钥）。 */
 export function summarizeArgs(args: unknown): string {

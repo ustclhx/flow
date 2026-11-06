@@ -37,6 +37,8 @@ interface Options {
   supervisorActive?: boolean
   /** 角色当前的 creatable_by；null 表示角色已不存在。 */
   creatable?: string[] | null
+  /** 节点是否声明处理派工输入（旧节点为 false）。 */
+  taskInputs?: boolean
 }
 
 let cursor = 0
@@ -92,6 +94,7 @@ async function setup(o: Options = {}) {
               ...NO_ADAPTER_CAPABILITIES,
               inject_while_running: o.inject ?? true,
             },
+            task_inputs: o.taskInputs ?? true,
           },
         ],
       },
@@ -281,7 +284,7 @@ describe('陌生人在公开仓库评论', () => {
 })
 
 describe('送达', () => {
-  test('确认送达后不再下发；输入不解除 blocked', async () => {
+  test('任务卡住（提问、待授权）时扣留输入；恢复运行后下发，确认后不再下发', async () => {
     const s = await setup()
     const id = s.create()
     const lease = await s.acquire()
@@ -293,21 +296,45 @@ describe('送达', () => {
     )
     expect(s.ledger.getTask(id)?.status).toBe('blocked')
     await s.comment()
+    // 卡住时不下发：输入不能被当成对提问的回答，也不能解除 blocked。
+    const held = must(s.service.renew(lease.lease_id, { lease_token: lease.lease_token }))
+    expect(held.inputs).toEqual([])
+    expect(s.ledger.getTask(id)?.status).toBe('blocked')
+    must(
+      s.service.renew(lease.lease_id, {
+        lease_token: lease.lease_token,
+        resumed: { note: '用户在终端里答复了' },
+      }),
+    )
     const first = must(s.service.renew(lease.lease_id, { lease_token: lease.lease_token }))
     expect(first.inputs).toHaveLength(1)
-    expect(first.reply).toBeNull()
     const seq = first.inputs[0]?.input_seq as number
     must(
       s.service.renew(lease.lease_id, { lease_token: lease.lease_token, inputs_delivered: [seq] }),
     )
-    expect(s.types(id)).toContain('task.input_delivered')
-    expect(s.ledger.getTask(id)?.status).toBe('blocked')
+    expect(
+      s.ledger.taskEvents(id).findLast((e) => e.type === 'task.input_delivered'),
+    ).toMatchObject({
+      payload: { input_seqs: [seq], via: 'running' },
+    })
     // 重复确认幂等；之后的续约不再下发。
     const again = must(
       s.service.renew(lease.lease_id, { lease_token: lease.lease_token, inputs_delivered: [seq] }),
     )
     expect(again.inputs).toEqual([])
     expect(s.types(id).filter((t) => t === 'task.input_delivered')).toHaveLength(1)
+  })
+
+  test('旧节点（不声明处理派工输入）不随派工下发，输入保持待送达', async () => {
+    const s = await setup({ inject: false, taskInputs: false })
+    const id = s.create()
+    const lease = await s.acquire()
+    await s.comment({ actor: 'mallory', allowed: false })
+    s.finish(lease, 'failed')
+    must(await s.tasks.retryTask(id, { actor: 'user' }))
+    const next = await s.acquire()
+    expect(next.inputs).toBeUndefined()
+    expect(s.ledger.pendingTaskInputs(id)).toHaveLength(1)
   })
 
   test('执行器不能中途注入时排队到下一次派工输入', async () => {
@@ -323,6 +350,14 @@ describe('送达', () => {
     const next = await s.acquire()
     expect(next.inputs?.map((i) => i.pr_event_seq)).toEqual([stranger.seq])
     expect(next.inputs?.[0]?.text).toContain('不可信')
+    // 节点确认之前仍待送达（派工响应丢失时不会丢输入）。
+    expect(s.ledger.pendingTaskInputs(id)).toHaveLength(1)
+    must(
+      s.service.renew(next.lease_id, {
+        lease_token: next.lease_token,
+        inputs_dispatched: [next.inputs?.[0]?.input_seq as number],
+      }),
+    )
     expect(s.ledger.pendingTaskInputs(id)).toEqual([])
   })
 
@@ -575,6 +610,7 @@ describe('账本兜底', () => {
         { actor: 'hub' },
       ),
     ).toMatchObject({ ok: false, error: { code: 'not_allowed_input' } })
+    // 已结束任务上的输入必须与恢复同一事务；即使这样写，陌生人的评论也被拒绝。
     expect(
       s.ledger.append(
         {
@@ -583,6 +619,25 @@ describe('账本兜底', () => {
           workspace: WS,
           payload: { source: 'pr', pr_event_seq: stranger.seq },
         },
+        { actor: 'hub' },
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'invalid_event' } })
+    expect(
+      s.ledger.appendMany(
+        [
+          {
+            type: 'task.input_added',
+            task_id: id,
+            workspace: WS,
+            payload: { source: 'pr', pr_event_seq: stranger.seq },
+          },
+          {
+            type: 'task.requeued',
+            task_id: id,
+            workspace: WS,
+            payload: { reason: 'input', pr_event_seq: stranger.seq },
+          },
+        ],
         { actor: 'hub' },
       ),
     ).toMatchObject({ ok: false, error: { code: 'not_allowed_input' } })
@@ -606,10 +661,6 @@ describe('账本兜底', () => {
     expect(
       s.ledger.appendMany([input, requeue], { actor: 'supervisor', actors: ['hub', 'supervisor'] }),
     ).toMatchObject({
-      ok: false,
-      error: { code: 'actor_mismatch' },
-    })
-    expect(s.ledger.append({ ...input }, { actor: 'supervisor' })).toMatchObject({
       ok: false,
       error: { code: 'actor_mismatch' },
     })

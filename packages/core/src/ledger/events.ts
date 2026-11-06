@@ -85,6 +85,10 @@ export const executorInfo = z
       .optional()
       .meta({ description: '交互式（如 codex-orca）或无头（如 claude-sdk）；由变更 ② 使用' }),
     adapter_capabilities: adapterCapabilities.default({ ...NO_ADAPTER_CAPABILITIES }),
+    task_inputs: z.boolean().optional().meta({
+      description:
+        '执行器会把派工的 inputs 放进输入并由节点确认（PR 直通，harness-neutral 8.4）；旧节点没有该字段时中枢不随派工下发输入',
+    }),
   })
   .meta({ title: 'Executor info' })
 export type ExecutorInfo = z.infer<typeof executorInfo>
@@ -93,6 +97,7 @@ export type ExecutorInfo = z.infer<typeof executorInfo>
 export const readExecutorInfo = executorInfo.extend({
   mode: executorInfo.shape.mode.catch(undefined),
   adapter_capabilities: readAdapterCapabilities,
+  task_inputs: z.boolean().optional().catch(undefined),
 })
 
 /**
@@ -608,6 +613,10 @@ export const eventPayloads = {
       .max(200)
       .meta({ description: '这次唤醒合并的账本事件 seq（按顺序）' }),
     generation: wakeGeneration,
+    source: z.literal('pr').optional().meta({
+      description:
+        '合并了 PR 评论（pr.wake_requested）的唤醒：保留 instruction 队列优先级，但不满足 auto_merge、受 observe 约束、新任务不继承原始指令',
+    }),
   }),
   /** 用户回答了 supervisor 的提问（D11）：条目关闭为 answered，并唤醒 supervisor。 */
   'supervisor.answered': z.strictObject({
@@ -754,8 +763,12 @@ export const eventPayloads = {
   }),
   /** 节点确认已把输入送进运行中的 worker（续约的 inputs_delivered）。 */
   'task.input_delivered': z.strictObject({
-    input_seqs: z.array(z.number().int().positive()).min(1).max(50),
+    input_seqs: z.array(z.number().int().positive()).min(1).max(200),
     lease_id: leaseId,
+    via: z.enum(['running', 'dispatch']).optional().meta({
+      description:
+        'running 送进运行中的 worker；dispatch 随派工输入交给执行器（节点确认后才记为送达）',
+    }),
   }),
   /**
    * 名单内用户的 PR 评论进入 supervisor 的 instruction 唤醒队列（harness-neutral 8.5、8.6）：
@@ -772,6 +785,8 @@ export const eventPayloads = {
       .optional()
       .meta({ description: 'handback 时为 worker 的理由；resume_rejected 时为校验未通过的原因' }),
   }),
+  /** 直通已处理这条 PR 事件（持久化检查点：中枢重启后从它之后继续，不按时间窗口重放）。 */
+  'pr.dispatched': z.strictObject({ pr_event_seq: z.number().int().positive() }),
   /**
    * 中枢 pr-watcher 读到的一条 PR 事件（D11）。只由中枢写入；`allowed` 由中枢按 `github.allowed_users`
    * 计算，不取自任何评论内容。重启后按 `cursor` 续读，已入账的不再送达。
@@ -866,6 +881,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task.input_added': 'task',
   'task.input_delivered': 'task',
   'pr.wake_requested': 'workspace',
+  'pr.dispatched': 'workspace',
 }
 
 const scopeShape = (scope: Scope) =>

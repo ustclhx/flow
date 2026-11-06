@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { PrEventPayload, prEventKind } from './pr-subscription.ts'
+import { PR_REQUEST_KINDS, type PrEventPayload, type prEventKind } from './pr-subscription.ts'
 import { clipText } from './redact.ts'
 
 /**
@@ -42,9 +42,17 @@ const escapeFacts = (value: unknown) =>
     .replace(/>/g, '\\u003e')
     .replace(/`/g, '\\u0060')
 
-/** PR 事件是否算"请求"：只有名单内的人类账号。 */
-export const isAllowedHumanPrEvent = (p: Pick<PrEventPayload, 'allowed' | 'actor_kind'>) =>
-  p.allowed === true && p.actor_kind === 'human'
+/** PR 事件是否算"请求"：只有名单内人类账号的 PR 评论或代码行评论（审查正文、CI 一律只作上下文）。 */
+export const isAllowedHumanPrEvent = (
+  p: Pick<PrEventPayload, 'allowed' | 'actor_kind'> & Partial<Pick<PrEventPayload, 'kind'>>,
+) =>
+  p.allowed === true &&
+  p.actor_kind === 'human' &&
+  (p.kind === undefined || PR_REQUEST_KINDS.includes(p.kind))
+
+/** 逐条宽松解析输入：单条格式错误只丢弃它本身，不让整批丢失。 */
+export const lenientInputs = (value: unknown): unknown =>
+  Array.isArray(value) ? value.filter((v) => deliveredInput.safeParse(v).success) : value
 
 /** 把一条 PR 事件渲染成任务输入。 */
 export function renderPrEventInput(event: { seq: number; payload: PrEventPayload }): string {

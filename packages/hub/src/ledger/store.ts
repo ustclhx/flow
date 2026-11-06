@@ -16,6 +16,7 @@ import {
   type InboxLevel,
   type InboxSource,
   inboxShortId,
+  isAllowedHumanPrEvent,
   type LedgerEvent,
   type LedgerEventDraft,
   type ListTasksQuery,
@@ -142,6 +143,8 @@ export interface WakeRecord {
   seq: number
   /** 这次唤醒合并的账本事件 seq（`supervisor.wake_started.events`，中枢写入）。 */
   events: number[]
+  /** 合并了 PR 评论（`pr.wake_requested`）的唤醒：来源记为 instruction:pr。 */
+  source?: 'pr'
 }
 
 /** 每张投影表按主键排序后的行（JSON 字段保持原文）。 */
@@ -201,6 +204,10 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   recentPrEvents(sinceIso: string): EventOf<'pr.event'>[]
   /** 是否已为这条 PR 事件写过同一原因（与任务）的 supervisor 唤醒请求。 */
   prWakeRequested(prEventSeq: number, reason: string, taskId?: string): boolean
+  /** 直通已处理到的最后一条 pr.event 的 seq（持久化检查点；没有时为 0）。 */
+  prDispatchedUpTo(): number
+  /** seq 大于 after 的 pr.event，按 seq 升序。 */
+  prEventsAfter(after: number, limit: number): EventOf<'pr.event'>[]
   /** 任务尚未送达的输入，按 seq 升序。 */
   pendingTaskInputs(taskId: string, limit?: number): { seq: number; pr_event_seq: number }[]
   /** 任务是否收到过这条 PR 事件（task.input_added）。 */
@@ -629,6 +636,7 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'task.input_added': ['hub'],
   'task.input_delivered': ['hub'],
   'pr.wake_requested': ['hub'],
+  'pr.dispatched': ['hub'],
 }
 
 /** 由用户操作结束委托的转交原因：与用户的 task_reply / 忽略同一次 append 写入，actor 为 user。 */
@@ -1224,8 +1232,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         if (
           !input ||
           input.pr_event_seq !== draft.payload.pr_event_seq ||
-          !ev?.payload.allowed ||
-          ev.payload.actor_kind !== 'human'
+          !ev ||
+          !isAllowedHumanPrEvent(ev.payload)
         ) {
           return invalidEvent('因输入恢复必须紧跟名单内人类评论的 task.input_added')
         }
@@ -1444,14 +1452,21 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
             `pr_event_seq ${draft.payload.pr_event_seq} 不是本 workspace 的 PR 事件`,
           )
         }
+        // 只送给事件发生前就已订阅的任务：后来才订阅的任务不能收到（或被重放）更早的 PR 事件。
         if (
           !get(
-            `SELECT 1 FROM pr_subscriptions WHERE task_id = ? AND pr = ? AND state = 'active'`,
+            `SELECT 1 FROM pr_subscriptions WHERE task_id = ? AND pr = ? AND state = 'active'
+               AND subscribed_seq < ?`,
             draft.task_id ?? null,
             ev.payload.pr,
+            ev.seq,
           )
         ) {
-          return fail('failure', 'not_subscribed', `任务没有有效的 ${ev.payload.pr} 订阅`)
+          return fail(
+            'failure',
+            'not_subscribed',
+            `任务在该事件之前没有有效的 ${ev.payload.pr} 订阅`,
+          )
         }
         if (
           get(
@@ -1465,7 +1480,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         // 已结束的任务只能因名单内的人类评论恢复（紧接着同一事务写 task.requeued{reason: input}）。
         if (
           (task?.status === 'done' || task?.status === 'failed') &&
-          !(ev.payload.allowed && ev.payload.actor_kind === 'human')
+          !isAllowedHumanPrEvent(ev.payload)
         ) {
           return fail(
             'failure',
@@ -1587,6 +1602,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       origin: WakeOrigin
       generation: number
       events?: number[]
+      source?: 'pr'
     }
     return {
       task_id: taskId,
@@ -1595,6 +1611,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       generation: p.generation,
       seq: r.seq,
       events: p.events ?? [],
+      ...(p.source === 'pr' ? { source: 'pr' as const } : {}),
     }
   }
 
@@ -1672,7 +1689,28 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         const checked = o.check()
         if (!checked.ok) throw new Abort(checked)
       }
-      return drafts.map((d, i) => writeOne({ ...d, actor: o.actors?.[i] ?? o.actor }, ts))
+      return drafts.map((d, i) => {
+        // 已结束任务上的输入只能与恢复同一事务写入，并紧跟 task.requeued{reason: input}。
+        if (d.type === 'task.input_added' && d.task_id !== undefined) {
+          const status = taskState(d.task_id)?.status
+          const next = drafts[i + 1]
+          if (
+            (status === 'done' || status === 'failed') &&
+            !(
+              next?.type === 'task.requeued' &&
+              next.task_id === d.task_id &&
+              (next.payload as { reason?: string }).reason === 'input'
+            )
+          ) {
+            throw new Abort(
+              invalidEvent(
+                '已结束任务上的 task.input_added 必须在同一事务中紧跟 task.requeued{reason: input}',
+              ),
+            )
+          }
+        }
+        return writeOne({ ...d, actor: o.actors?.[i] ?? o.actor }, ts)
+      })
     })
     if (result.ok) notify(result.data)
     return result
@@ -1981,6 +2019,21 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return all<EventRow>(
         "SELECT * FROM events WHERE type = 'pr.event' AND ts >= ? ORDER BY seq",
         sinceIso,
+      ).map((r) => rowToEvent(r) as EventOf<'pr.event'>)
+    },
+    prDispatchedUpTo() {
+      return (
+        get<{ s: number | null }>(
+          `SELECT MAX(json_extract(payload_json, '$.pr_event_seq')) AS s FROM events
+           WHERE type = 'pr.dispatched'`,
+        )?.s ?? 0
+      )
+    },
+    prEventsAfter(after, limit) {
+      return all<EventRow>(
+        "SELECT * FROM events WHERE type = 'pr.event' AND seq > ? ORDER BY seq LIMIT ?",
+        after,
+        limit,
       ).map((r) => rowToEvent(r) as EventOf<'pr.event'>)
     },
     prWakeRequested(prEventSeq, reason, taskId) {

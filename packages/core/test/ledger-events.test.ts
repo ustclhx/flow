@@ -465,6 +465,10 @@ const samples: Record<
     },
     invalid: { workspace: 'ws/product-res', payload: { pr_event_seq: 7, reason: 'please' } },
   },
+  'pr.dispatched': {
+    valid: { workspace: 'ws/product-res', payload: { pr_event_seq: 7 } },
+    invalid: { workspace: 'ws/product-res', payload: { pr_event_seq: 0 } },
+  },
   'pr.event': {
     valid: {
       workspace: 'ws/product-res',

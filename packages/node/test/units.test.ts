@@ -129,6 +129,7 @@ describe('执行器注册表', () => {
       {
         type: 'fake',
         mode: 'headless',
+        task_inputs: true,
         adapter_capabilities: {
           approval_requests: 'structured',
           inject_while_running: true,
