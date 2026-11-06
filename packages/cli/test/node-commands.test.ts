@@ -55,7 +55,11 @@ test('raindown node list：输出节点 id、能力与最近活动时间', async
     node_id: node.data.nodeId,
     hostname: 'cli-host',
     executors: [
-      { type: 'fake', mode: 'headless', capabilities: createFakeExecutor().adapterCapabilities },
+      {
+        type: 'fake',
+        mode: 'headless',
+        adapter_capabilities: createFakeExecutor().adapterCapabilities,
+      },
     ],
   })
 })

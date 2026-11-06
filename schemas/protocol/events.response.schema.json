@@ -3206,7 +3206,7 @@
                       "headless"
                     ]
                   },
-                  "capabilities": {
+                  "adapter_capabilities": {
                     "default": {
                       "approval_requests": "none",
                       "inject_while_running": false,
@@ -3228,7 +3228,8 @@
                         "type": "boolean"
                       },
                       "resume_session": {
-                        "type": "boolean"
+                        "type": "boolean",
+                        "description": "进程结束后仍能继续同一个 harness 会话"
                       },
                       "raindown_mcp": {
                         "type": "boolean"
@@ -3250,7 +3251,7 @@
                 },
                 "required": [
                   "type",
-                  "capabilities"
+                  "adapter_capabilities"
                 ],
                 "additionalProperties": false,
                 "title": "Executor info"

@@ -1,5 +1,5 @@
 import type { Database, LedgerEvent, Statement, TaskStatus } from '@raindown/core'
-import { executorInfo } from '@raindown/core'
+import { readExecutorInfo } from '@raindown/core'
 
 /**
  * 投影维护：唯一的 `apply(event)`（design D2）。
@@ -266,7 +266,7 @@ export function createApplier(db: Database): Applier {
           p.version,
           JSON.stringify(p.capabilities),
           // 旧注册事件也补齐能力，保证重放后的投影与新注册一致。
-          JSON.stringify(executorInfo.array().parse(p.executors ?? [])),
+          JSON.stringify(readExecutorInfo.array().parse(p.executors ?? [])),
           p.concurrency,
           e.ts,
         )

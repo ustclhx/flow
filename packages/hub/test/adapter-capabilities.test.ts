@@ -25,7 +25,7 @@ async function setup() {
   cleanups.push(ledger.cleanup)
   const protocol = createNodeProtocol({ ledger: ledger.store, leaseTtlS: 60, leaseWaitMaxS: 30 })
   cleanups.push(() => protocol.stop())
-  return { ...ledger, service: protocol.service }
+  return { ...ledger, service: protocol.service, routes: protocol.routes }
 }
 
 const registration = {
@@ -44,7 +44,9 @@ test('注册保存任意适配器自述的能力，重放后仍可列出', async
     raindown_mcp: true,
     out_of_band_detection: false,
   }
-  const executors: ExecutorInfo[] = [{ type: 'custom-harness', mode: 'headless', capabilities }]
+  const executors: ExecutorInfo[] = [
+    { type: 'custom-harness', mode: 'headless', adapter_capabilities: capabilities },
+  ]
   const registered = service.registerNode({ ...registration, executors }, 'unknown')
   expect(registered.ok && registered.data.node.executors).toEqual(executors)
   expect(store.eventsAfter(0)[0]?.payload).toMatchObject({ executors })
@@ -57,7 +59,7 @@ test('旧节点注册、旧投影与旧注册事件重放都补齐保守能力',
   const { path, store, service } = await setup()
   const oldExecutor = { type: 'codex-orca', mode: 'interactive' as const }
   const oldExecutors = [oldExecutor]
-  const expected = [{ ...oldExecutor, capabilities: NO_ADAPTER_CAPABILITIES }]
+  const expected = [{ ...oldExecutor, adapter_capabilities: NO_ADAPTER_CAPABILITIES }]
   const registered = service.registerNode({ ...registration, executors: oldExecutors }, 'unknown')
   expect(registered.ok && registered.data.node.executors).toEqual(expected)
 
@@ -81,3 +83,78 @@ test('旧节点注册、旧投影与旧注册事件重放都补齐保守能力',
   expect(store.rebuild().ok).toBe(true)
   expect(store.getNode(registration.node_id)?.executors).toEqual(expected)
 })
+
+test('HTTP 注册剥离未来能力键，已知能力字段类型错误仍拒绝', async () => {
+  const { routes } = await setup()
+  const register = (adapter_capabilities: unknown) =>
+    routes.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...registration,
+        executors: [{ type: 'custom-harness', adapter_capabilities, future_metadata: true }],
+      }),
+    })
+  const response = await register({ ...NO_ADAPTER_CAPABILITIES, future_feature: true })
+  expect(response.status).toBe(200)
+  const body = await response.json()
+  expect(body).toHaveProperty('data.node.executors', [
+    { type: 'custom-harness', adapter_capabilities: NO_ADAPTER_CAPABILITIES },
+  ])
+  const invalid = await register({ ...NO_ADAPTER_CAPABILITIES, resume_session: 'true' })
+  expect(invalid.status).toBe(400)
+})
+
+test.each(['event', 'projection'] as const)(
+  '读取 %s 的未来能力键与未知字段值时逐项降级，保留其他已知能力',
+  async (source) => {
+    const { path, store, service } = await setup()
+    const registered = service.registerNode(
+      { ...registration, executors: [{ type: 'custom-harness' }] },
+      'unknown',
+    )
+    expect(registered.ok).toBe(true)
+    const executors = [
+      {
+        type: 'custom-harness',
+        future_metadata: true,
+        adapter_capabilities: {
+          approval_requests: 'future-approval-mode',
+          inject_while_running: true,
+          resume_session: 'unsupported',
+          raindown_mcp: true,
+          future_feature: true,
+        },
+      },
+    ]
+    const db = await openDatabase(path)
+    try {
+      if (source === 'projection') {
+        db.prepare('UPDATE nodes SET executors_json = ? WHERE node_id = ?').run(
+          JSON.stringify(executors),
+          registration.node_id,
+        )
+      } else {
+        db.prepare('INSERT INTO events (ts, type, actor, payload_json) VALUES (?, ?, ?, ?)').run(
+          '2026-11-06T00:00:00.000Z',
+          'node.registered',
+          'node:n-adapter',
+          JSON.stringify({ ...registration, executors, concurrency: 1 }),
+        )
+      }
+    } finally {
+      db.close()
+    }
+    if (source === 'event') expect(store.rebuild().ok).toBe(true)
+    expect(store.getNode(registration.node_id)?.executors).toEqual([
+      {
+        type: 'custom-harness',
+        adapter_capabilities: {
+          ...NO_ADAPTER_CAPABILITIES,
+          inject_while_running: true,
+          raindown_mcp: true,
+        },
+      },
+    ])
+  },
+)

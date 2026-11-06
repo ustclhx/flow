@@ -10,6 +10,7 @@ import {
   fail,
   formatZodIssues,
   type InboxVia,
+  isKnownEventType,
   type ListTasksData,
   listTasksQuery,
   loadRoles,
@@ -651,7 +652,11 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
     getTask(id) {
       const task = ledger.getTask(id)
       return task
-        ? ok({ task, events: ledger.taskEvents(id), replies: ledger.taskReplies(id) })
+        ? ok({
+            task,
+            events: ledger.taskEvents(id).filter((event) => isKnownEventType(event.type)),
+            replies: ledger.taskReplies(id),
+          })
         : notFound(id)
     },
 

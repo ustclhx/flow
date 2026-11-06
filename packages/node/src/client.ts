@@ -16,6 +16,7 @@ import {
   HEADERS,
   HUB_TOKEN_ENV,
   HUB_UNAVAILABLE,
+  isKnownEventType,
   type ListTasksData,
   listNodesData,
   listTasksData,
@@ -40,7 +41,25 @@ import {
   showTaskData,
   type TaskStatus,
 } from '@raindown/core'
-import type { z } from 'zod'
+import { z } from 'zod'
+
+/** 较新中枢可能返回新增事件；仅跳过未知类型，已知事件和损坏信封仍按协议严格校验。 */
+const compatibleShowTaskData = showTaskData.extend({
+  events: z.preprocess(
+    (events) =>
+      Array.isArray(events)
+        ? events.filter(
+            (event) =>
+              typeof event !== 'object' ||
+              event === null ||
+              !('type' in event) ||
+              typeof event.type !== 'string' ||
+              isKnownEventType(event.type),
+          )
+        : events,
+    showTaskData.shape.events,
+  ),
+})
 
 /**
  * 节点访问中枢的最小 HTTP 客户端：只覆盖 nodes / leases（含 ack-reply）端点（node-protocol spec），
@@ -198,7 +217,8 @@ export function createNodeHubClient(o: NodeHubClientOptions): NodeHubClient {
       call('POST', leasePath(ENDPOINTS['leases-ack-reply'].path, id), ackReplyData, req),
     policyCheck: (req, opts = {}) =>
       call('POST', ENDPOINTS['policy-check'].path, policyCheckData, req, opts),
-    showTask: (id) => call('GET', leasePath(ENDPOINTS['tasks-show'].path, id), showTaskData),
+    showTask: (id) =>
+      call('GET', leasePath(ENDPOINTS['tasks-show'].path, id), compatibleShowTaskData),
     listTasks: (query) => {
       const params = new URLSearchParams()
       if (query.workspace) params.set('workspace', query.workspace)

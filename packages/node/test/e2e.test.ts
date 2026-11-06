@@ -151,7 +151,7 @@ describe('节点端到端（fake 执行器）', () => {
         {
           type: 'fake',
           mode: 'headless',
-          capabilities: {
+          adapter_capabilities: {
             approval_requests: 'structured',
             inject_while_running: true,
             resume_session: true,

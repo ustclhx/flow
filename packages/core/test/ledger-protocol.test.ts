@@ -171,7 +171,7 @@ describe('请求体', () => {
       capabilities: ['executor:codex-orca'],
       executors: [{ type: 'codex-orca', mode: 'interactive' }],
     })
-    expect(request.executors[0]?.capabilities).toEqual(NO_ADAPTER_CAPABILITIES)
+    expect(request.executors[0]?.adapter_capabilities).toEqual(NO_ADAPTER_CAPABILITIES)
   })
 
   test('声明的适配器能力须完整且类型合法', () => {
@@ -183,6 +183,12 @@ describe('请求体', () => {
     expect(
       adapterCapabilities.safeParse({ ...NO_ADAPTER_CAPABILITIES, resume_session: 'true' }).success,
     ).toBe(false)
+  })
+
+  test('适配器注册能力剥离未来新增键，保留已知字段', () => {
+    expect(adapterCapabilities.parse({ ...NO_ADAPTER_CAPABILITIES, future_feature: true })).toEqual(
+      NO_ADAPTER_CAPABILITIES,
+    )
   })
 
   test('acquire 的 slots 可选，缺省类别为 0', () => {

@@ -17,6 +17,7 @@ import {
   ledgerEvent,
   mergeRequestId,
   REPLY_REASON_MAX,
+  readExecutorInfo,
   taskProposalDecision,
   taskProposalId,
 } from './events.ts'
@@ -584,7 +585,7 @@ export const nodeView = z
     hostname: z.string(),
     version: z.string(),
     capabilities: z.array(capability),
-    executors: z.array(executorInfo),
+    executors: z.array(readExecutorInfo),
     concurrency: z.number().int().min(1),
     registered_at: timestamp,
     last_seen_at: timestamp

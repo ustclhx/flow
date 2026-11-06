@@ -519,8 +519,8 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
       approval_requests: 'structured',
       inject_while_running: true,
       resume_session: true,
-      // 已加载 Raindown MCP；任务绑定与 raindown_report 由后续阶段扩展。
-      raindown_mcp: true,
+      // 第 3 阶段完成任务绑定与 raindown_report 后再改为 true。
+      raindown_mcp: false,
       out_of_band_detection: false,
     },
     classify: classifyClaudeSdk,

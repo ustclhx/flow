@@ -180,3 +180,35 @@ test('中枢启动重放未知事件时收件箱和 supervisor 正常启动，�
     store.eventsAfter(0).some((event) => event.type === 'supervisor.scheduler_initialized'),
   ).toBe(true)
 })
+
+test('任务详情跳过未知事件，账本读取仍保留原文', async () => {
+  const paths = raindownPaths(home)
+  store = await openLedger(paths.ledgerDb)
+  must(store.append(drafts('t1')['task.created'], sys))
+  const known = store.taskEvents('t1')
+  await insertUnknown(paths.ledgerDb)
+  const unknown = store.taskEvents('t1').at(-1)
+  store.close()
+  store = undefined
+  hub = must(
+    await runHub({
+      home,
+      port: 0,
+      logger: { info() {}, warn() {} },
+      secrets: { watch: false },
+      inbox: { watch: false, channels: [] },
+    }),
+  )
+  const response = await fetch(`${hub.url}/v1/tasks/t1`, {
+    headers: { Authorization: `Bearer ${readFileSync(paths.hubToken, 'utf8').trim()}` },
+  })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({
+    ok: true,
+    data: { task: { id: 't1' }, events: known, replies: [] },
+  })
+  await hub.stop()
+  hub = undefined
+  store = await openLedger(paths.ledgerDb)
+  expect(store.taskEvents('t1').at(-1)).toEqual(unknown)
+})

@@ -325,7 +325,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
     adapterCapabilities: {
       approval_requests: 'inferred',
       inject_while_running: true,
-      resume_session: true,
+      resume_session: false,
       raindown_mcp: false,
       out_of_band_detection: false,
     },

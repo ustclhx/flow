@@ -207,7 +207,7 @@ export function createExecutorRegistry(plugins: readonly ExecutorPlugin[]): Exec
       [...byType.values()].map((p) => ({
         type: p.type,
         ...(p.mode ? { mode: p.mode } : {}),
-        capabilities: p.adapterCapabilities,
+        adapter_capabilities: p.adapterCapabilities,
       })),
   }
 }
