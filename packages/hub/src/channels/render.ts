@@ -7,7 +7,9 @@ import {
   redactSecrets,
 } from '@raindown/core'
 import { blockedText } from '../inbox/blocked.ts'
+import { readInboxItem } from '../inbox/read.ts'
 import type { LedgerStore } from '../ledger/store.ts'
+import type { TaskStageReader } from '../ledger/task-stage.ts'
 import type { ChannelMessage, OutboundItem } from './types.ts'
 
 /**
@@ -19,7 +21,7 @@ import type { ChannelMessage, OutboundItem } from './types.ts'
  */
 
 export interface RenderOptions {
-  ledger: Pick<LedgerStore, 'eventsAfter'>
+  ledger: Pick<LedgerStore, 'eventsAfter'> & TaskStageReader
   /** 终端片段保留的末尾字符数；0 表示不发片段。 */
   snippetMax: number
   redact?: (text: string) => string
@@ -91,6 +93,7 @@ export function toOutbound(item: InboxItemView, o: RenderOptions): OutboundItem 
     source: item.source,
     workspace: item.workspace,
     task_id: item.task_id,
+    ...(item.task_id ? { task_stage: readInboxItem(o.ledger, item).task_stage ?? null } : {}),
     title: redact(item.title),
     text: clipText(redact(text), INBOX_BODY_MAX),
     snippet,

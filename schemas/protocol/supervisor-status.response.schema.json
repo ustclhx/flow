@@ -69,6 +69,27 @@
                         ],
                         "description": "任务状态"
                       },
+                      "stage": {
+                        "description": "读取时从账本派生的当前阶段",
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "waiting-human-approval",
+                              "waiting-human-answer",
+                              "waiting-supervisor",
+                              "waiting-human-review",
+                              "stalled",
+                              "queued",
+                              "idle",
+                              "working"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "events": {
                         "type": "integer",
                         "minimum": 0,
@@ -149,6 +170,27 @@
                           "cancelled"
                         ],
                         "description": "任务状态"
+                      },
+                      "stage": {
+                        "description": "读取时从账本派生的当前阶段",
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "waiting-human-approval",
+                              "waiting-human-answer",
+                              "waiting-supervisor",
+                              "waiting-human-review",
+                              "stalled",
+                              "queued",
+                              "idle",
+                              "working"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       "events": {
                         "type": "integer",
@@ -404,6 +446,27 @@
                           "cancelled"
                         ],
                         "description": "任务状态"
+                      },
+                      "stage": {
+                        "description": "读取时从账本派生的当前阶段",
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "waiting-human-approval",
+                              "waiting-human-answer",
+                              "waiting-supervisor",
+                              "waiting-human-review",
+                              "stalled",
+                              "queued",
+                              "idle",
+                              "working"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       "events": {
                         "type": "integer",

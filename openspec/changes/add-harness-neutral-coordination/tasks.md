@@ -43,8 +43,8 @@
 
 ## 5. 阶段
 
-- [ ] 5.1 core 纯函数 `taskStage`（D8）与完整的顺序测试
-- [ ] 5.2 `raindown task list` 显示阶段、`--stage` 过滤与默认排序；`raindown task show`、收件箱条目、`raindown supervisor status` 显示阶段
+- [x] 5.1 core 纯函数 `taskStage`（D8）与完整的顺序测试
+- [x] 5.2 `raindown task list` 显示阶段、`--stage` 过滤与默认排序；`raindown task show`、收件箱条目、`raindown supervisor status` 显示阶段
 
 ## 6. 上下文指针与原始指令
 

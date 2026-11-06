@@ -1,5 +1,7 @@
-import type { InboxItemView } from '@raindown/core'
+import { type InboxItemData, TASK_STAGE_LABELS } from '@raindown/core'
+import { readInboxItem } from '../../inbox/read.ts'
 import type { LedgerStore } from '../../ledger/store.ts'
+import type { TaskStageReader } from '../../ledger/task-stage.ts'
 import type { ChannelStatus } from '../types.ts'
 
 /**
@@ -31,20 +33,26 @@ export const HELP_TEXT = [
 const LEVEL_TAG = { interrupt: '紧急', decide: '待定', digest: '摘要' } as const
 const INBOX_LIST_MAX = 30
 
-export function inboxText(items: readonly InboxItemView[], total: number): string {
+export function inboxText(items: readonly InboxItemData[], total: number): string {
   if (items.length === 0) return '收件箱是空的。'
   const lines = items.map((i) => {
     const ws = i.workspace ? ` ${i.workspace}` : ''
-    return `#${i.short_id} [${LEVEL_TAG[i.level]}]${ws} ${i.title}`
+    const stage = i.task_stage ? ` [${TASK_STAGE_LABELS[i.task_stage]}]` : ''
+    return `#${i.short_id} [${LEVEL_TAG[i.level]}]${ws}${stage} ${i.title}`
   })
   const more =
     total > items.length ? `\n…另有 ${total - items.length} 条，用 raindown inbox 查看全部` : ''
   return `未关闭的条目（${total} 条）：\n${lines.join('\n')}${more}`
 }
 
-export function listOpenItems(ledger: Pick<LedgerStore, 'listInboxItems'>): string {
+export function listOpenItems(
+  ledger: Pick<LedgerStore, 'listInboxItems'> & TaskStageReader,
+): string {
   const all = ledger.listInboxItems({ state: 'open', limit: 1000 })
-  return inboxText(all.slice(0, INBOX_LIST_MAX), all.length)
+  return inboxText(
+    all.slice(0, INBOX_LIST_MAX).map((item) => readInboxItem(ledger, item)),
+    all.length,
+  )
 }
 
 /** `/status` 的内容（中枢在 runHub 里组装）。 */

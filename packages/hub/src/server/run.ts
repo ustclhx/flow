@@ -321,7 +321,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         { path: '/', app: createTaskRoutes({ ledger, tasks }) },
         { path: '/', app: createWorkerReportRoutes({ ledger, now: () => clock.now() }) },
         { path: '/', app: createInboxRoutes(inboxDeps) },
-        { path: '/', app: createSupervisorRoutes({ scheduler: () => wakes }) },
+        { path: '/', app: createSupervisorRoutes({ scheduler: () => wakes, ledger }) },
         {
           path: '/',
           app: createBriefRoutes({

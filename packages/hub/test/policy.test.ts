@@ -95,7 +95,7 @@ test('具体规则优先：合同 scope 决定 draft-approve，事件可查询�
     { action: 'git.push', level: 'draft-approve' },
   ])
   const shown = must(await user.showTask(task.id))
-  expect(shown.task).toEqual(task)
+  expect(shown.task).toEqual({ ...task, stage: 'queued' })
   expect(shown.events.at(-1)).toMatchObject({
     type: 'policy.decided',
     actor: 'policy',
@@ -114,7 +114,7 @@ test('具体规则优先：合同 scope 决定 draft-approve，事件可查询�
   expect((await raw({ ...request, workspace: 'ws/other', role: 'admin' })).status).toBe(400)
   must(await user.rebuild())
   const rebuilt = must(await user.showTask(task.id))
-  expect(rebuilt.task).toEqual(task)
+  expect(rebuilt.task).toEqual(shown.task)
   expect(rebuilt.events).toEqual(shown.events)
 })
 

@@ -27,6 +27,7 @@ import {
 } from './events.ts'
 import { taskRecovery } from './recovery.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
+import { taskStageFilter, taskStageSchema } from './stage.ts'
 import {
   supervisorStatusData,
   supervisorStatusQuery,
@@ -509,20 +510,25 @@ export const listTasksQuery = z
   .strictObject({
     workspace: workspaceRef.optional(),
     status: taskStatus.optional(),
+    stage: taskStageFilter.optional(),
     parent: taskId.optional(),
     pr: prUrl.optional(),
     offset: z.coerce.number().int().nonnegative().optional(),
     limit: limit.default(50),
   })
-  .meta({ title: 'GET /v1/tasks 查询参数', description: '按创建时间倒序' })
+  .meta({ title: 'GET /v1/tasks 查询参数', description: '等人的任务优先，同组按创建时间倒序' })
 export type ListTasksQuery = z.infer<typeof listTasksQuery>
 
-export const listTasksData = z.object({ tasks: z.array(taskView) }).meta({ title: 'GET /v1/tasks' })
+/** 阶段只在读取时附加；可缺省以兼容旧中枢，不进入任务投影。 */
+const stagedTaskView = taskView.extend({ stage: taskStageSchema.nullable().optional() })
+export const listTasksData = z
+  .object({ tasks: z.array(stagedTaskView) })
+  .meta({ title: 'GET /v1/tasks' })
 export type ListTasksData = z.infer<typeof listTasksData>
 
 export const showTaskData = z
   .object({
-    task: taskView,
+    task: stagedTaskView,
     events: z.array(ledgerEvent).meta({ description: '该任务的全部事件' }),
     replies: z.array(replyView).default([]).meta({ description: '该任务收到的全部回复' }),
     attempts: z.array(taskAttempt).default([]).meta({ description: '按开始时间排列的派工列表' }),

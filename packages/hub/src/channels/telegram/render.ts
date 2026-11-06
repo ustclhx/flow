@@ -1,4 +1,4 @@
-import type { InboxAction, InboxLevel } from '@raindown/core'
+import { type InboxAction, type InboxLevel, TASK_STAGE_LABELS } from '@raindown/core'
 import type { ChannelMessage, OutboundItem } from '../types.ts'
 import type { InlineButton, ReplyMarkup } from './api.ts'
 
@@ -140,6 +140,7 @@ function renderItem(item: OutboundItem, scale: number, r: Redact): string {
   if (item.workspace) top.push(`<code>${escapeHtml(r(item.workspace))}</code>`)
   top.push(`<code>#${escapeHtml(item.short_id)}</code>`)
   const lines = [top.join(' · ')]
+  if (item.task_stage) lines.push(`阶段：${TASK_STAGE_LABELS[item.task_stage]}`)
   if (item.closed) lines.push(`✅ <b>${escapeHtml(r(item.closed.label))}</b>`)
   lines.push(`<b>${escapeHtml(clip(r(item.title), 200))}</b>`)
   const text = clip(r(item.text), Math.floor(1500 * scale))
@@ -174,6 +175,7 @@ function renderBatch(items: OutboundItem[], scale: number, r: Redact): string {
     const parts = [
       `${index + 1}. <code>#${escapeHtml(item.short_id)}</code>${ws} <b>${escapeHtml(clip(r(item.title), Math.min(150, per)))}</b>`,
     ]
+    if (item.task_stage) parts.push(`阶段：${TASK_STAGE_LABELS[item.task_stage]}`)
     if (item.closed) {
       parts.push(`✅ ${escapeHtml(r(item.closed.label))}`)
     } else {

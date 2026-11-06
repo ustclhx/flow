@@ -12,6 +12,7 @@ import {
   showTaskQuery,
 } from '../ledger/protocol.ts'
 import { checkContractSecrets } from '../ledger/redact.ts'
+import { TASK_STAGE_LABELS } from '../ledger/stage.ts'
 import { RETRYABLE_BLOCKED_REASONS, type TaskView } from '../ledger/task.ts'
 import { fail, ok } from '../result.ts'
 import { loadRoles } from '../roles.ts'
@@ -62,7 +63,7 @@ export const taskListOp = defineOperation({
   name: 'task_list',
   access: 'read',
   cli: 'task list',
-  summary: '按 workspace 和状态列出任务',
+  summary: '按 workspace、状态和阶段列出任务',
   input: listTasksQuery,
   run: (input: z.input<typeof listTasksQuery>, ctx) => client(ctx).listTasks(input),
   human: ({ tasks }) =>
@@ -70,6 +71,7 @@ export const taskListOp = defineOperation({
       { header: 'ID', value: (t) => t.id },
       { header: 'Workspace', value: (t) => t.workspace },
       { header: '状态', value: (t) => t.status },
+      { header: '阶段', value: (t) => (t.stage ? TASK_STAGE_LABELS[t.stage] : '—') },
       { header: '目标', value: (t) => t.contract.goal, max: 60 },
     ]),
 })
@@ -90,6 +92,7 @@ export const taskShowOp = defineOperation({
     const { task, events, attempts } = data
     return [
       taskSummary(task),
+      `阶段：${task.stage ? TASK_STAGE_LABELS[task.stage] : '—'}`,
       `合同：${JSON.stringify(task.contract, null, 2)}`,
       `授权依据：${task.mandate ? JSON.stringify(task.mandate, null, 2) : '未记录（旧任务）'}`,
       ...(task.blocked ? [`卡住原因：${task.blocked.reason} — ${task.blocked.message}`] : []),

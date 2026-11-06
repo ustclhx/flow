@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { actor, taskId, timestamp } from '../ledger/common.ts'
+import { taskStageSchema } from '../ledger/stage.ts'
 import { workspaceRef } from '../schema/common.ts'
 
 /**
@@ -226,7 +227,12 @@ export const inboxListQuery = z.strictObject({
   workspace: workspaceRef.optional(),
 })
 export type InboxListQuery = z.infer<typeof inboxListQuery>
-export const inboxListData = z.object({ items: z.array(inboxItemView) })
+/** 读响应扩展：阶段随任务与委托变化派生，不进入收件箱投影或创建事件。 */
+export const inboxItemData = inboxItemView.extend({
+  task_stage: taskStageSchema.nullable().optional(),
+})
+export type InboxItemData = z.infer<typeof inboxItemData>
+export const inboxListData = z.object({ items: z.array(inboxItemData) })
 
 /** 任务提案接受时可改写的目标的长度上限（字符）。 */
 export const INBOX_GOAL_MAX = 16_384
@@ -241,4 +247,4 @@ export const inboxActRequest = z.strictObject({
 })
 export type InboxActRequest = z.infer<typeof inboxActRequest>
 /** 非 dismiss 操作成功时条目可能仍在等待底层状态变化。 */
-export const inboxActData = z.object({ item: inboxItemView })
+export const inboxActData = z.object({ item: inboxItemData })

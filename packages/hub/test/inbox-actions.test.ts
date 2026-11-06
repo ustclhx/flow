@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { createProposal, type InboxItemView, renderEntry } from '@raindown/core'
+import {
+  createProposal,
+  type InboxItemView,
+  inboxListData,
+  inboxListOp,
+  renderEntry,
+} from '@raindown/core'
 import { initTempHome } from '../../core/test/helpers.ts'
+import { listOpenItems } from '../src/channels/telegram/commands.ts'
 import {
   createHubApp,
   createInboxReactor,
@@ -10,6 +17,8 @@ import {
   createNodeProtocol,
   createProposalWatcher,
   createTaskService,
+  renderMessage,
+  renderTelegramMessage,
 } from '../src/index.ts'
 import { anyRole, contractInput, must, tempLedger } from './ledger-helpers.ts'
 import { authHeaders, FakeClock, testToken } from './server-fixtures.ts'
@@ -51,7 +60,10 @@ async function setup() {
       headers: { ...authHeaders, 'X-Raindown-Actor': actor, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-  const createBlocked = async (reason: 'question' | 'awaiting_approval' = 'question') => {
+  const createBlocked = async (
+    reason: 'question' | 'awaiting_approval' = 'question',
+    reported = false,
+  ) => {
     const task = must(await tasks.createTask(contractInput(), { actor: 'codex' })).task
     must(
       protocol.service.registerNode(
@@ -71,7 +83,23 @@ async function setup() {
     must(
       protocol.service.renew(lease.lease_id, {
         lease_token: lease.lease_token,
-        blocked: { reason, message: '请决定' },
+        blocked: {
+          reason,
+          message: '请决定',
+          ...(reported
+            ? {
+                basis: 'reported' as const,
+                question: {
+                  text: '请决定',
+                  options: [
+                    { label: 'A', description: '方案 A' },
+                    { label: 'B', description: '方案 B' },
+                  ],
+                  recommended: 'A',
+                },
+              }
+            : {}),
+        },
       }),
     )
     await reactor.idle()
@@ -83,6 +111,65 @@ async function setup() {
 }
 
 describe('收件箱操作与查询（3.2）', () => {
+  test('阶段在读取与渲染时随委托转交变化，不保存在条目投影与正文里', async () => {
+    const ctx = await setup()
+    const { task, item } = await ctx.createBlocked('question', true)
+    const block = ctx.store.taskEvents(task.id).findLast((event) => event.type === 'task.blocked')
+    if (!block) throw new Error('没有卡住事件')
+    const list = async () => {
+      const response = await ctx.app.request('/v1/inbox', { headers: authHeaders })
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as { data: unknown }
+      return inboxListData.parse(body.data)
+    }
+    const first = await list()
+    expect(first.items[0]?.task_stage).toBe('waiting-human-answer')
+    expect(inboxListOp.human?.(first)).toContain('等人回答')
+    must(
+      ctx.store.append(
+        {
+          type: 'task.reply_delegated',
+          task_id: task.id,
+          workspace: task.workspace,
+          payload: {
+            task_id: task.id,
+            block_seq: block.seq,
+            kind: 'question',
+            deadline: '2026-10-25T09:00:00Z',
+          },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    await ctx.reactor.idle()
+    expect((await list()).items[0]?.task_stage).toBe('waiting-supervisor')
+    expect(listOpenItems(ctx.store)).toContain('等 supervisor')
+    // 故意重用创建时读出的 item：渲染不能依赖旧条目携带的阶段快照。
+    const delegated = renderMessage('item', [item], { ledger: ctx.store, snippetMax: 0 })
+    expect(renderTelegramMessage(delegated, (text) => text).text).toContain('阶段：等 supervisor')
+    must(
+      ctx.store.append(
+        {
+          type: 'task.reply_escalated',
+          task_id: task.id,
+          workspace: task.workspace,
+          payload: { block_seq: block.seq, reason: 'timeout' },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    await ctx.reactor.idle()
+    expect((await list()).items[0]?.task_stage).toBe('waiting-human-answer')
+    const escalated = renderMessage('batch', [item], { ledger: ctx.store, snippetMax: 0 })
+    expect(renderTelegramMessage(escalated, (text) => text).text).toContain('阶段：等人回答')
+    const created = ctx.store
+      .taskEvents(task.id)
+      .find((event) => event.type === 'inbox.item_created')
+    expect(created?.payload).not.toHaveProperty('task_stage')
+    expect(ctx.store.getInboxItem(item.id)).not.toHaveProperty('task_stage')
+    expect(created?.payload).toHaveProperty('body', item.body)
+  })
+
   test('approve 只提交回复；节点送达后恢复任务，由反应器关闭且保留渠道，重建后仍一致', async () => {
     const ctx = await setup()
     const { task, lease, item } = await ctx.createBlocked('awaiting_approval')

@@ -75,6 +75,130 @@ afterEach(async () => {
 })
 
 describe('任务操作与真实中枢', () => {
+  test('task list 按阶段过滤、等人优先且保留组内顺序，JSON 与详情显示同一阶段', async () => {
+    await start()
+    const ledger = await openLedger(raindownPaths(home).ledgerDb)
+    const kinds = ['approval', 'answer', 'review', 'stalled', 'working', 'queued', 'ended'] as const
+    const ids = {} as Record<(typeof kinds)[number], string>
+    try {
+      for (const kind of kinds) {
+        const task = data(await client().createTask({ ...contract, goal: kind })).task
+        ids[kind] = task.id
+        if (kind === 'queued') continue
+        const base = { task_id: task.id, workspace: task.workspace }
+        const lease_id = `lease-${kind}`
+        data(
+          ledger.appendMany(
+            [
+              {
+                ...base,
+                type: 'task.started',
+                payload: { node_id: 'n-stage', lease_id, attempt: 1 },
+              },
+              {
+                ...base,
+                type: 'lease.granted',
+                payload: {
+                  lease_id,
+                  node_id: 'n-stage',
+                  token_sha256: 'ab'.repeat(32),
+                  ttl_s: 60,
+                  expires_at: '2100-01-01T00:00:00.000Z',
+                },
+              },
+            ],
+            { actor: 'hub' },
+          ),
+        )
+        if (kind === 'review') {
+          data(
+            ledger.append(
+              {
+                ...base,
+                type: 'task.reported',
+                payload: {
+                  attempt: 1,
+                  lease_id,
+                  status: 'ready',
+                  summary: '交付物待审',
+                  deliverables: ['https://github.com/example/repo/pull/1'],
+                },
+              },
+              { actor: 'developer' },
+            ),
+          )
+        } else if (kind === 'ended') {
+          data(
+            ledger.append(
+              {
+                ...base,
+                type: 'task.done',
+                payload: {
+                  result: { summary: '已完成', executor: 'fake', node_id: 'n-stage' },
+                },
+              },
+              { actor: 'hub' },
+            ),
+          )
+        } else if (kind !== 'working') {
+          const reason =
+            kind === 'approval' ? 'awaiting_approval' : kind === 'answer' ? 'question' : 'other'
+          data(
+            ledger.append(
+              {
+                ...base,
+                type: 'task.blocked',
+                payload: {
+                  reason,
+                  message: '需要处理',
+                },
+              },
+              { actor: 'hub' },
+            ),
+          )
+        }
+      }
+    } finally {
+      ledger.close()
+    }
+    const filtered = await runCli(['task', 'list', '--stage', 'waiting-human', '--json'], commands)
+    expect(filtered.exitCode).toBe(0)
+    expect(
+      JSON.parse(filtered.stdout).data.tasks.map((t: { id: string; stage: string }) => [
+        t.id,
+        t.stage,
+      ]),
+    ).toEqual([
+      [ids.review, 'waiting-human-review'],
+      [ids.answer, 'waiting-human-answer'],
+      [ids.approval, 'waiting-human-approval'],
+    ])
+    const all = data(await client().listTasks())
+    expect(all.tasks.map((t) => t.id)).toEqual([
+      ids.review,
+      ids.answer,
+      ids.approval,
+      ids.ended,
+      ids.queued,
+      ids.working,
+      ids.stalled,
+    ])
+    expect(all.tasks.find((t) => t.id === ids.ended)?.stage).toBeNull()
+    expect(data(await client().listTasks({ limit: 1 })).tasks[0]?.id).toBe(ids.review)
+    expect(
+      data(await client().listTasks({ stage: 'waiting-human-answer', limit: 1 })).tasks[0]?.id,
+    ).toBe(ids.answer)
+    const table = await runCli(['task', 'list', '--stage', 'waiting-human'], commands)
+    for (const text of ['阶段', '等人授权', '等人回答', '等人审阅'])
+      expect(table.stdout).toContain(text)
+    const shown = await runCli(['task', 'show', ids.review], commands)
+    expect(shown.stdout).toContain('阶段：等人审阅')
+    expect(data(await client().showTask(ids.review)).task.stage).toBe('waiting-human-review')
+    expect(
+      (await runCli(['task', 'list', '--stage', 'unknown', '--json'], commands)).exitCode,
+    ).toBe(2)
+  })
+
   test('引用未定义角色：CLI 与 MCP 均返回 unknown_role，退出码 1，账本不新增任务', async () => {
     await start()
     const input = { ...contract, role: 'designer' }

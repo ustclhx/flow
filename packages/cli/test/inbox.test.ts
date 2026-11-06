@@ -66,7 +66,9 @@ test('raindown inbox 默认 list、CJK 表格、短 id act、CLI 固定渠道；
   const table = await runCli(['inbox'], commands)
   expect(table.exitCode).toBe(0)
   expect(table.stdout).toBe((await runCli(['inbox', 'list'], commands)).stdout)
-  expect(table.stdout.split('\n')[0]).toMatch(/ID\s+级别\s+来源\s+Workspace\s+标题\s+创建时间/)
+  expect(table.stdout.split('\n')[0]).toMatch(
+    /ID\s+级别\s+来源\s+Workspace\s+阶段\s+标题\s+创建时间/,
+  )
   const rows = table.stdout.trim().split('\n').slice(2)
   expect(rows).toHaveLength(3)
   for (const [index, item] of items.entries()) {

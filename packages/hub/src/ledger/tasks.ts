@@ -13,6 +13,7 @@ import {
   formatZodIssues,
   type InboxVia,
   isKnownEventType,
+  isWaitingHumanStage,
   type ListTasksData,
   listTasksQuery,
   loadRoles,
@@ -65,6 +66,7 @@ import {
   taskKind,
   wakePrs,
 } from './supervisor-checks.ts'
+import { readTaskStage } from './task-stage.ts'
 
 /**
  * 任务服务（tasks.md 2.3；task-ledger spec "任务合同""幂等创建""取消"）。
@@ -315,7 +317,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
     const events = ledger.taskEvents(id).filter((event) => isKnownEventType(event.type))
     if (section === undefined) {
       return ok({
-        task,
+        task: { ...task, stage: readTaskStage(ledger, task) },
         events,
         replies: ledger.taskReplies(id),
         attempts: foldTaskAttempts(task, events),
@@ -957,7 +959,21 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
     listTasks(filter = {}) {
       const parsed = listTasksQuery.safeParse(filter)
       if (!parsed.success) return invalidArguments('查询参数', parsed.error.issues, filter)
-      return ok({ tasks: ledger.listTasks(parsed.data) })
+      const { stage, limit, ...filters } = parsed.data
+      // SQLite 的 LIMIT -1 读取全部候选，派生阶段后才过滤、排序与截取。
+      const tasks = ledger
+        .listTasks({ ...filters, limit: -1 })
+        .map((task) => ({ ...task, stage: readTaskStage(ledger, task) }))
+        .filter((task) =>
+          stage === undefined
+            ? true
+            : stage === 'waiting-human'
+              ? isWaitingHumanStage(task.stage)
+              : task.stage === stage,
+        )
+        .sort((a, b) => Number(isWaitingHumanStage(b.stage)) - Number(isWaitingHumanStage(a.stage)))
+        .slice(0, limit)
+      return ok({ tasks })
     },
 
     getTask,

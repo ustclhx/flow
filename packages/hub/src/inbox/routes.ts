@@ -10,6 +10,7 @@ import {
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import { actOnInbox, type InboxActionDeps } from './actions.ts'
+import { readInboxItem } from './read.ts'
 
 export function createInboxRoutes(deps: InboxActionDeps): Hono {
   const app = new Hono()
@@ -19,12 +20,14 @@ export function createInboxRoutes(deps: InboxActionDeps): Hono {
       c,
       parsed.success
         ? ok({
-            items: deps.ledger.listInboxItems({
-              state: parsed.data.state,
-              ...(parsed.data.level ? { level: parsed.data.level } : {}),
-              ...(parsed.data.workspace ? { workspace: parsed.data.workspace } : {}),
-              limit: -1,
-            }),
+            items: deps.ledger
+              .listInboxItems({
+                state: parsed.data.state,
+                ...(parsed.data.level ? { level: parsed.data.level } : {}),
+                ...(parsed.data.workspace ? { workspace: parsed.data.workspace } : {}),
+                limit: -1,
+              })
+              .map((item) => readInboxItem(deps.ledger, item)),
           })
         : fail('usage', 'invalid_arguments', '收件箱查询参数不合法'),
       inboxListData,

@@ -69,6 +69,7 @@ describe('raindown ask / raindown supervisor', () => {
     expect(status.exitCode).toBe(0)
     expect(status.stdout).toContain(`当前唤醒：${asked.wake.task_id}`)
     expect(status.stdout).toContain('队列：instruction 1')
+    expect(status.stdout).toContain('排队')
 
     const release = await runCli(
       ['supervisor', 'wake', 'product-res', '--release', 'autonomous', '--json'],

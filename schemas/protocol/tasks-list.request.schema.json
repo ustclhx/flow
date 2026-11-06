@@ -21,6 +21,20 @@
       ],
       "description": "任务状态"
     },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "waiting-human-approval",
+        "waiting-human-answer",
+        "waiting-supervisor",
+        "waiting-human-review",
+        "stalled",
+        "queued",
+        "idle",
+        "working",
+        "waiting-human"
+      ]
+    },
     "parent": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
@@ -46,5 +60,5 @@
   },
   "additionalProperties": false,
   "title": "GET /v1/tasks 查询参数",
-  "description": "按创建时间倒序"
+  "description": "等人的任务优先，同组按创建时间倒序"
 }
