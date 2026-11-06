@@ -1492,6 +1492,45 @@
                   "title": "Task recovery",
                   "description": "同一任务上一次派工的结束与交付事实"
                 },
+                "inputs": {
+                  "description": "任务未运行期间到达的输入（PR 直通，harness-neutral 8.4）：适配器放在派工输入开头；旧节点忽略",
+                  "maxItems": 200,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "input_seq": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "description": "task.input_added 的 seq（幂等键）"
+                      },
+                      "source": {
+                        "type": "string",
+                        "const": "pr"
+                      },
+                      "pr_event_seq": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "中枢渲染好的输入（已包裹与转义）"
+                      }
+                    },
+                    "required": [
+                      "input_seq",
+                      "source",
+                      "pr_event_seq",
+                      "text"
+                    ],
+                    "additionalProperties": false,
+                    "title": "Task input",
+                    "description": "送给运行中或下一次派工的任务输入"
+                  }
+                },
                 "dispatch_token": {
                   "description": "当前派工的 worker 受限身份凭证；与节点 lease_token 分离",
                   "type": "string",

@@ -14,11 +14,13 @@ import {
 import { join } from 'node:path'
 import {
   type Activity,
+  type DeliveredInput,
   fail,
   NO_ADAPTER_CAPABILITIES,
   ok,
   type Result,
   renderRecoveryPrompt,
+  renderTaskInputs,
   type TaskRecovery,
   type TaskResume,
   taskContract,
@@ -76,6 +78,7 @@ async function start(
     home?: OrcaHome
     resume?: TaskResume
     recovery?: TaskRecovery
+    inputs?: DeliveredInput[]
     leaseTokenFile?: string
     reportResumeReplyDropped?: (options?: { attempted?: boolean }) => void
     directoryStat?: (path: string) => { isDirectory(): boolean }
@@ -114,6 +117,7 @@ async function start(
     signal: abort.signal,
     ...(extra.resume ? { resume: extra.resume } : {}),
     ...(extra.recovery ? { recovery: extra.recovery } : {}),
+    ...(extra.inputs ? { inputs: extra.inputs } : {}),
     ...(extra.leaseTokenFile ? { leaseTokenFile: extra.leaseTokenFile } : {}),
     ...(extra.reportResumeReplyDropped
       ? { reportResumeReplyDropped: extra.reportResumeReplyDropped }
@@ -2158,5 +2162,51 @@ describe('目录不存在', () => {
         message: `工作目录不存在：${h?.repo}`,
       },
     })
+  })
+})
+
+describe('PR 直通的输入（harness-neutral 8.4）', () => {
+  const input = (seq: number): DeliveredInput => ({
+    input_seq: seq,
+    source: 'pr',
+    pr_event_seq: 100 + seq,
+    text: `## 订阅的 PR 有新动态\n<untrusted-pr-event>\n{"text": "第 ${seq} 条"}\n</untrusted-pr-event>`,
+  })
+
+  test('只在普通输入框空闲时送入，按 input_seq 幂等', async () => {
+    const s = await start({}, (o) => o.show('question'))
+    await ready(s)
+    await s.poll(2)
+    s.orca.show('question')
+    expect(await s.run.inject?.(input(1))).toBe('delivered')
+    expect(await s.run.inject?.(input(1))).toBe('delivered')
+    const text = input(1).text.replace(/\n/g, ' ')
+    expect(sends(s)).toEqual([{ handle: s.orca.handle, text, enter: true, waitSubmitS: 10 }])
+    await s.run.cancel()
+    expect(await s.run.inject?.(input(2))).toBe('not_running')
+  })
+
+  test.each(['approval', 'trust-prompt', 'working'])(
+    '终端停在 %s 时不送入（不能当作批准或信任确认的按键）',
+    async (screen) => {
+      const s = await start({}, (o) => o.show('question'))
+      await ready(s)
+      s.orca.reads.splice(0)
+      s.orca.show(screen)
+      expect(await s.run.inject?.(input(3))).toBe('not_now')
+      expect(sends(s)).toEqual([])
+      await s.run.cancel()
+    },
+  )
+
+  test('派工输入：新终端从 spec 读取（放在恢复提示之后），不再另行送入', async () => {
+    const recovery: TaskRecovery = { previous_end: { attempt: 1, reason: 'done' }, prs: [] }
+    const s = await start({}, (o) => o.show('question'), { recovery, inputs: [input(4)] })
+    await ready(s)
+    await s.poll(2)
+    const spec = readFileSync(join(h?.home ?? '', 'state/tasks/t-orca-1/spec.md'), 'utf8')
+    expect(spec).toStartWith(`${renderRecoveryPrompt(recovery)}\n\n${renderTaskInputs([input(4)])}`)
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
   })
 })

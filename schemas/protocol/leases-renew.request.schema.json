@@ -337,6 +337,17 @@
       },
       "additionalProperties": false
     },
+    "inputs_delivered": {
+      "description": "已送进运行中 worker 的输入（响应 inputs 的 input_seq）；中枢写 task.input_delivered",
+      "minItems": 1,
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
     "branch": {
       "description": "执行器创建的任务分支与 worktree，以及节点在任务首次上报时对执行器解析出的登记仓库的快照（D15，写类适配器启动前）：中枢在续约生效后写入 task.branch_reported（每个任务一次；worktree 缺失的旧任务可补报一次 worktree，不补快照），结果见响应的 branch_report",
       "type": "object",

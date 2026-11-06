@@ -2,9 +2,11 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, normalize } from 'node:path'
 import {
+  type DeliveredInput,
   parseFrontmatter,
   raindownPaths,
   renderRecoveryPrompt,
+  renderTaskInputs,
   renderWorkerTaskPrompt,
   type TaskContract,
   type TaskRecovery,
@@ -41,6 +43,8 @@ export interface TaskSpecInput {
   /** 带着回复重新开始时的上一轮回复。 */
   resume?: TaskResume
   recovery?: TaskRecovery
+  /** 任务未运行期间到达的输入（PR 直通；中枢已包裹为不可信数据）。 */
+  inputs?: readonly DeliveredInput[]
 }
 
 /** 本任务在节点上的状态目录：`state/tasks/<id>/`。 */
@@ -105,6 +109,7 @@ export function renderTaskSpec(input: TaskSpecInput): string {
       : ['（合同没有指定验收命令；请运行仓库约定的检查）']
   const out = [
     ...(input.recovery ? [renderRecoveryPrompt(input.recovery), ''] : []),
+    ...(input.inputs?.length ? [renderTaskInputs(input.inputs), ''] : []),
     `# Raindown 任务 ${input.taskId}`,
     '',
     `- workspace：\`${contract.workspace}\``,

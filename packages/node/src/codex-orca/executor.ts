@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   type Activity,
+  type DeliveredInput,
   type DeliveredReply,
   fail,
   loadRoles,
@@ -14,6 +15,7 @@ import {
   redactLines,
   redactSecrets,
   renderRecoveryPrompt,
+  renderTaskInputs,
   SUPERVISOR_ACTOR,
   type TaskContract,
   type TaskResult,
@@ -35,6 +37,7 @@ import {
   type ExecutorOutcome,
   type ExecutorPlugin,
   type ExecutorRun,
+  type InjectResult,
   idleSignal,
   resumedSignal,
 } from '../executor.ts'
@@ -444,7 +447,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       let approvalRound: z.infer<typeof approvalRoundSchema> | undefined
       let restoredApprovalRound = false
       let resumeReplyHandled = false
-      const recoveryText = ctx.recovery ? renderRecoveryPrompt(ctx.recovery) : undefined
+      // 恢复提示与未运行期间到达的输入（PR 直通，已由中枢包裹）：新终端从 spec 读取，重挂接时一并送入。
+      const recoveryParts = [
+        ...(ctx.recovery ? [renderRecoveryPrompt(ctx.recovery)] : []),
+        ...(ctx.inputs?.length ? [renderTaskInputs(ctx.inputs)] : []),
+      ]
+      const recoveryText = recoveryParts.length ? recoveryParts.join('\n\n') : undefined
       // 与用户回复的 r-* id 分离；保存 request id，重试送达时沿用 Orca 的幂等机制。
       const recoveryId = `recovery-${ctx.attempt}`
       const inflight = new Map<string, Promise<DeliverResult>>()
@@ -1133,6 +1141,54 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         }
       }
 
+      /**
+       * 运行中注入 PR 直通的输入（harness-neutral 8.4）：只在普通输入框空闲时送入——授权弹窗、信任弹窗、
+       * worker 忙碌、回复或恢复提示尚未送完时都返回 not_now，绝不把输入当成批准或信任确认的按键。
+       * 以 `input-<seq>` 记录 Orca 的 request id，重送时沿用幂等机制。
+       */
+      const inject = async (input: DeliveredInput): Promise<InjectResult> => {
+        if (finished || !state) return 'not_running'
+        if (!handle) return 'not_now'
+        const st = replyState(`input-${input.input_seq}`)
+        if (st.done) return 'delivered'
+        if (
+          inflight.size > 0 ||
+          (ctx.resume && !resumeReplyHandled) ||
+          (recoveryText !== undefined && !replyState(recoveryId).done)
+        )
+          return 'not_now'
+        const h = handle
+        const guard = async () => {
+          const current = await orca.terminalRead({ handle: h, limit: 200 })
+          if (!current.ok) throw new TransientDeliverError(current.error.message)
+          const kind = analyzeTail(current.data.tail).kind
+          if (
+            current.data.status !== 'running' ||
+            kind === 'working' ||
+            kind === 'trust_prompt' ||
+            kind === 'awaiting_approval' ||
+            !current.data.tail.some((line) => /^›(?:\s|$)|\? for shortcuts/.test(line.trim()))
+          ) {
+            throw new TransientDeliverError('普通输入框尚不可用，输入等待下一次送达')
+          }
+        }
+        try {
+          if (!(await requireWorkdir())) return 'not_running'
+          await guard()
+          const submitted = await sendPrompt(h, input.text.replace(/\n/g, ' '), st, guard, true)
+          if (!submitted) return 'not_now'
+          st.done = true
+          await saveState()
+          reported = false
+          idlePolls = 0
+          status(`已把 PR 动态（输入 ${input.input_seq}）送进终端`)
+          return 'delivered'
+        } catch (error) {
+          if (error instanceof TransientDeliverError) return 'not_now'
+          throw error
+        }
+      }
+
       /** 停下的是预检过的同一个授权弹窗时，把 supervisor 判定 id 放进 hint（节点核对后上报）。 */
       const decisionHint = (a: TailAnalysis): Record<string, unknown> =>
         decision && a.kind === 'awaiting_approval' && decision.popup === a.last_message.join('\n')
@@ -1455,6 +1511,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           ...(scope ? { scope } : {}),
           ...(ctx.resume?.reply.kind === 'text' ? { resume: ctx.resume } : {}),
           ...(ctx.recovery ? { recovery: ctx.recovery } : {}),
+          ...(ctx.inputs?.length ? { inputs: ctx.inputs } : {}),
         })
         const specPath = await writeTaskSpec(options.home, ctx.taskId, spec)
         if (finished || stopping) return
@@ -1574,6 +1631,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         done,
         cancel: () => stop('codex-orca 已取消：终端已关闭，worktree 保留'),
         deliver,
+        inject,
         bindBlocked(binding) {
           if (approvalRound?.request_id === binding.request_id) {
             approvalRound.blockSeq = binding.seq

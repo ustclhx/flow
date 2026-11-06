@@ -19,6 +19,7 @@ export const PROJECTION_TABLES = [
   'channel_messages',
   'pr_subscriptions',
   'pr_cursors',
+  'task_inputs',
 ] as const
 export type ProjectionTable = (typeof PROJECTION_TABLES)[number]
 
@@ -34,6 +35,7 @@ export const SOFT_COLUMNS: Readonly<Record<ProjectionTable, readonly string[]>> 
   channel_messages: [],
   pr_subscriptions: [],
   pr_cursors: [],
+  task_inputs: [],
 }
 
 /** 每张投影表的主键（快照排序用）。 */
@@ -48,6 +50,7 @@ export const PROJECTION_KEYS: Readonly<Record<ProjectionTable, string>> = {
   channel_messages: 'channel, ref, item_id',
   pr_subscriptions: 'subscribed_seq',
   pr_cursors: 'workspace, pr, kind',
+  task_inputs: 'seq',
 }
 
 export const LEDGER_DDL = `
@@ -271,6 +274,20 @@ CREATE TABLE IF NOT EXISTS pr_cursors (
   seq       INTEGER NOT NULL,
   PRIMARY KEY (workspace, pr, kind)
 );
+
+-- 任务输入（harness-neutral 8.4；由 task.input_added / task.input_delivered / task.started 派生）：
+-- pending 待送达；running 已送进运行中的 worker；dispatch 随某次派工的输入下发。
+CREATE TABLE IF NOT EXISTS task_inputs (
+  seq          INTEGER PRIMARY KEY,
+  task_id      TEXT NOT NULL,
+  source       TEXT NOT NULL,
+  pr_event_seq INTEGER NOT NULL,
+  state        TEXT NOT NULL CHECK (state IN ('pending', 'running', 'dispatch')),
+  delivered_at TEXT,
+  lease_id     TEXT
+);
+CREATE INDEX IF NOT EXISTS task_inputs_task ON task_inputs (task_id, state, seq);
+CREATE INDEX IF NOT EXISTS task_inputs_event ON task_inputs (task_id, pr_event_seq);
 `
 
 /**

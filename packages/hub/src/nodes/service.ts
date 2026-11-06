@@ -10,6 +10,7 @@ import {
   capabilitiesSatisfy,
   clipDiffStat,
   completeLeaseRequest,
+  type DeliveredInput,
   fail,
   isSqliteBusy,
   type LeaseGrant,
@@ -24,6 +25,7 @@ import {
   type ReportQuestion,
   type Result,
   registerNodeRequest,
+  renderPrEventInput,
   renewLeaseRequest,
   SUPERVISOR_ACTOR,
   sanitizeMessage,
@@ -422,6 +424,31 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     return ledger.replyBlock(taskId, replyId)
   }
 
+  /** 渲染待送达的输入（PR 直通，harness-neutral 8.4）：内容一律经 core 模板包裹与转义。 */
+  function pendingInputs(taskId: string, limit: number): DeliveredInput[] {
+    return ledger.pendingTaskInputs(taskId, limit).flatMap((input) => {
+      const event = ledger.prEvent(input.pr_event_seq)
+      return event
+        ? [
+            {
+              input_seq: input.seq,
+              source: 'pr' as const,
+              pr_event_seq: input.pr_event_seq,
+              text: renderPrEventInput(event),
+            },
+          ]
+        : []
+    })
+  }
+
+  /** 节点为该任务注册的执行器能否在运行中注入输入；不能时输入排队到下一次派工。 */
+  function injectsWhileRunning(nodeId: string, task: TaskView): boolean {
+    const executor = ledger
+      .getNode(nodeId)
+      ?.executors.find((e) => e.type === task.contract.executor)
+    return executor?.adapter_capabilities.inject_while_running === true
+  }
+
   /** 恢复回复只属于紧接该次重新排队的派工，不能跨过其他派工或手动重新排队。 */
   function isLeaseResumeReply(taskId: string, leaseId: string, replyId: string): boolean {
     const events = ledger.taskEvents(taskId)
@@ -441,6 +468,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     // resume 只交给紧接着的这一次执行：task.started 会在投影里清空它（PR #16 审查第 1 条）。
     const resume = ledger.taskResume(task.id)
     const recovery = recoveryForTask(ledger, task)
+    // 尚未送达的输入随这次派工下发；task.started 在投影中把它们标记为已随派工送达。
+    const inputs = pendingInputs(task.id, 200)
     const leaseId = newLeaseId()
     const token = newLeaseToken()
     const attempt = task.attempt + 1
@@ -481,6 +510,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       ttl_s: ttl,
       expires_at: expiresAt,
       ...(recovery ? { recovery } : {}),
+      ...(inputs.length ? { inputs } : {}),
       ...(resume
         ? {
             resume: {
@@ -674,6 +704,23 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       if (!consumed.ok) return consumed
       const steps = renewSteps(task, lease, req.data, consumed.data)
       if (!steps.ok) return steps
+      // 节点确认已送进 worker 的输入（重复确认幂等：只记仍待送达的那些）。
+      if (req.data.inputs_delivered?.length) {
+        const pending = new Set(ledger.pendingTaskInputs(task.id, 1000).map((i) => i.seq))
+        const seqs = [...new Set(req.data.inputs_delivered)].filter((seq) => pending.has(seq))
+        if (seqs.length) {
+          const acked = ledger.append(
+            {
+              type: 'task.input_delivered',
+              task_id: task.id,
+              workspace: task.workspace,
+              payload: { input_seqs: seqs, lease_id: lease.lease_id },
+            },
+            { actor: 'hub' },
+          )
+          if (!acked.ok) return acked
+        }
+      }
       const expiresAt = iso(clock.now() + lease.ttl_s * 1000)
       ledger.renewLease(lease.lease_id, expiresAt)
       ledger.touchNode(lease.node_id)
@@ -741,6 +788,11 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
               by: pending.by,
             }
           : null,
+        // 输入与回复同一通道下发，但不解除 blocked；不能中途注入的执行器等下一次派工。
+        inputs:
+          !after.cancel_requested && injectsWhileRunning(lease.node_id, after)
+            ? pendingInputs(task.id, 10)
+            : [],
       })
     },
 

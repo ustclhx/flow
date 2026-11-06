@@ -195,6 +195,16 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   prCursors(workspace: string, pr: string): Record<string, string>
   /** 某 workspace、PR、种类中游标不早于 since 的已入账游标（同一秒竞态去重用）。 */
   prEventCursorsSince(workspace: string, pr: string, kind: string, sinceIso: string): string[]
+  /** 一条 pr.event（不存在或不是 pr.event 时为 null）。 */
+  prEvent(seq: number): EventOf<'pr.event'> | null
+  /** ts 不早于 since 的 pr.event，按 seq 升序（中枢启动时补处理直通）。 */
+  recentPrEvents(sinceIso: string): EventOf<'pr.event'>[]
+  /** 是否已为这条 PR 事件写过同一原因（与任务）的 supervisor 唤醒请求。 */
+  prWakeRequested(prEventSeq: number, reason: string, taskId?: string): boolean
+  /** 任务尚未送达的输入，按 seq 升序。 */
+  pendingTaskInputs(taskId: string, limit?: number): { seq: number; pr_event_seq: number }[]
+  /** 任务是否收到过这条 PR 事件（task.input_added）。 */
+  taskHasPrInput(taskId: string, prEventSeq: number): boolean
   prTasksSummary(workspace: string, pr: string): { count: number; chars: number }
   /** 某 workspace 未结束（非 done / failed / cancelled）的任务，按更新时间倒序，最多 limit 条。 */
   openTasks(workspace: string, limit: number): TaskView[]
@@ -616,6 +626,9 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'pr.subscribed': ['hub'],
   'pr.unsubscribed': ['hub', 'user'],
   'pr.event': ['hub'],
+  'task.input_added': ['hub'],
+  'task.input_delivered': ['hub'],
+  'pr.wake_requested': ['hub'],
 }
 
 /** 由用户操作结束委托的转交原因：与用户的 task_reply / 忽略同一次 append 写入，actor 为 user。 */
@@ -789,6 +802,33 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     )
 
   const notDelegable = (why: string) => fail('failure', 'not_delegable', why)
+
+  /** 一条 pr.event（只看校验位置之前的账本）。 */
+  const prEventRow = (seq: number) => {
+    if (seq >= before) return null
+    const row = get<EventRow>("SELECT * FROM events WHERE seq = ? AND type = 'pr.event'", seq)
+    return row ? (rowToEvent(row) as EventOf<'pr.event'>) : null
+  }
+  const taskHasInput = (taskId: string | undefined, prEventSeq: number) =>
+    !!get(
+      `SELECT 1 FROM events WHERE task_id = ? AND type = 'task.input_added'
+         AND json_extract(payload_json, '$.pr_event_seq') = ? AND seq < ? LIMIT 1`,
+      taskId ?? null,
+      prEventSeq,
+      before,
+    )
+  const wakeRequested = (prEventSeq: number, reason: string, taskId?: string) =>
+    !!get(
+      `SELECT 1 FROM events WHERE type = 'pr.wake_requested'
+         AND json_extract(payload_json, '$.pr_event_seq') = ?
+         AND json_extract(payload_json, '$.reason') = ?
+         AND (task_id IS ? OR (task_id IS NULL AND ? IS NULL)) AND seq < ? LIMIT 1`,
+      prEventSeq,
+      reason,
+      taskId ?? null,
+      taskId ?? null,
+      before,
+    )
 
   /**
    * `task.reply_delegated` 的不变量（D15 "判定与卡住绑定"）：
@@ -1165,6 +1205,32 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'task.requeued': {
+        if (draft.payload.reason !== 'input') return ok(null)
+        // 恢复只由中枢写入，并且紧跟在同一任务对一条名单内人类评论的 task.input_added 之后。
+        if (draft.actor !== 'hub') {
+          return fail('failure', 'actor_mismatch', 'reason 为 input 的 task.requeued 只接受 hub')
+        }
+        const last = get<{ type: string; payload_json: string }>(
+          'SELECT type, payload_json FROM events WHERE task_id = ? AND seq < ? ORDER BY seq DESC LIMIT 1',
+          draft.task_id ?? null,
+          before,
+        )
+        const input =
+          last?.type === 'task.input_added'
+            ? (JSON.parse(last.payload_json) as { pr_event_seq: number })
+            : undefined
+        const ev = input ? prEventRow(input.pr_event_seq) : null
+        if (
+          !input ||
+          input.pr_event_seq !== draft.payload.pr_event_seq ||
+          !ev?.payload.allowed ||
+          ev.payload.actor_kind !== 'human'
+        ) {
+          return invalidEvent('因输入恢复必须紧跟名单内人类评论的 task.input_added')
+        }
+        return ok(null)
+      }
       case 'task.requeued_with_reply':
         return pendingReplyOf(draft)
       case 'task.lease_expired': {
@@ -1368,6 +1434,86 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
             `唤醒代数必须严格递增：${draft.workspace} 已有第 ${max} 代`,
             { generation: max },
           )
+        }
+        return ok(null)
+      }
+      case 'task.input_added': {
+        const ev = prEventRow(draft.payload.pr_event_seq)
+        if (!ev || ev.workspace !== draft.workspace) {
+          return invalidEvent(
+            `pr_event_seq ${draft.payload.pr_event_seq} 不是本 workspace 的 PR 事件`,
+          )
+        }
+        if (
+          !get(
+            `SELECT 1 FROM pr_subscriptions WHERE task_id = ? AND pr = ? AND state = 'active'`,
+            draft.task_id ?? null,
+            ev.payload.pr,
+          )
+        ) {
+          return fail('failure', 'not_subscribed', `任务没有有效的 ${ev.payload.pr} 订阅`)
+        }
+        if (
+          get(
+            'SELECT 1 FROM task_inputs WHERE task_id = ? AND pr_event_seq = ?',
+            draft.task_id ?? null,
+            draft.payload.pr_event_seq,
+          )
+        ) {
+          return fail('failure', 'duplicate_input', '这条 PR 事件已送给该任务')
+        }
+        // 已结束的任务只能因名单内的人类评论恢复（紧接着同一事务写 task.requeued{reason: input}）。
+        if (
+          (task?.status === 'done' || task?.status === 'failed') &&
+          !(ev.payload.allowed && ev.payload.actor_kind === 'human')
+        ) {
+          return fail(
+            'failure',
+            'not_allowed_input',
+            '机器人、CI 与名单外用户的内容不能恢复已结束的任务',
+          )
+        }
+        return ok(null)
+      }
+      case 'task.input_delivered': {
+        const lease = get<{ node_id: string }>(
+          "SELECT node_id FROM leases WHERE lease_id = ? AND task_id = ? AND state = 'active'",
+          draft.payload.lease_id,
+          draft.task_id ?? null,
+        )
+        if (!lease) return invalidEvent(`租约 ${draft.payload.lease_id} 不是该任务的活动租约`)
+        for (const seq of draft.payload.input_seqs) {
+          if (
+            !get(
+              "SELECT 1 FROM task_inputs WHERE seq = ? AND task_id = ? AND state = 'pending'",
+              seq,
+              draft.task_id ?? null,
+            )
+          ) {
+            return invalidEvent(`输入 ${seq} 不是该任务待送达的输入`)
+          }
+        }
+        return ok(null)
+      }
+      case 'pr.wake_requested': {
+        // 只有名单内的人类评论能唤醒 supervisor（store 兜底，调用方另有检查）。
+        const ev = prEventRow(draft.payload.pr_event_seq)
+        if (!ev || ev.workspace !== draft.workspace) {
+          return invalidEvent(
+            `pr_event_seq ${draft.payload.pr_event_seq} 不是本 workspace 的 PR 事件`,
+          )
+        }
+        if (!ev.payload.allowed || ev.payload.actor_kind !== 'human') {
+          return fail('failure', 'not_allowed_input', '只有名单内用户的人类评论能唤醒 supervisor')
+        }
+        if (draft.payload.reason !== 'no_subscriber' && draft.task_id === undefined) {
+          return invalidEvent(`reason 为 ${draft.payload.reason} 时必须带 task_id`)
+        }
+        if (draft.payload.reason === 'handback' && !taskHasInput(draft.task_id, ev.seq)) {
+          return fail('failure', 'handback_invalid', '只能交回本任务收到过的 PR 事件')
+        }
+        if (wakeRequested(ev.seq, draft.payload.reason, draft.task_id)) {
+          return fail('failure', 'duplicate_event', '这条 PR 事件已经请求过唤醒')
         }
         return ok(null)
       }
@@ -1826,6 +1972,33 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         kind,
         sinceIso,
       ).map((r) => r.cursor)
+    },
+    prEvent(seq) {
+      const row = get<EventRow>("SELECT * FROM events WHERE seq = ? AND type = 'pr.event'", seq)
+      return row ? (rowToEvent(row) as EventOf<'pr.event'>) : null
+    },
+    recentPrEvents(sinceIso) {
+      return all<EventRow>(
+        "SELECT * FROM events WHERE type = 'pr.event' AND ts >= ? ORDER BY seq",
+        sinceIso,
+      ).map((r) => rowToEvent(r) as EventOf<'pr.event'>)
+    },
+    prWakeRequested(prEventSeq, reason, taskId) {
+      return wakeRequested(prEventSeq, reason, taskId)
+    },
+    pendingTaskInputs(taskId, limit = 50) {
+      return all<{ seq: number; pr_event_seq: number }>(
+        "SELECT seq, pr_event_seq FROM task_inputs WHERE task_id = ? AND state = 'pending' ORDER BY seq LIMIT ?",
+        taskId,
+        limit,
+      )
+    },
+    taskHasPrInput(taskId, prEventSeq) {
+      return !!get(
+        'SELECT 1 FROM task_inputs WHERE task_id = ? AND pr_event_seq = ?',
+        taskId,
+        prEventSeq,
+      )
     },
     prCursors(workspace, pr) {
       return Object.fromEntries(

@@ -49,7 +49,8 @@
                 "digest",
                 "task_proposal",
                 "merge_request",
-                "decision"
+                "decision",
+                "pr_comment"
               ],
               "description": "条目来源"
             },

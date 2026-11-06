@@ -54,6 +54,7 @@ import { createPolicyRoutes } from '../policy/routes.ts'
 import { createPolicyService, type PolicyService } from '../policy/service.ts'
 import { verifyPolicyFromHome } from '../policy/verify.ts'
 import { createGhApi, type GhApi, type RepoOriginLookup } from '../pr/github.ts'
+import { createPrPassthrough } from '../pr/passthrough.ts'
 import { createPrSubscriptionReactor } from '../pr/subscriptions.ts'
 import { createPrWatcher, type PrWatcher } from '../pr/watcher.ts'
 import { createScheduler, type Scheduler } from '../scheduler/index.ts'
@@ -167,6 +168,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   /** PR 自动订阅与采集（harness-neutral 8.1、8.3）：只对 github.watch 的 workspace 生效。 */
   let prSubscriptions: ReturnType<typeof createPrSubscriptionReactor> | undefined
   let prWatcher: PrWatcher | undefined
+  let prPassthrough: ReturnType<typeof createPrPassthrough> | undefined
   // Web 页面（6.1）：会话只在内存中；Host 校验需要实际监听的端口，启动成功后才填入。
   const uiSessions = createUiSessions({ now: () => clock.now() })
   const activeLedgerFor = () => {
@@ -393,6 +395,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       await policiesService?.stop()
       await existingPr?.stop()
       await prWatcher?.stop()
+      await prPassthrough?.stop()
       await prSubscriptions?.stop()
       stopSupervisorTools?.()
       wakes?.stop()
@@ -553,6 +556,16 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     logger,
   })
   prSubscriptions.start(clock.now())
+  // 直通先于采集启动：pr-watcher 写下的事件都能被分发（harness-neutral 8.4–8.6）。
+  prPassthrough = createPrPassthrough({
+    ledger,
+    workspaces: workspaceLookupFromHome(options.home),
+    roles: roleLookupFromHome(options.home),
+    supervisorActive: supervisorActiveFromHome(options.home),
+    logger,
+    now: () => clock.now(),
+  })
+  prPassthrough.start()
   prWatcher = createPrWatcher({
     ledger,
     workspaces: workspaceLookupFromHome(options.home),

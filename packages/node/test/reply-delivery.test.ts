@@ -94,7 +94,7 @@ for (const outcome of ['dropped', 'delivered'] as const) {
             b.ledger.touchNode(lease.node_id)
             b.ledger.recordActivity(lease.task_id, body.activity)
             legacyReplyDelivered = true
-            const data: RenewLeaseData = {
+            const data: Omit<RenewLeaseData, 'inputs'> = {
               lease_id: lease.lease_id,
               expires_at: expiresAt,
               cancel_requested: b.task(lease.task_id).cancel_requested,

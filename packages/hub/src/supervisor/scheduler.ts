@@ -11,6 +11,7 @@ import {
   MANUAL_WAKE_TEXT,
   normalizePrUrl,
   ok,
+  PR_INPUT_TEXT_MAX,
   prTasksReadPointer,
   type QueueDropReason,
   type Result,
@@ -501,6 +502,12 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
 
   // ---- 唤醒内容（只供提示词，D1） ----
 
+  const PR_WAKE_LABEL: Record<'handback' | 'no_subscriber' | 'resume_rejected', string> = {
+    handback: '被负责的 worker 交回（超出任务范围或属于另一件工作）',
+    no_subscriber: '没有任何订阅任务接收',
+    resume_rejected: '没能恢复已结束的任务（恢复前的授权校验未通过）',
+  }
+
   const eventAt = (seq: number): LedgerEvent | null => ledger.eventsAfter(seq - 1, {}, 1)[0] ?? null
 
   function describe(ev: LedgerEvent): Omit<WakeEventInput, 'seq' | 'type' | 'ts'> {
@@ -602,6 +609,33 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
           summary: `你的提问 ${ev.payload.item_id} 已过期，用户没有回答`,
           data: { item_id: ev.payload.item_id, reason: ev.payload.reason },
         }
+      case 'pr.wake_requested': {
+        const pr = ledger.prEvent(ev.payload.pr_event_seq)
+        const why = PR_WAKE_LABEL[ev.payload.reason]
+        if (!pr) return { ...base, summary: `PR 评论（事件 ${ev.payload.pr_event_seq}）${why}` }
+        const p = pr.payload
+        const clipped = p.text.length > PR_INPUT_TEXT_MAX
+        return {
+          ...base,
+          summary: clip(
+            `${p.pr} 上允许名单内用户 ${p.actor} 的评论${why}${ev.payload.note ? `；${ev.payload.reason === 'handback' ? 'worker 的交回理由' : '原因'}：${ev.payload.note}` : ''}`,
+            WAKE_EVENT_SUMMARY_MAX,
+          ),
+          ...(clipped ? { chars: p.chars ?? p.text.length, ...eventReadPointer(pr.seq) } : {}),
+          data: {
+            reason: ev.payload.reason,
+            pr: p.pr,
+            pr_event_seq: pr.seq,
+            kind: p.kind,
+            actor: p.actor,
+            allowed: true,
+            url: p.url,
+            ...(p.state ? { state: p.state } : {}),
+            text: clipText(p.text, PR_INPUT_TEXT_MAX),
+            ...(ev.payload.note ? { note: ev.payload.note } : {}),
+          },
+        }
+      }
       default:
         return base
     }

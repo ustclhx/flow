@@ -245,6 +245,10 @@ export class WakeProjection {
         return this.normalOriginOf(this.mergeRequests.get(e.payload.item_id))
       case 'task.reply_delegated':
         return 'reply'
+      // 名单内用户的 PR 评论（交回、无订阅任务、恢复被拒）等同用户指令（harness-neutral D11）。
+      // 直通给任务的 pr.event 本身不在任何唤醒队列中。
+      case 'pr.wake_requested':
+        return e.actor === 'hub' ? 'instruction' : null
       default:
         return null
     }

@@ -13,6 +13,7 @@ import {
   clipTail,
   clipText,
   DEFAULT_NO_PROGRESS_MINUTES,
+  type DeliveredInput,
   type DeliveredReply,
   fail,
   HUB_TOKEN_ENV,
@@ -51,6 +52,7 @@ import {
   type ExecutorPlugin,
   type ExecutorRegistry,
   type ExecutorRun,
+  type InjectResult,
   isIdleSignal,
   isResumedSignal,
   type StuckVerdict,
@@ -382,6 +384,10 @@ class LeaseRunner {
   private unacked: { reply_id: string; outcome: DeliverResult } | undefined
   /** 进行中的 deliver（后台执行，不阻塞续约）。 */
   private delivering: Promise<void> | undefined
+  /** 已送进 worker 的输入（按 input_seq 只送一次）与待随续约确认的输入（harness-neutral 8.4）。 */
+  private injected = new Set<number>()
+  private inputAcks: number[] = []
+  private injecting: Promise<void> | undefined
   /** 执行器已结束：之后不再重新计时。 */
   private runEnded = false
   /** 初始写入与续约刷新共用最新 token 和串行写队列，清理关闭队列后不再创建文件。 */
@@ -493,6 +499,7 @@ class LeaseRunner {
     const signal = this.signals.shift()
     const branch = this.pendingBranch
     const outOfBand = this.outOfBand.splice(0, 100)
+    const inputAcks = this.inputAcks.splice(0, 50)
     // 同批信号已带 report_seq 时不混发（report_conflict 须与之一致），留到下一次续约。
     const staleAck =
       signal && 'report_seq' in signal && signal.report_seq !== undefined
@@ -508,6 +515,7 @@ class LeaseRunner {
       ...(staleAck !== undefined ? { report_seq: staleAck } : {}),
       ...(branch ? { branch } : {}),
       ...(outOfBand.length > 0 ? { out_of_band: outOfBand } : {}),
+      ...(inputAcks.length > 0 ? { inputs_delivered: inputAcks } : {}),
     })
     if (this.released) return
     if (r.ok && staleAck !== undefined && this.staleReportSeq === staleAck)
@@ -523,6 +531,7 @@ class LeaseRunner {
       if (r.error.kind === 'retryable') {
         this.buffer.unshift(...batch)
         this.outOfBand.unshift(...outOfBand)
+        this.inputAcks.unshift(...inputAcks)
         // 重试仍从队首发送，先确认恢复再上报后续的新回合。
         if (signal) this.signals.unshift(signal)
         this.scheduleRenew(Math.min(this.intervalMs, this.env.retryMs))
@@ -534,6 +543,7 @@ class LeaseRunner {
         if (this.pendingBranch === branch) this.pendingBranch = undefined
         this.buffer.unshift(...batch)
         this.outOfBand.unshift(...outOfBand)
+        this.inputAcks.unshift(...inputAcks)
         if (signal) this.signals.unshift(signal)
         this.scheduleRenew(0)
         return
@@ -552,6 +562,7 @@ class LeaseRunner {
       this.buffer.length > 0 ||
       this.signals.length > 0 ||
       this.outOfBand.length > 0 ||
+      this.inputAcks.length > 0 ||
       this.staleReportSeq !== undefined
     )
       this.renewAgain = true
@@ -568,8 +579,39 @@ class LeaseRunner {
       this.run?.bindBlocked?.({ seq: r.data.blocked.seq, request_id: r.data.blocked.request_id })
     }
     if (r.data.reply && !this.cancelRequested && !this.unacked) this.deliver(r.data.reply)
+    if (r.data.inputs?.length && !this.cancelRequested) this.inject(r.data.inputs)
     if (this.unacked) await this.ack()
     this.scheduleRenew()
+  }
+
+  /**
+   * 把续约带来的输入送进运行中的 worker（PR 直通，harness-neutral 8.4）：后台依次送，不阻塞续约；
+   * 每条只送一次，送达后随下一次续约以 inputs_delivered 确认。适配器暂时不能送（not_now）或 worker
+   * 已不在（not_running）时不确认，中枢会在之后的续约或下一次派工再给。
+   */
+  private inject(inputs: readonly DeliveredInput[]) {
+    const run = this.run
+    if (this.injecting || !run?.inject || this.released || this.runEnded) return
+    const todo = inputs.filter((i) => !this.injected.has(i.input_seq))
+    if (!todo.length) return
+    this.injecting = (async () => {
+      for (const input of todo) {
+        if (this.released || this.runEnded || this.cancelRequested) return
+        let result: InjectResult
+        try {
+          result = (await run.inject?.(input)) ?? 'not_running'
+        } catch (error) {
+          this.env.logger.warn(`输入 ${input.input_seq} 暂时未送达，下一次续约重试`, String(error))
+          return
+        }
+        if (result !== 'delivered') return
+        this.injected.add(input.input_seq)
+        this.inputAcks.push(input.input_seq)
+      }
+    })().finally(() => {
+      this.injecting = undefined
+      if (this.inputAcks.length && !this.released) this.scheduleRenew(0)
+    })
   }
 
   /**
@@ -1298,6 +1340,7 @@ class LeaseRunner {
           signal: this.abort.signal,
           ...(grant.resume ? { resume: grant.resume } : {}),
           ...(grant.recovery ? { recovery: grant.recovery } : {}),
+          ...(grant.inputs?.length ? { inputs: grant.inputs } : {}),
           ...(wakeTokenFile ? { wakeTokenFile } : {}),
           ...(this.leaseTokenFile ? { leaseTokenFile: this.leaseTokenFile } : {}),
           precheck,

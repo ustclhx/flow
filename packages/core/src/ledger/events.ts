@@ -337,9 +337,16 @@ export const eventPayloads = {
       .meta({ description: '上一轮卡住时上报的会话 id，下一次执行据此恢复' }),
   }),
   'task.requeued': z.strictObject({
-    reason: z.enum(['lease_expired', 'manual']).meta({
-      description: 'lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队',
+    reason: z.enum(['lease_expired', 'manual', 'input']).meta({
+      description:
+        'lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队；input：已结束任务因名单内用户的 PR 评论恢复（harness-neutral 8.5，只由中枢写入）',
     }),
+    pr_event_seq: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .meta({ description: 'reason 为 input 时：恢复所依据的 pr.event' }),
     requested_by: z.enum(['user', 'supervisor']).optional(),
     retry_reason: z.string().trim().min(1).max(PROTOCOL_MESSAGE_MAX).optional(),
     policy_version: policyVersionSchema.optional(),
@@ -738,6 +745,34 @@ export const eventPayloads = {
     reason: prUnsubscribeReason,
   }),
   /**
+   * 给任务的新输入（harness-neutral 8.4）：订阅的 PR 上的事件。运行中的任务经续约下发（与回复同一通道，
+   * 但不解除 blocked）；执行器不能中途注入时排队到下一次派工输入。只由中枢写入。
+   */
+  'task.input_added': z.strictObject({
+    source: z.literal('pr'),
+    pr_event_seq: z.number().int().positive().meta({ description: '对应的 pr.event 的 seq' }),
+  }),
+  /** 节点确认已把输入送进运行中的 worker（续约的 inputs_delivered）。 */
+  'task.input_delivered': z.strictObject({
+    input_seqs: z.array(z.number().int().positive()).min(1).max(50),
+    lease_id: leaseId,
+  }),
+  /**
+   * 名单内用户的 PR 评论进入 supervisor 的 instruction 唤醒队列（harness-neutral 8.5、8.6）：
+   * handback 由 worker 交回（附理由）；no_subscriber 没有订阅任务接收；resume_rejected 已结束任务恢复前的
+   * 授权校验未通过。只由中枢写入，且只能指向 allowed 的人类评论。
+   */
+  'pr.wake_requested': z.strictObject({
+    pr_event_seq: z.number().int().positive(),
+    reason: z.enum(['handback', 'no_subscriber', 'resume_rejected']),
+    note: z
+      .string()
+      .min(1)
+      .max(PROTOCOL_MESSAGE_MAX)
+      .optional()
+      .meta({ description: 'handback 时为 worker 的理由；resume_rejected 时为校验未通过的原因' }),
+  }),
+  /**
    * 中枢 pr-watcher 读到的一条 PR 事件（D11）。只由中枢写入；`allowed` 由中枢按 `github.allowed_users`
    * 计算，不取自任何评论内容。重启后按 `cursor` 续读，已入账的不再送达。
    */
@@ -828,6 +863,9 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'pr.subscribed': 'task',
   'pr.unsubscribed': 'task',
   'pr.event': 'workspace',
+  'task.input_added': 'task',
+  'task.input_delivered': 'task',
+  'pr.wake_requested': 'workspace',
 }
 
 const scopeShape = (scope: Scope) =>
@@ -969,7 +1007,7 @@ export const TASK_EVENT_RULES: Readonly<
   'task.replied': { from: ['blocked'], to: 'unchanged' },
   'task.reply_fetched': { from: ['blocked'], to: 'unchanged' },
   'task.requeued_with_reply': { from: ['blocked'], to: 'queued' },
-  'task.requeued': { from: ['blocked', 'running', 'verifying', 'failed'], to: 'queued' },
+  'task.requeued': { from: ['blocked', 'running', 'verifying', 'failed', 'done'], to: 'queued' },
   // blocked：交互式执行器卡住期间仍持有租约（D7a），可以请求取消、租约也可能过期。
   'task.cancel_requested': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   'task.cancelled': { from: ['queued', 'running', 'verifying', 'blocked'], to: 'cancelled' },
@@ -977,6 +1015,12 @@ export const TASK_EVENT_RULES: Readonly<
   // 代回复委托与转交只发生在卡住期间（D15）。
   'task.reply_delegated': { from: ['blocked'], to: 'unchanged' },
   'task.reply_escalated': { from: ['blocked'], to: 'unchanged' },
+  // PR 直通的输入（harness-neutral 8.4）：已取消的任务不再接收；已结束的任务只在同一事务紧接着恢复时接收。
+  'task.input_added': {
+    from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed'],
+    to: 'unchanged',
+  },
+  'task.input_delivered': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   // codex-orca 开始执行后上报一次（持有活动租约，见 store 的校验）。
   'task.branch_reported': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   // 唤醒任务创建后立即写入（同一事务或紧随其后），此时任务仍在排队。
@@ -1016,8 +1060,18 @@ export function checkTaskEvent(
   }
   if (event.type === 'task.requeued' && current !== null) {
     const reason = (event.payload as EventPayload<'task.requeued'>).reason
-    const expected = current === 'blocked' || current === 'failed' ? 'manual' : 'lease_expired'
-    if (reason !== expected) return reject(`task.requeued 的 reason 应为 ${expected}`)
+    // done 只能因名单内用户的 PR 评论恢复（input）；failed 可手动重试或因评论恢复。
+    const expected =
+      current === 'done'
+        ? ['input']
+        : current === 'failed'
+          ? ['manual', 'input']
+          : current === 'blocked'
+            ? ['manual']
+            : ['lease_expired']
+    if (!expected.includes(reason)) {
+      return reject(`task.requeued 的 reason 应为 ${expected.join(' 或 ')}`)
+    }
   }
   const to = rule.to === 'unchanged' ? current : rule.to
   if (to !== null && current !== null && to !== current && !canTransition(current, to)) {

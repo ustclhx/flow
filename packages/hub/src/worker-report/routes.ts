@@ -3,6 +3,7 @@ import { promisify } from 'node:util'
 import {
   ENDPOINTS,
   fail,
+  isAllowedHumanPrEvent,
   ok,
   parseRemoteUrl,
   prRepoOf,
@@ -233,14 +234,53 @@ export function createWorkerReportRoutes({
           fail('failure', 'not_running', '核对交付物时派工已结束'),
           workerReportData,
         )
-      const written = ledger.append(
-        {
-          task_id: task.id,
-          workspace: task.workspace,
-          type: 'task.reported',
-          payload: { ...report, attempt: caller.attempt, lease_id: caller.lease_id },
-        },
-        { actor: caller.actor },
+      // 交回（harness-neutral 8.6）：只能交回本任务收到过的、名单内用户的人类评论；
+      // 交回等同用户指令，进入 supervisor 的 instruction 唤醒队列并附 worker 的理由。
+      const handback = report.handback
+      if (handback) {
+        const event = ledger.prEvent(handback.pr_event_seq)
+        if (
+          !event ||
+          event.workspace !== task.workspace ||
+          !ledger.taskHasPrInput(task.id, event.seq) ||
+          !isAllowedHumanPrEvent(event.payload)
+        )
+          return respond(
+            c,
+            fail(
+              'failure',
+              'handback_invalid',
+              '只能交回本任务收到过的、允许名单内用户的 PR 评论；机器人、CI 与名单外用户的内容不能交回',
+            ),
+            workerReportData,
+          )
+      }
+      const handedBack =
+        handback && !ledger.prWakeRequested(handback.pr_event_seq, 'handback', task.id)
+      const written = ledger.appendMany(
+        [
+          {
+            task_id: task.id,
+            workspace: task.workspace,
+            type: 'task.reported',
+            payload: { ...report, attempt: caller.attempt, lease_id: caller.lease_id },
+          },
+          ...(handback && handedBack
+            ? [
+                {
+                  type: 'pr.wake_requested' as const,
+                  task_id: task.id,
+                  workspace: task.workspace,
+                  payload: {
+                    pr_event_seq: handback.pr_event_seq,
+                    reason: 'handback' as const,
+                    note: handback.reason,
+                  },
+                },
+              ]
+            : []),
+        ],
+        { actor: caller.actor, actors: handedBack ? [caller.actor, 'hub'] : [caller.actor] },
       )
       if (written.ok) {
         failed.total--
@@ -248,7 +288,9 @@ export function createWorkerReportRoutes({
       }
       return respond(
         c,
-        written.ok ? ok({ seq: written.data.seq, attempt: caller.attempt }) : written,
+        written.ok
+          ? ok({ seq: (written.data[0] as { seq: number }).seq, attempt: caller.attempt })
+          : written,
         workerReportData,
       )
     } finally {

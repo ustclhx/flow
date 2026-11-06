@@ -18,6 +18,7 @@ import {
   ok,
   type Role,
   renderRecoveryPrompt,
+  renderTaskInputs,
   renderWorkerTaskPrompt,
   type TaskRecovery,
   taskContract,
@@ -216,6 +217,23 @@ describe('codex-exec 无头执行器', () => {
     expect((await collect(run)).outcome.outcome).toBe('done')
     expect(s.launched()).toBe(true)
     expect(reports).toEqual([])
+  })
+
+  test('PR 直通：不能中途注入，派工输入放在恢复提示之后', async () => {
+    const s = setup()
+    const recovery: TaskRecovery = { previous_end: { attempt: 1, reason: 'done' }, prs: [] }
+    const inputs = [
+      {
+        input_seq: 5,
+        source: 'pr' as const,
+        pr_event_seq: 50,
+        text: '<untrusted-pr-event>{"text": "未运行时的评论"}</untrusted-pr-event>',
+      },
+    ]
+    await collect(s.run({ ...s.ctx, attempt: 2, recovery, inputs }))
+    expect(s.report().args.at(-1)).toStartWith(
+      `${renderRecoveryPrompt(recovery)}\n\n${renderTaskInputs(inputs)}\n\n`,
+    )
   })
 
   test.each([false, true])('恢复提示放在输入开头（恢复旧会话：%s）', async (resume) => {

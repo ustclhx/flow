@@ -15,6 +15,7 @@ import {
   type Result,
   type Role,
   renderRecoveryPrompt,
+  renderTaskInputs,
   renderWorkerTaskPrompt,
   type TaskContract,
   type TaskRecovery,
@@ -943,6 +944,51 @@ describe('运行中的回复与会话恢复', () => {
     ).done
     expect(state.prompts[0]).toStartWith(`${renderRecoveryPrompt(recovery)}\n\n`)
     expect(state.calls[0]?.resume).toBe(resume ? 's-old' : undefined)
+  })
+
+  test('PR 直通：派工输入放在恢复提示之后；运行中的输入推入流式输入，按 input_seq 幂等', async () => {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield say('开始处理')
+      const extra = await io.nextUser()
+      yield say(`收到：${extra}`)
+      yield result()
+    })
+    const recovery: TaskRecovery = { previous_end: { attempt: 1, reason: 'done' }, prs: [] }
+    const dispatched = {
+      input_seq: 7,
+      source: 'pr' as const,
+      pr_event_seq: 70,
+      text: '<untrusted-pr-event>{"text": "派工时的评论"}</untrusted-pr-event>',
+    }
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(reviewer()),
+    })
+    const run = ex.run(contract(), ctx({ attempt: 2, recovery, inputs: [dispatched] }))
+    const live = {
+      ...dispatched,
+      input_seq: 8,
+      pr_event_seq: 80,
+      text: '<untrusted-pr-event>运行中的 CI 失败</untrusted-pr-event>',
+    }
+    const results: string[] = []
+    for await (const a of run.activity) {
+      if (a.kind === 'output' && a.text === '开始处理') {
+        results.push(String(await run.inject?.(dispatched)))
+        results.push(String(await run.inject?.(live)))
+        results.push(String(await run.inject?.(live)))
+      }
+    }
+    await run.done
+    expect(state.prompts[0]).toStartWith(
+      `${renderRecoveryPrompt(recovery)}\n\n${renderTaskInputs([dispatched])}\n\n`,
+    )
+    expect(results).toEqual(['delivered', 'delivered', 'delivered'])
+    expect(state.prompts[1]).toBe(live.text)
+    expect(state.prompts).toHaveLength(2)
+    expect(await run.inject?.({ ...live, input_seq: 9 })).toBe('not_running')
   })
 
   test('无进展后的文字回复：作为用户消息推入流式输入，Claude 接着完成', async () => {
