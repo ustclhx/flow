@@ -1937,6 +1937,11 @@
                                 ],
                                 "additionalProperties": false
                               }
+                            },
+                            "pr_sourced": {
+                              "description": "中枢计算：任务源自 PR 评论引起的唤醒，或其唤醒链上游任务带此标记（向下传递）；自动合并与直接建写类任务都据此拦截",
+                              "type": "boolean",
+                              "const": true
                             }
                           },
                           "required": [
@@ -4030,9 +4035,21 @@
                           "type": "string",
                           "enum": [
                             "lease_expired",
-                            "manual"
+                            "manual",
+                            "input"
                           ],
-                          "description": "lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队"
+                          "description": "lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队；input：已结束任务因名单内用户的 PR 评论恢复（harness-neutral 8.5，只由中枢写入）"
+                        },
+                        "pr_event_seq": {
+                          "description": "reason 为 input 时：恢复所依据的 pr.event",
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "pr_sourced": {
+                          "description": "中枢计算：由 PR 来源唤醒发起的重试（污染随任务保留，不因重试清除）",
+                          "type": "boolean",
+                          "const": true
                         },
                         "requested_by": {
                           "type": "string",
@@ -5322,6 +5339,10 @@
                                 ],
                                 "additionalProperties": false,
                                 "title": "Adapter capabilities"
+                              },
+                              "task_inputs": {
+                                "description": "执行器会把派工的 inputs 放进输入并由节点确认（PR 直通，harness-neutral 8.4）；旧节点没有该字段时中枢不随派工下发输入",
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -5804,7 +5825,8 @@
                             "digest",
                             "task_proposal",
                             "merge_request",
-                            "decision"
+                            "decision",
+                            "pr_comment"
                           ],
                           "description": "条目来源"
                         },
@@ -6501,6 +6523,11 @@
                           "minimum": 1,
                           "maximum": 9007199254740991,
                           "description": "唤醒代数，从 1 开始"
+                        },
+                        "source": {
+                          "description": "合并了 PR 评论（pr.wake_requested）的唤醒：保留 instruction 队列优先级，但不满足 auto_merge、受 observe 约束、新任务不继承原始指令",
+                          "type": "string",
+                          "const": "pr"
                         }
                       },
                       "required": [
@@ -8951,6 +8978,288 @@
                   ],
                   "additionalProperties": false,
                   "title": "pr.unsubscribed"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "seq": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991,
+                      "description": "账本序号，单调递增"
+                    },
+                    "ts": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "task.input_added"
+                    },
+                    "workspace": {
+                      "type": "string",
+                      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                      "description": "workspace 标识，形如 ws/<id>"
+                    },
+                    "task_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                      "description": "任务 id，由中枢在创建时分配"
+                    },
+                    "actor": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                    },
+                    "payload": {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "const": "pr"
+                        },
+                        "pr_event_seq": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "description": "对应的 pr.event 的 seq"
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "pr_event_seq"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "seq",
+                    "ts",
+                    "type",
+                    "workspace",
+                    "task_id",
+                    "actor",
+                    "payload"
+                  ],
+                  "additionalProperties": false,
+                  "title": "task.input_added"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "seq": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991,
+                      "description": "账本序号，单调递增"
+                    },
+                    "ts": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "task.input_delivered"
+                    },
+                    "workspace": {
+                      "type": "string",
+                      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                      "description": "workspace 标识，形如 ws/<id>"
+                    },
+                    "task_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                      "description": "任务 id，由中枢在创建时分配"
+                    },
+                    "actor": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                    },
+                    "payload": {
+                      "type": "object",
+                      "properties": {
+                        "input_seqs": {
+                          "minItems": 1,
+                          "maxItems": 200,
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "lease_id": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                          "description": "租约 id，由中枢在分配任务时生成"
+                        },
+                        "via": {
+                          "description": "running 送进运行中的 worker；dispatch 随派工输入交给执行器（节点确认后才记为送达）",
+                          "type": "string",
+                          "enum": [
+                            "running",
+                            "dispatch"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "input_seqs",
+                        "lease_id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "seq",
+                    "ts",
+                    "type",
+                    "workspace",
+                    "task_id",
+                    "actor",
+                    "payload"
+                  ],
+                  "additionalProperties": false,
+                  "title": "task.input_delivered"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "seq": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991,
+                      "description": "账本序号，单调递增"
+                    },
+                    "ts": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "pr.wake_requested"
+                    },
+                    "workspace": {
+                      "type": "string",
+                      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                      "description": "workspace 标识，形如 ws/<id>"
+                    },
+                    "task_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                      "description": "任务 id，由中枢在创建时分配"
+                    },
+                    "actor": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                    },
+                    "payload": {
+                      "type": "object",
+                      "properties": {
+                        "pr_event_seq": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "handback",
+                            "no_subscriber",
+                            "resume_rejected"
+                          ]
+                        },
+                        "note": {
+                          "description": "handback 时为 worker 的理由；resume_rejected 时为校验未通过的原因",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 8192
+                        }
+                      },
+                      "required": [
+                        "pr_event_seq",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "seq",
+                    "ts",
+                    "type",
+                    "workspace",
+                    "actor",
+                    "payload"
+                  ],
+                  "additionalProperties": false,
+                  "title": "pr.wake_requested"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "seq": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991,
+                      "description": "账本序号，单调递增"
+                    },
+                    "ts": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                    },
+                    "type": {
+                      "type": "string",
+                      "const": "pr.dispatched"
+                    },
+                    "workspace": {
+                      "type": "string",
+                      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                      "description": "workspace 标识，形如 ws/<id>"
+                    },
+                    "task_id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                      "description": "任务 id，由中枢在创建时分配"
+                    },
+                    "actor": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                    },
+                    "payload": {
+                      "type": "object",
+                      "properties": {
+                        "pr_event_seq": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "pr_event_seq"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "seq",
+                    "ts",
+                    "type",
+                    "workspace",
+                    "actor",
+                    "payload"
+                  ],
+                  "additionalProperties": false,
+                  "title": "pr.dispatched"
                 },
                 {
                   "type": "object",

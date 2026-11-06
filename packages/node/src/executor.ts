@@ -2,6 +2,7 @@ import type {
   Activity,
   AdapterCapabilities,
   BlockedReason,
+  DeliveredInput,
   DeliveredReply,
   ExecutorInfo,
   Result,
@@ -43,6 +44,11 @@ export interface ExecutorContext {
   resume?: TaskResume
   /** 同一任务上一次派工的结束与交付事实；适配器用 core 模板放在输入开头。 */
   recovery?: TaskRecovery
+  /**
+   * 任务未运行期间到达的输入（PR 直通，harness-neutral 8.4）：中枢已渲染并包裹为不可信数据，
+   * 适配器用 `renderTaskInputs` 原样放在派工输入开头（恢复提示之后），不得改写或解包。
+   */
+  inputs?: DeliveredInput[]
   /**
    * 恢复时发现回复所属授权回合已关闭或请求不匹配：节点拒收当前 resume.reply，通知回复者。
    * 不接受回复 id；可在 run 初始化期间调用，节点在执行结束前完成确认与临时失败重试。
@@ -127,6 +133,13 @@ export type DeliverResult =
   | 'dropped'
   | { outcome: 'dropped'; reason: 'round_closed' | 'request_changed'; attempted?: boolean }
 
+/**
+ * 运行中注入输入的结果：delivered 已送进 worker（节点随下一次续约确认）；not_now 暂时不能送
+ * （例如终端停在授权或信任弹窗、worker 正在忙），中枢下一次续约会再给；not_running worker 已不在，
+ * 输入留到下一次派工。
+ */
+export type InjectResult = 'delivered' | 'not_now' | 'not_running'
+
 /** 执行器的最终结果：done / failed 附带结果，blocked 附带原因与说明。 */
 export type ExecutorOutcome =
   | {
@@ -165,6 +178,11 @@ export interface ExecutorRun {
   deliver?(reply: DeliveredReply): Promise<DeliverResult>
   /** 续约确认的卡住事件与适配器本地请求的对应关系；在送达回复之前调用。 */
   bindBlocked?(binding: { seq: number; request_id: string }): void
+  /**
+   * 把输入送进运行中的 worker（只有 `adapterCapabilities.inject_while_running` 为 true 的适配器实现）。
+   * 应当按 `input_seq` 幂等；不解除 blocked，也不能当作授权回复。文字已由中枢包裹，原样送入。
+   */
+  inject?(input: DeliveredInput): Promise<InjectResult>
 }
 
 export interface ExecutorPlugin {
@@ -174,6 +192,11 @@ export interface ExecutorPlugin {
   mode?: 'interactive' | 'headless'
   /** 适配器的交互能力；区别于 registry.capabilities() 的 executor:<type> 派送标签。 */
   adapterCapabilities: AdapterCapabilities
+  /**
+   * 执行器是否把派工的 `ctx.inputs` 放进输入（PR 直通）；缺省为 true。为 false 时节点不向中枢声明，
+   * 中枢不随派工下发输入。
+   */
+  taskInputs?: boolean
   /** 执行器额外要求节点具备的能力（例如 `browser`）。 */
   requires?: readonly string[]
   run(contract: TaskContract, ctx: ExecutorContext): ExecutorRun
@@ -227,6 +250,7 @@ export function createExecutorRegistry(plugins: readonly ExecutorPlugin[]): Exec
         type: p.type,
         ...(p.mode ? { mode: p.mode } : {}),
         adapter_capabilities: p.adapterCapabilities,
+        task_inputs: p.taskInputs !== false,
       })),
   }
 }

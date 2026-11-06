@@ -5,7 +5,9 @@ import { taskContract } from '@raindown/core'
 import {
   analyzeTail,
   approvalExecutionLines,
+  atShellPrompt,
   classifyCodexOrca,
+  composerReady,
   isBusy,
   lastMessage,
 } from '../src/codex-orca/classify.ts'
@@ -424,7 +426,8 @@ describe('analyzeTail', () => {
     })
     expect(analyzeTail(tuiFixture('approval-denied').tail).kind).toBe('other')
     const exited = analyzeTail(tuiFixture('codex-exited').tail)
-    expect(exited.kind).toBe('other')
+    // 回到 shell 提示符单独成一类（不是"回合结束后的空闲输入框"），卡住原因仍为 other。
+    expect(exited.kind).toBe('shell_prompt')
     expect(exited.message).toContain('shell 提示符')
     expect(analyzeTail(tuiFixture('shell-prompt').tail).message).toContain('shell 提示符')
   })
@@ -723,5 +726,38 @@ describe('approvalExecutionLines', () => {
     ).toEqual([])
     expect(approvalExecutionLines([`• Ran ${command}`], 'git push --force origin HEAD')).toEqual([])
     expect(approvalExecutionLines([`• Ran ${command}`, '  --other'], command)).toEqual([])
+  })
+})
+
+describe('composerReady：只有最后几行是 Codex 输入框才能敲入文字', () => {
+  const exitedWithComposerInScrollback = [
+    '• Done.',
+    '',
+    '› Ask Codex to do anything',
+    '  ? for shortcuts',
+    '',
+    'Token usage: total=1',
+    'user@host repo %',
+  ]
+  test('Codex 已退出、滚动历史中残留输入框：不算输入框，分类为 shell 提示符', () => {
+    expect(composerReady(exitedWithComposerInScrollback)).toBe(false)
+    expect(atShellPrompt(exitedWithComposerInScrollback)).toBe(true)
+    expect(analyzeTail(exitedWithComposerInScrollback).kind).toBe('shell_prompt')
+  })
+  test('末尾就是输入框及其状态行时可以敲入', () => {
+    expect(
+      composerReady(['• 已完成。', '', '› Ask Codex to do anything', '  ? for shortcuts']),
+    ).toBe(true)
+    expect(composerReady(['› ', ''])).toBe(true)
+    expect(composerReady(['› Ask Codex', 'a', 'b', 'c'])).toBe(false)
+    expect(composerReady([])).toBe(false)
+    // 末行只剩裸提示符（精简主题的 shell）也不算输入框。
+    expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', '$ '])).toBe(false)
+    expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', '  ❯'])).toBe(false)
+    expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', 'repo %'])).toBe(false)
+    // 输入框本身与 Codex 状态行不按裸提示符判断。
+    expect(composerReady(['› Ask Codex', '  ⏎ send … · 3%'])).toBe(true)
+    expect(composerReady(['› fix #'])).toBe(true)
+    expect(composerReady(['› Ask Codex', '$ '])).toBe(false)
   })
 })

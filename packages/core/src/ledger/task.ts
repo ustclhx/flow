@@ -102,7 +102,8 @@ export type TaskAttemptEndReason = z.infer<typeof taskAttemptEndReason>
  * - running → verifying | done | failed | blocked
  * - verifying → done | failed | blocked
  * - blocked → queued | running | cancelled | failed | done（done 仅用于已存在 PR 判定）
- * - failed → queued：仅允许手动重试
+ * - failed → queued：仅允许手动重试或因名单内用户的 PR 评论恢复
+ * - done → queued：仅允许因名单内用户的 PR 评论恢复（`task.requeued{reason: input}`，harness-neutral 8.5）
  * - 任何非终态 → cancelled
  *
  * 另加 `running | verifying → queued`：仅用于"允许重试的任务租约过期后重新排队"
@@ -113,7 +114,7 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]
   running: ['verifying', 'done', 'failed', 'blocked', 'cancelled', 'queued'],
   verifying: ['done', 'failed', 'blocked', 'cancelled', 'queued'],
   blocked: ['queued', 'running', 'cancelled', 'failed', 'done'],
-  done: [],
+  done: ['queued'],
   failed: ['queued'],
   cancelled: [],
 }
@@ -329,6 +330,10 @@ export const taskMandate = z.strictObject({
     .meta({ description: '未能确定原始指令的中枢说明' }),
   policy_version: policyVersionSchema,
   matched_rules: z.array(indexedPolicyRuleSchema).optional(),
+  pr_sourced: z.literal(true).optional().meta({
+    description:
+      '中枢计算：任务源自 PR 评论引起的唤醒，或其唤醒链上游任务带此标记（向下传递）；自动合并与直接建写类任务都据此拦截',
+  }),
 })
 export type TaskMandate = z.infer<typeof taskMandate>
 

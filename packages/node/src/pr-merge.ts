@@ -189,6 +189,7 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
     type: PR_MERGE_EXECUTOR,
     mode: 'headless',
     adapterCapabilities: NO_ADAPTER_CAPABILITIES,
+    taskInputs: false,
     classify: () => null,
     run(contract: TaskContract, ctx: ExecutorContext) {
       const queue = new ActivityQueue()

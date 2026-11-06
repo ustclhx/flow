@@ -41,9 +41,21 @@
           "type": "string",
           "enum": [
             "lease_expired",
-            "manual"
+            "manual",
+            "input"
           ],
-          "description": "lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队"
+          "description": "lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队；input：已结束任务因名单内用户的 PR 评论恢复（harness-neutral 8.5，只由中枢写入）"
+        },
+        "pr_event_seq": {
+          "description": "reason 为 input 时：恢复所依据的 pr.event",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pr_sourced": {
+          "description": "中枢计算：由 PR 来源唤醒发起的重试（污染随任务保留，不因重试清除）",
+          "type": "boolean",
+          "const": true
         },
         "requested_by": {
           "type": "string",

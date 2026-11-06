@@ -448,6 +448,25 @@ export function createApplier(db: Database): Applier {
         }
         return
       }
+      case 'task.input_added':
+        stmt(
+          `INSERT INTO task_inputs (seq, task_id, source, pr_event_seq, state)
+           VALUES (?, ?, ?, ?, 'pending')`,
+        ).run(e.seq, e.task_id ?? null, e.payload.source, e.payload.pr_event_seq)
+        touchTask(e, '')
+        return
+      case 'task.input_delivered':
+        for (const seq of e.payload.input_seqs) {
+          stmt(
+            `UPDATE task_inputs SET state = ?, delivered_at = ?, lease_id = ?
+             WHERE seq = ? AND task_id = ? AND state = 'pending'`,
+          ).run(e.payload.via ?? 'running', e.ts, e.payload.lease_id, seq, e.task_id ?? null)
+        }
+        touchTask(e, '')
+        return
+      case 'pr.wake_requested':
+      case 'pr.dispatched':
+        return
       case 'pr.subscribed':
         stmt(
           `INSERT INTO pr_subscriptions (subscribed_seq, task_id, workspace, pr, role, subscribed_at, state)

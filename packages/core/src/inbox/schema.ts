@@ -49,6 +49,7 @@ export const INBOX_SOURCES = [
   'task_proposal',
   'merge_request',
   'decision',
+  'pr_comment',
 ] as const
 export type InboxSource = (typeof INBOX_SOURCES)[number]
 export const inboxSource = z.enum(INBOX_SOURCES).meta({ description: '条目来源' })

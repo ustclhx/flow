@@ -201,6 +201,8 @@ describe('状态与状态机', () => {
     'running>queued',
     'verifying>queued',
     'failed>queued',
+    // harness-neutral 8.5：已完成的任务只能因名单内用户的 PR 评论恢复（task.requeued{reason: input}）。
+    'done>queued',
   ])
 
   const pairs: [TaskStatus, TaskStatus][] = TASK_STATUSES.flatMap((from) =>
@@ -215,10 +217,9 @@ describe('状态与状态机', () => {
     expect(canTransition(from, to)).toBe(false)
   })
 
-  test('完成与取消不能恢复，失败仅允许重新排队', () => {
-    for (const s of ['done', 'cancelled'] as const) {
-      expect(TASK_STATUSES.some((t) => canTransition(s, t))).toBe(false)
-    }
+  test('取消不能恢复；完成与失败仅允许重新排队', () => {
+    expect(TASK_STATUSES.some((t) => canTransition('cancelled', t))).toBe(false)
+    expect(TASK_STATUSES.filter((t) => canTransition('done', t))).toEqual(['queued'])
     expect(TASK_STATUSES.filter((t) => canTransition('failed', t))).toEqual(['queued'])
   })
 })

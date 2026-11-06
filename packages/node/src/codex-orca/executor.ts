@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   type Activity,
+  type DeliveredInput,
   type DeliveredReply,
   fail,
   loadRoles,
@@ -14,6 +15,7 @@ import {
   redactLines,
   redactSecrets,
   renderRecoveryPrompt,
+  renderTaskInputs,
   SUPERVISOR_ACTOR,
   type TaskContract,
   type TaskResult,
@@ -35,6 +37,7 @@ import {
   type ExecutorOutcome,
   type ExecutorPlugin,
   type ExecutorRun,
+  type InjectResult,
   idleSignal,
   resumedSignal,
 } from '../executor.ts'
@@ -44,8 +47,10 @@ import {
   analyzeTail,
   approvalExecutionLines,
   approvalForPrecheck,
+  atShellPrompt,
   CODEX_ORCA_PRECHECK_TOOL,
   classifyCodexOrca,
+  composerReady,
   type TailAnalysis,
 } from './classify.ts'
 import {
@@ -405,7 +410,9 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
     mode: 'interactive',
     adapterCapabilities: {
       approval_requests: 'inferred',
-      inject_while_running: true,
+      // 运行中注入只在回合结束后的空闲输入框、且尚未上报停下的极短窗口内可行：如实声明为不支持，
+      // PR 输入排队到下一次派工（新终端从 spec 读取，重挂接时随恢复提示送入）。
+      inject_while_running: false,
       resume_session: false,
       raindown_mcp: true,
       out_of_band_detection: true,
@@ -444,7 +451,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       let approvalRound: z.infer<typeof approvalRoundSchema> | undefined
       let restoredApprovalRound = false
       let resumeReplyHandled = false
-      const recoveryText = ctx.recovery ? renderRecoveryPrompt(ctx.recovery) : undefined
+      // 恢复提示与未运行期间到达的输入（PR 直通，已由中枢包裹）：新终端从 spec 读取，重挂接时一并送入。
+      const recoveryParts = [
+        ...(ctx.recovery ? [renderRecoveryPrompt(ctx.recovery)] : []),
+        ...(ctx.inputs?.length ? [renderTaskInputs(ctx.inputs)] : []),
+      ]
+      const recoveryText = recoveryParts.length ? recoveryParts.join('\n\n') : undefined
       // 与用户回复的 r-* id 分离；保存 request id，重试送达时沿用 Orca 的幂等机制。
       const recoveryId = `recovery-${ctx.attempt}`
       const inflight = new Map<string, Promise<DeliverResult>>()
@@ -862,6 +874,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         }
         if (!(await requireWorkdir())) return 'not_running'
         if (now.data.status !== 'running') return 'not_running'
+        // 终端回到了 shell 提示符：Codex 已退出，不发送任何按键（回车、Esc 或文字）。
+        if (atShellPrompt(now.data.tail)) return 'not_running'
         const h = handle
         const live = analyzeTail(now.data.tail)
         if (restoringApproval && !restoredApprovalRound) {
@@ -1029,7 +1043,21 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             replyText(reply),
           ].join(' ')
           if (text) {
-            const submitted = await sendPrompt(h, text, st, undefined, needsRecovery)
+            // 文字回复同样只敲进 Codex 的输入框：最后几行必须是输入框，shell 提示符时不发送。
+            const composerGuard = async () => {
+              const current = await orca.terminalRead({ handle: h, limit: 200 })
+              if (!current.ok) throw new TransientDeliverError(current.error.message)
+              if (current.data.status !== 'running')
+                throw new TransientDeliverError('终端不在运行，回复等待下一次送达')
+              const live = analyzeTail(current.data.tail).kind
+              // 出现新的授权或信任弹窗：这次回复所属回合已结束，文字不能落到新弹窗上。
+              if (live === 'awaiting_approval' || live === 'trust_prompt')
+                throw new RoundClosedError('出现新的弹窗，回复尚未送达')
+              if (!composerReady(current.data.tail))
+                throw new TransientDeliverError('Codex 输入框尚不可用，回复等待下一次送达')
+            }
+            await composerGuard()
+            const submitted = await sendPrompt(h, text, st, composerGuard, needsRecovery)
             if (needsRecovery && !submitted)
               throw new TransientDeliverError('恢复提示尚未确认开始，等待幂等重验')
           }
@@ -1107,7 +1135,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             kind === 'working' ||
             kind === 'trust_prompt' ||
             kind === 'awaiting_approval' ||
-            !current.data.tail.some((line) => /^›(?:\s|$)|\? for shortcuts/.test(line.trim()))
+            kind === 'shell_prompt' ||
+            !composerReady(current.data.tail)
           ) {
             throw new TransientDeliverError('普通输入框尚不可用，恢复提示等待下一次送达')
           }
@@ -1130,6 +1159,61 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           status('已把恢复提示送进已有终端')
         } catch (error) {
           if (!(error instanceof TransientDeliverError)) throw error
+        }
+      }
+
+      /**
+       * 运行中注入 PR 直通的输入（harness-neutral 8.4）：只在普通输入框空闲时送入——授权弹窗、信任弹窗、
+       * worker 忙碌、回复或恢复提示尚未送完时都返回 not_now，绝不把输入当成批准或信任确认的按键。
+       * 以 `input-<seq>` 记录 Orca 的 request id，重送时沿用幂等机制。
+       */
+      const inject = async (input: DeliveredInput): Promise<InjectResult> => {
+        if (finished || !state) return 'not_running'
+        if (!handle) return 'not_now'
+        const st = replyState(`input-${input.input_seq}`)
+        if (st.done) return 'delivered'
+        // 有打开的授权回合、或回复已发 Esc 尚未送完时，输入框里的文字属于那次回复：不能插入输入。
+        const replyInProgress = Object.values(state.replies).some(
+          (r) => r.esc_sent === true && r.done !== true,
+        )
+        // 本次运行已上报停下（idle / blocked）：输入框里等的是用户或 supervisor 的回答，不插入输入。
+        if (
+          reported ||
+          inflight.size > 0 ||
+          (approvalRound !== undefined && !approvalRound.closed) ||
+          replyInProgress ||
+          (ctx.resume && !resumeReplyHandled) ||
+          (recoveryText !== undefined && !replyState(recoveryId).done)
+        )
+          return 'not_now'
+        const h = handle
+        const guard = async () => {
+          const current = await orca.terminalRead({ handle: h, limit: 200 })
+          if (!current.ok) throw new TransientDeliverError(current.error.message)
+          const kind = analyzeTail(current.data.tail).kind
+          // 只在"回合结束后的普通空闲输入框"送入：提问、授权、信任弹窗、忙碌或空屏都不送（不能替用户回答）。
+          if (
+            current.data.status !== 'running' ||
+            (kind !== 'other' && kind !== 'pr_opened') ||
+            reported ||
+            !composerReady(current.data.tail)
+          ) {
+            throw new TransientDeliverError('普通输入框尚不可用，输入等待下一次送达')
+          }
+        }
+        try {
+          if (!(await requireWorkdir())) return 'not_running'
+          await guard()
+          const submitted = await sendPrompt(h, input.text.replace(/\n/g, ' '), st, guard, true)
+          if (!submitted) return 'not_now'
+          st.done = true
+          await saveState()
+          // 不重置 reported / idlePolls：送达不能掩盖随后的提问或停下。
+          status(`已把 PR 动态（输入 ${input.input_seq}）送进终端`)
+          return 'delivered'
+        } catch (error) {
+          if (error instanceof TransientDeliverError) return 'not_now'
+          throw error
         }
       }
 
@@ -1455,6 +1539,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           ...(scope ? { scope } : {}),
           ...(ctx.resume?.reply.kind === 'text' ? { resume: ctx.resume } : {}),
           ...(ctx.recovery ? { recovery: ctx.recovery } : {}),
+          ...(ctx.inputs?.length ? { inputs: ctx.inputs } : {}),
         })
         const specPath = await writeTaskSpec(options.home, ctx.taskId, spec)
         if (finished || stopping) return
@@ -1574,6 +1659,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         done,
         cancel: () => stop('codex-orca 已取消：终端已关闭，worktree 保留'),
         deliver,
+        inject,
         bindBlocked(binding) {
           if (approvalRound?.request_id === binding.request_id) {
             approvalRound.blockSeq = binding.seq

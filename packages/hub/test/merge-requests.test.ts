@@ -163,7 +163,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
   )
   let generation = 0
   /** 中枢以 hub 建唤醒任务并由节点领取，返回唤醒任务 id 与租约下发的唤醒 token。 */
-  const wake = async (origin: WakeOrigin, ws = WS) => {
+  const wake = async (origin: WakeOrigin, ws = WS, source?: 'pr') => {
     const g = ++generation
     const t = must(
       await tasks.createTask(
@@ -184,7 +184,14 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
               task_id: id,
               workspace: ws,
               type: 'supervisor.wake_started',
-              payload: { task_id: id, workspace: ws, origin, events: [], generation: g },
+              payload: {
+                task_id: id,
+                workspace: ws,
+                origin,
+                events: [],
+                generation: g,
+                ...(source ? { source } : {}),
+              },
             },
           ],
         },
@@ -215,6 +222,10 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       /** 随分支上报的登记仓库快照的 origin 地址；null 表示不带快照。缺省为 acme/demo。 */
       remoteUrl?: string | null
       actor?: 'user' | 'hub'
+      /** 授权依据中的唤醒（模拟在该唤醒里建的任务）。 */
+      mandateWake?: string
+      /** 授权依据带 PR 来源污染（两跳之后的任务）。 */
+      prSourced?: boolean
     } = {},
   ) => {
     clock.time += 1000
@@ -229,6 +240,17 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
           payload: {
             contract: { goal: 'g', workspace: ws, requires: [], timeout_s: 60, ...contract },
             ...(opts.origin ? { origin: opts.origin } : {}),
+            ...(opts.mandateWake || opts.prSourced
+              ? {
+                  mandate: {
+                    created_by: 'supervisor',
+                    origin: 'supervisor',
+                    ...(opts.mandateWake ? { wake_task: opts.mandateWake } : {}),
+                    ...(opts.prSourced ? { pr_sourced: true } : {}),
+                    policy_version: '012345abcdef',
+                  },
+                }
+              : {}),
           },
         } as unknown as EventInput,
         { actor: opts.actor ?? 'user' },
@@ -306,6 +328,8 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       /** 仓库快照的 origin 地址；null 表示没有快照。 */
       remoteUrl?: string | null
       parent?: string
+      mandateWake?: string
+      prSourced?: boolean
     } = {},
     status: 'done' | 'failed' | 'blocked' = 'done',
   ) =>
@@ -330,6 +354,8 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
               ...(o.remoteUrl === undefined ? {} : { remoteUrl: o.remoteUrl }),
             }
           : {}),
+        ...(o.mandateWake ? { mandateWake: o.mandateWake } : {}),
+        ...(o.prSourced ? { prSourced: true } : {}),
         status,
       },
     )
@@ -1155,6 +1181,43 @@ describe('自动合并与收尾', () => {
     expect(r.item?.source).toBe('merge_request')
     expect(s.events('merge_request.created')[0]?.payload).toMatchObject({ auto_merge: false })
     expect(s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)).toBeNull()
+  })
+
+  test('PR 评论引起的唤醒（source: pr）即使开着 auto_merge 也只生成审批条目，交给用户', async () => {
+    const s = await setup({ supervisor: { auto_merge: true } })
+    s.dev()
+    const rv = s.review()
+    const w = await s.wake('instruction', WS, 'pr')
+    expect(s.ledger.wakeOf(w.id)?.source).toBe('pr')
+    const r = must(await s.request(w.token, rv))
+    expect(r.mode).toBe('approval')
+    expect(r.task).toBeUndefined()
+    expect(r.item?.source).toBe('merge_request')
+    expect(s.events('merge_request.created')[0]?.payload).toMatchObject({ auto_merge: false })
+    expect(s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)).toBeNull()
+  })
+
+  test('开发任务建于 PR 评论引起的唤醒：之后普通 instruction 唤醒请求合并也不自动合并', async () => {
+    const s = await setup({ supervisor: { auto_merge: true } })
+    const prWake = await s.wake('instruction', WS, 'pr')
+    s.dev({ mandateWake: prWake.id })
+    const rv = s.review()
+    const w = await s.wake('instruction')
+    expect(s.ledger.wakeOf(w.id)?.source).toBeUndefined()
+    const r = must(await s.request(w.token, rv))
+    expect(r.mode).toBe('approval')
+    expect(r.task).toBeUndefined()
+    expect(s.events('merge_request.created')[0]?.payload).toMatchObject({ auto_merge: false })
+  })
+
+  test('两跳之后的开发任务（授权依据带 pr_sourced）由普通唤醒请求合并也不自动合并', async () => {
+    const s = await setup({ supervisor: { auto_merge: true } })
+    s.dev({ prSourced: true })
+    const rv = s.review()
+    const w = await s.wake('instruction')
+    const r = must(await s.request(w.token, rv))
+    expect(r.mode).toBe('approval')
+    expect(s.events('merge_request.created')[0]?.payload).toMatchObject({ auto_merge: false })
   })
 
   test('merger 结束（done / failed(pr_not_open)）进 instruction 队列唤醒 supervisor', async () => {

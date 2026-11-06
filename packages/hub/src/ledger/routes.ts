@@ -37,7 +37,7 @@ import { fieldIssues, type TaskService } from './tasks.ts'
  */
 
 export interface TaskRoutesDeps {
-  ledger: Pick<LedgerStore, 'rebuild' | 'eventsAfter' | 'getTask' | 'wakeOf'>
+  ledger: Pick<LedgerStore, 'rebuild' | 'eventsAfter' | 'getTask' | 'wakeOf' | 'taskHasPrInput'>
   tasks: TaskService
 }
 
@@ -157,9 +157,16 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
       return respond(c, usage('事件序号必须为正整数', parsed.error.issues), eventGetData)
     const { seq } = parsed.data
     const event = ledger.eventsAfter(seq - 1, undefined, 1)[0]
+    // 任务绑定只能读本任务的事件，以及直通给本任务的 PR 事件（送达输入的读取指针，harness-neutral 8.4）。
+    const deliveredPrEvent =
+      auth?.kind === 'task' &&
+      event?.type === 'pr.event' &&
+      event.workspace === auth.task.workspace &&
+      ledger.taskHasPrInput(auth.task.task_id, seq)
     if (
       event?.seq !== seq ||
       (auth?.kind === 'task' &&
+        !deliveredPrEvent &&
         (event.task_id !== auth.task.task_id ||
           event.workspace !== auth.task.workspace ||
           // observe 判断、未执行的动作与收件箱条目不给 worker 看（D10）。

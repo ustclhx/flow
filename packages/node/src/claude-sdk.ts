@@ -33,6 +33,7 @@ import {
   redactLines,
   redactSecrets,
   renderRecoveryPrompt,
+  renderTaskInputs,
   renderWorkerTaskPrompt,
   reviewerRoleProblem,
   reviewOutput,
@@ -62,6 +63,7 @@ import {
   type ExecutorOutcome,
   type ExecutorPlugin,
   type ExecutorRun,
+  type InjectResult,
   idleSignal,
   resumedSignal,
   type StuckSnapshot,
@@ -558,6 +560,9 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
       const abortController = new AbortController()
       const pending: PendingApproval[] = []
       const seenReplies = new Set<string>()
+      /** 已推给 Claude 的输入（PR 直通，按 input_seq 幂等）；首条消息发出前不注入，保证顺序。 */
+      const seenInputs = new Set<number>()
+      let firstSent = false
       const stderrTail: string[] = []
       const writtenFiles = new Set<string>()
       let q: ClaudeQueryHandle | undefined
@@ -1092,11 +1097,16 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
               ...(review ? ['', reviewPromptSection(review)] : []),
               ...(resume ? ['', renderReply(resume.reply)] : []),
             ].join('\n')
-        const first = sessionCtx.recovery
-          ? `${renderRecoveryPrompt(sessionCtx.recovery)}\n\n${taskInput}`
-          : taskInput
+        // 恢复提示、未运行期间到达的输入（已由中枢包裹）放在派工输入开头。
+        const first = [
+          ...(sessionCtx.recovery ? [renderRecoveryPrompt(sessionCtx.recovery)] : []),
+          ...(sessionCtx.inputs?.length ? [renderTaskInputs(sessionCtx.inputs)] : []),
+          taskInput,
+        ].join('\n\n')
         if (resume) seenReplies.add(resume.reply.reply_id)
+        for (const i of sessionCtx.inputs ?? []) seenInputs.add(i.input_seq)
         input.push(userMessage(first))
+        firstSent = true
         status(
           resume?.session
             ? `恢复 Claude 会话 ${resume.session}（${role.data.name}，模型 ${options_.model}）`
@@ -1159,6 +1169,16 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         }),
         cancel: async () => {
           if (!finished) onAbort()
+        },
+        inject: async (i): Promise<InjectResult> => {
+          if (finished || loopClosed) return 'not_running'
+          if (seenInputs.has(i.input_seq)) return 'delivered'
+          if (!firstSent) return 'not_now'
+          seenInputs.add(i.input_seq)
+          // 运行中的输入：作为用户消息推入流式输入（不解除待审批的工具调用，也不能当作批准）。
+          input.push(userMessage(i.text))
+          status(`已把 PR 动态（输入 ${i.input_seq}）推给 Claude`)
+          return 'delivered'
         },
         deliver: async (reply): Promise<DeliverResult> => {
           if (finished) return 'not_running'

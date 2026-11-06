@@ -239,6 +239,7 @@ describe('续约与提交', () => {
       expires_at: new Date(ctx.clock.now() + TTL * 1000).toISOString(),
       cancel_requested: false,
       reply: null,
+      inputs: [],
     })
     expect(ctx.ledger.taskActivity(id).map((a) => a.text)).toEqual(['hello'])
     expect(ctx.ledger.getNode('n1')?.last_seen_at).toBe(at)

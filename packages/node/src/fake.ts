@@ -19,6 +19,7 @@ import {
   type ExecutorOutcome,
   type ExecutorPlugin,
   type ExecutorRun,
+  type InjectResult,
   idleSignal,
   resumedSignal,
   type StuckSnapshot,
@@ -136,6 +137,7 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
         ? (parsed.data.resume ?? fakeResumeInputs.parse({}))
         : parsed.data
       const seenReplies = new Set<string>()
+      const seenInputs = new Set<number>()
       let deliverFailures = spec.deliver_failures ?? 0
       let deliverHangs = spec.deliver_hangs ?? 0
       const resumedSummary = resume
@@ -273,6 +275,8 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
       }
 
       const main = async () => {
+        // 派工输入（PR 直通）：真实适配器放在提示开头，这里以输出留痕供测试核对。
+        for (const input of ctx.inputs ?? []) output(`派工输入 ${input.input_seq}：${input.text}`)
         for (const s of spec.script ?? []) {
           if (!(await step(s))) return
         }
@@ -342,6 +346,13 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
           const w = replyWaiter
           replyWaiter = undefined
           w?.()
+          return 'delivered'
+        },
+        inject: async (input): Promise<InjectResult> => {
+          if (finished) return 'not_running'
+          if (seenInputs.has(input.input_seq)) return 'delivered'
+          seenInputs.add(input.input_seq)
+          output(`收到输入 ${input.input_seq}：${input.text}`)
           return 'delivered'
         },
       }

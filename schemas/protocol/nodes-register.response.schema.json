@@ -95,6 +95,9 @@
                       "out_of_band_detection"
                     ],
                     "additionalProperties": false
+                  },
+                  "task_inputs": {
+                    "type": "boolean"
                   }
                 },
                 "required": [

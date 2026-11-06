@@ -101,7 +101,7 @@ PR 也不能被 supervisor 请求合并（卡住仍可能被委托代回复）�
 - 每个 workspace 有三条队列：instruction、autonomous、reply。同一时刻最多一个**普通唤醒**（instruction 或 autonomous），
   空闲时 instruction 优先；另可并行一个 reply 唤醒。
 - 一次唤醒只合并同一条队列里的事件（最新 200 个；`inputs.wake.events` 以 16000 字符为预算，超出时逐级省略正文）。任务快照按 id 在顶层去重，PR 只关联本次涉及的对象并限制内联任务数。降级同时裁剪正文和元数据，最终 `inputs.wake` 不超过 16000 字符；省略部分附 `chars` 与读取指针。事件引用也装不下时，`overflow.read` 指向本次唤醒的 `task_show section=events`，其中 `supervisor.wake_started.events` 保留完整 seq 清单，可逐条用 `event_get` 读取；队列仍一次消费最多 200 条事件。
-- 按读取指针调用 `event_get` 或带 `section`、`offset`、`limit` 的 `task_show` 补读内容；`tail` 与 `instruction` 按字符分页，其他列表按条目分页。supervisor 只能读本 workspace 的事件；无 workspace 的全局事件只有被本次唤醒引用时可读，其他返回 `forbidden`。用户可读取全部事件。`event_get` 与 `task_show section=events/tail` 都对疑似密钥做正则遮蔽；tail 先遮蔽再分页，避免秘密跨页边界泄露。任务绑定的 worker 只能读取本任务、同 workspace 的事件，越界与不存在均返回 `not_found`；唤醒读取其他 workspace 的任务同样返回 `not_found`。
+- 按读取指针调用 `event_get` 或带 `section`、`offset`、`limit` 的 `task_show` 补读内容；`tail` 与 `instruction` 按字符分页，其他列表按条目分页。supervisor 只能读本 workspace 的事件；无 workspace 的全局事件只有被本次唤醒引用时可读，其他返回 `forbidden`。用户可读取全部事件。`event_get` 与 `task_show section=events/tail` 都对疑似密钥做正则遮蔽；tail 先遮蔽再分页，避免秘密跨页边界泄露。任务绑定的 worker 只能读取本任务、同 workspace 的事件（以及直通给本任务的 PR 事件），越界与不存在均返回 `not_found`；唤醒读取其他 workspace 的任务同样返回 `not_found`。
 - supervisor 建任务时，中枢附加 `origin_instruction`，原文与 supervisor 的补充分段显示，以原始指令为准。本次唤醒只有一条用户指令时自动选择，多条时必须传本次唤醒中的 `instruction_seq`；autonomous 没有原始指令。用户指令最多 8192 字符，合同内联前 4000 字符，超出部分附原长和 `event_get` 指针。由开发任务完成等事件引出的审查与后续任务从关联开发任务继承原始指令；候选任务对应多条不同指令时不自动继承，授权依据中的 `instruction_note` 解释原因。提案通过 `draft.instruction_seq` 指定本次唤醒中的指令，接受后保留相同来源。没有原始指令的输入明确写出“本任务没有用户原始指令”，目标仍按 JSON 数据包裹。 长原文注入 worker 时，core 把读取指针转为本任务的 `task_show section=instruction`；中枢只从该任务合同关联的指令读取并脱敏分页，worker 仍不能直接读取没有本任务归属的原始事件。
 - 普通唤醒失败重试一次；仍失败则出现一条 Interrupt 条目，**该队列暂停**，直到你 `--release` 或 1 小时后自动恢复一次
   （再失败则退避翻倍，最长 24 小时）。
@@ -491,7 +491,7 @@ raindown supervisor report [product-res] [--days 30]        # observe 一致率�
 ## 13. PR 订阅与直通（`github.watch`）
 
 开出或审查 PR 的任务可以持续跟随这个 PR：PR 上后来的 CI 结果、审查结论与评论由中枢读取并记入账本，
-之后（见下文"直通送达"）直接送到负责的 worker，不必每次都唤醒 supervisor。默认关闭；不打开时行为与之前完全相同。
+直接送到负责的 worker，不必每次都唤醒 supervisor。默认关闭；不打开时行为与之前完全相同。
 
 ### 开启
 
@@ -554,6 +554,46 @@ worker 目前用中枢所在机器的 `gh` 登录在 PR 上发评论与审查—
 非请求内容在账本中只存 500 字（完整内容见 `url`）。陌生人（数字 id 不在名单中的人类账号）的内容按类分别计额度：
 每个 PR 每类每次轮询最多入账 20 条、每天最多 200 条，超出的丢弃并在 `hub status` 提示；CI 检查与名单内账号的内容不计入，不会被刷屏挤掉。
 
+### 直通送达
+
+- 每条 `pr.event` 按订阅分发，**不唤醒 supervisor**（包括 CI 失败、审查 changes_requested）：
+  只有**事件之前就已订阅**的未结束任务收到 `task.input_added{source:'pr', pr_event_seq}`（后来才订阅的任务不会收到更早的事件）；
+- 运行中的任务经续约下发；**任务卡住（提问、待授权）时扣留**，恢复运行后再给——输入不能被当成对提问的回答或授权弹窗上的按键。
+  节点送进 worker 后在下一次续约确认（`task.input_delivered`）。codex-orca 声明不支持运行中注入（只有回合结束后、尚未上报停下的
+  极短窗口能安全敲入），PR 输入排队到下一次派工；它敲入任何文字前都要求终端最后几行是 Codex 输入框，回到 shell 时不发送任何按键；
+  claude-sdk 推入流式输入；不能中途注入的执行器（codex-exec）排队到下一次派工，与恢复提示一起放在派工输入开头；
+- 随派工下发的输入在节点确认后才记为送达（续约的 `inputs_dispatched`）；旧节点不声明处理派工输入，中枢不下发，输入保持待送达；
+- 送达内容由中枢统一渲染：原文与来源放进 `<untrusted-pr-event>` 数据块（JSON 序列化并转义 `<`、`>`、反引号，与恢复事实、原始指令相同），
+  标明来源、作者与是否在名单内；超长时截断并附字符数与读取指针（任务凭证只能读送给本任务的 PR 事件）；
+- 直通只是上下文：不改任务的授权依据（mandate）与合同，策略判定也不因此放宽；
+- 每条事件处理完写 `pr.dispatched` 检查点；中枢重启后从第一个没有检查点的事件开始补处理（处理失败或追赶中的事件不会被跳过）。
+
+### 已结束的任务因评论恢复
+
+- 只有**名单内人类的 PR 评论或代码行评论**能恢复已结束（done / failed）的订阅任务；机器人、CI、审查正文与名单外用户的内容不恢复；共享身份下一律不恢复；
+- 恢复前依次核对，任一不满足则任务保持结束，评论改为唤醒 supervisor（`pr.wake_requested{reason:'resume_rejected'}`），supervisor 不可用时进收件箱（来源 `pr_comment`）：
+  - PR 仍为 open（已合并或关闭时不恢复）；
+  - 该开发任务没有进行中的合并请求（待批准）或未结束的 merger 任务；
+  - 每个任务 24 小时内最多恢复 `github.resume_per_day` 次（默认 3），超出时**只进收件箱**；
+  - 按当前策略重新校验授权（由 supervisor 创建的任务要求 supervisor 仍启用、角色仍允许 supervisor 创建）；
+- 通过则写 `task.requeued{reason:'input'}` 开始新派工，带恢复提示与这条评论；该任务此前的"卡住唤醒"去重随之清除。
+
+### 交回与没有订阅任务的评论
+
+- worker 收到名单内用户超出任务范围、或属于另一件工作的请求时，用 `raindown_report` 的 `handback{pr_event_seq, reason}` 交回。
+  中枢只接受本任务收到过的、名单内人类评论，否则返回 `handback_invalid`；交回写 `pr.wake_requested{reason:'handback'}`，
+  进入 supervisor 的 instruction 唤醒队列，唤醒输入里有该评论，worker 的理由标为不可信的 worker 文本并转义；
+- 没有任何订阅任务接收的名单内评论（例如订阅它的任务都已取消）同样唤醒 supervisor（`no_subscriber`），supervisor 不可用时进收件箱；
+- PR 评论引起的唤醒来源记为 `instruction:pr`（`supervisor.wake_started.source: pr`）：保留 instruction 队列优先级，但
+  不满足 `auto_merge`，受 `observe` 约束（与 autonomous 相同），不能直接建或重试写类任务（`proposal_required`，只能提案），
+  新任务不继承来源任务的原始指令；
+- 污染沿唤醒链向下传递，**用户接受提案或重试都不清除**（当前版本）：在这类唤醒里建的任务（含用户接受这类唤醒的提案）授权依据由中枢固化
+  `pr_sourced`，这类唤醒发起的重试在 `task.requeued` 上记 `pr_sourced`；调度器创建唤醒时，事件含 PR 评论或涉及带此标记的任务，
+  就在 `supervisor.wake_started` 上固化 `source: pr`，在其中建的任务继续带标记。污染只在每次写入时由**一层已存储的标记**计算，
+  检查时只读这些标记、不递归重算（开销与唤醒代数无关）；没有这些字段的旧账本按未污染处理，只有事件本身含 `pr.wake_requested`
+  的旧唤醒算 PR 来源。合并时检查发起的唤醒、开发任务与审查任务，任何一项带 PR 来源都交给你批准；
+- 账本兜底：`pr.wake_requested` 与"已结束任务的恢复"都只接受指向名单内人类评论的事件；已结束任务上的输入必须与恢复同一事务写入。
+
 ### `allowed_users` 的安全含义
 
 仓库公开时，任何人都能在 PR 上评论。**只有名单内用户的人类评论算"请求"**：能恢复已结束的任务、被 worker 交回给 supervisor、
@@ -565,3 +605,9 @@ worker 目前用中枢所在机器的 `gh` 登录在 PR 上发评论与审查—
   名单按账号数字 id 比较，同名账号的 id 变化时告警；
 - `allowed: true` 只表示"可以算请求"，**不扩大任务的授权依据或合同范围**：worker 收到超出范围的请求时应交回 supervisor；
 - 名单写错（如拼错用户名）只会让评论被当作不可信上下文，不会放宽任何权限。
+
+### 升级
+
+先升级中枢，再升级所有节点：旧节点忽略派工里的 `inputs`，任务未运行期间到达的 PR 输入会随派工标记为已送达却没有进入 worker。
+新事件（`pr.*`、`task.input_added`、`task.input_delivered`、`pr.wake_requested`）与 `task.requeued{reason:'input'}`、`done → queued`
+在旧版本中不合法；打开 `github.watch` 并产生这些事件之后，回滚必须停止服务并恢复打开之前的账本备份。

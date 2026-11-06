@@ -85,6 +85,10 @@
               "out_of_band_detection"
             ],
             "title": "Adapter capabilities"
+          },
+          "task_inputs": {
+            "description": "执行器会把派工的 inputs 放进输入并由节点确认（PR 直通，harness-neutral 8.4）；旧节点没有该字段时中枢不随派工下发输入",
+            "type": "boolean"
           }
         },
         "required": [

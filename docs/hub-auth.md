@@ -172,7 +172,7 @@ Codex 默认 `shell_environment_policy` 排除 `*TOKEN*` 而看不到它，适�
 日志与账本脱敏识别 `fls_` 前缀。
 
 MCP 启动时以该文件访问绑定查询；显式的 task/workspace 只用于核对，不一致时拒绝启动。任务绑定只列出
-`raindown_report`、`task_show`、`event_get`、`kb_search`、`kb_get`、`kb_query`；`task_show` 与 `event_get` 限本任务。
+`raindown_report`、`task_show`、`event_get`、`kb_search`、`kb_get`、`kb_query`；`task_show` 与 `event_get` 限本任务（`event_get` 另可读取直通给本任务的 PR 事件，即送达输入里的读取指针）。
 未绑定会话与 supervisor 唤醒会话沿用原工具清单，不列出 worker 的 raindown_report。
 
 ### 上报与节点消费

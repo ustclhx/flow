@@ -449,6 +449,26 @@ const samples: Record<
       payload: { pr: 'https://github.com/o/r/pull/12', reason: 'user' },
     },
   },
+  'task.input_added': {
+    valid: { ...task, payload: { source: 'pr', pr_event_seq: 7 } },
+    invalid: { ...task, payload: { source: 'email', pr_event_seq: 7 } },
+  },
+  'task.input_delivered': {
+    valid: { ...task, payload: { input_seqs: [8], lease_id: 'l1' } },
+    invalid: { ...task, payload: { input_seqs: [], lease_id: 'l1' } },
+  },
+  'pr.wake_requested': {
+    valid: {
+      workspace: 'ws/product-res',
+      task_id: 't_1',
+      payload: { pr_event_seq: 7, reason: 'handback', note: '超出范围' },
+    },
+    invalid: { workspace: 'ws/product-res', payload: { pr_event_seq: 7, reason: 'please' } },
+  },
+  'pr.dispatched': {
+    valid: { workspace: 'ws/product-res', payload: { pr_event_seq: 7 } },
+    invalid: { workspace: 'ws/product-res', payload: { pr_event_seq: 0 } },
+  },
   'pr.event': {
     valid: {
       workspace: 'ws/product-res',
@@ -614,6 +634,20 @@ describe('事件触发的状态转换', () => {
       ['running', 'queued'],
       ['verifying', 'queued'],
       ['failed', 'queued'],
+      ['done', 'queued'],
+    ],
+    'task.input_added': [
+      ['queued', 'queued'],
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
+      ['done', 'done'],
+      ['failed', 'failed'],
+    ],
+    'task.input_delivered': [
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
     ],
     'task.cancel_requested': [
       ['running', 'running'],
@@ -655,7 +689,14 @@ describe('事件触发的状态转换', () => {
 
   const payloadFor = (type: EventType, from: TaskStatus | null) => {
     if (type === 'task.requeued')
-      return { reason: from === 'blocked' || from === 'failed' ? 'manual' : 'lease_expired' }
+      return {
+        reason:
+          from === 'done'
+            ? 'input'
+            : from === 'blocked' || from === 'failed'
+              ? 'manual'
+              : 'lease_expired',
+      }
     return samples[type].valid.payload
   }
 
@@ -703,6 +744,13 @@ describe('事件触发的状态转换', () => {
     expect(checkTaskEvent('failed', manual)).toEqual({ ok: true, data: 'queued' })
     expect(checkTaskEvent('done', manual).ok).toBe(false)
     expect(checkTaskEvent('cancelled', manual).ok).toBe(false)
+    // 因 PR 评论恢复（input）只用于已结束的 done / failed。
+    const input = { type: 'task.requeued', payload: { reason: 'input', pr_event_seq: 3 } } as never
+    expect(checkTaskEvent('done', input)).toEqual({ ok: true, data: 'queued' })
+    expect(checkTaskEvent('failed', input)).toEqual({ ok: true, data: 'queued' })
+    expect(checkTaskEvent('blocked', input).ok).toBe(false)
+    expect(checkTaskEvent('running', input).ok).toBe(false)
+    expect(checkTaskEvent('cancelled', input).ok).toBe(false)
   })
 
   test('非任务事件不涉及状态', () => {

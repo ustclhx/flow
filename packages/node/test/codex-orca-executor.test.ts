@@ -14,11 +14,13 @@ import {
 import { join } from 'node:path'
 import {
   type Activity,
+  type DeliveredInput,
   fail,
   NO_ADAPTER_CAPABILITIES,
   ok,
   type Result,
   renderRecoveryPrompt,
+  renderTaskInputs,
   type TaskRecovery,
   type TaskResume,
   taskContract,
@@ -76,6 +78,7 @@ async function start(
     home?: OrcaHome
     resume?: TaskResume
     recovery?: TaskRecovery
+    inputs?: DeliveredInput[]
     leaseTokenFile?: string
     reportResumeReplyDropped?: (options?: { attempted?: boolean }) => void
     directoryStat?: (path: string) => { isDirectory(): boolean }
@@ -114,6 +117,7 @@ async function start(
     signal: abort.signal,
     ...(extra.resume ? { resume: extra.resume } : {}),
     ...(extra.recovery ? { recovery: extra.recovery } : {}),
+    ...(extra.inputs ? { inputs: extra.inputs } : {}),
     ...(extra.leaseTokenFile ? { leaseTokenFile: extra.leaseTokenFile } : {}),
     ...(extra.reportResumeReplyDropped
       ? { reportResumeReplyDropped: extra.reportResumeReplyDropped }
@@ -2158,5 +2162,109 @@ describe('目录不存在', () => {
         message: `工作目录不存在：${h?.repo}`,
       },
     })
+  })
+})
+
+describe('PR 直通的输入（harness-neutral 8.4）', () => {
+  const input = (seq: number): DeliveredInput => ({
+    input_seq: seq,
+    source: 'pr',
+    pr_event_seq: 100 + seq,
+    text: `## 订阅的 PR 有新动态\n<untrusted-pr-event>\n{"text": "第 ${seq} 条"}\n</untrusted-pr-event>`,
+  })
+
+  test('只在回合结束后的普通空闲输入框送入，按 input_seq 幂等；送达不掩盖之后的停下', async () => {
+    const s = await start({}, (o) => o.show('working'))
+    await ready(s)
+    s.orca.reads.splice(0)
+    s.orca.show('stopped-statement')
+    expect(await s.run.inject?.(input(1))).toBe('delivered')
+    expect(await s.run.inject?.(input(1))).toBe('delivered')
+    const text = input(1).text.replace(/\n/g, ' ')
+    expect(sends(s)).toEqual([{ handle: s.orca.handle, text, enter: true, waitSubmitS: 10 }])
+    await s.run.cancel()
+    expect(await s.run.inject?.(input(2))).toBe('not_running')
+  })
+
+  test('Codex 已退出回到 shell、滚动历史中残留输入框：PR 输入与文字回复都不敲进 shell', async () => {
+    const shell = [
+      '• Done.',
+      '',
+      '› Ask Codex to do anything',
+      '  ? for shortcuts',
+      '',
+      'Token usage: total=1',
+      'user@host repo %',
+    ]
+    const s = await start({}, (o) => o.show('working'))
+    await ready(s)
+    s.orca.reads = [ok({ handle: s.orca.handle, status: 'running', tail: shell })]
+    expect(await s.run.inject?.(input(8))).toBe('not_now')
+    const reply = { reply_id: 'r-shell', kind: 'text' as const, text: 'rm -rf $HOME', by: 'user' }
+    expect(await s.run.deliver?.(reply)).toBe('not_running')
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
+  })
+
+  test('Codex 停在提问时不送入（不能替用户回答），已上报停下后也不送入', async () => {
+    const s = await start({}, (o) => o.show('working'))
+    await ready(s)
+    s.orca.reads.splice(0)
+    s.orca.show('question')
+    expect(await s.run.inject?.(input(6))).toBe('not_now')
+    // 连续两轮停在普通输入框后上报停下：之后即使屏幕看起来空闲也不送入。
+    s.orca.reads.splice(0)
+    s.orca.show('stopped-statement')
+    await s.poll(3)
+    expect(idles(s).length).toBeGreaterThan(0)
+    expect(await s.run.inject?.(input(7))).toBe('not_now')
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
+  })
+
+  test.each(['approval', 'trust-prompt', 'working'])(
+    '终端停在 %s 时不送入（不能当作批准或信任确认的按键）',
+    async (screen) => {
+      const s = await start({}, (o) => o.show('question'))
+      await ready(s)
+      s.orca.reads.splice(0)
+      s.orca.show(screen)
+      expect(await s.run.inject?.(input(3))).toBe('not_now')
+      expect(sends(s)).toEqual([])
+      await s.run.cancel()
+    },
+  )
+
+  test('授权回合打开或文字回复已发 Esc 尚未送完时不送入（不能替用户回答）', async () => {
+    const s = await start({}, (o) => o.show('approval'))
+    await ready(s)
+    await s.poll(3)
+    // 已上报授权停下：回合打开。即使屏幕随后显示普通输入框，也不把输入打进去。
+    const state = JSON.parse(
+      readFileSync(join(h?.home ?? '', 'state/tasks/t-orca-1/orca.json'), 'utf8'),
+    )
+    expect(state.approval_round?.closed).toBe(false)
+    s.orca.reads.splice(0)
+    s.orca.show('question')
+    expect(await s.run.inject?.(input(5))).toBe('not_now')
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
+  })
+
+  test('如实声明不支持运行中注入：PR 输入排队到下一次派工', () => {
+    expect(
+      createCodexOrcaExecutor({ home: '/unused' }).adapterCapabilities.inject_while_running,
+    ).toBe(false)
+  })
+
+  test('派工输入：新终端从 spec 读取（放在恢复提示之后），不再另行送入', async () => {
+    const recovery: TaskRecovery = { previous_end: { attempt: 1, reason: 'done' }, prs: [] }
+    const s = await start({}, (o) => o.show('question'), { recovery, inputs: [input(4)] })
+    await ready(s)
+    await s.poll(2)
+    const spec = readFileSync(join(h?.home ?? '', 'state/tasks/t-orca-1/spec.md'), 'utf8')
+    expect(spec).toStartWith(`${renderRecoveryPrompt(recovery)}\n\n${renderTaskInputs([input(4)])}`)
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
   })
 })

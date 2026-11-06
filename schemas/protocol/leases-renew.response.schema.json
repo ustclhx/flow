@@ -230,13 +230,53 @@
               "type": "null"
             }
           ]
+        },
+        "inputs": {
+          "description": "待送达的输入（PR 直通，harness-neutral 8.4）：只发给能中途注入的执行器；不解除 blocked。节点送达后在下一次续约的 inputs_delivered 确认，确认前每次续约都会返回",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "input_seq": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "description": "task.input_added 的 seq（幂等键）"
+              },
+              "source": {
+                "type": "string",
+                "const": "pr"
+              },
+              "pr_event_seq": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "description": "中枢渲染好的输入（已包裹与转义）"
+              }
+            },
+            "required": [
+              "input_seq",
+              "source",
+              "pr_event_seq",
+              "text"
+            ],
+            "additionalProperties": false,
+            "title": "Task input",
+            "description": "送给运行中或下一次派工的任务输入"
+          }
         }
       },
       "required": [
         "lease_id",
         "expires_at",
         "cancel_requested",
-        "reply"
+        "reply",
+        "inputs"
       ],
       "additionalProperties": false,
       "title": "POST /v1/leases/:id/renew 响应"
