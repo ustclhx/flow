@@ -23,6 +23,7 @@ import { dateString, workspaceRef } from '../schema/common.ts'
 import { adapterCapabilities, NO_ADAPTER_CAPABILITIES, readAdapterCapabilities } from './adapter.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import {
+  approvalFingerprint,
   blockedDelegationShape,
   blockedReason,
   canTransition,
@@ -219,6 +220,7 @@ export const eventPayloads = {
     }),
   'task.blocked': z.strictObject({
     request_id: z.string().min(1).max(512).optional(),
+    approval_fingerprint: approvalFingerprint.optional(),
     reason: blockedReason,
     message: z.string().min(1),
     tail: z

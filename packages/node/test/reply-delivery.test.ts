@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { NO_ADAPTER_CAPABILITIES, ok, type Result } from '@raindown/core'
+import { type DeliveredReply, NO_ADAPTER_CAPABILITIES, ok, type Result } from '@raindown/core'
 import { createInboxReactor } from '@raindown/hub'
 import {
   ActivityQueue,
@@ -259,8 +259,8 @@ test('恢复回复同步拒收且确认临时失败时，结束前重试ack一�
           ),
           async cancel() {},
         }
-      ctx.reportResumeReplyDropped?.()
-      ctx.reportResumeReplyDropped?.()
+      ctx.reportResumeReplyDropped?.({ attempted: true })
+      ctx.reportResumeReplyDropped?.({ attempted: true })
       return {
         activity,
         async cancel() {},
@@ -280,8 +280,11 @@ test('恢复回复同步拒收且确认临时失败时，结束前重试ack一�
     },
   }
   let acknowledgements = 0
-  const b = await bench({ executors: [executor] }, 60, (url) => {
-    if (url.endsWith('/ack-reply') && ++acknowledgements === 1)
+  const ackBodies: unknown[] = []
+  const b = await bench({ executors: [executor] }, 60, (url, init) => {
+    if (!url.endsWith('/ack-reply')) return undefined
+    ackBodies.push(JSON.parse(String(init?.body)))
+    if (++acknowledgements === 1)
       return new Response(
         JSON.stringify({
           ok: false,
@@ -301,10 +304,254 @@ test('恢复回复同步拒收且确认临时失败时，结束前重试ack一�
     await b.until(id, (task) => task.status === 'done', 60_000)
     await reactor.idle()
     expect(acknowledgements).toBe(2)
+    expect(ackBodies).toMatchObject([
+      { outcome: 'dropped', reason: 'round_closed', attempted: true },
+      { outcome: 'dropped', reason: 'round_closed', attempted: true },
+    ])
     expect(b.events(id).filter((event) => event.type === 'task.reply_dropped')).toHaveLength(1)
     expect(b.ledger.taskReplies(id)[0]?.state).toBe('dropped')
-    expect(b.ledger.listInboxItems({ source: 'reply_delivery', state: 'open' })).toHaveLength(1)
+    const notifications = b.ledger.listInboxItems({ source: 'reply_delivery', state: 'open' })
+    expect(notifications).toHaveLength(1)
+    expect(notifications[0]?.title).toContain('可能没有送达')
+    expect(notifications[0]?.body).toContain('可能没有送达')
   } finally {
     reactor.stop()
   }
+})
+
+test('已尝试但无法确认的普通回复经ack通知可能没有送达', async () => {
+  const activity = new ActivityQueue()
+  let finish: (value: Result<ExecutorOutcome>) => void = () => {}
+  const done = new Promise<Result<ExecutorOutcome>>((resolve) => {
+    finish = resolve
+  })
+  const executor: ExecutorPlugin = {
+    type: 'probe',
+    adapterCapabilities: NO_ADAPTER_CAPABILITIES,
+    classify: () => ({ reason: 'awaiting_approval', message: '等待授权' }),
+    run: () => ({
+      activity,
+      done,
+      async deliver() {
+        return { outcome: 'dropped', reason: 'round_closed', attempted: true }
+      },
+      async cancel() {
+        activity.close()
+        finish(ok({ outcome: 'cancelled' }))
+      },
+    }),
+  }
+  const ackBodies: unknown[] = []
+  const b = await bench({ executors: [executor] }, 60, (url, init) => {
+    if (url.endsWith('/ack-reply')) ackBodies.push(JSON.parse(String(init?.body)))
+    return undefined
+  })
+  current = b
+  const reactor = createInboxReactor({ ledger: b.ledger })
+  reactor.start()
+  try {
+    const id = await b.create({ executor: 'probe' })
+    activity.push(idleSignal(new Date(b.clock.now()).toISOString(), '等待授权'))
+    await b.until(id, (task) => task.status === 'blocked')
+    expect(b.tasks.replyTask(id, { kind: 'approve' }, { actor: 'user' }).ok).toBe(true)
+    await b.until(id, () => b.types(id).includes('task.reply_dropped'))
+    await reactor.idle()
+    expect(ackBodies).toMatchObject([
+      { outcome: 'dropped', reason: 'round_closed', attempted: true },
+    ])
+    const notifications = b.ledger.listInboxItems({ source: 'reply_delivery', state: 'open' })
+    expect(notifications).toHaveLength(1)
+    expect(notifications[0]?.title).toContain('可能没有送达')
+    expect(notifications[0]?.body).toContain('可能没有送达')
+    expect(b.task(id).status).toBe('blocked')
+  } finally {
+    reactor.stop()
+  }
+})
+
+for (const fingerprint of ['a1'.repeat(32), 'A1'.repeat(32), 'a'.repeat(63)]) {
+  const valid = fingerprint === 'a1'.repeat(32)
+  test(`${valid ? '合法' : '非法'}授权指纹从idle提示经账本、普通回复与恢复回复传递`, async () => {
+    const activity = new ActivityQueue()
+    const delivered: DeliveredReply[] = []
+    const resumed: DeliveredReply[] = []
+    let runs = 0
+    let finish: (value: Result<ExecutorOutcome>) => void = () => {}
+    const done = new Promise<Result<ExecutorOutcome>>((resolve) => {
+      finish = resolve
+    })
+    const executor: ExecutorPlugin = {
+      type: 'probe',
+      adapterCapabilities: NO_ADAPTER_CAPABILITIES,
+      classify: () => ({ reason: 'awaiting_approval', message: `Bearer ${fingerprint}` }),
+      run: (_contract, ctx) => {
+        if (++runs === 1)
+          return {
+            activity,
+            done,
+            async deliver(reply) {
+              delivered.push(reply)
+              return 'not_running'
+            },
+            async cancel() {
+              activity.close()
+              finish(ok({ outcome: 'cancelled' }))
+            },
+          }
+        if (ctx.resume?.reply) resumed.push(ctx.resume.reply)
+        const closed = new ActivityQueue()
+        closed.close()
+        return {
+          activity: closed,
+          done: Promise.resolve(
+            ok({
+              outcome: 'done',
+              result: {
+                summary: '恢复结束',
+                artifacts: [],
+                verify: [],
+                executor: 'probe',
+                node_id: ctx.nodeId,
+              },
+            }),
+          ),
+          async cancel() {},
+        }
+      },
+    }
+    const b = await bench({ executors: [executor] })
+    current = b
+    const id = await b.create({ executor: 'probe' })
+    activity.push({
+      ts: new Date(b.clock.now()).toISOString(),
+      kind: 'output',
+      text: `Bearer ${fingerprint}`,
+    })
+    activity.push(
+      idleSignal(new Date(b.clock.now()).toISOString(), `Bearer ${fingerprint}`, {
+        request_id: 'round-with-fingerprint',
+        session: 'session-with-fingerprint',
+        approval_fingerprint: fingerprint,
+      }),
+    )
+    await b.until(id, (task) => task.status === 'blocked')
+    const blocked = b.events(id).find((event) => event.type === 'task.blocked')
+    if (blocked?.type !== 'task.blocked') throw new Error('缺少卡住事件')
+    expect(blocked.payload.approval_fingerprint).toBe(valid ? fingerprint : undefined)
+    expect(blocked.payload.message).not.toContain(fingerprint)
+    expect(blocked.payload.tail?.join('\n')).not.toContain(fingerprint)
+    expect(b.tasks.replyTask(id, { kind: 'approve' }, { actor: 'user' }).ok).toBe(true)
+    await b.until(id, (task) => task.status === 'done', 60_000)
+    expect(delivered).toHaveLength(1)
+    expect(resumed).toHaveLength(1)
+    for (const reply of [...delivered, ...resumed]) {
+      expect(reply.block_seq).toBe(blocked.seq)
+      expect(reply.approval_fingerprint).toBe(valid ? fingerprint : undefined)
+    }
+  })
+}
+
+test('已尝试的request_changed拒收保留D15恢复与下一轮no_delegate语义', async () => {
+  const activity = new ActivityQueue()
+  let finish: (value: Result<ExecutorOutcome>) => void = () => {}
+  const done = new Promise<Result<ExecutorOutcome>>((resolve) => {
+    finish = resolve
+  })
+  const executor: ExecutorPlugin = {
+    type: 'probe',
+    adapterCapabilities: NO_ADAPTER_CAPABILITIES,
+    classify: () => ({ reason: 'awaiting_approval', message: '等待授权' }),
+    run: (_contract, ctx) => {
+      void ctx.precheck?.({ tool: 'Read', command: 'cat README.md' }).then((verdict) => {
+        activity.push(
+          idleSignal(new Date().toISOString(), '等待授权', {
+            ...(!verdict.allow ? { decision_id: verdict.decision_id } : {}),
+          }),
+        )
+      })
+      return {
+        activity,
+        done,
+        async deliver() {
+          return { outcome: 'dropped', reason: 'request_changed', attempted: true }
+        },
+        async cancel() {
+          activity.close()
+          finish(ok({ outcome: 'cancelled' }))
+        },
+      }
+    },
+  }
+  const ackBodies: unknown[] = []
+  const b = await bench(
+    { executors: [executor], policies: [{ scope: 'ws/demo', action: '*', level: 'supervisor' }] },
+    60,
+    (url, init) => {
+      if (!url.endsWith('/ack-reply')) return undefined
+      ackBodies.push(JSON.parse(String(init?.body)))
+      if (ackBodies.length === 1)
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: { kind: 'retryable', code: 'hub_busy', message: '稍后重试' },
+          }),
+          { status: 503 },
+        )
+      return undefined
+    },
+  )
+  current = b
+  const id = await b.create({ executor: 'probe' })
+  await b.until(id, (task) => task.status === 'blocked')
+  const firstBlock = b.events(id).find((event) => event.type === 'task.blocked')
+  if (!firstBlock) throw new Error('缺少卡住事件')
+  expect(
+    b.ledger.append(
+      {
+        type: 'task.reply_delegated',
+        task_id: id,
+        workspace: b.task(id).workspace,
+        payload: {
+          task_id: id,
+          block_seq: firstBlock.seq,
+          kind: 'awaiting_approval',
+          decision_id: b.task(id).blocked?.decision_id,
+          deadline: '2099-01-01T00:00:00.000Z',
+        },
+      },
+      { actor: 'hub' },
+    ).ok,
+  ).toBe(true)
+  expect(
+    b.ledger.append(
+      {
+        type: 'task.replied',
+        task_id: id,
+        workspace: b.task(id).workspace,
+        payload: { reply_id: 'r-supervisor-attempted', kind: 'approve', via: 'supervisor' },
+      },
+      { actor: 'supervisor' },
+    ).ok,
+  ).toBe(true)
+  await b.until(id, () => ackBodies.length === 1)
+  // request_changed 在确认重试期间与旧字符串 dropped 一样，由 ack 负责恢复。
+  activity.push(resumedSignal(new Date(b.clock.now()).toISOString(), '旧授权回合结束'))
+  await b.clock.advance(0)
+  expect(b.task(id).status).toBe('blocked')
+  expect(b.types(id)).not.toContain('task.unblocked')
+  await b.until(id, (task) => task.status === 'running', 60_000)
+  expect(ackBodies).toMatchObject([
+    { outcome: 'dropped', reason: 'request_changed', attempted: true },
+    { outcome: 'dropped', reason: 'request_changed', attempted: true },
+  ])
+  expect(b.ledger.getReply('r-supervisor-attempted')?.state).toBe('dropped')
+  activity.push(idleSignal(new Date(b.clock.now()).toISOString(), '新的授权请求'))
+  await b.until(id, (task) => task.status === 'blocked')
+  expect(b.task(id).blocked?.no_delegate).toBe(true)
+  expect(
+    b
+      .events(id)
+      .filter((event) => event.type === 'task.blocked' || event.type === 'task.unblocked')
+      .map((event) => event.type),
+  ).toEqual(['task.blocked', 'task.unblocked', 'task.blocked'])
 })

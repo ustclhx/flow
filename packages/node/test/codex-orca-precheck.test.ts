@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Activity, ok, type Result, taskContract } from '@raindown/core'
+import { type Activity, fail, ok, type Result, taskContract } from '@raindown/core'
 import { approvalForPrecheck, CODEX_ORCA_PRECHECK_TOOL } from '../src/codex-orca/classify.ts'
 import { createCodexOrcaExecutor } from '../src/codex-orca/executor.ts'
 import type { OrcaTerminalRead } from '../src/codex-orca/orca.ts'
@@ -84,18 +84,28 @@ async function start(
   const activity: Activity[] = []
   let blockSeq = 0
   const replySequences = new Map<string, number>()
+  const fingerprints = new Map<number, string>()
   const originalDeliver = run.deliver?.bind(run)
   run.deliver = (reply) => {
     const seq = reply.block_seq ?? replySequences.get(reply.reply_id) ?? blockSeq
     replySequences.set(reply.reply_id, seq)
-    return originalDeliver?.({ ...reply, block_seq: seq }) ?? Promise.resolve('not_running')
+    return (
+      originalDeliver?.({
+        ...reply,
+        block_seq: seq,
+        approval_fingerprint: reply.approval_fingerprint ?? fingerprints.get(seq),
+      }) ?? Promise.resolve('not_running')
+    )
   }
   void (async () => {
     for await (const a of run.activity) {
       activity.push(a)
       if (a.data?.idle) {
         blockSeq++
-        const hint = a.data.hint as { request_id?: string } | undefined
+        const hint = a.data.hint as
+          | { request_id?: string; approval_fingerprint?: string }
+          | undefined
+        if (hint?.approval_fingerprint) fingerprints.set(blockSeq, hint.approval_fingerprint)
         if (hint?.request_id) run.bindBlocked?.({ seq: blockSeq, request_id: hint.request_id })
       }
     }
@@ -458,6 +468,30 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
     for (const idle of s.idles()) {
       expect(idle.data?.hint as Record<string, unknown>).not.toHaveProperty('decision_id')
     }
+    await s.run.cancel()
+  })
+
+  test('批准已尝试但回执失败，再因环境变化拒收时保留送达结果的不确定性', async () => {
+    let confirmed = 0
+    const s = await start([APPROVAL], undefined, {
+      confirmApproval: async () => ++confirmed === 1,
+    })
+    await s.poll(2)
+    s.orca.sends = [fail('retryable', 'orca_unavailable', '回执暂时不可用')]
+    const reply = { reply_id: 'uncertain-supervisor', kind: 'approve' as const, by: 'supervisor' }
+    await expect(s.run.deliver?.(reply)).rejects.toThrow('回执暂时不可用')
+    expect(await s.run.deliver?.(reply)).toEqual({
+      outcome: 'dropped',
+      reason: 'request_changed',
+      attempted: true,
+    })
+    expect(await s.run.deliver?.(reply)).toEqual({
+      outcome: 'dropped',
+      reason: 'request_changed',
+      attempted: true,
+    })
+    expect(s.enters()).toHaveLength(1)
+    expect(s.texts().some((text) => text.includes('可能没有送达'))).toBe(true)
     await s.run.cancel()
   })
 

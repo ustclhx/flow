@@ -29,6 +29,10 @@
         "request_changed",
         "round_closed"
       ]
+    },
+    "attempted": {
+      "description": "拒收回复时是否已经尝试注入；true 表示可能已送达",
+      "type": "boolean"
     }
   },
   "required": [
