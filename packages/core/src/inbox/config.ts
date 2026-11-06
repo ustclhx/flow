@@ -283,6 +283,8 @@ export interface LevelQuery {
  */
 export function defaultInboxLevel(q: LevelQuery): InboxLevel {
   switch (q.source) {
+    case 'out_of_band':
+      return 'interrupt'
     case 'task':
       return q.reason === 'no_progress' || q.reason === 'other' ? 'decide' : 'interrupt'
     case 'proposal':

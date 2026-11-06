@@ -239,12 +239,14 @@ async function sdkBench(
   const b = await bench({ executors: [executor] })
   dc.set(b.clock)
   current = b
+  const cwd = join(b.home, 'repo')
+  mkdirSync(cwd, { recursive: true })
   const create = (over: Record<string, unknown> = {}) =>
     b.create({
       goal: '审查 PR #42',
       role: 'reviewer',
       executor: 'claude-sdk',
-      cwd: '/repo/demo',
+      cwd,
       ...over,
     })
   return { b, state, create }
@@ -289,7 +291,7 @@ describe('按角色运行', () => {
     expect(texts.some((x) => x.includes(`Claude 会话 ${SID} 已启动`))).toBe(true)
 
     const o = state.calls[0]
-    expect(o?.cwd).toBe('/repo/demo')
+    expect(o?.cwd).toBe(join(b.home, 'repo'))
     // 子进程环境来自节点（executorEnv），不含中枢凭证。
     expect(o?.env?.PATH).toBe(process.env.PATH)
     expect(o?.env?.RAINDOWN_ACTOR).toBe('reviewer')
@@ -307,7 +309,7 @@ describe('按角色运行', () => {
     expect(o?.resume).toBeUndefined()
     // 首条用户消息是任务说明。
     expect(state.prompts[0]).toContain('审查 PR #42')
-    expect(state.prompts[0]).toContain('/repo/demo')
+    expect(state.prompts[0]).toContain(join(b.home, 'repo'))
   })
 
   test('默认 reviewer 角色模板：权限模式、允许与禁止列表原样传给 SDK，模型默认 claude-opus-5-5', async () => {

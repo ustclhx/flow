@@ -560,6 +560,7 @@
                             "question",
                             "no_progress",
                             "crashed",
+                            "workdir_missing",
                             "node_lost",
                             "other"
                           ]
@@ -806,6 +807,7 @@
                                 "question",
                                 "no_progress",
                                 "crashed",
+                                "workdir_missing",
                                 "node_lost",
                                 "other"
                               ]
@@ -1949,10 +1951,11 @@
                 "question",
                 "no_progress",
                 "crashed",
+                "workdir_missing",
                 "node_lost",
                 "other"
               ],
-              "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、node_lost 节点掉线（租约过期）、other 其他"
+              "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、workdir_missing 工作目录或会话丢失、node_lost 节点掉线（租约过期）、other 其他"
             },
             "message": {
               "type": "string",
@@ -1990,6 +1993,7 @@
                 "question",
                 "no_progress",
                 "crashed",
+                "workdir_missing",
                 "node_lost",
                 "other"
               ]
@@ -2067,6 +2071,113 @@
       ],
       "additionalProperties": false,
       "title": "task.blocked"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "task.out_of_band"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "approval_outside_raindown"
+                },
+                "command": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 16384
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 16384
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "command"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "session_removed"
+                },
+                "command": {
+                  "type": "string",
+                  "maxLength": 16384
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 16384
+                }
+              },
+              "required": [
+                "id",
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "task_id",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "task.out_of_band"
     },
     {
       "type": "object",
@@ -3709,6 +3820,7 @@
               "type": "string",
               "enum": [
                 "task",
+                "out_of_band",
                 "proposal",
                 "policy",
                 "supervisor",
@@ -3954,6 +4066,7 @@
               "type": "string",
               "enum": [
                 "task_running",
+                "handled_externally",
                 "task_queued",
                 "task_done",
                 "task_failed",
@@ -4916,6 +5029,7 @@
                             "question",
                             "no_progress",
                             "crashed",
+                            "workdir_missing",
                             "node_lost",
                             "other"
                           ]
@@ -5162,6 +5276,7 @@
                                 "question",
                                 "no_progress",
                                 "crashed",
+                                "workdir_missing",
                                 "node_lost",
                                 "other"
                               ]

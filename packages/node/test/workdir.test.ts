@@ -138,6 +138,17 @@ test('显式 cwd 优先于 inputs.repo，允许使用 workspace 仓库以外的�
   expect(contexts[0]?.cwd).toBe(cwd)
 })
 
+test('启动前工作目录丢失：blocked(workdir_missing)，不调用执行器', async () => {
+  const { b, contexts } = await setup()
+  const cwd = join(b.home, 'missing-workdir')
+  const id = await b.create({ executor: 'claude-sdk', cwd })
+  expect(await finish(b, id)).toMatchObject({
+    status: 'blocked',
+    blocked: { reason: 'workdir_missing', message: `工作目录不存在：${cwd}` },
+  })
+  expect(contexts).toHaveLength(0)
+})
+
 test('workspace 不存在：沿用 repo_not_in_workspace', async () => {
   const { b, contexts } = await setup()
   const id = await b.create({ executor: 'claude-sdk', workspace: 'ws/missing', cwd: undefined })

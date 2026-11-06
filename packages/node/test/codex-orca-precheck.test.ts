@@ -245,9 +245,16 @@ describe('codex-orca 监控循环中的预检', () => {
     ])
     expect(s.enters()).toHaveLength(1)
     expect(s.texts().some((t) => t.startsWith('策略自动放行：执行命令 mkdir'))).toBe(true)
+    s.orca.reads = [
+      ok({
+        ...tuiFixture('working'),
+        tail: [`• Ran ${COMMAND}`, '• Working (1s • esc to interrupt)'],
+      }),
+    ]
     await s.poll(3)
     expect(s.idles()).toHaveLength(0)
     expect(calls).toHaveLength(1)
+    expect(s.activity.filter((a) => a.data?.out_of_band)).toHaveLength(0)
     await s.run.cancel()
   })
 

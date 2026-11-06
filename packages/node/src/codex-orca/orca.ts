@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { fail, ok, type Result } from '@raindown/core'
 import { z } from 'zod'
 import { executorEnv } from '../env.ts'
+import { checkWorkingDirectory } from '../workdir.ts'
 
 /**
  * Orca CLI 与 gh CLI 的封装（add-m1-executors 2.1；design D2）。
@@ -15,7 +16,7 @@ import { executorEnv } from '../env.ts'
  * - `orca_error`：Orca 返回 `ok: false`（details.code 为 Orca 自己的错误码，例如 `terminal_handle_stale`）；
  * - `orca_bad_output`：输出不是预期的 JSON；
  * - `orca_failed`：进程以非零退出码结束且没有可解析的错误信封；
- * - gh 同理：`gh_not_found`、`gh_failed`、`gh_bad_output`。
+ * - gh 同理：`gh_not_found`、`gh_failed`、`gh_bad_output`；`cwd_missing` 表示工作目录不存在。
  */
 
 export interface CommandOutput {
@@ -353,6 +354,8 @@ export function createGhCli(options: GhCliOptions = {}): GhCli {
   const run = options.run ?? execRunner
   return {
     async prList({ cwd, branch }) {
+      const checked = checkWorkingDirectory(cwd)
+      if (!checked.ok) return checked
       let out: CommandOutput
       try {
         out = await run(
@@ -375,6 +378,9 @@ export function createGhCli(options: GhCliOptions = {}): GhCli {
         )
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          // 检查与 spawn 之间目录仍可能被删除，不能把这种 ENOENT 误报成缺少 gh。
+          const current = checkWorkingDirectory(cwd)
+          if (!current.ok) return current
           return fail('failure', 'gh_not_found', `找不到 gh 可执行文件：${bin}`)
         }
         return fail('failure', 'gh_failed', `gh pr list 无法执行：${(err as Error).message}`)

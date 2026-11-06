@@ -24,6 +24,7 @@ describe('默认分级', () => {
       awaiting_approval: 'interrupt',
       question: 'interrupt',
       crashed: 'interrupt',
+      workdir_missing: 'interrupt',
       node_lost: 'interrupt',
       no_progress: 'decide',
       other: 'decide',

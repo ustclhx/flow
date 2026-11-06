@@ -43,6 +43,29 @@ const finished = (b: Bench, id: string) =>
 const waitForExit = (pids: number[]) =>
   waitForCondition(() => pids.every(processStopped), '父子进程退出')
 
+test('验收目录不存在：不启动命令，任务以 workdir_missing 卡住', async () => {
+  const b = await open()
+  const marker = join(b.home, 'must-not-run')
+  const cmd = command(
+    b,
+    'missing-cwd',
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`,
+  )
+  const id = await create(b, [{ cmd, cwd: 'deleted' }])
+  await finished(b, id)
+  expect(b.task(id)).toMatchObject({
+    status: 'blocked',
+    blocked: {
+      reason: 'workdir_missing',
+      message: `工作目录不存在：${join(b.home, 'work/deleted')}`,
+    },
+  })
+  expect(existsSync(marker)).toBe(false)
+  expect(b.events(id).filter((event) => event.type === 'task.out_of_band')).toMatchObject([
+    { payload: { kind: 'session_removed' } },
+  ])
+})
+
 /** 父子进程都忽略 SIGTERM，子进程继承管道；只杀父进程时 close 不会触发。 */
 function hangingGroup(b: Bench) {
   const ready = join(b.home, 'ready.json')

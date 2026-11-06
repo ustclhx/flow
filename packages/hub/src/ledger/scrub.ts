@@ -63,6 +63,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task_proposal.rejected': [['note']],
   'merge_request.rejected': [['note']],
   'task.unblocked': [['note']],
+  'task.out_of_band': [['command'], ['message']],
   // reason：supervisor 代回复的理由（D15），只进每日摘要。
   'task.replied': [['text'], ['reason']],
   'task.requeued': [['note']],

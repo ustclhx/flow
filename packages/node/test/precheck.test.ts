@@ -470,10 +470,12 @@ async function sdkBench(policies: unknown[], calls: Array<[string, Record<string
   })
   const b = await bench({ policies, executors: [executor], precheckTimeoutMs: 3_600_000 })
   current = b
+  const cwd = join(b.home, 'repo')
+  mkdirSync(cwd, { recursive: true })
   const id = await b.create({
     workspace: 'ws/xuanxue-saas',
     executor: 'claude-sdk',
-    cwd: '/repo/demo',
+    cwd,
   })
   return { b, id, permissions }
 }

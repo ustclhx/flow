@@ -792,27 +792,46 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     const base = { task_id: task.id, workspace: task.workspace }
     const actor = { actor: `node:${lease.node_id}` }
     if (req.activity.length > 0) ledger.recordActivity(task.id, req.activity)
+    // 先记录带外事实，再解除卡住：反应器据此前一条授权以“已在外部处理”关闭。
+    const seen = new Set(
+      req.out_of_band?.length
+        ? ledger
+            .taskEvents(task.id)
+            .flatMap((e) => (e.type === 'task.out_of_band' ? [e.payload.id] : []))
+        : [],
+    )
+    const signals: EventInput[] = []
+    let externalApproval = false
+    for (const signal of req.out_of_band ?? []) {
+      if (seen.has(signal.id)) continue
+      signals.push({ ...base, type: 'task.out_of_band', payload: signal })
+      seen.add(signal.id)
+      if (signal.kind === 'approval_outside_raindown') externalApproval = true
+    }
     // 重复上报（上一次的响应丢失后重试）时任务已经处于目标状态，忽略即可。
-    if (req.resumed && task.status === 'blocked') {
+    if ((req.resumed || externalApproval) && task.status === 'blocked') {
       // 自行恢复时尚未送达的回复会被丢弃：记下它们的 id，供收件箱通知回复者（PR #16 审查第 5 条）。
       const dropped = ledger
         .taskReplies(task.id)
         .filter((r) => r.state === 'pending')
         .map((r) => r.id)
-      const written = ledger.append(
-        {
-          ...base,
-          type: 'task.unblocked',
-          payload: {
-            note: req.resumed.note ?? 'worker 自行恢复',
-            ...(dropped.length > 0 ? { dropped_reply_ids: dropped } : {}),
-          },
+      signals.push({
+        ...base,
+        type: 'task.unblocked',
+        payload: {
+          note: externalApproval
+            ? '授权已在 Raindown 之外处理，worker 继续运行'
+            : (req.resumed?.note ?? 'worker 自行恢复'),
+          ...(dropped.length > 0 ? { dropped_reply_ids: dropped } : {}),
         },
-        actor,
-      )
+      })
+    }
+    if (signals.length > 0) {
+      const written = ledger.appendMany(signals, actor)
       if (!written.ok) return written
     }
-    if (req.blocked && (task.status === 'running' || task.status === 'verifying')) {
+    const current = ledger.getTask(task.id)?.status ?? task.status
+    if (req.blocked && (current === 'running' || current === 'verifying')) {
       const written = ledger.append(
         {
           ...base,

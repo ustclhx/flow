@@ -12,6 +12,7 @@ import {
 import { join } from 'node:path'
 import {
   type Activity,
+  fail,
   NO_ADAPTER_CAPABILITIES,
   ok,
   type Result,
@@ -158,6 +159,7 @@ describe('启动', () => {
       command: string
       worktreePath: string
     }
+    expect(created).toMatchObject({ title: '[Raindown] t-orca-1' })
     expect(created.worktreePath).toBe(h?.worktree ?? '')
     expect(created.command).toContain(
       `RAINDOWN_ACTOR=dev FLOW_ACTOR=dev CODEX_HOME=${join(h?.home ?? '', 'state/codex-orca-home')} codex`,
@@ -424,7 +426,7 @@ describe('监控循环', () => {
     const hint = idle?.data?.hint as { kind: string; tail: string[] }
     expect(hint.kind).toBe('question')
     expect(hint.tail.at(-1)).toBe('  ? for shortcuts')
-    expect(s.gh.calls).toEqual([{ cwd: h?.worktree ?? '', branch: 'example-user/t-orca-1' }])
+    expect(s.gh.calls).toEqual([{ cwd: h?.repo ?? '', branch: 'example-user/t-orca-1' }])
     await s.poll(2)
     expect(idles(s)).toHaveLength(1)
     await s.run.cancel()
@@ -528,7 +530,7 @@ describe('监控循环', () => {
     await s.run.cancel()
   })
 
-  test('gh 不可用且终端已退出：exited，不判 done', async () => {
+  test('gh 不可用且终端已退出：记录会话丢失，不再查询 PR', async () => {
     const s = await start({}, (o) =>
       o.reads.push(ok({ ...tuiFixture('pr-opened'), status: 'exited' })),
     )
@@ -537,16 +539,20 @@ describe('监控循环', () => {
     await s.poll()
     await until(() => s.outcome() !== undefined, '结束')
     const o = s.outcome()
-    expect(o?.ok && o.data.outcome).toBe('exited')
-    expect(o?.ok && o.data.outcome === 'exited' && o.data.message).toContain('gh 不可用')
+    expect(o).toMatchObject({ ok: true, data: { outcome: 'blocked', reason: 'workdir_missing' } })
+    expect(s.gh.calls).toHaveLength(0)
+    expect(s.activity.filter((a) => a.data?.out_of_band)).toHaveLength(1)
   })
 
-  test('无输出：终端已退出且没有 PR，以 exited 结束（节点上报 crashed）', async () => {
+  test('无输出：终端已关闭，以 workdir_missing 结束', async () => {
     const s = await start({}, (o) => o.show('no-output'))
     await ready(s)
     await s.poll()
     await until(() => s.outcome() !== undefined, '结束')
-    expect(s.outcome()).toMatchObject({ ok: true, data: { outcome: 'exited', exit_code: null } })
+    expect(s.outcome()).toMatchObject({
+      ok: true,
+      data: { outcome: 'blocked', reason: 'workdir_missing' },
+    })
   })
 
   test('handle 失效（stale）不等于终端已死：在本 worktree 找到进程身份相同的唯一 Codex 就接上', async () => {
@@ -1184,4 +1190,162 @@ test('user 角色在创建 worktree 或接管旧终端前失败', async () => {
     data: { outcome: 'failed', result: { reason: 'unknown_role' } },
   })
   expect(s.orca.calls).toEqual([])
+})
+
+const outside = (s: Started) => s.activity.filter((a) => a.data?.out_of_band)
+const APPROVAL_COMMAND = 'mkdir -p /tmp/raindown-tui-probe-dir2'
+const executed = (line: string) => ({
+  ...tuiFixture('working'),
+  tail: [line, '• Working (1s • esc to interrupt)'],
+})
+
+describe('带外操作', () => {
+  for (const line of [
+    `✓ You approved codex to run ${APPROVAL_COMMAND} this time`,
+    `✔ You approved codex to run ${APPROVAL_COMMAND} every time this session`,
+    `• Ran ${APPROVAL_COMMAND}`,
+  ]) {
+    test(`待批后出现明确记录：${line}`, async () => {
+      const s = await start({}, (o) => o.show('approval'))
+      await s.poll(2)
+      expect(idles(s)).toHaveLength(1)
+      s.orca.reads = [ok(executed(line))]
+      await s.poll(2)
+      expect(outside(s)).toHaveLength(1)
+      expect(outside(s)[0]?.data?.out_of_band).toMatchObject({
+        id: expect.any(String),
+        kind: 'approval_outside_raindown',
+        command: APPROVAL_COMMAND,
+      })
+      expect(s.activity.filter((a) => a.data?.resumed)).toHaveLength(1)
+      await s.run.cancel()
+    })
+  }
+
+  test('历史批准、其他命令与模糊 working 不算外部批准', async () => {
+    const history = `• Ran ${APPROVAL_COMMAND}`
+    const approval = tuiFixture('approval')
+    const s = await start({}, (o) =>
+      o.reads.push(ok({ ...approval, tail: [history, ...approval.tail] })),
+    )
+    await s.poll(2)
+    s.orca.reads = [ok(executed(history))]
+    await s.poll()
+    s.orca.reads = [ok(executed(`• Ran ${APPROVAL_COMMAND} --other`))]
+    await s.poll()
+    expect(outside(s)).toHaveLength(0)
+    expect(s.activity.filter((a) => a.data?.resumed)).toHaveLength(0)
+    await s.run.cancel()
+  })
+
+  test('Raindown 批准送达后出现执行行：没有带外事件', async () => {
+    const s = await start({}, (o) => o.show('approval'))
+    await s.poll(2)
+    expect(await s.run.deliver?.({ reply_id: 'r-approved', kind: 'approve', by: 'user' })).toBe(
+      'delivered',
+    )
+    s.orca.reads = [ok(executed(`• Ran ${APPROVAL_COMMAND}`))]
+    await s.poll()
+    expect(outside(s)).toHaveLength(0)
+    await s.run.cancel()
+  })
+
+  test('外部批准发生在轮询与回复之间：送达前记录带外，不发回复、不误报 delivered', async () => {
+    const s = await start({}, (o) => o.show('approval'))
+    await s.poll(2)
+    s.orca.reads = [ok(executed(`• Ran ${APPROVAL_COMMAND}`))]
+    await expect(
+      s.run.deliver?.({ reply_id: 'r-late', kind: 'approve', by: 'user' }),
+    ).rejects.toThrow('回复尚未送达')
+    expect(sends(s)).toHaveLength(0)
+    expect(outside(s)).toHaveLength(1)
+    expect(s.activity.filter((a) => a.data?.resumed)).toHaveLength(1)
+    await s.run.cancel()
+  })
+
+  test('还未上报待批就出现执行行：没有带外事件', async () => {
+    const s = await start({}, (o) => o.reads.push(ok(executed(`• Ran ${APPROVAL_COMMAND}`))))
+    await s.poll()
+    expect(outside(s)).toHaveLength(0)
+    await s.run.cancel()
+  })
+
+  test('明确 terminal_not_found：记录会话删除并 blocked；stale 仍由现有测试覆盖', async () => {
+    const s = await start({}, (o) =>
+      o.reads.push(fail('failure', 'orca_error', '终端不存在', { code: 'terminal_not_found' })),
+    )
+    await s.poll()
+    expect(s.outcome()).toMatchObject({
+      ok: true,
+      data: { outcome: 'blocked', reason: 'workdir_missing' },
+    })
+    expect(outside(s)[0]?.data?.out_of_band).toMatchObject({ kind: 'session_removed' })
+  })
+})
+
+describe('目录不存在', () => {
+  test('监控时 worktree 被删：不再读终端，记录删除并 blocked', async () => {
+    const s = await start()
+    await ready(s)
+    rmSync(h?.worktree ?? '', { recursive: true })
+    await s.poll()
+    expect(s.orca.ops('terminalRead')).toHaveLength(0)
+    expect(s.outcome()).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'workdir_missing',
+        message: `工作目录不存在：${h?.worktree}`,
+      },
+    })
+    expect(outside(s)[0]?.data?.out_of_band).toMatchObject({ kind: 'session_removed' })
+  })
+
+  test('deliver 时 worktree 被普通文件替换：不读终端也不发送', async () => {
+    const s = await start()
+    await ready(s)
+    rmSync(h?.worktree ?? '', { recursive: true })
+    writeFileSync(h?.worktree ?? '', 'not a directory')
+    expect(await s.run.deliver?.({ reply_id: 'r-missing', kind: 'approve', by: 'user' })).toBe(
+      'not_running',
+    )
+    expect(s.orca.ops('terminalRead')).toHaveLength(0)
+    expect(sends(s)).toHaveLength(0)
+    expect(await s.run.done).toMatchObject({
+      ok: true,
+      data: { outcome: 'blocked', reason: 'workdir_missing' },
+    })
+  })
+
+  test('保存 state 中的 worktree 丢失：保留记录，不静默新建', async () => {
+    const first = await start()
+    await ready(first)
+    const home = h as OrcaHome
+    await first.run.cancel()
+    rmSync(home.worktree, { recursive: true })
+    const second = await start({}, undefined, { home })
+    await ready(second)
+    expect(second.orca.ops('worktreeCreate')).toHaveLength(0)
+    expect(second.orca.ops('terminalCreate')).toHaveLength(0)
+    expect(second.outcome()).toMatchObject({
+      ok: true,
+      data: { outcome: 'blocked', reason: 'workdir_missing' },
+    })
+  })
+
+  test('登记 repo 被删：不调用 gh，说明目录不存在', async () => {
+    const s = await start({}, (o) => o.show('question'))
+    await ready(s)
+    rmSync(h?.repo ?? '', { recursive: true })
+    await s.poll(2)
+    expect(s.gh.calls).toHaveLength(0)
+    expect(s.outcome()).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'workdir_missing',
+        message: `工作目录不存在：${h?.repo}`,
+      },
+    })
+  })
 })

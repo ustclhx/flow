@@ -55,6 +55,7 @@
           "type": "string",
           "enum": [
             "task",
+            "out_of_band",
             "proposal",
             "policy",
             "supervisor",

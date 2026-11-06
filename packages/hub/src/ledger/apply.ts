@@ -88,6 +88,7 @@ export function createApplier(db: Database): Applier {
 
   function applyEvent(e: LedgerEvent) {
     switch (e.type) {
+      case 'task.out_of_band':
       case 'policy.decided':
         // 策略判定只供审计，不修改任务或租约投影。
         return

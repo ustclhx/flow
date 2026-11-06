@@ -32,6 +32,7 @@ const VIA_LABEL: Readonly<Record<InboxVia, string>> = {
 
 const REASON_LABEL: Readonly<Record<InboxCloseReason, string>> = {
   task_running: '已处理（任务已恢复）',
+  handled_externally: '已在外部处理',
   task_queued: '已处理（任务已重新排队）',
   task_done: '已处理（任务已完成）',
   task_failed: '已处理（任务已失败）',

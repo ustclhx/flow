@@ -264,6 +264,43 @@ describe('orca 封装', () => {
 })
 
 describe('gh 封装', () => {
+  test('cwd 不存在时不启动 gh；可执行文件不存在时保留 gh_not_found', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'raindown-gh-cwd-'))
+    roots.push(dir)
+    let calls = 0
+    const injected = createGhCli({
+      run: async () => {
+        calls++
+        throw Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })
+      },
+    })
+    expect(await injected.prList({ cwd: join(dir, 'missing'), branch: 'b' })).toMatchObject({
+      ok: false,
+      error: { code: 'cwd_missing', message: `工作目录不存在：${join(dir, 'missing')}` },
+    })
+    expect(calls).toBe(0)
+    const missingBin = join(dir, 'missing-gh')
+    expect(await createGhCli({ bin: missingBin }).prList({ cwd: dir, branch: 'b' })).toMatchObject({
+      ok: false,
+      error: { code: 'gh_not_found', message: `找不到 gh 可执行文件：${missingBin}` },
+    })
+  })
+
+  test('spawn 时 cwd 被删除：ENOENT 仍归为 cwd_missing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'raindown-gh-race-'))
+    roots.push(dir)
+    const gh = createGhCli({
+      run: async () => {
+        rmSync(dir, { recursive: true })
+        throw Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })
+      },
+    })
+    expect(await gh.prList({ cwd: dir, branch: 'b' })).toMatchObject({
+      ok: false,
+      error: { code: 'cwd_missing', message: `工作目录不存在：${dir}` },
+    })
+  })
+
   test('pr list：按分支查询并校验输出', async () => {
     const f = fakeCli('gh', {
       'pr list': [

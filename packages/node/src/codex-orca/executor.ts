@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { existsSync, statSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -34,6 +35,7 @@ import { autoApprovedText, needsUserText } from '../precheck.ts'
 import { resolveContractCwd } from '../workdir.ts'
 import {
   analyzeTail,
+  approvalExecutionLines,
   approvalForPrecheck,
   CODEX_ORCA_PRECHECK_TOOL,
   classifyCodexOrca,
@@ -66,7 +68,7 @@ import { checkProjectCodexTrust } from './trust.ts'
  * - 连续两次没有忙碌标记：查本任务分支上的 PR（`gh pr list --head`），有则以 done 结束（`workdir` 为 worktree，
  *   验收在这里运行）；gh 不可用时**不判 done**，上报 idle 并在 hint 中带上 gh 的错误，classify 判为 other；
  *   没有 PR 时上报 idle 信号（hint 中带终端末尾 40 行），节点调用 `classify` 判定原因并上报 blocked，租约继续持有；
- * - 终端退出（read 返回 status=exited）：有 PR 则 done，否则 exited（节点上报 blocked(crashed)）。
+ * - 终端明确被关闭或不存在：记录 session_removed，以上报 blocked(workdir_missing) 结束。
  *
  * `terminal_handle_stale` 的语义（在本机 Orca 1.4.218 上确认，2026-10-25）：
  * - 对一个已关闭的终端执行 `terminal read`，返回的是 `ok: true` 加 `status: "exited"`，不是 stale；
@@ -261,6 +263,7 @@ export async function defaultBaseBranch(repo: string, run: CommandRunner = execR
  */
 export function setupWaiter(clock: NodeClock, timeoutMs: number, pollMs: number) {
   return async (wt: string, signal: AbortSignal): Promise<Result<void>> => {
+    if (!isDirectory(wt)) return fail('failure', 'workdir_missing', `工作目录不存在：${wt}`)
     if (!existsSync(join(wt, 'package.json'))) return ok(undefined)
     const ready = () =>
       (existsSync(join(wt, 'node_modules', '.bin')) ||
@@ -268,6 +271,7 @@ export function setupWaiter(clock: NodeClock, timeoutMs: number, pollMs: number)
       (!existsSync(join(wt, 'scripts', 'orca', 'setup.sh')) ||
         existsSync(join(wt, '.env.worktree')))
     for (let waited = 0; ; waited += pollMs) {
+      if (!isDirectory(wt)) return fail('failure', 'workdir_missing', `工作目录不存在：${wt}`)
       if (ready()) return ok(undefined)
       if (signal.aborted) return fail('failure', 'cancelled', '等待 setup 时被取消')
       if (waited >= timeoutMs) {
@@ -281,6 +285,19 @@ export function setupWaiter(clock: NodeClock, timeoutMs: number, pollMs: number)
     }
   }
 }
+
+/** 目录被删除或被普通文件替换时均不可作为命令 cwd。 */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return false
+    throw error
+  }
+}
+
+const terminalRemoved = (r: Result<unknown>) =>
+  ['terminal_not_found', 'terminal_gone', 'terminal_exited'].includes(orcaErrorCode(r) ?? '')
 
 /** 末尾输出用于比较时去掉计时（`Working (3m 00s • …`），计时变化不算新输出。 */
 const normLine = (l: string) => l.replace(/\(\d+[hms][^)]*\)/g, '()').replace(/\s+$/, '')
@@ -357,6 +374,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       let precheckChanges = 0
       /** 当前弹窗预检得到的 supervisor 判定（D15）：上报停下时放进 hint，界面离开该弹窗后清空。 */
       let decision: { popup: string; id: number } | undefined
+      /** 只有实际交给 Raindown 的待批请求才参与检测；记录原有证据，避免历史输出重绘误判。 */
+      let pendingApproval: { id: string; command: string; seen: Set<string> } | undefined
       const inflight = new Map<string, Promise<DeliverResult>>()
 
       const iso = () => new Date(clock.now()).toISOString()
@@ -409,6 +428,39 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         return true
       }
 
+      const missing = (path: string, removed = false, detail?: string): false => {
+        if (finished) return false
+        const message = detail ?? `工作目录不存在：${path}`
+        if (removed) {
+          status(message, {
+            out_of_band: {
+              id: randomUUID(),
+              kind: 'session_removed',
+              ...(pendingApproval ? { command: redactSecrets(pendingApproval.command) } : {}),
+              message,
+            },
+          })
+        }
+        finish(
+          ok({
+            outcome: 'blocked',
+            reason: 'workdir_missing',
+            message,
+            tail: redactLines(prevTail).slice(-STUCK_TAIL),
+          }),
+        )
+        return false
+      }
+      const requireWorkdir = (): boolean =>
+        !!state && (isDirectory(state.worktree_path) || missing(state.worktree_path, true))
+      const requireRepo = (repo: string): boolean => isDirectory(repo) || missing(repo)
+      const removedTerminal = () =>
+        missing(
+          state?.worktree_path ?? ctx.cwd,
+          true,
+          `Codex 终端已关闭或不存在：${handle ?? state?.handle ?? ctx.taskId}`,
+        )
+
       const stop = async (message: string) => {
         if (finished || stopping) return
         stopping = true
@@ -459,7 +511,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       const checkPr = async (): Promise<PrCheck> => {
         if (!state) return { none: true }
         const branch = state.branch
-        const r = await gh.prList({ cwd: state.worktree_path, branch })
+        if (!requireRepo(state.repo)) return { none: true }
+        const r = await gh.prList({ cwd: state.repo, branch })
+        if (!r.ok && !isDirectory(state.repo)) {
+          missing(state.repo)
+          return { none: true }
+        }
         if (!r.ok) {
           logger?.warn(`查询分支 ${state.branch} 的 PR 失败`, r.error.message)
           return { error: r.error.message }
@@ -508,7 +565,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
        * 返回是否换到了新的 handle。
        */
       const relocate = async (): Promise<boolean> => {
-        if (!state) return false
+        if (!state || !requireWorkdir()) return false
         const r = await orca.terminalList({ worktreePath: state.worktree_path })
         if (!r.ok) return false
         const s = state
@@ -549,6 +606,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       }
 
       const send = async (input: Parameters<OrcaCli['terminalSend']>[0]) => {
+        if (!requireWorkdir()) return fail('failure', 'workdir_missing', `工作目录不存在：${state?.worktree_path}`)
         // 包括预检后、授权复核后、文字送达与补发回车，均在最后一次异步等待后重查。
         if (!state || (await blockProjectConfig(state.worktree_path)))
           return fail('failure', 'codex_isolation_blocked', '隔离检查未通过，没有向 Codex 发送输入')
@@ -591,8 +649,29 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         await send({ handle: h, enter: true })
       }
 
+      /** 轮询与送达前共用同一判定，防止外部批准恰好发生在两次轮询之间。 */
+      const detectOutsideApproval = (tail: readonly string[]): boolean => {
+        const pending = pendingApproval
+        if (!pending) return false
+        const evidence = approvalExecutionLines(tail, pending.command)
+        if (!evidence.some((line) => !pending.seen.has(line))) return false
+        status('授权在 Raindown 之外被批准', {
+          out_of_band: {
+            id: pending.id,
+            kind: 'approval_outside_raindown',
+            command: redactSecrets(pending.command),
+          },
+        })
+        pendingApproval = undefined
+        reported = false
+        idlePolls = 0
+        queue.push(resumedSignal(iso(), '待批命令已在 Raindown 之外获准执行'))
+        return true
+      }
+
       const doDeliver = async (reply: DeliveredReply): Promise<DeliverResult> => {
         if (!handle || finished || !state) return 'not_running'
+        if (!requireWorkdir()) return 'not_running'
         const st = replyState(reply.reply_id)
         if (st.done) return 'delivered'
         if (st.dropped) return 'dropped'
@@ -600,10 +679,22 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         // 按实时的末尾内容判断（PR #24 审查第 5 条），不用上一次轮询的分析。
         const now = await orca.terminalRead({ handle, limit: 200 })
         if (!now.ok) {
+          if (terminalRemoved(now)) {
+            removedTerminal()
+            return 'not_running'
+          }
           if (orcaErrorCode(now) === 'terminal_handle_stale') await relocate()
           throw new TransientDeliverError(`读取终端失败：${now.error.message}`)
         }
+        if (!requireWorkdir()) return 'not_running'
+        if (now.data.status === 'exited') {
+          removedTerminal()
+          return 'not_running'
+        }
         if (now.data.status !== 'running') return 'not_running'
+        if (detectOutsideApproval(now.data.tail)) {
+          throw new TransientDeliverError('待批命令已在 Raindown 之外获准执行，回复尚未送达')
+        }
         const h = handle
         const live = analyzeTail(now.data.tail)
         if (live.kind === 'trust_prompt') {
@@ -644,7 +735,15 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           if (!confirmed) return drop()
           if (reply.by === SUPERVISOR_ACTOR) {
             // 复核期间界面可能已变：发回车之前再读一次终端，弹窗全文与复核时一致才放行（TOCTOU）。
+            if (!requireWorkdir()) return 'not_running'
             const again = await orca.terminalRead({ handle: h, limit: 200 })
+            if (
+              (!again.ok && terminalRemoved(again)) ||
+              (again.ok && again.data.status === 'exited')
+            ) {
+              removedTerminal()
+              return 'not_running'
+            }
             if (finished) return 'not_running'
             const latest =
               again.ok && again.data.status === 'running'
@@ -669,6 +768,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           const text = replyText(reply)
           if (text) await sendPrompt(h, text, st)
         }
+        pendingApproval = undefined
         st.done = true
         await saveState()
         reported = false
@@ -738,7 +838,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         }
         // 预检期间界面可能已经变了：按实时终端再核对一次，弹窗与命令都一致才发回车。
         const h = handle
+        if (!requireWorkdir()) return 'user'
         const live = await orca.terminalRead({ handle: h, limit: 200 })
+        if ((!live.ok && terminalRemoved(live)) || (live.ok && live.data.status === 'exited')) {
+          removedTerminal()
+          return 'user'
+        }
         if (finished || stopping) return 'user'
         const again =
           live.ok && live.data.status === 'running'
@@ -772,19 +877,24 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         let readFailures = 0
         while (!finished && !stopping) {
           await sleep(clock, pollMs, ctx.signal)
-          if (finished || stopping || !handle) return
+          if (finished || stopping || !handle || !requireWorkdir()) return
           if (!state || (await blockProjectConfig(state.worktree_path))) return
           const r = await orca.terminalRead({ handle, limit: 200 })
           if (finished || stopping) return
           if (!r.ok) {
+            if (terminalRemoved(r)) return void removedTerminal()
+            if (!requireWorkdir()) return
             // stale 只表示 handle 在当前 Orca runtime 中失效，终端可能还活着：先找替代的终端。
             if (orcaErrorCode(r) === 'terminal_handle_stale' && (await relocate())) continue
             // 读失败不算活动：持续失败时由节点的无进展计时兜底。
             if (readFailures++ % 10 === 0) logger?.warn(`读取终端 ${handle} 失败`, r.error.message)
             continue
           }
+          if (!requireWorkdir()) return
           readFailures = 0
           const term = r.data
+          if (term.status === 'exited') return void removedTerminal()
+          if (inflight.size === 0) detectOutsideApproval(term.tail)
           const fresh = emitOutput(term.tail)
           const a = analyzeTail(term.tail)
           if (a.kind !== 'awaiting_approval') {
@@ -813,7 +923,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             seenBusy = true
             idlePolls = 0
             reemit = false
-            if (reported) {
+            if (reported && !pendingApproval) {
               reported = false
               queue.push(resumedSignal(iso(), 'Codex 重新开始工作'))
             }
@@ -860,6 +970,14 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             if (finished || stopping) return
             if ('pr' in pr) return finishWithPr(pr.pr)
             reported = true
+            if (a.kind === 'awaiting_approval' && a.command && !('error' in pr)) {
+              const command = approvalForPrecheck(term.tail)?.command ?? a.command
+              pendingApproval = {
+                id: randomUUID(),
+                command,
+                seen: new Set(approvalExecutionLines(term.tail, command)),
+              }
+            }
             const extra = {
               ...('error' in pr ? { gh_error: pr.error } : {}),
               ...decisionHint(a),
@@ -875,6 +993,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
 
       /** 复用记录中的 handle 前确认它仍属于这个 worktree，并且终端还在运行。 */
       const reusable = async (h: string, wt: string): Promise<string[] | undefined> => {
+        if (!requireWorkdir()) return undefined
         const list = await orca.terminalList({ worktreePath: wt })
         if (!list.ok) return undefined
         const t = list.data.find((x) => x.handle === h)
@@ -884,6 +1003,10 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           return undefined
         }
         const alive = await orca.terminalRead({ handle: h, limit: 50 })
+        if ((!alive.ok && terminalRemoved(alive)) || (alive.ok && alive.data.status === 'exited')) {
+          removedTerminal()
+          return undefined
+        }
         return alive.ok && alive.data.status === 'running' ? alive.data.tail : undefined
       }
 
@@ -897,20 +1020,16 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const repoR = await resolveTaskRepo(options.home, contract)
         if (!repoR.ok) return failed(repoR.error.code, repoR.error.message)
         const repo = repoR.data
+        if (!requireRepo(repo)) return
         const scope = codexOrcaInputs.parse(contract.inputs ?? {}).scope
 
         state = await readState()
         if (state && state.repo !== repo) state = undefined
-        if (
-          state &&
-          !existsSync(state.worktree_path) &&
-          (await blockProjectConfig(state.worktree_path))
-        )
-          return
+        if (state && !requireWorkdir()) return
         let fresh = false
         if (!state) {
           const base = await baseBranchOf(repo)
-          if (finished || stopping) return
+          if (finished || stopping || !requireRepo(repo)) return
           const wt = await orca.worktreeCreate({
             repo,
             name: ctx.taskId,
@@ -933,13 +1052,16 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           status(`已创建 worktree ${state.worktree_path}（分支 ${state.branch}，基于 ${base}）`)
         }
         const st = state
+        if (!requireWorkdir()) return
         // D15：codex-orca 开始时上报任务分支与 worktree（中枢每个任务只记录一次）。等节点采集完仓库快照
         // 再启动 Codex，快照（remote_url 等）反映 worker 改动之前的状态。
         await ctx.reportBranch?.({ branch: st.branch, worktree: st.worktree_path, repo })
         if (finished || stopping) return
         if (fresh) {
+          if (!requireWorkdir()) return
           const ready = await waitForSetup(st.worktree_path, ctx.signal)
           if (finished || stopping) return
+          if (!requireWorkdir()) return
           if (!ready.ok) return failed(ready.error.code, ready.error.message)
         }
 
@@ -973,6 +1095,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         // 上一次执行留下的终端仍在运行且属于这个 worktree：接着用它，把带来的回复送进去。
         if (st.handle) {
           const tail = await reusable(st.handle, st.worktree_path)
+          if (finished || stopping) return
           if (tail) {
             // 无法改变存活进程的 CODEX_HOME；升级前的终端不能通过重挂接绕过隔离。
             if (!(await sameCodexHome(st.codex_home, isolated.data)))
@@ -987,6 +1110,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           }
         }
         if (!handle) {
+          if (!requireWorkdir()) return
           const cmd = buildCodexCommand({
             codexBin,
             codexHome: isolated.data,
@@ -996,7 +1120,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             role,
           })
           if (!cmd.ok) return failed(cmd.error.code, cmd.error.message)
-          const title = `raindown ${ctx.taskId}`
+          const title = `[Raindown] ${ctx.taskId}`
           const term = await orca.terminalCreate({
             worktreePath: st.worktree_path,
             command: cmd.data,

@@ -33,6 +33,7 @@ import {
   activity,
   blockedReason,
   deliveredReply,
+  outOfBandSignal,
   policyDecisionId,
   protocolBlockedDelegationShape,
   prUrl,
@@ -726,6 +727,9 @@ export const renewLeaseRequest = z
         description:
           'worker 卡住但仍活着（交互式执行器）：中枢写入 task.blocked(lease_held=true)，租约照常续约',
       }),
+    out_of_band: z.array(outOfBandSignal).max(100).optional().meta({
+      description: '自上次续约以来的带外操作；每个信号的 id 在重试时不变',
+    }),
     resumed: z
       .strictObject({ note: z.string().optional() })
       .optional()

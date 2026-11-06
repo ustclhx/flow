@@ -37,6 +37,7 @@ export const INBOX_LEVEL_RANK: Readonly<Record<InboxLevel, number>> = {
  */
 export const INBOX_SOURCES = [
   'task',
+  'out_of_band',
   'proposal',
   'policy',
   'supervisor',
@@ -82,6 +83,7 @@ export const inboxVia = z.enum(INBOX_VIA).meta({ description: '操作发起的�
  */
 export const INBOX_CLOSE_REASONS = [
   'task_running',
+  'handled_externally',
   'task_queued',
   'task_done',
   'task_failed',

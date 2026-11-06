@@ -389,6 +389,22 @@ export function approvalForPrecheck(tail: readonly string[]): ApprovalPrompt | u
   return { command, prompt: block, ...(reason ? { reason } : {}) }
 }
 
+/**
+ * 只接受 Codex 明确的批准/执行记录，并严格匹配待批命令；忙碌标记本身不是批准证据。
+ * 批准文案来自 Codex `tui/src/history_cell/approvals.rs`；本地 approval fixture 的 Running 行
+ * 在弹窗打开前就会出现，只有 Ran 才能证明命令已执行。
+ */
+export function approvalExecutionLines(tail: readonly string[], command: string): string[] {
+  return tail.filter((line) => {
+    const text = line.trim()
+    const approved = /^(?:[✓✔]\s*)?You approved codex to run (.+)$/.exec(text)?.[1]
+    if (approved === `${command} this time` || approved === `${command} every time this session`)
+      return true
+    const ran = /^• Ran (.+)$/.exec(text)?.[1]
+    return ran === command
+  })
+}
+
 /** 从 idle 信号的 hint 中取终端末尾；没有时用节点累积的末尾输出。 */
 function snapshotTail(snapshot: StuckSnapshot): readonly string[] {
   const t = snapshot.hint?.tail

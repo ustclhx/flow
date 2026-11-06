@@ -1,9 +1,23 @@
+import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fail, loadWorkspaces, ok, type Result, type TaskContract } from '@raindown/core'
 import { z } from 'zod'
 
 const workdirInputs = z.looseObject({ repo: z.string().min(1).optional() })
+
+/** 启动依赖目录的操作前检查目录，区分目录丢失与访问失败。 */
+export function checkWorkingDirectory(path: string): Result<void> {
+  try {
+    if (statSync(path).isDirectory()) return ok(undefined)
+    return fail('failure', 'cwd_missing', `工作目录不存在：${path}`)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR')
+      return fail('failure', 'cwd_missing', `工作目录不存在：${path}`)
+    return fail('failure', 'cwd_unavailable', `无法访问工作目录 ${path}：${(err as Error).message}`)
+  }
+}
 const normalizeRepo = (path: string) => {
   const expanded =
     path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
