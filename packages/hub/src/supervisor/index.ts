@@ -1,5 +1,7 @@
 export * from './cost.ts'
 export * from './delegation.ts'
+export * from './observe.ts'
 export * from './projection.ts'
+export * from './report.ts'
 export * from './routes.ts'
 export * from './scheduler.ts'

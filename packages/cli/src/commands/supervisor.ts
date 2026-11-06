@@ -4,6 +4,7 @@ import {
   HubClient,
   resolveRaindownHome,
   SUPERVISOR_QUEUES,
+  type SupervisorReportData,
   type SupervisorStatusData,
   type SupervisorWakeData,
   TASK_STAGE_LABELS,
@@ -126,4 +127,128 @@ export const supervisorStatusCommand = defineCommand<SupervisorStatusData>({
   },
 })
 
-export const supervisorCommands = [askCommand, supervisorWakeCommand, supervisorStatusCommand]
+/** 日期（YYYY-MM-DD，按本地时区的 0 点）或 ISO 时间 → UTC ISO 时间；不合法时返回 null。 */
+export function parseReportTime(value: string): string | null {
+  const v = value.trim()
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v)
+  const ms = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() : Date.parse(v)
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null
+}
+
+const pct = (r: number | null) => (r === null ? '—' : `${(r * 100).toFixed(1)}%`)
+
+/** 简单的定宽表格（中文按 2 列宽计）。 */
+function table(head: string[], rows: string[][]): string {
+  const width = (s: string) => [...s].reduce((n, ch) => n + (/[\u2e80-\uffff]/.test(ch) ? 2 : 1), 0)
+  const cols = head.map((h, i) => Math.max(width(h), ...rows.map((r) => width(r[i] ?? ''))))
+  const line = (cells: string[]) =>
+    cells
+      .map((c, i) => c + ' '.repeat((cols[i] ?? 0) - width(c)))
+      .join('  ')
+      .trimEnd()
+  return [line(head), line(cols.map((w) => '-'.repeat(w))), ...rows.map(line)].join('\n')
+}
+
+/** `raindown supervisor report [<ws>] [--since] [--until] [--days]`（D10，tasks 7.4）。 */
+export const supervisorReportCommand = defineCommand<SupervisorReportData>({
+  name: 'supervisor report',
+  usage:
+    'supervisor report [<workspace>] [--since <日期>] [--until <日期>] [--days <天数>] [--json]',
+  summary:
+    'observe 判断与用户回复的一致率、卡住 basis 比例与 observe 下未执行的自主动作（仅 user）',
+  options: {
+    since: { type: 'string', description: '统计起点（含）：YYYY-MM-DD 或 ISO 时间；缺省为 7 天前' },
+    until: { type: 'string', description: '统计终点（不含）：YYYY-MM-DD 或 ISO 时间；缺省为现在' },
+    days: { type: 'string', description: '统计最近 N 天（与 --since 二选一）' },
+  },
+  run: async ({ args, options, actor }) => {
+    const input: { workspace?: string; since?: string; until?: string } = {}
+    if (args[0]) input.workspace = wsRef(args[0])
+    for (const key of ['since', 'until'] as const) {
+      const raw = options[key]
+      if (raw === undefined) continue
+      const t = typeof raw === 'string' ? parseReportTime(raw) : null
+      if (!t) return usage(`--${key} 应为 YYYY-MM-DD 或 ISO 时间`)
+      input[key] = t
+    }
+    if (options.days !== undefined) {
+      if (input.since) return usage('--days 不能与 --since 同时给出')
+      const days = Number(options.days)
+      if (!Number.isInteger(days) || days < 1 || days > 3650) {
+        return usage('--days 应为 1–3650 的整数')
+      }
+      const end = input.until ? Date.parse(input.until) : Date.now()
+      input.since = new Date(end - days * 24 * 60 * 60 * 1000).toISOString()
+    }
+    const home = resolveRaindownHome(process.env)
+    return new HubClient({ home, actor }).supervisorReport(input)
+  },
+  human: (d) => {
+    const range = `${new Date(d.since).toLocaleString()} — ${new Date(d.until).toLocaleString()}`
+    if (d.workspaces.length === 0) return `统计范围：${range}\n没有记录`
+    const out = [`统计范围：${range}`]
+    for (const w of d.workspaces) {
+      const s = w.observed_replies
+      out.push(
+        '',
+        `${w.workspace}`,
+        '',
+        'observe 判断与用户实际回复',
+        table(
+          ['类别', '判断', '已回复', '可判定', '一致', '一致率'],
+          [
+            [
+              '代批',
+              String(s.awaiting_approval),
+              '',
+              String(s.approvals.judged),
+              String(s.approvals.agreed),
+              pct(s.approvals.judged ? s.approvals.agreed / s.approvals.judged : null),
+            ],
+            [
+              '代答',
+              String(s.question),
+              '',
+              String(s.choices.judged),
+              String(s.choices.agreed),
+              pct(s.choices.judged ? s.choices.agreed / s.choices.judged : null),
+            ],
+            [
+              '合计',
+              String(s.total),
+              String(s.replied),
+              String(s.judged),
+              String(s.agreed),
+              pct(s.agreement),
+            ],
+          ],
+        ),
+        `  supervisor 也会转交 ${s.escalate}，用户尚未回复 ${s.pending}，自由文本回答（只计已回复）${s.free_text}`,
+        '',
+        '卡住记录的 basis（按执行器）',
+        w.stuck_basis.length
+          ? table(
+              ['执行器', 'reported', 'inferred', '未标注', 'reported 比例'],
+              w.stuck_basis.map((b) => [
+                b.executor,
+                String(b.reported),
+                String(b.inferred),
+                String(b.unspecified),
+                pct(b.reported_ratio),
+              ]),
+            )
+          : '  没有卡住记录',
+        '',
+        `observe 下未执行的自主动作：${w.observed_actions.total}（task_create ${w.observed_actions.task_create}，task_propose ${w.observed_actions.task_propose}，pr_merge_request ${w.observed_actions.pr_merge_request}）`,
+      )
+    }
+    return out.join('\n')
+  },
+})
+
+export const supervisorCommands = [
+  askCommand,
+  supervisorWakeCommand,
+  supervisorStatusCommand,
+  supervisorReportCommand,
+]

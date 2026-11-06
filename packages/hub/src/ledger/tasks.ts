@@ -11,6 +11,7 @@ import {
   fail,
   foldTaskAttempts,
   formatZodIssues,
+  hiddenFromWorker,
   type InboxVia,
   isKnownEventType,
   isWaitingHumanStage,
@@ -49,6 +50,7 @@ import {
 } from '@raindown/core'
 import { auditRules } from '../policy/service.ts'
 import { redactDeep } from '../secrets/redactor.ts'
+import { observeAutonomous, recordObservedAction } from '../supervisor/observe.ts'
 import type { EventInput, LedgerStore } from './store.ts'
 import {
   chainDepth,
@@ -255,11 +257,19 @@ export interface ReplyTaskOptions {
   via?: InboxVia
 }
 
+export interface GetTaskOptions {
+  /**
+   * 调用方是任务绑定（worker 的派工令牌）：事件列表去掉 `hiddenFromWorker` 的类型（D10 observe 判断、
+   * 未执行的动作与收件箱条目）。只由路由按鉴权结果填入。
+   */
+  forWorker?: boolean
+}
+
 export interface TaskService {
   createTask(contractInput: unknown, opts: CreateTaskOptions): Promise<Result<CreateTaskData>>
   listTasks(filter?: unknown): Result<ListTasksData>
   getTask(id: string): Result<ShowTaskData>
-  getTask(id: string, query: ShowTaskQuery): Result<TaskShowResponse>
+  getTask(id: string, query: ShowTaskQuery, opts?: GetTaskOptions): Result<TaskShowResponse>
   cancelTask(id: string, opts: CancelTaskOptions): Result<CancelTaskData>
   retryTask(id: string, opts: RetryTaskOptions): Promise<Result<RetryTaskData>>
   replyTask(id: string, body: unknown, opts: ReplyTaskOptions): Result<ReplyTaskData>
@@ -301,8 +311,16 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
     o.verifyPolicy ?? (async (scope, steps) => ok(decideVerifySteps([], scope, steps)))
 
   function getTask(id: string): Result<ShowTaskData>
-  function getTask(id: string, query: ShowTaskQuery): Result<TaskShowResponse>
-  function getTask(id: string, query: ShowTaskQuery = {}): Result<TaskShowResponse> {
+  function getTask(
+    id: string,
+    query: ShowTaskQuery,
+    opts?: GetTaskOptions,
+  ): Result<TaskShowResponse>
+  function getTask(
+    id: string,
+    query: ShowTaskQuery = {},
+    opts: GetTaskOptions = {},
+  ): Result<TaskShowResponse> {
     const parsed = showTaskQuery.safeParse(query)
     if (!parsed.success) return invalidArguments('查询参数', parsed.error.issues, query)
     const storedTask = ledger.getTask(id)
@@ -315,7 +333,10 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         : storedTask
     if (section === 'summary') return ok({ task, section })
     const all = ledger.taskEvents(id)
-    const events = all.filter((event) => isKnownEventType(event.type))
+    const events = all.filter(
+      (event) =>
+        isKnownEventType(event.type) && !(opts.forWorker === true && hiddenFromWorker(event.type)),
+    )
     if (section === undefined) {
       return ok({
         // 只读一次事件：阶段与详情共用同一份事件。
@@ -909,6 +930,22 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       if (raced) return ok({ task: raced, created: false })
       const late = checkLimits()
       if (!late.ok) return late
+      // observe（D10）：autonomous 唤醒建任务只记录为 supervisor.observed_action，不执行。核对全部通过后才记录，
+      // 记录的是"本会执行"的动作；workspace 已在唤醒分支中读取（这里没有 await）。
+      if (
+        callerWake &&
+        observeAutonomous(callerWake.origin, (workspace as WorkspaceInfo | null)?.supervisor)
+      ) {
+        // 结构化字段在前、目标放最后：摘要截断时优先保留角色、执行器与仓库。
+        const { idempotency_key: _key, goal, ...shown } = contract
+        return recordObservedAction(ledger, {
+          workspace: contract.workspace,
+          wake_task_id: callerWake.task_id,
+          action: 'task_create',
+          args: { ...shown, goal },
+          limit: limits.tasks_per_wake,
+        })
+      }
       const parentNow = parent ? ledger.getTask(parent.id) : null
       const origin = computeOrigin(
         opts.origin,

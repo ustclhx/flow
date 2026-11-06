@@ -457,6 +457,9 @@ export function createApplier(db: Database): Applier {
       case 'supervisor.release':
       case 'supervisor.queue_dropped':
       case 'supervisor.scheduler_initialized':
+      case 'supervisor.observed_action':
+      // observe 判断（D10）只供审计与 supervisor report，不改变任务、回复或租约投影。
+      case 'task.reply_observed':
       case 'task_proposal.created':
       case 'task_proposal.accepted':
       case 'task_proposal.rejected':

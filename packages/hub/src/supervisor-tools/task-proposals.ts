@@ -31,6 +31,7 @@ import {
   taskKind,
 } from '../ledger/supervisor-checks.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
+import { observeAutonomous, recordObservedAction } from '../supervisor/observe.ts'
 import { oneLine, type SupervisorToolsDeps } from './common.ts'
 
 /**
@@ -240,6 +241,23 @@ export async function proposeTask(
     )
   }
   const instructionSeq = requestedInstruction ?? instructions[0]?.seq
+  // observe（D10）：autonomous 唤醒的提案只记录为 supervisor.observed_action，不生成提案条目。
+  if (wake.origin === 'autonomous') {
+    const ws = await deps.workspaces(wake.workspace)
+    if (observeAutonomous(wake.origin, ws?.supervisor)) {
+      return recordObservedAction(ledger, {
+        workspace: wake.workspace,
+        wake_task_id: wake.task_id,
+        action: 'task_propose',
+        limit: ws?.supervisor.limits.tasks_per_wake ?? 0,
+        args: {
+          draft,
+          ...(input.decision ? { decision: input.decision } : {}),
+          ...(input.reason ? { reason: input.reason } : {}),
+        },
+      })
+    }
+  }
   const r = ledger.appendMany(
     [
       {

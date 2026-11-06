@@ -117,12 +117,17 @@ export const REPLY_ESCALATION_REASONS = [
   'user_dismissed',
   'user_replied',
   'policy_changed',
+  'observe',
+  'config_unavailable',
 ] as const
 export type ReplyEscalationReason = (typeof REPLY_ESCALATION_REASONS)[number]
 export const replyEscalationReason = z.enum(REPLY_ESCALATION_REASONS).meta({
   description:
-    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变',
+    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变；observe 该项处于 observe 模式，supervisor 的判断只记录不送达；config_unavailable 回复时 workspace 配置无法读取，判断按失败即不送达处理',
 })
+
+/** `supervisor.observed_action.args` 的上限（D10：参数摘要做遮蔽与长度限制）。 */
+export const OBSERVED_ARGS_MAX = 1000
 
 /** supervisor 代回复（task_respond）的理由上限。 */
 export const REPLY_REASON_MAX = 2000
@@ -363,6 +368,10 @@ export const eventPayloads = {
     policy_version: policyVersionSchema.optional(),
     matched_rules: z.array(indexedPolicyRuleSchema).optional(),
     deadline: timestamp.meta({ description: '超过此时间仍未回复即转交用户（reply_timeout_s）' }),
+    observe: z.literal(true).optional().meta({
+      description:
+        '委托时该项处于 observe 模式（D10）：supervisor 的判断只记录为 task.reply_observed，不送达 worker',
+    }),
   }),
   /** 代回复委托结束、转交用户（D15）；除 user_replied、user_dismissed 外按条目原级别推送。 */
   'task.reply_escalated': z.strictObject({
@@ -381,6 +390,32 @@ export const eventPayloads = {
       .min(1)
       .meta({ description: '被结束的委托对应的 task.blocked seq（必须是当前这次卡住）' }),
     note: z.string().max(2000).optional().meta({ description: '说明，例如 supervisor 转交的理由' }),
+  }),
+  /**
+   * observe 模式下 supervisor 对委托给出的判断（D10）：只记录"会怎么做"，**不写 task.replied、不送达 worker**，
+   * 随后以 `task.reply_escalated{reason: observe}` 转给用户。信封不带 task_id（workspace 级事件），
+   * 任务绑定的读取（task_show / event_get）因此看不到它；任务 id 在载荷里。
+   */
+  'task.reply_observed': z.strictObject({
+    task_id: taskId,
+    block_seq: z.number().int().min(1).meta({ description: '被委托的那次 task.blocked 的 seq' }),
+    delegation_seq: z
+      .number()
+      .int()
+      .min(1)
+      .meta({ description: '对应的 task.reply_delegated 的 seq' }),
+    kind: delegableBlockedReason,
+    decision_id: policyDecisionId.optional(),
+    decision: z.enum(['approve', 'deny', 'answer', 'escalate']).meta({
+      description: 'supervisor 的判断：批准、拒绝、回答或转交',
+    }),
+    text: z.string().min(1).max(2000).optional().meta({ description: '回答的文字（answer）' }),
+    reason: z.string().min(1).max(REPLY_REASON_MAX).meta({ description: 'supervisor 给出的理由' }),
+    policy_version: policyVersionSchema.optional(),
+    forced: z.literal('config_unavailable').optional().meta({
+      description:
+        '不是 observe 模式：回复时 workspace 配置无法读取，按失败即不送达只记录（不计入 supervisor report 一致率）',
+    }),
   }),
   /**
    * 执行器创建的任务分支（D15，写类适配器启动前上报）：只接受持有该任务活动租约的节点写入，
@@ -590,6 +625,18 @@ export const eventPayloads = {
       .min(0)
       .meta({ description: '初始化时账本的最新 seq（空账本为 0）' }),
   }),
+  /**
+   * observe 模式下 autonomous 唤醒的写类动作（D10）：只记录，不执行。`args` 是遮蔽并截断后的参数摘要。
+   */
+  'supervisor.observed_action': z.strictObject({
+    wake_task_id: taskId.meta({ description: '发起动作的 autonomous 唤醒任务' }),
+    action: z.enum(['task_create', 'task_propose', 'pr_merge_request']),
+    args: z
+      .string()
+      .max(OBSERVED_ARGS_MAX)
+      .meta({ description: '参数摘要（遮蔽疑似密钥，最多 1000 字符）' }),
+    reason: z.string().min(1).max(2000).meta({ description: '未执行的原因' }),
+  }),
   'supervisor.queue_dropped': z.strictObject({
     queue: supervisorQueue,
     up_to_seq: z.number().int().min(1).meta({ description: '清掉该队列中 seq 不大于它的事件' }),
@@ -726,6 +773,8 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task.lease_expired': 'task',
   'task.reply_delegated': 'task',
   'task.reply_escalated': 'task',
+  // 不带 task_id：任务绑定的读取看不到 observe 判断（D10）。
+  'task.reply_observed': 'workspace',
   'task.branch_reported': 'task',
   'lease.granted': 'task',
   'node.registered': 'none',
@@ -747,6 +796,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'supervisor.answered': 'workspace',
   'supervisor.release': 'workspace',
   'supervisor.queue_dropped': 'workspace',
+  'supervisor.observed_action': 'workspace',
   'supervisor.scheduler_initialized': 'none',
   'task_proposal.created': 'workspace',
   'task_proposal.accepted': 'workspace',
@@ -857,6 +907,8 @@ export const TASK_EVENT_RULES: Readonly<
       | 'supervisor.release'
       | 'supervisor.queue_dropped'
       | 'supervisor.scheduler_initialized'
+      | 'supervisor.observed_action'
+      | 'task.reply_observed'
       | 'schedule.fired'
     >,
     TransitionRule

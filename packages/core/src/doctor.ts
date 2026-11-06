@@ -525,6 +525,7 @@ export function describeSupervisorConfig(c: SupervisorConfig): string {
     `无检查时${c.allow_no_checks ? '允许' : '不允许'}合并`,
     `审查角色 ${c.reviewer_roles.join('、')}`,
     `代回复 ${c.delegate_replies ? `开（超时 ${c.reply_timeout_s}s）` : '关'}`,
+    `observe：代答 ${c.observe.replies ? '开' : '关'}、代批 ${c.observe.approvals ? '开' : '关'}、自主工作 ${c.observe.autonomous ? '开' : '关'}`,
     `上限：每次唤醒 ${l.tasks_per_wake} 个任务，每天 ${l.wakes_per_day} 次唤醒（autonomous ${l.autonomous_wakes_per_day}、reply ${l.reply_wakes_per_day}），链深 ${l.chain_depth}，审查 ${l.review_rounds} 轮，未答提问 ${l.open_questions}`,
   ].join('；')
 }

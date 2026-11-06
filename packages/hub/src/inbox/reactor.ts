@@ -532,6 +532,20 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     let body = item.body
     if (e.type === 'task.reply_delegated') {
       title = delegatedNow(task, blockSeq) ? delegatedTitle(base) : base
+    } else if (e.payload.reason === 'observe') {
+      // observe（D10）：附上 supervisor 会怎么做；判断只在用户可见的条目里，不送达 worker。
+      const observed = ledger
+        .eventsByPayload('task.reply_observed', 'task_id', task.id)
+        .findLast(
+          (x) =>
+            x.type === 'task.reply_observed' && x.payload.block_seq === blockSeq && x.seq < e.seq,
+        )
+      const line =
+        observed?.type === 'task.reply_observed'
+          ? observeLine(observed.payload)
+          : `${OBSERVE_LINE_PREFIX}（判断记录缺失）`
+      const original = blockedBody(blockedText(blocked.payload), blocked.payload.tail)
+      body = clipText(`${line}\n\n${original}`, INBOX_BODY_MAX)
     } else if (e.payload.reason !== 'user_replied' && e.payload.reason !== 'user_dismissed') {
       const line = clipText(
         `supervisor 未代为处理，已转交给你：${ESCALATION_LABEL[e.payload.reason]}${
@@ -748,6 +762,40 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
   }
 }
 
+/** observe 模式下条目正文第一段的前缀（D10）；渠道渲染据此附上这一行。 */
+export const OBSERVE_LINE_PREFIX = '【observe】supervisor 会：'
+
+const OBSERVE_DECISION_LABEL = {
+  approve: '批准',
+  deny: '拒绝',
+  answer: '回答',
+  escalate: '转交给你',
+} as const
+
+/**
+ * 去掉条目正文开头的 observe 行（D10）：observe 判断只给用户看，非 user 的调用方（AI 身份、任务绑定、
+ * supervisor 唤醒）读取收件箱时只看到条目标题与原卡住说明。
+ */
+export function stripObserveLine(body: string): string {
+  if (!body.startsWith(OBSERVE_LINE_PREFIX)) return body
+  const cut = body.indexOf('\n\n')
+  return cut === -1 ? '' : body.slice(cut + 2)
+}
+
+/** "【observe】supervisor 会：批准（理由）"——一行，最多 600 字符。 */
+export function observeLine(p: {
+  decision: keyof typeof OBSERVE_DECISION_LABEL
+  text?: string | undefined
+  reason: string
+}): string {
+  const flat = (s: string) => s.replace(/\s+/g, ' ').trim()
+  const answer = p.decision === 'answer' && p.text ? `「${flat(p.text)}」` : ''
+  return clipText(
+    `${OBSERVE_LINE_PREFIX}${OBSERVE_DECISION_LABEL[p.decision]}${answer}（${flat(p.reason)}）`,
+    600,
+  )
+}
+
 /** 委托给 supervisor 期间的条目标题前缀（D15 "supervisor 处理中"）。 */
 export const DELEGATED_TITLE_PREFIX = '【supervisor 处理中】'
 const delegatedTitle = (title: string) =>
@@ -762,6 +810,8 @@ const ESCALATION_LABEL: Record<ReplyEscalationReason, string> = {
   wake_ended: 'supervisor 结束时没有回复',
   user_dismissed: '你忽略了该条目',
   user_replied: '你已回复',
+  observe: '该项处于 observe 模式，supervisor 的判断只记录、未送达',
+  config_unavailable: '回复时无法读取 workspace 配置，supervisor 的判断未送达',
 }
 
 function blockedTitle(task: TaskView, reason: BlockedReason): string {

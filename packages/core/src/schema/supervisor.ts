@@ -60,6 +60,28 @@ export const supervisorLimitsSchema = z
   })
   .meta({ title: 'Supervisor limits', description: '中枢强制的硬性上限（D4）' })
 
+/**
+ * observe 模式（add-harness-neutral-coordination D10）：三项分别控制代答（question）、代批
+ * （awaiting_approval）与 autonomous 唤醒的写类动作。开启的项 supervisor 照常被唤醒并给出判断，
+ * 判断只记录为"会怎么做"，不送达 worker、不建任务、不提交合并。全部默认 false，缺省时行为不变。
+ */
+export const supervisorObserveSchema = z
+  .strictObject({
+    replies: z.boolean().default(false).meta({
+      description:
+        'true：代答（提问）只记录 supervisor 的判断（task.reply_observed），提问照常转给用户',
+    }),
+    approvals: z.boolean().default(false).meta({
+      description: 'true：代批（授权请求）只记录 supervisor 的判断，授权照常推给用户',
+    }),
+    autonomous: z.boolean().default(false).meta({
+      description:
+        'true：autonomous 唤醒中的 task_create、task_propose、pr_merge_request 只写 supervisor.observed_action，不执行',
+    }),
+  })
+  .meta({ title: 'Supervisor observe', description: 'observe 模式：逐项只记录不执行（D10）' })
+export type SupervisorObserveConfig = z.infer<typeof supervisorObserveSchema>
+
 export const MERGE_METHODS = ['squash', 'merge', 'rebase'] as const
 export type MergeMethod = (typeof MERGE_METHODS)[number]
 
@@ -107,6 +129,11 @@ export const supervisorConfigSchema = z
       .default(DEFAULT_REPLY_TIMEOUT_S)
       .meta({ description: '代回复的等待秒数，超时转交用户；默认 600' }),
     limits: supervisorLimitsSchema.default({ ...SUPERVISOR_LIMIT_DEFAULTS }),
+    observe: supervisorObserveSchema.default({
+      replies: false,
+      approvals: false,
+      autonomous: false,
+    }),
   })
   .meta({ title: 'Workspace supervisor', description: 'workspace 配置的 supervisor 一节' })
 
@@ -131,3 +158,9 @@ export const disabledSupervisorConfig = globalSupervisorConfig
  */
 export const delegationEnabled = (workspace: { supervisor: SupervisorConfig }): boolean =>
   workspace.supervisor.enabled && workspace.supervisor.delegate_replies
+
+/** 委托的卡住类型对应的 observe 开关：question → replies，awaiting_approval → approvals（D10）。 */
+export const observeFor = (
+  config: Pick<SupervisorConfig, 'observe'>,
+  kind: 'question' | 'awaiting_approval',
+): boolean => (kind === 'question' ? config.observe.replies : config.observe.approvals)

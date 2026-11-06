@@ -6,16 +6,20 @@ import {
   inboxListData,
   inboxListQuery,
   ok,
+  USER_ACTOR,
 } from '@raindown/core'
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import { actOnInbox, type InboxActionDeps } from './actions.ts'
+import { stripObserveLine } from './reactor.ts'
 import { readInboxItem } from './read.ts'
 
 export function createInboxRoutes(deps: InboxActionDeps): Hono {
   const app = new Hono()
   app.get(ENDPOINTS['inbox-list'].path, (c) => {
     const parsed = inboxListQuery.safeParse(c.req.query())
+    // observe 判断（D10）只给用户看：其他调用方（AI 身份、任务绑定、supervisor 唤醒）拿到的正文去掉 observe 行。
+    const forUser = c.get('actor') === USER_ACTOR && c.get('auth')?.kind !== 'wake'
     return respond(
       c,
       parsed.success
@@ -27,7 +31,10 @@ export function createInboxRoutes(deps: InboxActionDeps): Hono {
                 ...(parsed.data.workspace ? { workspace: parsed.data.workspace } : {}),
                 limit: -1,
               })
-              .map((item) => readInboxItem(deps.ledger, item)),
+              .map((item) => {
+                const view = readInboxItem(deps.ledger, item)
+                return forUser ? view : { ...view, body: stripObserveLine(view.body) }
+              }),
           })
         : fail('usage', 'invalid_arguments', '收件箱查询参数不合法'),
       inboxListData,

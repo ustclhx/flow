@@ -250,6 +250,11 @@ export class HubClient {
     return this.request('supervisor-status', input)
   }
 
+  /** `raindown supervisor report`（D10，tasks 7.4）：observe 一致率、卡住 basis 与未执行的自主动作。 */
+  supervisorReport(input: { workspace?: string; since?: string; until?: string } = {}) {
+    return this.request('supervisor-report', input)
+  }
+
   /** 旧中枢没有 status 路由时，用 health 加本地文件补足可观测信息。 */
   async status(): Promise<Result<HubStatus>> {
     const status = await this.request('hub-status')

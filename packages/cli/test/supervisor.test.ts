@@ -103,4 +103,39 @@ describe('raindown ask / raindown supervisor', () => {
       payload: { text: '修一下 README', via: 'cli' },
     })
   })
+
+  test('raindown supervisor report：表格与 --json；时间参数校验；AI 身份 user_only（harness-neutral 7.4）', async () => {
+    // 上一个用例结束时停了中枢：重新启动一个（同一 RAINDOWN_HOME）。
+    hub = data(
+      await runHub({ home, port: 0, logger: quiet, inbox: { watch: false, channels: [] } }),
+    )
+    await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
+    const json = await runCli(
+      ['supervisor', 'report', 'product-res', '--since', '2026-01-01', '--json'],
+      commands,
+    )
+    expect(json.exitCode).toBe(0)
+    const report = JSON.parse(json.stdout).data
+    expect(report.since).toBe(new Date(2026, 0, 1).toISOString())
+    expect(report.workspaces).toHaveLength(1)
+    expect(report.workspaces[0]).toMatchObject({
+      workspace: 'ws/product-res',
+      observed_replies: { total: 0, agreement: null },
+      observed_actions: { total: 0 },
+    })
+    const table = await runCli(['supervisor', 'report', 'product-res', '--days', '30'], commands)
+    expect(table.exitCode).toBe(0)
+    expect(table.stdout).toContain('observe 判断与用户实际回复')
+    expect(table.stdout).toContain('一致率')
+    expect(table.stdout).toContain('卡住记录的 basis')
+    const bad = await runCli(['supervisor', 'report', '--since', '昨天'], commands)
+    expect(bad.exitCode).toBe(2)
+    const both = await runCli(
+      ['supervisor', 'report', '--since', '2026-01-01', '--days', '3'],
+      commands,
+    )
+    expect(both.exitCode).toBe(2)
+    const ai = await runCli(['supervisor', 'report', '--actor', 'reviewer', '--json'], commands)
+    expect(JSON.parse(ai.stdout).error.code).toBe('user_only')
+  })
 })

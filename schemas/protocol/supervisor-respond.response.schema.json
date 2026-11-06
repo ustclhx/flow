@@ -2209,6 +2209,11 @@
         "requeued": {
           "type": "boolean",
           "description": "true：没有节点持有该任务，任务已带着回复重新排队"
+        },
+        "observed": {
+          "description": "observe 模式（D10）：判断只记录为 task.reply_observed，未送达 worker，卡住已转给用户",
+          "type": "boolean",
+          "const": true
         }
       },
       "required": [

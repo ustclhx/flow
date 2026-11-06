@@ -7,6 +7,7 @@ import {
   redactSecrets,
 } from '@raindown/core'
 import { blockedText } from '../inbox/blocked.ts'
+import { OBSERVE_LINE_PREFIX } from '../inbox/reactor.ts'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { ChannelMessage, OutboundItem } from './types.ts'
 
@@ -81,6 +82,10 @@ export function toOutbound(item: InboxItemView, o: RenderOptions): OutboundItem 
   let snippet: string | null = null
   if (source) {
     text = blockedText(source.payload)
+    // observe（D10）：条目正文第一段是"supervisor 会：……"，渠道同样显示（只发给用户）。
+    if (item.body.startsWith(OBSERVE_LINE_PREFIX)) {
+      text = `${item.body.split('\n\n')[0]}\n\n${text}`
+    }
     const tail = (source.payload.tail ?? []).join('\n')
     if (tail.length > 0 && o.snippetMax > 0) snippet = clipTailText(redact(tail), o.snippetMax)
   }

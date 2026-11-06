@@ -6,6 +6,7 @@ import {
   eventGetData,
   eventGetQuery,
   fail,
+  hiddenFromWorker,
   listTasksData,
   ok,
   PROTOCOL_ERRORS,
@@ -85,6 +86,15 @@ export async function jsonBody(c: Context, allowEmpty: boolean): Promise<Result<
   }
 }
 
+/**
+ * 按 worker 处理的调用方（D10 observe 的可见范围）：任务绑定，以及除 user 与 supervisor 唤醒之外的
+ * 任何身份（例如 user token 声明的 AI 身份、节点）。它们读到的事件列表去掉 `hiddenFromWorker` 的类型。
+ */
+function workerLike(c: Context): boolean {
+  const auth = c.get('auth')
+  return auth?.kind === 'task' || (c.get('actor') !== USER_ACTOR && auth?.kind !== 'wake')
+}
+
 export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
   const { ledger, tasks } = deps
   const app = new Hono()
@@ -125,7 +135,11 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     if (task && auth?.kind === 'wake' && task.workspace !== auth.wake.workspace) {
       return respond(c, fail('failure', 'not_found', `没有任务 ${id}`), taskShowResponse)
     }
-    return respond(c, tasks.getTask(id, parsed.data), taskShowResponse)
+    return respond(
+      c,
+      tasks.getTask(id, parsed.data, { forWorker: workerLike(c) }),
+      taskShowResponse,
+    )
   })
 
   app.get(ENDPOINTS['events-get'].path, (c) => {
@@ -145,7 +159,10 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     if (
       event?.seq !== seq ||
       (auth?.kind === 'task' &&
-        (event.task_id !== auth.task.task_id || event.workspace !== auth.task.workspace))
+        (event.task_id !== auth.task.task_id ||
+          event.workspace !== auth.task.workspace ||
+          // observe 判断、未执行的动作与收件箱条目不给 worker 看（D10）。
+          hiddenFromWorker(event.type)))
     )
       return respond(c, fail('failure', 'not_found', '账本事件不存在'), eventGetData)
     if (auth?.kind === 'wake') {
@@ -153,6 +170,9 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
         event.workspace === auth.wake.workspace ||
         (event.workspace === undefined && ledger.wakeOf(auth.wake.task_id)?.events.includes(seq))
       if (!visible)
+        return respond(c, fail('failure', 'forbidden', '本次唤醒不能读取该事件'), eventGetData)
+      // reply 唤醒的产出不进入 instruction / autonomous 唤醒的上下文（D15）：observe 判断只给 reply 唤醒读。
+      if (event.type === 'task.reply_observed' && auth.wake.origin !== 'reply')
         return respond(c, fail('failure', 'forbidden', '本次唤醒不能读取该事件'), eventGetData)
     }
     return respond(

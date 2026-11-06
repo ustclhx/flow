@@ -1463,3 +1463,76 @@ describe('创建时固化授权依据', () => {
     expect(forged.code).toBe('invalid_arguments')
   })
 })
+
+describe('observe：autonomous 唤醒的 task_create（harness-neutral 7.3）', () => {
+  const OBSERVE = { replies: false, approvals: false, autonomous: true }
+  const observed = (store: LedgerStore) =>
+    store
+      .eventsBetween(
+        'supervisor.observed_action',
+        '2000-01-01T00:00:00.000Z',
+        '2100-01-01T00:00:00.000Z',
+      )
+      .flatMap((e) => (e.type === 'supervisor.observed_action' ? [e] : []))
+
+  test('只写 supervisor.observed_action，不建任务，结果标注 observe：未执行', async () => {
+    const s = await setup({ supervisor: { observe: OBSERVE } })
+    const a = await s.wake('autonomous')
+    const before = s.store.listTasks({ limit: 1000 }).length
+    const r = await s.supCreate(a.token, {
+      parent: a.id,
+      role: 'triage',
+      goal: `巡检${'很长'.repeat(800)}`,
+    })
+    expect([r.status, r.code]).toEqual([409, 'observe_not_executed'])
+    expect(r.body.error?.message.startsWith('observe：未执行')).toBe(true)
+    expect(s.store.listTasks({ limit: 1000 })).toHaveLength(before)
+    expect(s.store.countChildren(a.id, 'supervisor')).toBe(0)
+    const events = observed(s.store)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      actor: 'hub',
+      workspace: WS,
+      payload: { wake_task_id: a.id, action: 'task_create' },
+    })
+    expect(events[0]?.task_id).toBeUndefined()
+    // 参数摘要有长度上限。
+    expect(events[0]?.payload.args.length).toBeLessThanOrEqual(1000)
+    expect(events[0]?.payload.args).toContain('"role":"triage"')
+  })
+
+  test('observe 记录计入 tasks_per_wake：一次唤醒不能无限写 observed_action', async () => {
+    const s = await setup({
+      supervisor: {
+        observe: OBSERVE,
+        limits: { ...defaultSupervisorConfig().limits, tasks_per_wake: 2 },
+      },
+    })
+    const a = await s.wake('autonomous')
+    for (let i = 0; i < 2; i++) {
+      expect((await s.supCreate(a.token, { parent: a.id })).code).toBe('observe_not_executed')
+    }
+    const third = await s.supCreate(a.token, { parent: a.id })
+    expect([third.status, third.code]).toEqual([429, 'limit_exceeded'])
+    expect(observed(s.store)).toHaveLength(2)
+  })
+
+  test('核对不通过的动作照常报错，不记录为 observe', async () => {
+    const s = await setup({ supervisor: { observe: OBSERVE } })
+    const a = await s.wake('autonomous')
+    const dev = await s.supCreate(a.token, { parent: a.id, role: 'dev', executor: 'codex-orca' })
+    expect(dev.code).toBe('proposal_required')
+    expect(observed(s.store)).toHaveLength(0)
+  })
+
+  test('instruction 唤醒不受影响；autonomous 未开启 observe 时照常建任务', async () => {
+    const s = await setup({ supervisor: { observe: OBSERVE } })
+    const i = await s.wake('instruction')
+    expect((await s.supCreate(i.token, { parent: i.id })).code).toBe('ok')
+    const off = await setup({ supervisor: { observe: { ...OBSERVE, autonomous: false } } })
+    const a = await off.wake('autonomous')
+    expect((await off.supCreate(a.token, { parent: a.id })).code).toBe('ok')
+    expect(observed(s.store)).toHaveLength(0)
+    expect(observed(off.store)).toHaveLength(0)
+  })
+})

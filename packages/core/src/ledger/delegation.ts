@@ -17,6 +17,8 @@ export interface ActiveDelegation {
   kind: 'question' | 'awaiting_approval'
   decision_id?: number
   deadline: string
+  /** 委托时该项处于 observe 模式（D10）：判断只记录，不送达。 */
+  observe?: true
 }
 
 /**
@@ -31,6 +33,20 @@ export const DELEGATION_ENDING_EVENTS: ReadonlySet<LedgerEvent['type']> = new Se
   'task.lease_expired',
   'task.cancel_requested',
 ])
+
+/**
+ * 任务绑定（worker 的派工令牌）读取本任务事件时隐藏的事件类型（D10 observe 的纵深防御）：
+ * - `task.reply_observed`、`supervisor.observed_action`：observe 判断与未执行的动作，绝不能送达 worker；
+ * - `inbox.*`：收件箱条目是给用户看的文字，其中可能附有"supervisor 会：……"与 supervisor 的转交说明。
+ * observe 判断本身不带 task_id（workspace 级事件），这里再按类型兜底一次。
+ */
+export function hiddenFromWorker(type: string): boolean {
+  return (
+    type === 'task.reply_observed' ||
+    type === 'supervisor.observed_action' ||
+    type.startsWith('inbox.')
+  )
+}
 
 /** 卡住上报的待批请求与策略判定所针对的请求中，参与一致性核对的字段。 */
 export interface DelegationRequest {
@@ -109,6 +125,7 @@ export function activeDelegation(
         kind: e.payload.kind,
         ...(e.payload.decision_id === undefined ? {} : { decision_id: e.payload.decision_id }),
         deadline: e.payload.deadline,
+        ...(e.payload.observe === true ? { observe: true as const } : {}),
       }
     }
     if (e.type === 'task.reply_escalated' && e.payload.block_seq === blockSeq) return null

@@ -29,6 +29,8 @@ import { taskRecovery } from './recovery.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import { taskStageFilter, taskStageSchema } from './stage.ts'
 import {
+  supervisorReportData,
+  supervisorReportQuery,
   supervisorStatusData,
   supervisorStatusQuery,
   supervisorWakeData,
@@ -163,6 +165,8 @@ export const PROTOCOL_ERRORS = {
   not_patrol_wake: { status: 403, kind: 'failure' },
   /** 本次唤醒已经提交过巡检日报（D13：每次巡检唤醒一份）。 */
   patrol_already_reported: { status: 409, kind: 'failure' },
+  /** observe 模式（D10）：autonomous 唤醒的写类动作只记录为 supervisor.observed_action，未执行。 */
+  observe_not_executed: { status: 409, kind: 'failure' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
 export type ProtocolErrorCode = keyof typeof PROTOCOL_ERRORS
@@ -1235,6 +1239,10 @@ export const taskRespondData = z
       .nullable()
       .meta({ description: '写入的回复（approve / deny / answer）；escalate 时为 null' }),
     requeued: z.boolean().meta({ description: 'true：没有节点持有该任务，任务已带着回复重新排队' }),
+    observed: z.literal(true).optional().meta({
+      description:
+        'observe 模式（D10）：判断只记录为 task.reply_observed，未送达 worker，卡住已转给用户',
+    }),
   })
   .meta({ title: 'POST /v1/supervisor/respond' })
 export type TaskRespondData = z.infer<typeof taskRespondData>
@@ -1368,6 +1376,13 @@ export const ENDPOINTS = {
     auth: true,
     request: supervisorStatusQuery,
     response: supervisorStatusData,
+  },
+  'supervisor-report': {
+    method: 'GET',
+    path: '/v1/supervisor/report',
+    auth: true,
+    request: supervisorReportQuery,
+    response: supervisorReportData,
   },
   'tasks-create': {
     method: 'POST',

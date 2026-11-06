@@ -43,6 +43,7 @@ import {
 } from '../ledger/supervisor-checks.ts'
 import type { WorkspaceInfo } from '../ledger/tasks.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
+import { observeAutonomous, recordObservedAction } from '../supervisor/observe.ts'
 import type { SupervisorToolsDeps } from './common.ts'
 
 /**
@@ -550,6 +551,16 @@ export async function requestMerge(
   )
   if (!elig.ok) return elig
   const e = elig.data
+  // observe（D10）：autonomous 唤醒的合并请求只记录为 supervisor.observed_action，不建 merger、不生成审批条目。
+  if (observeAutonomous(wake.origin, e.workspace.supervisor)) {
+    return recordObservedAction(ledger, {
+      workspace: wake.workspace,
+      wake_task_id: wake.task_id,
+      action: 'pr_merge_request',
+      limit: e.workspace.supervisor.limits.tasks_per_wake,
+      args: { pr: e.pr, review_task: e.review.id, reviewed_sha: e.reviewed_sha },
+    })
+  }
   const requestId = newRequestId()
   const base = {
     request_id: requestId,

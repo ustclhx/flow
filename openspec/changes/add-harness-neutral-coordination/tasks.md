@@ -55,10 +55,10 @@
 
 ## 7. observe 模式
 
-- [ ] 7.1 配置 `supervisor.observe`（schema、doctor）
-- [ ] 7.2 代答/代批 observe：`task.reply_observed` + 转交用户，收件箱附"supervisor 会：……"
-- [ ] 7.3 autonomous 唤醒的写类动作 observe：`supervisor.observed_action`
-- [ ] 7.4 `raindown supervisor report`：observe 判断与用户实际回复的一致率，reported / inferred 比例
+- [x] 7.1 配置 `supervisor.observe`（schema、doctor）
+- [x] 7.2 代答/代批 observe：`task.reply_observed` + 转交用户，收件箱附"supervisor 会：……"
+- [x] 7.3 autonomous 唤醒的写类动作 observe：`supervisor.observed_action`
+- [x] 7.4 `raindown supervisor report`：observe 判断与用户实际回复的一致率，reported / inferred 比例
 
 ## 8. PR 订阅与直通
 
