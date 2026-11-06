@@ -1,6 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { EventOf } from '@raindown/core'
-import { PR_CONTEXT_PER_DAY, PR_CONTEXT_PER_POLL, PR_FAILURES_REPORTED } from '../src/pr/watcher.ts'
+import {
+  PR_CONTEXT_PER_DAY,
+  PR_CONTEXT_PER_POLL,
+  PR_FAILURES_REPORTED,
+  PR_UNREGISTERED_UNSUBSCRIBE_MS,
+  workerIdentityVerified,
+} from '../src/pr/watcher.ts'
 import { must, WS } from './ledger-helpers.ts'
 import { type FakeComment, iso, PR, prSetup, T0 } from './pr-fixtures.ts'
 
@@ -61,9 +67,9 @@ test('共享身份：查询 gh 登录失败时 fail closed', async () => {
   expect(s.watcher.status().identity).toMatchObject({ ok: false, login: null })
 })
 
-test('worker_identity：与 gh 登录不同且不在名单时解除限制；它发的内容标为 agent，永不 allowed', async () => {
+test('当前版本一律共享身份：配置 worker_identity、中枢 gh 登录不在名单时，名单内评论也不 allowed', async () => {
   const s = await subscribed({ github: { watch: true, worker_identity: 'raindown-bot' } })
-  s.gh.self = { login: 'acme', id: 1 }
+  // 中枢 gh 登录（hub-runner）不在名单中；节点上的 worker 仍以 owner 的身份发评论，中枢无从区分。
   s.gh.accounts['raindown-bot'] = { id: 7, type: 'User' }
   s.gh.issueComments.push(comment(1, 'acme', 1), comment(2, 'raindown-bot', 1))
   await s.poll()
@@ -77,10 +83,18 @@ test('worker_identity：与 gh 登录不同且不在名单时解除限制；它�
         e.payload.not_allowed,
       ]),
   ).toEqual([
-    ['acme', 'human', true, undefined],
+    ['acme', 'human', false, 'shared_identity'],
     ['raindown-bot', 'agent', false, 'agent'],
   ])
-  expect(s.watcher.status().shared).toEqual([])
+  expect(s.watcher.status().shared).toMatchObject([{ workspace: WS }])
+  expect(s.watcher.status().shared[0]?.reason).toContain('worker_identity 在当前版本不生效')
+  // 解除条件在当前版本恒为 false。
+  expect(workerIdentityVerified({ worker_identity: 'raindown-bot' })).toBe(false)
+  expect(
+    workerIdentityVerified({ worker_identity: 'raindown-bot' }, [
+      { gh_login: 'raindown-bot', injects_worker_credentials: true },
+    ]),
+  ).toBe(false)
 })
 
 test('worker_identity 与 gh 登录相同或在名单中时不解除限制', async () => {
@@ -147,21 +161,101 @@ test('有登记仓库读不出 origin 时按可重试失败处理，不退订', 
   expect(s.store.activePrSubscriptions()).toHaveLength(1)
 })
 
-test('分页截断：按 updated 升序的行评论只推进到已取到的部分，下一轮补齐；PR 评论截断时本类不入账并报告', async () => {
+test('分页截断：评论与行评论都按 updated 升序只推进到已取到的部分，下一轮补齐', async () => {
   const s = await subscribed()
   for (let i = 1; i <= 1005; i++) {
     s.gh.reviewComments.push({ ...comment(i, 'acme', 1), updated_at: iso(T0 + 60_000 + i * 1000) })
   }
-  for (let i = 1; i <= 1001; i++) s.gh.issueComments.push(comment(10_000 + i, 'acme', 1))
+  for (let i = 1; i <= 1001; i++)
+    s.gh.issueComments.push({
+      ...comment(10_000 + i, 'acme', 1),
+      updated_at: iso(T0 + 60_000 + i * 1000),
+    })
   await s.poll(30)
   const kinds = (k: string) => s.prEvents().filter((e) => e.payload.kind === k).length
   expect(kinds('review_comment')).toBe(1000)
-  expect(kinds('issue_comment')).toBe(0)
+  expect(kinds('issue_comment')).toBe(1000)
   await s.poll()
   expect(kinds('review_comment')).toBe(1005)
+  expect(kinds('issue_comment')).toBe(1001)
+  expect(s.watcher.status().errors).toEqual([])
+})
+
+test('1000+ 条陌生人评论之后 owner 的评论最终送达，其他 PR 的评论不混入，其他类不受影响', async () => {
+  const s = await subscribed()
+  for (let i = 1; i <= 1100; i++)
+    s.gh.issueComments.push({
+      ...comment(i, 'mallory', 1, '刷屏'),
+      updated_at: iso(T0 + 60_000 + i * 100),
+    })
+  s.gh.issueComments.push({
+    ...comment(5000, 'acme', 1, '另一个 PR'),
+    issue: 41,
+    updated_at: iso(T0 + 200_000),
+  })
+  s.gh.issueComments.push({
+    ...comment(5001, 'acme', 1, 'owner 的意见'),
+    updated_at: iso(T0 + 300_000),
+  })
+  s.gh.checks.push({
+    id: 9,
+    name: 'ci',
+    status: 'completed',
+    conclusion: 'failure',
+    completed_at: iso(T0 + 60_000),
+    app: { slug: 'github-actions' },
+  })
+  for (let i = 0; i < 80; i++) await s.poll(10)
+  const texts = s.prEvents().map((e) => e.payload.text)
+  expect(texts).toContain('owner 的意见')
+  expect(texts).not.toContain('另一个 PR')
+  expect(s.prEvents().some((e) => e.payload.kind === 'check_run')).toBe(true)
+})
+
+test('额度按类独立且只算陌生人：220 条陌生人评论后，失败的 CI 与 owner 的 CHANGES_REQUESTED 仍被记录', async () => {
+  const s = await subscribed()
+  for (let i = 1; i <= 220; i++)
+    s.gh.issueComments.push({ ...comment(i, 'mallory', 1), updated_at: iso(T0 + 60_000 + i) })
+  s.gh.reviews.push({
+    id: 3,
+    user: { login: 'acme' },
+    body: '',
+    state: 'CHANGES_REQUESTED',
+    submitted_at: iso(T0 + 61_000),
+  })
+  s.gh.checks.push({
+    id: 9,
+    name: 'ci',
+    status: 'completed',
+    conclusion: 'failure',
+    completed_at: iso(T0 + 61_000),
+    app: { slug: 'github-actions' },
+  })
   await s.poll()
+  const kinds = s.prEvents().map((e) => e.payload.kind)
+  expect(kinds.filter((k) => k === 'issue_comment')).toHaveLength(PR_CONTEXT_PER_POLL)
+  expect(kinds).toContain('review')
+  expect(kinds).toContain('check_run')
+})
+
+test('PR 不在登记仓库：所有仓库都读出且连续 3 天仍不匹配时自动退订', async () => {
+  const s = await subscribed({ origin: 'git@github.com:other/repo.git' })
   await s.poll()
-  expect(s.watcher.status().errors[0]?.message).toContain('超过分页上限')
+  expect(s.store.activePrSubscriptions()).toHaveLength(1)
+  s.clock.time += PR_UNREGISTERED_UNSUBSCRIBE_MS
+  await s.poll()
+  expect(s.store.prSubscriptions('dev')).toMatchObject([
+    { active: false, reason: 'repo_not_registered' },
+  ])
+})
+
+test('共享身份状态按 workspace 汇总，不随单次轮询闪烁', async () => {
+  const s = await subscribed()
+  await s.poll()
+  expect(s.watcher.status().shared).toHaveLength(1)
+  await s.poll(10)
+  await s.poll(10)
+  expect(s.watcher.status().shared).toHaveLength(1)
 })
 
 test('一类查询失败不阻塞其他类', async () => {
@@ -226,8 +320,8 @@ test('非请求内容有配额：每次轮询与每天的条数有限，文字�
   for (let i = 0; i < 20; i++) await s.poll()
   expect(s.prEvents()).toHaveLength(PR_CONTEXT_PER_DAY)
   expect(s.watcher.status().warnings.join('\n')).toContain('已丢弃 30 条')
-  // 名单内的请求不受配额限制。
+  // 名单内账号的内容不计入陌生人配额。
   s.gh.issueComments.push({ ...comment(9999, 'acme', 2), updated_at: iso(T0 + 120_000) })
   await s.poll(10) // 无新内容时已退避到 10 分钟
-  expect(s.prEvents().some((e) => e.payload.allowed)).toBe(true)
+  expect(s.prEvents().some((e) => e.payload.actor === 'acme')).toBe(true)
 })

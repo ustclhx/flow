@@ -24,6 +24,8 @@ export const T0 = Date.parse('2026-10-24T00:00:00Z')
 
 export interface FakeComment {
   id: number
+  /** PR 编号（仓库级评论端点据 issue_url 区分 PR），缺省为 40。 */
+  issue?: number
   user: { login: string; type?: string; id?: number } | null
   body: string
   created_at?: string
@@ -112,7 +114,16 @@ export class FakeGitHub {
       return paged(list)
     }
     if (/\/pulls\/\d+$/.test(url.pathname)) return ok(this.pull)
-    if (/\/issues\/\d+\/comments$/.test(url.pathname)) return ok(after(this.issueComments))
+    if (/\/issues\/comments$/.test(url.pathname))
+      return ok(
+        after(
+          this.issueComments.map((c) => ({
+            ...c,
+            issue_url: `https://api.github.com/repos/acme/demo/issues/${c.issue ?? 40}`,
+          })),
+          true,
+        ),
+      )
     if (/\/pulls\/\d+\/comments$/.test(url.pathname)) return ok(after(this.reviewComments, true))
     if (/\/pulls\/\d+\/reviews$/.test(url.pathname))
       return ok(paged(this.reviews.map((r) => this.withUser(r))))

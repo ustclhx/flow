@@ -545,7 +545,7 @@ export function describeGithubConfig(c: GithubConfig): string {
       : '不轮询 PR（github.watch: false）',
     `允许名单：${users}；名单外用户与机器人的内容只作为不可信上下文送达运行中的任务`,
     c.worker_identity
-      ? `worker 身份：${c.worker_identity}（它发的内容标为 agent，永不算请求；与中枢 gh 登录不同且不在名单中时才解除共享身份限制）`
+      ? `worker 身份：${c.worker_identity}（它发的内容标为 agent，永不算请求）。当前版本该设置不生效：worker 仍以本机 gh 登录发评论；需等 bot 凭证注入`
       : 'worker 身份：未配置',
   ].join('；')
 }
@@ -603,13 +603,13 @@ async function checkWorkspaces(home: string, roles?: Role[]): Promise<DoctorChec
         message: `${ws.ref} github：${describeGithubConfig(ws.github)}`,
       })
     }
-    if (ws.github.watch && ws.github.worker_identity === undefined) {
+    if (ws.github.watch) {
       checks.push({
         id: `workspace.${ws.id}.github_shared_identity`,
         ok: false,
         severity: 'warning',
-        message: `${ws.ref} 共享 GitHub 身份：worker 用中枢所在机器的 gh 登录发评论，与允许名单中的你无法区分；中枢检测到 gh 登录在名单中（或无法确认）时，PR 评论只作上下文，不恢复已结束任务、不交回、不唤醒 supervisor`,
-        hint: '为 worker 配置独立的 GitHub bot 账号或 App 并写入 github.worker_identity，让 allowed_users 只含你本人（bot 凭证注入 worker 留待后续版本）',
+        message: `${ws.ref} 共享 GitHub 身份：worker 以本机 gh 登录发评论，与允许名单中的你无法区分；当前版本所有 PR 评论一律只作上下文，不恢复已结束任务、不交回、不唤醒 supervisor`,
+        hint: '需等后续版本把独立 bot 账号或 App 的凭证注入 worker 后才能解除；github.worker_identity 在当前版本不生效',
       })
     }
     if (ws.github.watch && ws.github.allowed_users === undefined) {

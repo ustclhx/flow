@@ -85,6 +85,7 @@ const pullMeta = z.object({
 })
 const comment = z.object({
   id: z.number(),
+  issue_url: z.string().optional(),
   user,
   body: z.string().nullable().optional(),
   html_url: z.string().optional(),
@@ -141,6 +142,8 @@ interface WatchState {
   failures: number
   failingSince: number | null
   lastError: string
+  /** 所有登记仓库都读出、PR 仍不匹配的起始时间。 */
+  unregisteredSince?: number | null
 }
 
 export interface PrWatcherOptions {
@@ -212,7 +215,22 @@ interface Candidate {
 }
 
 const SHARED_HINT =
-  '为 worker 配置独立的 GitHub bot 账号或 App（github.worker_identity），并让 allowed_users 只含你本人'
+  '当前版本 worker 仍以本机 gh 登录发评论，与你本人无法区分；需等后续版本把独立 bot 账号或 App 的凭证注入 worker 后才能解除（届时让 allowed_users 只含你本人）。github.worker_identity 在当前版本不生效'
+
+/**
+ * 解除共享身份限制的条件（保留代码路径）：需要节点上报 worker 实际使用的 gh 登录全部等于
+ * `github.worker_identity`，并声明已把 bot 凭证注入 worker。这两项能力在当前版本都不存在，
+ * 所以恒为 false——不论中枢 gh 登录是谁、是否配置了 worker_identity，所有 workspace 都按共享身份处理。
+ */
+export function workerIdentityVerified(
+  _github: Pick<GithubConfig, 'worker_identity'>,
+  _nodes: { gh_login?: string; injects_worker_credentials?: boolean }[] = [],
+): boolean {
+  return false
+}
+
+/** 不在名单内、连续多久都确认不属于登记仓库的 PR 订阅自动结束。 */
+export const PR_UNREGISTERED_UNSUBSCRIBE_MS = 3 * 86_400_000
 
 export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
   const { ledger } = o
@@ -225,6 +243,8 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
   /** 每个 PR 当天已入账与已丢弃的非请求事件数。 */
   const daily = new Map<string, { day: string; used: number; dropped: Set<string> }>()
   const users = new Map<string, { at: number; info: { id: number; type?: string } | null }>()
+  /** 本进程内各 PR、各类已扫描到的位置（含其他 PR 的评论与被丢弃的内容；重启后从已落账游标重扫）。 */
+  const scans = new Map<string, string>()
   let identity:
     | { at: number; ok: true; login: string; id: number }
     | {
@@ -351,22 +371,14 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
       if (info) ids.add(info.id)
       else warnings.set(`user:${login}`, `无法解析允许名单中的 GitHub 用户 ${login}（不算请求）`)
     }
-    if (!ids.size) return { ids, shared: null }
+    // 中枢 gh 登录只用于显示；共享身份不取决于它（worker 与节点上的 gh 登录无法由中枢确认）。
     const self = await selfIdentity()
-    if (!self.ok)
-      return { ids, shared: `${self.message}，无法确认 worker 不以名单内身份发言；${SHARED_HINT}` }
-    if (!ids.has(self.id)) return { ids, shared: null }
-    const wi = github.worker_identity
-    const lifted =
-      wi !== undefined &&
-      wi.toLowerCase() !== self.login.toLowerCase() &&
-      !logins.includes(wi.toLowerCase())
-    return lifted
-      ? { ids, shared: null }
-      : {
-          ids,
-          shared: `中枢 gh 登录 ${self.login} 在允许名单中，worker 以它发的评论会被当作你本人的请求；在此之前 PR 评论只作上下文，不恢复任务、不交回、不唤醒 supervisor。解除：${SHARED_HINT}`,
-        }
+    if (workerIdentityVerified(github)) return { ids, shared: null }
+    const who = self.ok ? `中枢 gh 登录为 ${self.login}` : self.message
+    return {
+      ids,
+      shared: `共享 GitHub 身份（${who}）：PR 评论一律只作上下文，不恢复任务、不交回、不唤醒 supervisor。${SHARED_HINT}`,
+    }
   }
 
   /** 轮询一个 PR；返回是否读到新内容。失败时返回错误说明（已入账的种类不回滚）。 */
@@ -380,12 +392,40 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
     const number = Number(pr.split('/').at(-1))
     if (!repo) return ok(false)
     const registered = repos.repos.find((r) => sameRepo(r, repo))
+    const st = states.get(key(workspace, pr))
     if (!registered) {
-      // 不自动退订：origin 暂时读不出来或登记仓库调整都可能是临时的。
-      return repos.unresolved > 0
-        ? fail('retryable', 'repo_unresolved', '有登记仓库读不出 origin，暂时无法确认 PR 所在仓库')
-        : fail('failure', 'repo_not_registered', 'PR 不在本 workspace 登记的仓库中')
+      // origin 暂时读不出来时不退订；全部读出且连续 3 天都不匹配时才结束订阅。
+      if (repos.unresolved > 0) {
+        if (st) st.unregisteredSince = null
+        return fail(
+          'retryable',
+          'repo_unresolved',
+          '有登记仓库读不出 origin，暂时无法确认 PR 所在仓库',
+        )
+      }
+      if (st) {
+        st.unregisteredSince ??= clock.now()
+        if (clock.now() - st.unregisteredSince >= PR_UNREGISTERED_UNSUBSCRIBE_MS) {
+          for (const sub of ledger.activePrSubscriptions(workspace)) {
+            if (sub.pr !== pr) continue
+            const r = ledger.append(
+              {
+                type: 'pr.unsubscribed',
+                task_id: sub.task_id,
+                workspace,
+                payload: { pr, reason: 'repo_not_registered' },
+              },
+              { actor: 'hub' },
+            )
+            if (!r.ok)
+              o.logger?.warn('取消 PR 订阅失败', { task_id: sub.task_id, pr, error: r.error })
+          }
+          return ok(false)
+        }
+      }
+      return fail('failure', 'repo_not_registered', 'PR 不在本 workspace 登记的仓库中')
     }
+    if (st) st.unregisteredSince = null
     // 仓库标识一律取登记仓库 origin 解析出的值（不取 PR 链接或评论内容）。
     const meta = await o.gh(githubPaths.pull(registered, number))
     if (!meta.ok) return meta
@@ -418,8 +458,8 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
     const subs = ledger.activePrSubscriptions(workspace).filter((s) => s.pr === pr)
     if (!subs.length) return ok(false)
     const { ids, shared: sharedReason } = await allowance(workspace, github, registered)
+    // 共享身份按 workspace 汇总：只记录、不被单个 PR 的结果清除（workspace 不再关注 PR 时才移除）。
     if (sharedReason) shared.set(workspace, sharedReason)
-    else shared.delete(workspace)
     const baseline = makeCursor(
       subs.map((s) => s.subscribed_at).sort()[0] ?? iso(clock.now()),
       0,
@@ -432,7 +472,6 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
       budget = { day, used: 0, dropped: new Set<string>() }
       daily.set(k, budget)
     }
-    let pollBudget = PR_CONTEXT_PER_POLL
     let wrote = false
     const errors: string[] = []
 
@@ -449,6 +488,10 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
       )
       return { effective, start, seen, since: iso(start) }
     }
+
+    /** 陌生人：人类账号、但数字 id 不在名单中（只有它们计入配额；CI 检查与名单内账号的内容不计入）。 */
+    const stranger = (c: Candidate) =>
+      c.who.kind === 'human' && (c.who.id === undefined || !ids.has(c.who.id))
 
     const classify = (
       c: Candidate,
@@ -470,9 +513,13 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
       return reason ? { allowed: false, not_allowed: reason } : { allowed: true }
     }
 
-    /** 筛出本类的新内容并入账（各类独立提交）。 */
-    const commit = (kind: PrEventKind, candidates: Candidate[]) => {
+    /**
+     * 筛出本类的新内容并入账（各类独立提交，额度各自计算）。`scanEnd` 为本次读到的最后一条（含其他 PR 的）游标：
+     * 全部处理完时扫描位置推进到它；因额度中断时只推进到中断前已处理的位置，后面的下一轮再读。
+     */
+    const commit = (kind: PrEventKind, candidates: Candidate[], scanEnd?: string) => {
       const w = window(kind)
+      const scanKey = `${k}\n${kind}`
       // 同一条评论多次编辑只保留最新一次。
       const latest = new Map<number, Candidate>()
       for (const c of candidates) {
@@ -482,19 +529,32 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
       const fresh: (Candidate & { cursor: string })[] = []
       for (const c of latest.values()) {
         const cursor = makeCursor(c.at, c.id)
-        if (!cursor || w.seen.has(cursor)) continue
+        if (
+          !cursor ||
+          w.seen.has(cursor) ||
+          (budget as { dropped: Set<string> }).dropped.has(cursor)
+        )
+          continue
         const later = compareCursor(cursor, w.effective) > 0
         const raced = cursorTime(cursor) >= w.start && compareCursor(cursor, baseline) > 0
         if (later || raced) fresh.push({ ...c, cursor })
       }
       fresh.sort((a, b) => compareCursor(a.cursor, b.cursor))
+      let pollBudget = PR_CONTEXT_PER_POLL
+      let processed: string | undefined
+      let interrupted = false
       const drafts: EventInput[] = []
       for (const c of fresh) {
         const verdict = classify(c)
-        if (!verdict.allowed) {
-          if (pollBudget <= 0) break // 本次轮询的配额用完：后面的（含请求）下一轮再读，游标不越过它们。
+        if (!verdict.allowed && stranger(c)) {
+          if (pollBudget <= 0) {
+            // 本次轮询本类的陌生人额度用完：后面的下一轮再读，扫描位置不越过它们。
+            interrupted = true
+            break
+          }
           if ((budget as { used: number }).used >= PR_CONTEXT_PER_DAY) {
             ;(budget as { dropped: Set<string> }).dropped.add(c.cursor)
+            processed = c.cursor
             continue
           }
           pollBudget--
@@ -514,40 +574,63 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
           cursor: c.cursor,
         }
         drafts.push({ type: 'pr.event', workspace, payload })
+        processed = c.cursor
       }
-      if (!drafts.length) return
-      const written = ledger.appendMany(drafts, { actor: 'hub' })
-      if (written.ok) wrote = true
-      else errors.push(`${kind}：${written.error.message}`)
+      if (drafts.length) {
+        const written = ledger.appendMany(drafts, { actor: 'hub' })
+        if (written.ok) wrote = true
+        else {
+          errors.push(`${kind}：${written.error.message}`)
+          return
+        }
+      }
+      const end = interrupted ? processed : (scanEnd ?? processed)
+      const prev = scans.get(scanKey)
+      if (end && (!prev || compareCursor(end, prev) > 0)) scans.set(scanKey, end)
+    }
+
+    /** 请求的 since：在已落账游标与本进程已扫描的位置中取较晚者，往前 1 秒。 */
+    const sinceOf = (kind: PrEventKind) => {
+      const w = window(kind)
+      const scan = scans.get(`${k}\n${kind}`)
+      const start = scan && cursorTime(scan) - 1000 > w.start ? cursorTime(scan) - 1000 : w.start
+      return iso(start)
     }
 
     const wi = github.worker_identity
     const issue = await pages(
-      (p) => githubPaths.issueComments(registered, number, p, window('issue_comment').since),
+      (p) => githubPaths.issueComments(registered, p, sinceOf('issue_comment')),
       comment,
     )
     if (!issue.ok) errors.push(`issue_comment：${issue.error.message}`)
-    else if (issue.data.truncated) errors.push('issue_comment：新评论超过分页上限，本次未入账')
-    else
+    else {
+      // 仓库级端点按 updated 升序：只取本 PR 的评论，截断时提交已取到的前缀，下一轮从那里继续。
+      const suffix = `/issues/${number}`
+      const last = issue.data.items.at(-1)
       commit(
         'issue_comment',
-        issue.data.items.map((c) => ({
-          kind: 'issue_comment',
-          at: c.updated_at,
-          id: c.id,
-          who: actorOf(c.user, wi),
-          raw: c.body ?? '',
-          url: c.html_url,
-          edited: c.created_at !== undefined && c.created_at !== c.updated_at,
-        })),
+        issue.data.items
+          .filter((c) => c.issue_url?.endsWith(suffix) === true)
+          .map((c) => ({
+            kind: 'issue_comment' as const,
+            at: c.updated_at,
+            id: c.id,
+            who: actorOf(c.user, wi),
+            raw: c.body ?? '',
+            url: c.html_url,
+            edited: c.created_at !== undefined && c.created_at !== c.updated_at,
+          })),
+        last ? makeCursor(last.updated_at, last.id) : undefined,
       )
+    }
     const reviewComments = await pages(
-      (p) => githubPaths.reviewComments(registered, number, p, window('review_comment').since),
+      (p) => githubPaths.reviewComments(registered, number, p, sinceOf('review_comment')),
       comment,
     )
     if (!reviewComments.ok) errors.push(`review_comment：${reviewComments.error.message}`)
     // 按 updated 升序：截断时只推进到已取到的部分，其余下一轮继续。
-    else
+    else {
+      const last = reviewComments.data.items.at(-1)
       commit(
         'review_comment',
         reviewComments.data.items.map((c) => ({
@@ -557,9 +640,13 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
           who: actorOf(c.user, wi),
           raw: c.path ? `[${c.path}] ${c.body ?? ''}` : (c.body ?? ''),
           url: c.html_url,
+          // 保守判定：created_at 与 updated_at 不同就视为编辑过。待提交审查中批量提交的行内评论两者也可能不同，
+          // 误判只会让它变成上下文（不算请求），属于安全侧；没有真实数据可核对时不放宽。
           edited: c.created_at !== undefined && c.created_at !== c.updated_at,
         })),
+        last ? makeCursor(last.updated_at, last.id) : undefined,
       )
+    }
     const reviews = await pages((p) => githubPaths.reviews(registered, number, p), review)
     if (!reviews.ok) errors.push(`review：${reviews.error.message}`)
     else if (reviews.data.truncated) errors.push('review：审查超过分页上限，本次未入账')
@@ -657,6 +744,7 @@ export function createPrWatcher(o: PrWatcherOptions): PrWatcher {
       const config = configs.get(workspace)
       if (!config) {
         states.delete(k)
+        shared.delete(workspace)
         continue
       }
       if (!state) {

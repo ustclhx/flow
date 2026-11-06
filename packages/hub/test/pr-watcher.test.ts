@@ -47,7 +47,9 @@ test('重启后不重放：已入账的评论不再送达，游标随事件落�
         kind: 'issue_comment',
         actor: 'acme',
         actor_kind: 'human',
-        allowed: true,
+        // 当前版本一律按共享身份处理：名单内评论也只作上下文（not_allowed 表示唯一缺的条件）。
+        allowed: false,
+        not_allowed: 'shared_identity',
         text: '请把日志级别改成 info',
         cursor: `${at(1)}|11`,
       },
@@ -110,11 +112,12 @@ test('订阅之前的历史内容不送达；之后的 CI、审查、行评论�
   )
   await s.watcher.tick()
   const payloads = s.prEvents().map((e) => e.payload)
-  expect(payloads.map((p) => [p.kind, p.actor, p.actor_kind, p.allowed, p.state])).toEqual([
-    ['review_comment', 'acme', 'human', true, undefined],
+  expect(payloads.every((p) => !p.allowed)).toBe(true)
+  expect(payloads.map((p) => [p.kind, p.actor, p.actor_kind, p.not_allowed, p.state])).toEqual([
+    ['review_comment', 'acme', 'human', 'shared_identity', undefined],
     // 审查正文与 CI 只作上下文，不算请求。
-    ['review', 'acme', 'human', false, 'changes_requested'],
-    ['check_run', 'github-actions[bot]', 'bot', false, 'failure'],
+    ['review', 'acme', 'human', 'kind', 'changes_requested'],
+    ['check_run', 'github-actions[bot]', 'bot', 'bot', 'failure'],
   ])
   expect(payloads[0]?.text).toBe('[src/a.ts] 这里少了判空')
   expect(payloads[1]?.text).toBe('审查结论：changes_requested')
@@ -143,14 +146,15 @@ test('allowed：只有名单内的人类账号；机器人与陌生人恒为 fal
   )
   await s.watcher.tick()
   expect(
-    s.prEvents().map((e) => [e.payload.actor, e.payload.actor_kind, e.payload.allowed]),
+    s.prEvents().map((e) => [e.payload.actor, e.payload.actor_kind, e.payload.not_allowed]),
   ).toEqual([
-    ['ACME', 'human', true],
-    ['stranger', 'human', false],
-    ['acme[bot]', 'bot', false],
-    ['acme[bot]', 'bot', false],
-    ['unknown', 'human', false],
+    ['ACME', 'human', 'shared_identity'],
+    ['stranger', 'human', 'not_listed'],
+    ['acme[bot]', 'bot', 'bot'],
+    ['acme[bot]', 'bot', 'bot'],
+    ['unknown', 'human', 'not_listed'],
   ])
+  expect(s.prEvents().some((e) => e.payload.allowed)).toBe(false)
 })
 
 test('allowed_users 显式配置时取代默认 owner；空名单表示没有人', async () => {
@@ -160,12 +164,12 @@ test('allowed_users 显式配置时取代默认 owner；空名单表示没有人
     { id: 2, user: { login: 'Alice' }, body: 'alice', updated_at: at(1) },
   )
   await s.watcher.tick()
-  expect(s.prEvents().map((e) => e.payload.allowed)).toEqual([false, true])
+  expect(s.prEvents().map((e) => e.payload.not_allowed)).toEqual(['not_listed', 'shared_identity'])
 
   const t = await subscribed({ github: { watch: true, allowed_users: [] } })
   t.gh.issueComments.push({ id: 1, user: { login: 'acme' }, body: 'owner', updated_at: at(1) })
   await t.watcher.tick()
-  expect(t.prEvents().map((e) => e.payload.allowed)).toEqual([false])
+  expect(t.prEvents().map((e) => e.payload.not_allowed)).toEqual(['not_listed'])
 })
 
 test('github.watch 关闭时不调用 gh', async () => {
@@ -211,7 +215,8 @@ test('文字先遮蔽疑似密钥再截断，并附原始字符数', async () =>
   await s.watcher.tick()
   const [secret, long] = s.prEvents().map((e) => e.payload)
   expect(secret?.text).not.toContain(token)
-  expect(long?.text.length).toBe(8192)
+  // 当前版本所有评论都只作上下文：只存 500 字。
+  expect(long?.text.length).toBe(500)
   expect(long?.chars).toBe(20_000)
 })
 

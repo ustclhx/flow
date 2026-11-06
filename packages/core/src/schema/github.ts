@@ -32,7 +32,7 @@ export const githubConfigSchema = z
     }),
     worker_identity: githubActorLogin.optional().meta({
       description:
-        'worker 在 GitHub 上使用的独立身份（bot 账号或 App）。只有配置了、与中枢 gh 登录不同、且不在 allowed_users 中时，才解除共享身份限制；它发的内容标为 agent，永不算请求。凭证注入 worker 留待后续变更',
+        'worker 在 GitHub 上使用的独立身份（bot 账号或 App）；它发的内容标为 agent，永不算请求。当前版本该设置不解除共享身份限制：worker 仍以本机 gh 登录发评论，需等 bot 凭证注入 worker 的后续变更',
     }),
   })
   .meta({ title: 'Workspace GitHub settings' })

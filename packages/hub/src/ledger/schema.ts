@@ -79,6 +79,11 @@ CREATE INDEX IF NOT EXISTS events_worker_report_conflict ON events
   (task_id, json_extract(payload_json, '$.lease_id'), json_extract(payload_json, '$.attempt'),
    json_extract(payload_json, '$.report_seq'))
   WHERE type = 'task.report_conflict';
+-- pr-watcher 每次轮询的同一秒去重查询（harness-neutral 8.3）：只索引 pr.event。
+CREATE INDEX IF NOT EXISTS events_pr_cursor ON events
+  (workspace, json_extract(payload_json, '$.pr'), json_extract(payload_json, '$.kind'),
+   json_extract(payload_json, '$.cursor'))
+  WHERE type = 'pr.event';
 CREATE INDEX IF NOT EXISTS events_task_reply ON events
   (task_id, json_extract(payload_json, '$.reply_id'), seq)
   WHERE type = 'task.replied';

@@ -36,7 +36,7 @@ const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
  * 或 `repos/<owner>/<repo>/commits/<sha>/check-runs`，查询串只含 per_page、page、since 与固定的排序参数。
  */
 const SAFE_PATH =
-  /^(?:user|users\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})|repos\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/(?:(?:pulls|issues)\/[1-9]\d{0,9}(?:\/(?:comments|reviews))?|commits\/[0-9a-f]{40}\/check-runs)(?:\?per_page=100&page=[1-9]\d?(?:&sort=updated&direction=asc)?(?:&since=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?)?)$/
+  /^(?:user|users\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})|repos\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/(?:(?:pulls|issues)\/[1-9]\d{0,9}(?:\/(?:comments|reviews))?|issues\/comments|commits\/[0-9a-f]{40}\/check-runs)(?:\?per_page=100&page=[1-9]\d?(?:&sort=updated&direction=asc)?(?:&since=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?)?)$/
 
 export const isSafeApiPath = (path: string): boolean => SAFE_PATH.test(path) && !path.includes('..')
 
@@ -73,10 +73,12 @@ export const githubPaths = {
     checkNumber(n)
     return `${repoPrefix(repo)}/pulls/${n}`
   },
-  /** PR 对话评论：该端点只支持 since（按 id 升序），截断时由调用方判失败。 */
-  issueComments(repo: RepoRef, n: number, p: number, since?: string) {
-    checkNumber(n)
-    return `${repoPrefix(repo)}/issues/${n}/comments${page(p, since)}`
+  /**
+   * PR 对话评论：用仓库级端点按 updated 升序读取（单个 issue 的端点不支持排序），由调用方按 `issue_url`
+   * 过滤出本 PR；截断时可以安全提交已取到的前缀，下一轮从那里继续。
+   */
+  issueComments(repo: RepoRef, p: number, since?: string) {
+    return `${repoPrefix(repo)}/issues/comments${page(p, since, true)}`
   },
   /** 代码行评论：按 updated 升序，截断时游标只推进到已取到的部分。 */
   reviewComments(repo: RepoRef, n: number, p: number, since?: string) {

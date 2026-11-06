@@ -12,15 +12,16 @@ const repo = { host: 'github.com', owner: 'acme', repo: 'demo' }
 
 test('gh 路径构造只接受登记信息：非法 owner、编号、sha、since 一律抛出', () => {
   expect(githubPaths.pull(repo, 40)).toBe('repos/acme/demo/pulls/40')
-  expect(githubPaths.issueComments(repo, 40, 1, '2026-10-24T00:00:00.000Z')).toBe(
-    'repos/acme/demo/issues/40/comments?per_page=100&page=1&since=2026-10-24T00:00:00.000Z',
+  expect(githubPaths.issueComments(repo, 1, '2026-10-24T00:00:00.000Z')).toBe(
+    'repos/acme/demo/issues/comments?per_page=100&page=1&sort=updated&direction=asc&since=2026-10-24T00:00:00.000Z',
   )
   expect(() => githubPaths.pull({ ...repo, owner: 'a/b' }, 1)).toThrow()
   expect(() => githubPaths.pull({ ...repo, owner: '..' }, 1)).toThrow()
   expect(() => githubPaths.pull({ ...repo, host: 'evil.example' }, 1)).toThrow()
   expect(() => githubPaths.pull(repo, 0)).toThrow()
   expect(() => githubPaths.checkRuns(repo, 'HEAD; rm -rf', 1)).toThrow()
-  expect(() => githubPaths.issueComments(repo, 1, 1, '2026&per_page=1')).toThrow()
+  expect(() => githubPaths.issueComments(repo, 1, '2026&per_page=1')).toThrow()
+  expect(isSafeApiPath(githubPaths.issueComments(repo, 3))).toBe(true)
   for (const path of [
     githubPaths.pull(repo, 1),
     githubPaths.reviews(repo, 1, 2),
