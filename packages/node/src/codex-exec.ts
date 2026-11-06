@@ -113,7 +113,7 @@ async function taskPrompt(home: string, role: Role, contract: TaskContract, resu
 function missingSession(message: string, id: string): boolean {
   const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return new RegExp(
-    `(?:^|\\n)(?:Error: )?(?:Session not found: |thread not found: |no rollout found for (?:thread|conversation) id )${escaped}(?:[.\\s]|$)`,
+    `(?:^|\\n)[^\\n]*?(?:Session not found: |thread not found: |no rollout found for (?:thread|conversation) id )${escaped}(?:[\\s.(]|$)`,
     'i',
   ).test(message)
 }

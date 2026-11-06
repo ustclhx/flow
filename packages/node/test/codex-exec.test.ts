@@ -206,30 +206,31 @@ describe('codex-exec 无头执行器', () => {
     expect(args.at(-1)).not.toContain('<untrusted-goal>')
   })
 
-  test.each(['stderr', 'error', 'turn.failed'])(
+  test.each(['stderr', 'error', 'turn.failed', 'stderr-0167'])(
     '旧会话缺失（%s）时携原任务、角色、上下文与回复新建会话',
     async (channel) => {
       const newSession = '00000000-0000-7000-8000-000000000002'
       const message = `${
-        channel === 'stderr'
-          ? 'Session not found: '
-          : channel === 'error'
-            ? 'thread not found: '
-            : 'no rollout found for thread id '
-      }${SID}`
-      const diagnostic =
-        channel === 'stderr'
-          ? `process.stderr.write(${JSON.stringify(`Error: ${message}\n`)})`
-          : `send('\\n' + JSON.stringify(${JSON.stringify(
-              channel === 'error'
-                ? { type: 'error', message }
-                : { type: 'turn.failed', error: { message } },
-            )}))`
+        channel === 'stderr-0167'
+          ? 'Error: thread/resume: thread/resume failed: no rollout found for thread id '
+          : channel === 'stderr'
+            ? 'Session not found: '
+            : channel === 'error'
+              ? 'thread not found: '
+              : 'no rollout found for thread id '
+      }${SID}${channel === 'stderr-0167' ? ' (code -32600)' : ''}`
+      const diagnostic = channel.startsWith('stderr')
+        ? `process.stderr.write(${JSON.stringify(`${channel === 'stderr' ? 'Error: ' : ''}${message}\n`)})`
+        : `send('\\n' + JSON.stringify(${JSON.stringify(
+            channel === 'error'
+              ? { type: 'error', message }
+              : { type: 'turn.failed', error: { message } },
+          )}))`
       const s = setup(
         `
       fs.appendFileSync('attempts.jsonl', JSON.stringify(args) + '\\n')
       if (args.includes('resume')) {
-        send(JSON.stringify({type:'thread.started',thread_id:'${SID}'}) + '\\n')
+        ${channel === 'stderr-0167' ? '' : `send(JSON.stringify({type:'thread.started',thread_id:'${SID}'}) + '\\n')`}
         ${diagnostic}
         process.exitCode = 1
       } else {
@@ -301,6 +302,7 @@ describe('codex-exec 无头执行器', () => {
     'authentication failed',
     'network connection reset',
     `Session not found: another-session`,
+    `Error: thread/resume: thread/resume failed: no rollout found for thread id ${SID}-another (code -32600)`,
   ])('resume 的 %s 错误不启动新会话', async (message) => {
     const s = setup(`
       fs.appendFileSync('attempts', '1')

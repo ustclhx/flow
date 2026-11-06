@@ -134,6 +134,7 @@ Codex 0.166.0 实测（2026-11-06，全部使用临时 HOME、CODEX_HOME 和 git
   处理它们需要部署侧管理权限，本次不由适配器改动，也不能据此声称全局配置已完全隔离。
 - `~/.agents/skills`：可能引入用户指令或脚本，不随 `CODEX_HOME` 隔离。
   需要独立的 skills 发现与执行隔离方案，本次不扩大到该范围。
+- 项目级 `.agents/`（`skills` 与 `plugins/marketplace.json`）未检查：skills 可引入指令及脚本，但执行权限仍由角色的审批与沙箱设置决定；marketplace 只是插件发现清单，项目启用配置仍在已检查的 `.codex/config.toml`，因此直接通过配置绕过授权的影响有限。仍存在提示注入等风险，不能视为已隔离。来源见官方 [skills](https://learn.chatgpt.com/docs/build-skills) 与 [项目插件启用配置](https://developers.openai.com/plugins/build/plugins#enable-or-disable-a-plugin-for-a-repo)。
 
 这些措施隔离配置继承，不是操作系统沙箱；同一系统用户下的文件改写、检查与使用之间的并发竞态（TOCTOU），
 以及具备文件和命令权限的 worker 自行写入配置，仍受现有权限与部署边界约束。
