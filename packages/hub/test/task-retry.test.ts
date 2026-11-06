@@ -4,6 +4,8 @@ import {
   ok,
   okBody,
   operations,
+  type PolicyConfig,
+  policyVersion,
   retryTaskData,
   taskRetryOp,
   type WakeOrigin,
@@ -14,6 +16,7 @@ import {
   createTaskService,
   createWakeTokenAuthority,
   type RoleLookup,
+  type TaskServiceOptions,
 } from '../src/index.ts'
 import {
   anyRole,
@@ -34,7 +37,7 @@ afterEach(() => {
 })
 const code = (r: { ok: boolean; error?: { code: string } }) => r.error?.code ?? 'ok'
 
-async function setup(roles: RoleLookup = anyRole) {
+async function setup(roles: RoleLookup = anyRole, policy?: TaskServiceOptions['policy']) {
   const l = await tempLedger()
   cleanups.push(l.cleanup)
   let n = 0
@@ -42,6 +45,7 @@ async function setup(roles: RoleLookup = anyRole) {
     ledger: l.store,
     workspaceExists: () => true,
     roles,
+    ...(policy ? { policy } : {}),
     newTaskId: () => `t-retry-${++n}`,
   })
   const wake = async (origin: WakeOrigin = 'instruction', workspace = WS) => {
@@ -107,6 +111,43 @@ async function setup(roles: RoleLookup = anyRole) {
 }
 
 describe('task_retry', () => {
+  test('重试记录当前策略版本，新派工可追溯且不改写原 mandate', async () => {
+    let policy: PolicyConfig = { rules: [], version: policyVersion([]), errors: [], warnings: [] }
+    const e = await setup(anyRole, { load: async () => ok(policy), current: () => policy })
+    const target = await e.task()
+    const originalMandate = target.mandate
+    expect(originalMandate?.policy_version).toBe(policy.version)
+    const d = startTask(e.store, target.id)
+    must(e.store.append(d['task.failed'], sys))
+    const rules: PolicyConfig['rules'] = [
+      { rule_index: 0, rule: { scope: '*', action: 'task.retry', level: 'draft-approve' } },
+    ]
+    policy = { rules, version: policyVersion(rules), errors: [], warnings: [] }
+
+    const retried = must(
+      await e.tasks.retryTask(target.id, { actor: 'user', reason: '策略更新后重试' }),
+    ).task
+    expect(retried.mandate).toEqual(originalMandate)
+    expect(retried.mandate?.policy_version).not.toBe(policy.version)
+    expect(e.store.taskEvents(target.id).at(-1)).toMatchObject({
+      type: 'task.requeued',
+      payload: {
+        reason: 'manual',
+        requested_by: 'user',
+        retry_reason: '策略更新后重试',
+        note: '策略更新后重试',
+        policy_version: policy.version,
+      },
+    })
+    startTask(e.store, target.id, 2)
+    const shown = must(e.tasks.getTask(target.id))
+    expect(shown.attempts).toMatchObject([
+      { attempt: 1, policy_version: originalMandate?.policy_version },
+      { attempt: 2, policy_version: policy.version },
+    ])
+    expect(shown.task.mandate).toEqual(originalMandate)
+  })
+
   test('workdir_missing 在目录恢复后可重试，沿用原任务合同', async () => {
     const e = await setup()
     const target = await e.task()
@@ -384,6 +425,38 @@ describe('task_retry', () => {
       reason: '核对后重试',
       wake: { task_id: caller },
     })
+    await started
+    must(e.tasks.cancelTask(target.id, { actor: 'user' }))
+    const seq = e.store.seq()
+    resume()
+    expect(code(await retry)).toBe('cancel_requested')
+    expect(e.store.seq()).toBe(seq)
+    expect(e.store.getTask(target.id)?.cancel_requested).toBe(true)
+  })
+
+  test('策略加载期间的取消请求在重试写入前重新检查', async () => {
+    let loading = false
+    let loaded!: () => void
+    let resume!: () => void
+    const started = new Promise<void>((resolve) => {
+      loaded = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    const e = await setup(anyRole, {
+      load: async () => {
+        if (loading) {
+          loaded()
+          await gate
+        }
+        return ok({ rules: [], version: policyVersion([]), errors: [], warnings: [] })
+      },
+    })
+    const target = await e.task()
+    e.block(target.id, 'other', true)
+    loading = true
+    const retry = e.tasks.retryTask(target.id, { actor: 'user' })
     await started
     must(e.tasks.cancelTask(target.id, { actor: 'user' }))
     const seq = e.store.seq()

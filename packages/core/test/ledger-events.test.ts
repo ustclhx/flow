@@ -407,16 +407,23 @@ describe('事件 schema', () => {
     expect(ledgerEventDraft.safeParse(draft).success).toBe(true)
   })
 
-  test('task.requeued 兼容旧载荷并校验重试身份与非空限长理由', () => {
+  test('task.requeued 兼容旧载荷并校验重试身份、理由与策略版本', () => {
     const parse = (payload: Record<string, unknown>) =>
       ledgerEvent.safeParse(envelope('task.requeued', { ...task, payload }))
     expect(parse({ reason: 'manual', note: '旧理由' }).success).toBe(true)
     expect(
-      parse({ reason: 'manual', requested_by: 'supervisor', retry_reason: '  已恢复目录  ' })
-        .success,
+      parse({
+        reason: 'manual',
+        requested_by: 'supervisor',
+        retry_reason: '  已恢复目录  ',
+        policy_version: '012345abcdef',
+      }).success,
     ).toBe(true)
     expect(parse({ reason: 'manual', requested_by: 'user' }).success).toBe(true)
     expect(parse({ reason: 'manual', requested_by: 'hub' }).success).toBe(false)
+    for (const policy_version of ['invalid', '012345abcde', '012345abcdeF']) {
+      expect(parse({ reason: 'manual', policy_version }).success).toBe(false)
+    }
     for (const retry_reason of ['', '   ', 'x'.repeat(8193)]) {
       expect(parse({ reason: 'manual', retry_reason }).success).toBe(false)
     }

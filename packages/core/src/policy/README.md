@@ -34,6 +34,8 @@ hub 合并管线通过 mandate 的源唤醒追溯 supervisor，只重新检查�
 其他 AI 身份创建任务时，来源保留该 actor 的原始字符串；字段保持开放字符串以兼容这些身份及旧账本，
 不把未知来源当作 supervisor 授权。已有任务的旧来源不改写。接受提案仍保留提出草稿的唤醒与指令；
 业务字段 `origin` 的 `instruction/autonomous` 取值与继承规则不变。
+`task_retry` 的 `task.requeued` 另记本次重试的 `policy_version`，派工视图与 `task show` 展示每次派工的版本；
+创建时的 mandate 保持不变。旧账未记录重试版本时留空，租约过期的自动重排沿用上一派工依据。
 任务创建在策略文件损坏时沿用原有创建权限检查，以最近有效快照或空规则记录 mandate；验收命令的策略拒绝语义不变。
 进行中的代批在策略变化、委托前与 `task_respond` 前重新判定；原命中规则删除或新规则不再允许 supervisor
 时转交用户，尚未交付的 supervisor 批准通过同一转交事件标记为丢弃。续约首次下发回复前，
@@ -100,10 +102,10 @@ core 不访问文件系统或解析符号链接；节点在预检前对每个路
 最近的已存在祖先目录做 realpath 再拼回其余部分），原路径与解析后的路径都送去判定。
 
 raindown MCP 工具（`mcp__raindown__<操作名>`）中会扩大权限或替用户做决定的操作额外识别为具体
-动作（`RAINDOWN_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、
+动作（`RAINDOWN_TOOL_ACTIONS`）：`task_create` → `task.create`、`task_cancel` → `task.cancel`、`task_retry` → `task.retry`、
 `task_reply` → `task.reply`、`task_respond` → `task.respond`、`kb_proposals_accept` / `kb_proposals_reject` → `proposal.decide`、
 `resource_transfer` → `resource.transfer`。Bash 调 raindown CLI 时识别为同样的动作
-（`raindown task create|cancel|reply|respond`、`raindown kb proposals accept|reject`、`raindown resource transfer`）；
+（`raindown task create|cancel|retry|reply|respond`、`raindown kb proposals accept|reject`、`raindown resource transfer`）；
 `raindown hub`、`raindown policy`、`raindown daemon`、`raindown mcp`、`raindown node`、`raindown init` 识别为
 `raindown.admin`，`raindown secrets` 识别为 `secrets`。raindown 可执行文件按 basename 识别
 （`/Users/x/.bun/bin/raindown`），`bunx|npx|pnpx raindown`、`bun x raindown`、`bun [run] <脚本>.ts`、

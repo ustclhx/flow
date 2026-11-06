@@ -18,9 +18,9 @@ import {
   loadRoles,
   loadWorkspaces,
   ok,
-  RETRYABLE_BLOCKED_REASONS,
   type PolicyConfig,
   policyVersion,
+  RETRYABLE_BLOCKED_REASONS,
   type ReplyKind,
   type ReplyTaskData,
   type Result,
@@ -166,7 +166,7 @@ export interface TaskServiceOptions {
   workspaces?: WorkspaceLookup
   /** 仓库检查的选项（测试注入家目录）。 */
   repoCheck?: RepoCheckOptions
-  /** 创建时固化授权依据所用的策略；生产环境注入共享策略加载器。 */
+  /** 创建与手动重试时固化策略版本；生产环境注入共享策略加载器。 */
   policy?: { load(): Promise<Result<PolicyConfig>>; current?(): PolicyConfig | undefined }
   /** 验收命令的策略判定；缺省为没有规则（全部拒绝）。 */
   verifyPolicy?: VerifyPolicyCheck
@@ -814,7 +814,14 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         }
         role = found.data
       }
-      // 角色加载后重新读状态；此后的校验与写入之间不能 await，避免撤销并发取消或释放新租约。
+      // 与建任务共用策略快照，加载失败时保留最近成功版本；这里只追溯重试依据，不增加放行门槛。
+      const loadedPolicy = o.policy
+        ? await o.policy.load()
+        : ok({ rules: [], version: policyVersion([]) })
+      const policy = loadedPolicy.ok
+        ? loadedPolicy.data
+        : (o.policy?.current?.() ?? { rules: [], version: policyVersion([]) })
+      // 角色与策略加载后重新读状态；此后的校验与写入之间不能 await，避免撤销并发取消或释放新租约。
       const task = ledger.getTask(id)
       if (!task) return notFound(id)
       if (task.cancel_requested) {
@@ -917,6 +924,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
             payload: {
               reason: 'manual',
               requested_by: opts.actor,
+              policy_version: policy.version,
               ...(reason === undefined ? {} : { retry_reason: reason, note: reason }),
             },
           },

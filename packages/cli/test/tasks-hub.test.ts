@@ -253,8 +253,15 @@ describe('任务操作与真实中枢', () => {
         node_id: 'n1',
         reason: 'blocked',
         last_report: '检查完成前崩溃',
+        policy_version: task.mandate?.policy_version,
       },
-      { attempt: 2, executor: 'fake', node_id: 'n2', reason: 'done' },
+      {
+        attempt: 2,
+        executor: 'fake',
+        node_id: 'n2',
+        reason: 'done',
+        policy_version: task.mandate?.policy_version,
+      },
     ])
     const table = await runCli(['task', 'show', task.id], commands)
     for (const text of [
@@ -264,6 +271,8 @@ describe('任务操作与真实中枢', () => {
       '开始',
       '结束',
       '最后上报',
+      '策略版本',
+      task.mandate?.policy_version ?? '',
       'n1',
       'n2',
       '检查完成前崩溃',

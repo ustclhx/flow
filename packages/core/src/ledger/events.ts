@@ -320,6 +320,7 @@ export const eventPayloads = {
     }),
     requested_by: z.enum(['user', 'supervisor']).optional(),
     retry_reason: z.string().trim().min(1).max(PROTOCOL_MESSAGE_MAX).optional(),
+    policy_version: policyVersionSchema.optional(),
     note: z.string().optional(),
   }),
   'task.cancel_requested': z.strictObject({ reason: z.string().optional() }),

@@ -228,7 +228,7 @@ describe('送达与恢复', () => {
     expect(t.result?.summary).toBe('已恢复（会话 无）：text 用 main')
     const types = b.types(id)
     expect(types).not.toContain('task.unblocked')
-    expect(types.slice(3, 8)).toEqual([
+    expect(types.slice(3, 9)).toEqual([
       'task.blocked',
       'task.replied',
       'task.reply_fetched',

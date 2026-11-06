@@ -33,6 +33,51 @@ const started = (seq: number, attempt: number, nodeId = 'n1') =>
   event(seq, 'task.started', { node_id: nodeId, lease_id: `l${attempt}`, attempt })
 
 describe('派工事件折叠', () => {
+  test('首次派工使用创建版本，手动重试采用新版本，租约重排沿用该版本', () => {
+    const versionedTask = {
+      ...task,
+      mandate: { created_by: 'user', origin: 'user', policy_version: '012345abcdef' },
+    }
+    const attempts = foldTaskAttempts(versionedTask, [
+      started(1, 1),
+      event(2, 'task.requeued', {
+        reason: 'manual',
+        requested_by: 'user',
+        retry_reason: '按当前策略重试',
+        policy_version: 'abcdef012345',
+      }),
+      started(3, 2),
+      event(4, 'task.requeued', { reason: 'lease_expired' }),
+      started(5, 3),
+    ])
+    expect(attempts.map((attempt) => attempt.policy_version)).toEqual([
+      '012345abcdef',
+      'abcdef012345',
+      'abcdef012345',
+    ])
+    expect(attempts.every((attempt) => taskAttempt.safeParse(attempt).success)).toBe(true)
+    expect(versionedTask.mandate.policy_version).toBe('012345abcdef')
+  })
+
+  test('旧手动重试缺少策略版本时不伪造派工版本', () => {
+    const attempts = foldTaskAttempts(
+      {
+        ...task,
+        mandate: { created_by: 'user', origin: 'user', policy_version: '012345abcdef' },
+      },
+      [
+        started(1, 1),
+        event(2, 'task.requeued', { reason: 'manual' }),
+        started(3, 2),
+        event(4, 'task.requeued', { reason: 'lease_expired' }),
+        started(5, 3),
+      ],
+    )
+    expect(attempts[0]?.policy_version).toBe('012345abcdef')
+    expect(attempts[1]).not.toHaveProperty('policy_version')
+    expect(attempts[2]).not.toHaveProperty('policy_version')
+  })
+
   test('一次崩溃与一次重试保留同一任务的两次派工，忽略其他任务并按账本顺序返回', () => {
     const events = [
       started(1, 1),
