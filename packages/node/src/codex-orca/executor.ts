@@ -322,6 +322,13 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
   return {
     type: 'codex-orca',
     mode: 'interactive',
+    adapterCapabilities: {
+      approval_requests: 'inferred',
+      inject_while_running: true,
+      resume_session: true,
+      raindown_mcp: false,
+      out_of_band_detection: false,
+    },
     classify: classifyCodexOrca,
     run(contract: TaskContract, ctx: ExecutorContext): ExecutorRun {
       const queue = new ActivityQueue()

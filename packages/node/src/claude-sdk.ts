@@ -515,6 +515,14 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
   return {
     type: CLAUDE_SDK_EXECUTOR,
     mode: 'interactive',
+    adapterCapabilities: {
+      approval_requests: 'structured',
+      inject_while_running: true,
+      resume_session: true,
+      // 已加载 Raindown MCP；任务绑定与 raindown_report 由后续阶段扩展。
+      raindown_mcp: true,
+      out_of_band_detection: false,
+    },
     classify: classifyClaudeSdk,
     // 节点启动时清理本节点残留的审查 worktree 与私有目录（D10）。
     prepare: ({ nodeId }) => cleanupStaleReviews(options.home, nodeId, options.git),

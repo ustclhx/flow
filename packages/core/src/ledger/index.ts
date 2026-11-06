@@ -5,6 +5,7 @@ import { EVENT_TYPES, eventSchemas, ledgerEvent } from './events.ts'
 import { createTaskRequest, ENDPOINTS, errorBody, okBody } from './protocol.ts'
 import { activity, reviewOutput, taskResult, taskStatus, taskView } from './task.ts'
 
+export * from './adapter.ts'
 export * from './common.ts'
 export * from './delegation.ts'
 export * from './events.ts'

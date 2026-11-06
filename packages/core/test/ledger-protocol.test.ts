@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   acquireLeaseData,
   acquireLeaseRequest,
+  adapterCapabilities,
   cancelTaskRequest,
   completeLeaseRequest,
   createTaskData,
@@ -18,6 +19,7 @@ import {
   listTasksQuery,
   loadHubConfig,
   loadNodeConfig,
+  NO_ADAPTER_CAPABILITIES,
   okBody,
   PROTOCOL_ERRORS,
   registerNodeRequest,
@@ -159,6 +161,28 @@ describe('请求体', () => {
 
   test('acquire 的 wait_s 默认 30', () => {
     expect(acquireLeaseRequest.parse({ node_id: 'n1', capabilities: [] }).wait_s).toBe(30)
+  })
+
+  test('旧节点省略适配器能力时保守缺省，不按类型推断', () => {
+    const request = registerNodeRequest.parse({
+      node_id: 'n1',
+      hostname: 'mac',
+      version: '0',
+      capabilities: ['executor:codex-orca'],
+      executors: [{ type: 'codex-orca', mode: 'interactive' }],
+    })
+    expect(request.executors[0]?.capabilities).toEqual(NO_ADAPTER_CAPABILITIES)
+  })
+
+  test('声明的适配器能力须完整且类型合法', () => {
+    expect(adapterCapabilities.safeParse({}).success).toBe(false)
+    expect(
+      adapterCapabilities.safeParse({ ...NO_ADAPTER_CAPABILITIES, approval_requests: 'auto' })
+        .success,
+    ).toBe(false)
+    expect(
+      adapterCapabilities.safeParse({ ...NO_ADAPTER_CAPABILITIES, resume_session: 'true' }).success,
+    ).toBe(false)
   })
 
   test('acquire 的 slots 可选，缺省类别为 0', () => {

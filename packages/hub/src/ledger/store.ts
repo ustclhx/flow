@@ -8,7 +8,8 @@ import {
   DELEGATION_ENDING_EVENTS,
   type EventPayload,
   type EventType,
-  type eventPayloads,
+  eventPayloads,
+  executorInfo,
   fail,
   INBOX_LEVEL_RANK,
   type InboxItemView,
@@ -467,7 +468,7 @@ function rowToNode(r: NodeRow): NodeView {
     hostname: r.hostname,
     version: r.version,
     capabilities: JSON.parse(r.capabilities_json),
-    executors: JSON.parse(r.executors_json),
+    executors: executorInfo.array().parse(JSON.parse(r.executors_json)),
     concurrency: r.concurrency,
     registered_at: r.registered_at,
     last_seen_at: r.last_seen_at,
@@ -1160,6 +1161,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           const batch = eventsAfter(after, {}, 1000)
           if (batch.length === 0) break
           for (const event of batch) {
+            // 新版本写入的事件保留在账本中，旧版本不校验、不折叠未知类型。
+            if (!Object.hasOwn(eventPayloads, event.type)) continue
             // 重放时同样校验，账本自相矛盾时整体回滚，保留原投影。
             const valid = validate(event)
             if (!valid.ok) {

@@ -33,6 +33,7 @@ import {
   raindownPaths,
   readRaindownEnv,
   registerNodeData,
+  type registerNodeRequest,
   renewLeaseData,
   resolveHubUrl,
   type ShowTaskData,
@@ -99,7 +100,7 @@ export interface NodeHubClient {
 }
 
 /** 注册请求（调用方形态：带默认值的字段可省略）。 */
-export type RegisterRequest = Partial<RegisterNodeRequest> &
+export type RegisterRequest = Partial<z.input<typeof registerNodeRequest>> &
   Pick<RegisterNodeRequest, 'node_id' | 'hostname' | 'version' | 'capabilities'>
 
 /**

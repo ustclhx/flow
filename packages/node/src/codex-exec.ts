@@ -130,6 +130,13 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
   return {
     type: 'codex-exec',
     mode: 'headless',
+    adapterCapabilities: {
+      approval_requests: 'none',
+      inject_while_running: false,
+      resume_session: true,
+      raindown_mcp: false,
+      out_of_band_detection: false,
+    },
     // 进程仍在运行时不从中间消息推断提问；无进展由节点判定。
     classify: () => null,
     run(contract, ctx) {

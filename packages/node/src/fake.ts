@@ -73,6 +73,13 @@ export function createFakeExecutor(options: FakeExecutorOptions = {}): ExecutorP
   return {
     type: 'fake',
     mode: 'headless',
+    adapterCapabilities: {
+      approval_requests: 'structured',
+      inject_while_running: true,
+      resume_session: true,
+      raindown_mcp: false,
+      out_of_band_detection: false,
+    },
     classify: classifyFake,
     run(contract: TaskContract, ctx: ExecutorContext): ExecutorRun {
       const queue = new ActivityQueue()

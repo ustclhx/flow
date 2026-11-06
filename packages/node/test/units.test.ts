@@ -2,7 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type Activity, LEDGER_ID_RE, raindownPaths, taskContract } from '@raindown/core'
+import {
+  type Activity,
+  LEDGER_ID_RE,
+  raindownPaths,
+  registerNodeRequest,
+  taskContract,
+} from '@raindown/core'
 import {
   createExecutorRegistry,
   createFakeExecutor,
@@ -119,7 +125,30 @@ describe('执行器注册表', () => {
   test('贡献 executor:<type> 能力；重复注册报错', () => {
     const reg = createExecutorRegistry([createFakeExecutor()])
     expect(reg.capabilities()).toEqual(['executor:fake'])
-    expect(reg.info()).toEqual([{ type: 'fake', mode: 'headless' }])
+    expect(reg.info()).toEqual([
+      {
+        type: 'fake',
+        mode: 'headless',
+        capabilities: {
+          approval_requests: 'structured',
+          inject_while_running: true,
+          resume_session: true,
+          raindown_mcp: false,
+          out_of_band_detection: false,
+        },
+      },
+    ])
+    const wire = JSON.parse(
+      JSON.stringify({
+        node_id: 'n-test',
+        hostname: 'test',
+        version: 'test',
+        capabilities: reg.capabilities(),
+        executors: reg.info(),
+        concurrency: 1,
+      }),
+    )
+    expect(registerNodeRequest.parse(wire).executors).toEqual(reg.info())
     expect(() => createExecutorRegistry([createFakeExecutor(), createFakeExecutor()])).toThrow()
   })
 })

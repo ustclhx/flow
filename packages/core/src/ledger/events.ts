@@ -20,6 +20,7 @@ import {
 import { policyDecisionSchema } from '../policy/decide.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { dateString, workspaceRef } from '../schema/common.ts'
+import { adapterCapabilities, NO_ADAPTER_CAPABILITIES } from './adapter.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import {
   blockedDelegationShape,
@@ -75,8 +76,10 @@ export const executorInfo = z
       .enum(['interactive', 'headless'])
       .optional()
       .meta({ description: '交互式（如 codex-orca）或无头（如 claude-sdk）；由变更 ② 使用' }),
+    capabilities: adapterCapabilities.default({ ...NO_ADAPTER_CAPABILITIES }),
   })
   .meta({ title: 'Executor info' })
+export type ExecutorInfo = z.infer<typeof executorInfo>
 
 /**
  * `task.replied` 的渠道：收件箱渠道之外多一个 `supervisor`（D15：supervisor 代用户回复）。

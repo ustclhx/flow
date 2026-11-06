@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ok, type Result, type TaskView } from '@raindown/core'
+import { NO_ADAPTER_CAPABILITIES, ok, type Result, type TaskView } from '@raindown/core'
 import {
   ActivityQueue,
   type DeliverResult,
@@ -67,6 +67,7 @@ function scriptedExecutor(s: Omit<Script, 'verdicts' | 'delivered' | 'dropped' |
   const plugin: ExecutorPlugin = {
     type: 'codex-orca',
     mode: 'interactive',
+    adapterCapabilities: NO_ADAPTER_CAPABILITIES,
     classify: (snap) => ({
       reason: 'awaiting_approval',
       message: typeof snap.hint?.message === 'string' ? snap.hint.message : '等待授权',
