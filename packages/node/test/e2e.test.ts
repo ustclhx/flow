@@ -147,7 +147,19 @@ describe('节点端到端（fake 执行器）', () => {
     expect(me).toMatchObject({
       hostname: 'e2e-host',
       capabilities: ['browser', 'executor:fake'],
-      executors: [{ type: 'fake', mode: 'headless' }],
+      executors: [
+        {
+          type: 'fake',
+          mode: 'headless',
+          adapter_capabilities: {
+            approval_requests: 'structured',
+            inject_while_running: true,
+            resume_session: true,
+            raindown_mcp: false,
+            out_of_band_detection: false,
+          },
+        },
+      ],
       concurrency: 1,
     })
     expect(me?.last_seen_at).not.toBeNull()

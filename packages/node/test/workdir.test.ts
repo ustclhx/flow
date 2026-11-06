@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, relative } from 'node:path'
-import { ok, taskContract } from '@raindown/core'
+import { NO_ADAPTER_CAPABILITIES, ok, taskContract } from '@raindown/core'
 import { ActivityQueue, type ExecutorContext, type ExecutorPlugin } from '../src/executor.ts'
 import { resolveContractCwd } from '../src/workdir.ts'
 import { type Bench, bench } from './harness.ts'
@@ -28,6 +28,7 @@ async function setup(type = 'claude-sdk') {
   const policyPaths: string[][] = []
   const executor: ExecutorPlugin = {
     type,
+    adapterCapabilities: NO_ADAPTER_CAPABILITIES,
     run(contract, ctx) {
       contexts.push(ctx)
       const activity = new ActivityQueue()

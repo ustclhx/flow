@@ -20,6 +20,7 @@ import {
 import { policyDecisionSchema } from '../policy/decide.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { dateString, workspaceRef } from '../schema/common.ts'
+import { adapterCapabilities, NO_ADAPTER_CAPABILITIES, readAdapterCapabilities } from './adapter.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import {
   blockedDelegationShape,
@@ -69,14 +70,21 @@ export const chatDigest = (channel: string, chatId: number): string =>
   createHash('sha256').update(`${channel}-chat:${chatId}`).digest('hex').slice(0, 16)
 
 export const executorInfo = z
-  .strictObject({
+  .object({
     type: executorType,
     mode: z
       .enum(['interactive', 'headless'])
       .optional()
       .meta({ description: '交互式（如 codex-orca）或无头（如 claude-sdk）；由变更 ② 使用' }),
+    adapter_capabilities: adapterCapabilities.default({ ...NO_ADAPTER_CAPABILITIES }),
   })
   .meta({ title: 'Executor info' })
+export type ExecutorInfo = z.infer<typeof executorInfo>
+
+/** 注册输入仍校验已知字段的类型；读取与重放使用可逐字段降级的能力 schema。 */
+export const readExecutorInfo = executorInfo.extend({
+  adapter_capabilities: readAdapterCapabilities,
+})
 
 /**
  * `task.replied` 的渠道：收件箱渠道之外多一个 `supervisor`（D15：supervisor 代用户回复）。
@@ -598,6 +606,8 @@ export const eventPayloads = {
 
 export type EventType = keyof typeof eventPayloads
 export const EVENT_TYPES = Object.keys(eventPayloads) as EventType[]
+export const isKnownEventType = (type: unknown): type is EventType =>
+  typeof type === 'string' && Object.hasOwn(eventPayloads, type)
 export type EventPayload<T extends EventType> = z.infer<(typeof eventPayloads)[T]>
 
 /** 信封中 task_id / workspace 的要求。 */

@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Activity, ok, type Result, type TaskResume, taskContract } from '@raindown/core'
+import {
+  type Activity,
+  NO_ADAPTER_CAPABILITIES,
+  ok,
+  type Result,
+  type TaskResume,
+  taskContract,
+} from '@raindown/core'
 import { createCodexOrcaExecutor } from '../src/codex-orca/executor.ts'
 import {
   ActivityQueue,
@@ -802,6 +809,7 @@ describe('验收目录（PR #24 审查第 3 条）', () => {
     const plugin: ExecutorPlugin = {
       type: 'codex-orca',
       mode: 'interactive',
+      adapterCapabilities: NO_ADAPTER_CAPABILITIES,
       run: (_c, ctx) => {
         const queue = new ActivityQueue()
         queue.close()
@@ -853,6 +861,7 @@ describe('经节点与中枢的完整流程', () => {
     const proxy: ExecutorPlugin = {
       type: 'codex-orca',
       mode: 'interactive',
+      adapterCapabilities: createCodexOrcaExecutor({ home: '/nonexistent' }).adapterCapabilities,
       classify: (snap) => real?.classify?.(snap) ?? null,
       run: (c, ctx) => {
         if (!real) throw new Error('执行器尚未就绪')

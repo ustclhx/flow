@@ -1,4 +1,5 @@
 import type { Database, LedgerEvent, Statement, TaskStatus } from '@raindown/core'
+import { readExecutorInfo } from '@raindown/core'
 
 /**
  * 投影维护：唯一的 `apply(event)`（design D2）。
@@ -264,7 +265,8 @@ export function createApplier(db: Database): Applier {
           p.hostname,
           p.version,
           JSON.stringify(p.capabilities),
-          JSON.stringify(p.executors),
+          // 旧注册事件也补齐能力，保证重放后的投影与新注册一致。
+          JSON.stringify(readExecutorInfo.array().parse(p.executors ?? [])),
           p.concurrency,
           e.ts,
         )
@@ -434,10 +436,9 @@ export function createApplier(db: Database): Applier {
       case 'channel.unlinked':
         // 中枢运维事件、用户指令与 supervisor 事件（由 ④ 的调度器与收件箱消费）不影响这些投影（租约顺延属于软状态，由调用方直接更新 expires_at）。
         return
-      default: {
-        const never: never = e
-        throw new Error(`未知事件类型：${(never as { type: string }).type}`)
-      }
+      default:
+        // 账本可能来自更新的版本；未知事件不影响当前版本的投影。
+        return
     }
   }
 }

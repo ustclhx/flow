@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { initRaindownHome, raindownPaths } from '@raindown/core'
 import { runHub } from '@raindown/hub'
-import { startNode } from '@raindown/node'
+import { createFakeExecutor, startNode } from '@raindown/node'
 import { commands } from '../src/commands/index.ts'
 import { runCli } from '../src/run.ts'
 
@@ -51,7 +51,17 @@ test('raindown node list：输出节点 id、能力与最近活动时间', async
   expect(out).toMatch(/\d{4}-\d{2}-\d{2}T/)
 
   const json = JSON.parse((await runCli(['node', 'list', '--json'], commands)).stdout)
-  expect(json.data.nodes[0]).toMatchObject({ node_id: node.data.nodeId, hostname: 'cli-host' })
+  expect(json.data.nodes[0]).toMatchObject({
+    node_id: node.data.nodeId,
+    hostname: 'cli-host',
+    executors: [
+      {
+        type: 'fake',
+        mode: 'headless',
+        adapter_capabilities: createFakeExecutor().adapterCapabilities,
+      },
+    ],
+  })
 })
 
 test('raindown node list：中枢从未启动时返回可重试错误（退出码 3）', async () => {

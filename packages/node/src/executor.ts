@@ -1,7 +1,9 @@
 import type {
   Activity,
+  AdapterCapabilities,
   BlockedReason,
   DeliveredReply,
+  ExecutorInfo,
   Result,
   TaskContract,
   TaskResult,
@@ -151,6 +153,8 @@ export interface ExecutorPlugin {
   type: string
   /** 交互式或无头（变更 ② 使用）。 */
   mode?: 'interactive' | 'headless'
+  /** 适配器的交互能力；区别于 registry.capabilities() 的 executor:<type> 派送标签。 */
+  adapterCapabilities: AdapterCapabilities
   /** 执行器额外要求节点具备的能力（例如 `browser`）。 */
   requires?: readonly string[]
   run(contract: TaskContract, ctx: ExecutorContext): ExecutorRun
@@ -185,7 +189,7 @@ export interface ExecutorRegistry {
   /** 执行器贡献的能力：每个插件一个 `executor:<type>`。 */
   capabilities(): string[]
   /** 注册时上报的执行器信息。 */
-  info(): Array<{ type: string; mode?: 'interactive' | 'headless' }>
+  info(): ExecutorInfo[]
 }
 
 /** 执行器注册表；同一类型重复注册时抛出。 */
@@ -200,7 +204,11 @@ export function createExecutorRegistry(plugins: readonly ExecutorPlugin[]): Exec
     list: () => [...byType.values()],
     capabilities: () => [...byType.keys()].map(executorCapability).sort(),
     info: () =>
-      [...byType.values()].map((p) => ({ type: p.type, ...(p.mode ? { mode: p.mode } : {}) })),
+      [...byType.values()].map((p) => ({
+        type: p.type,
+        ...(p.mode ? { mode: p.mode } : {}),
+        adapter_capabilities: p.adapterCapabilities,
+      })),
   }
 }
 

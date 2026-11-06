@@ -52,13 +52,58 @@
                         "interactive",
                         "headless"
                       ]
+                    },
+                    "adapter_capabilities": {
+                      "default": {
+                        "approval_requests": "none",
+                        "inject_while_running": false,
+                        "resume_session": false,
+                        "raindown_mcp": false,
+                        "out_of_band_detection": false
+                      },
+                      "type": "object",
+                      "properties": {
+                        "approval_requests": {
+                          "default": "none",
+                          "type": "string",
+                          "enum": [
+                            "structured",
+                            "inferred",
+                            "none"
+                          ]
+                        },
+                        "inject_while_running": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "resume_session": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "raindown_mcp": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "out_of_band_detection": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "approval_requests",
+                        "inject_while_running",
+                        "resume_session",
+                        "raindown_mcp",
+                        "out_of_band_detection"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
-                    "type"
+                    "type",
+                    "adapter_capabilities"
                   ],
-                  "additionalProperties": false,
-                  "title": "Executor info"
+                  "additionalProperties": false
                 }
               },
               "concurrency": {

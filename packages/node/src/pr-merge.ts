@@ -7,6 +7,7 @@ import {
   loadRoles,
   loadWorkspaces,
   mergeInputs,
+  NO_ADAPTER_CAPABILITIES,
   ok,
   type Result,
   type Role,
@@ -187,6 +188,7 @@ export function createPrMergeExecutor(options: PrMergeOptions): ExecutorPlugin {
   return {
     type: PR_MERGE_EXECUTOR,
     mode: 'headless',
+    adapterCapabilities: NO_ADAPTER_CAPABILITIES,
     classify: () => null,
     run(contract: TaskContract, ctx: ExecutorContext) {
       const queue = new ActivityQueue()
