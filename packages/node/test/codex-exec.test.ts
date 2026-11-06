@@ -206,6 +206,160 @@ describe('codex-exec 无头执行器', () => {
     expect(args.at(-1)).not.toContain('<untrusted-goal>')
   })
 
+  test.each(['stderr', 'error', 'turn.failed'])(
+    '旧会话缺失（%s）时携原任务、角色、上下文与回复新建会话',
+    async (channel) => {
+      const newSession = '00000000-0000-7000-8000-000000000002'
+      const message = `${
+        channel === 'stderr'
+          ? 'Session not found: '
+          : channel === 'error'
+            ? 'thread not found: '
+            : 'no rollout found for thread id '
+      }${SID}`
+      const diagnostic =
+        channel === 'stderr'
+          ? `process.stderr.write(${JSON.stringify(`Error: ${message}\n`)})`
+          : `send('\\n' + JSON.stringify(${JSON.stringify(
+              channel === 'error'
+                ? { type: 'error', message }
+                : { type: 'turn.failed', error: { message } },
+            )}))`
+      const s = setup(
+        `
+      fs.appendFileSync('attempts.jsonl', JSON.stringify(args) + '\\n')
+      if (args.includes('resume')) {
+        send(JSON.stringify({type:'thread.started',thread_id:'${SID}'}) + '\\n')
+        ${diagnostic}
+        process.exitCode = 1
+      } else {
+        send(JSON.stringify({type:'thread.started',thread_id:${JSON.stringify(newSession)}}) + '\\n' + ${JSON.stringify(say('新会话完成'))})
+      }
+    `,
+        { permissions: { sandbox: 'workspace-write' }, prompt: '开发角色要求' },
+      )
+      s.contract.goal = '完成旧任务'
+      s.contract.context = ['notes/context']
+      mkdirSync(join(s.home, 'brain', 'notes'), { recursive: true })
+      writeFileSync(
+        join(s.home, 'brain', 'notes', 'context.md'),
+        '---\ntitle: 原上下文\nsummary: 旧任务摘要\n---\n',
+      )
+      const { outcome } = await collect(
+        s.run({
+          ...s.ctx,
+          resume: {
+            session: SID,
+            reply: { reply_id: 'r-old', kind: 'text', text: '继续执行', by: 'user' },
+          },
+        }),
+      )
+      expect(outcome).toMatchObject({
+        outcome: 'done',
+        result: { summary: '新会话完成', session: newSession },
+      })
+      if (outcome.outcome !== 'done') return
+      expect(outcome.result.cost).toBeUndefined()
+      const attempts = readFileSync(join(s.dir, 'attempts.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as string[])
+      expect(attempts).toHaveLength(2)
+      expect(attempts[0]).toContain('resume')
+      expect(attempts[1]).not.toContain('resume')
+      expect(s.report().codexHome).toBe(execCodexHome(s.home))
+      const prompt = attempts[1]?.at(-1)
+      expect(prompt).toContain('请先核对工作目录、git 历史与已有 PR')
+      expect(prompt).toContain('开发角色要求')
+      expect(prompt).toContain('<untrusted-goal>\n完成旧任务\n</untrusted-goal>')
+      expect(prompt).toContain('原上下文\n旧任务摘要')
+      expect(prompt).toContain('<untrusted-reply>\ntext\n继续执行\n</untrusted-reply>')
+    },
+  )
+
+  test('回退只尝试一次，且不沿用旧会话和费用', async () => {
+    const s = setup(`
+      fs.appendFileSync('attempts', '1')
+      if (args.includes('resume')) send(JSON.stringify({type:'thread.started',thread_id:'${SID}'}) + '\\n')
+      process.stderr.write('Session not found: ${SID}')
+      process.exitCode = 1
+    `)
+    const { outcome } = await collect(
+      s.run({
+        ...s.ctx,
+        resume: { session: SID, reply: { reply_id: 'r-old', kind: 'approve', by: 'user' } },
+      }),
+    )
+    expect(outcome).toMatchObject({ outcome: 'failed', result: { reason: 'nonzero_exit' } })
+    if (outcome.outcome !== 'failed') return
+    expect(outcome.result.session).toBeUndefined()
+    expect(outcome.result.cost).toBeUndefined()
+    expect(readFileSync(join(s.dir, 'attempts'), 'utf8')).toBe('11')
+  })
+
+  test.each([
+    'authentication failed',
+    'network connection reset',
+    `Session not found: another-session`,
+  ])('resume 的 %s 错误不启动新会话', async (message) => {
+    const s = setup(`
+      fs.appendFileSync('attempts', '1')
+      process.stderr.write(${JSON.stringify(message)})
+      process.exitCode = 1
+    `)
+    const { outcome } = await collect(
+      s.run({
+        ...s.ctx,
+        resume: { session: SID, reply: { reply_id: 'r-old', kind: 'approve', by: 'user' } },
+      }),
+    )
+    expect(outcome).toMatchObject({
+      outcome: 'failed',
+      result: { reason: 'nonzero_exit', session: SID },
+    })
+    expect(readFileSync(join(s.dir, 'attempts'), 'utf8')).toBe('1')
+  })
+
+  test('resume 已有执行事件时，即使报指定会话缺失也不重启任务', async () => {
+    const s = setup(`
+      fs.appendFileSync('attempts', '1')
+      send(resumed)
+      process.stderr.write('Session not found: ${SID}')
+      process.exitCode = 1
+    `)
+    const { outcome } = await collect(
+      s.run({
+        ...s.ctx,
+        resume: { session: SID, reply: { reply_id: 'r-old', kind: 'approve', by: 'user' } },
+      }),
+    )
+    expect(outcome).toMatchObject({ outcome: 'failed', result: { reason: 'nonzero_exit' } })
+    expect(readFileSync(join(s.dir, 'attempts'), 'utf8')).toBe('1')
+  })
+
+  test('回退的新进程仍可取消，取消不会再次启动进程', async () => {
+    const s = setup(`
+      fs.appendFileSync('attempts', '1')
+      if (args.includes('resume')) {
+        process.stderr.write('Session not found: ${SID}')
+        process.exitCode = 1
+      } else {
+        fs.writeFileSync('fallback-pid', String(process.pid))
+        setInterval(()=>{},1000)
+      }
+    `)
+    const run = s.run({
+      ...s.ctx,
+      resume: { session: SID, reply: { reply_id: 'r-old', kind: 'approve', by: 'user' } },
+    })
+    await waitFor(() => existsSync(join(s.dir, 'fallback-pid')), '回退进程启动')
+    const pid = Number(readFileSync(join(s.dir, 'fallback-pid'), 'utf8'))
+    s.abort.abort()
+    expect((await collect(run)).outcome).toEqual({ outcome: 'cancelled' })
+    await waitFor(() => processStopped(pid), '回退进程取消后退出')
+    expect(readFileSync(join(s.dir, 'attempts'), 'utf8')).toBe('11')
+  })
+
   test.each([
     [
       '带选项提问',

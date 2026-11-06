@@ -233,9 +233,74 @@ describe('启动', () => {
       else expect(lstatSync(config).isSymbolicLink()).toBe(true)
     },
   )
+
+  test('worktree 缺少 .git：blocked(other)，说明祖先配置风险，不启动 Codex', async () => {
+    const s = await start({}, (o) => {
+      const create = o.worktreeCreate.bind(o)
+      o.worktreeCreate = async (input) => {
+        const result = await create(input)
+        rmSync(join(o.worktreePath, '.git'))
+        return result
+      }
+    })
+    await ready(s)
+    expect(s.outcome()).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'other',
+        message: expect.stringContaining('worktree_git_missing'),
+      },
+    })
+    expect(s.orca.ops('terminalCreate')).toEqual([])
+    expect(sends(s)).toEqual([])
+  })
+
+  test('创建终端期间出现 .codex：创建后立即关闭，不等信任弹窗', async () => {
+    const s = await start({}, (o) => {
+      const create = o.terminalCreate.bind(o)
+      o.terminalCreate = async (input) => {
+        const result = await create(input)
+        mkdirSync(join(o.worktreePath, '.codex'))
+        return result
+      }
+    })
+    await ready(s)
+    expect(s.outcome()).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'other',
+        message: expect.stringContaining('project_codex_config'),
+      },
+    })
+    expect(s.orca.ops('terminalCreate')).toHaveLength(1)
+    expect(s.orca.ops('terminalClose')).toHaveLength(1)
+    expect(s.orca.ops('terminalRead')).toEqual([])
+    expect(sends(s)).toEqual([])
+  })
 })
 
 describe('监控循环', () => {
+  test('worker 忙碌时创建 .codex：下一轮即关闭终端并 blocked(other)', async () => {
+    const s = await start({}, (o) => o.show('working'))
+    await ready(s)
+    await s.poll()
+    mkdirSync(join(s.orca.worktreePath, '.codex'))
+    await s.poll()
+    expect(s.outcome()).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'other',
+        message: expect.stringContaining('project_codex_config'),
+      },
+    })
+    expect(s.orca.ops('terminalClose')).toHaveLength(1)
+    expect(s.activity.some((a) => a.data?.reason === 'project_codex_config')).toBe(true)
+    expect(sends(s)).toEqual([])
+  })
+
   test('启动后出现 .codex：确认信任前重新检查，blocked(other)，不发回车', async () => {
     const s = await start({}, (o) => o.show('trust-prompt'))
     await ready(s)
@@ -593,6 +658,51 @@ describe('监控循环', () => {
 })
 
 describe('deliver 与 cancel', () => {
+  test('两次轮询之间出现 .codex：deliver 检查后关闭终端，不发送文字', async () => {
+    const s = await start({}, (o) => o.show('question'))
+    await ready(s)
+    mkdirSync(join(s.orca.worktreePath, '.codex'))
+    expect(
+      await s.run.deliver?.({ reply_id: 'r-guard', kind: 'text', text: '继续', by: 'user' }),
+    ).toBe('not_running')
+    expect(await s.run.done).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'other',
+        message: expect.stringContaining('project_codex_config'),
+      },
+    })
+    expect(s.orca.ops('terminalClose')).toHaveLength(1)
+    expect(sends(s)).toEqual([])
+  })
+
+  test.each(['trust-prompt', 'trust-prompt-0167'])(
+    '重新挂接后仍在信任弹窗（%s）：拒绝把回复和 Enter 打入弹窗',
+    async (fixture) => {
+      const first = await start({}, (o) => o.show(fixture))
+      await ready(first)
+      const home = h
+      if (!home) throw new Error('no home')
+      const reply = {
+        reply_id: 'r-trust',
+        kind: 'text' as const,
+        text: '已经移出配置，请继续',
+        by: 'user',
+      }
+      const second = await start({}, (o) => o.show(fixture), { home, resume: { reply } })
+      await ready(second)
+      expect(await second.run.deliver?.(reply)).toBe('dropped')
+      expect(
+        await second.run.deliver?.({ reply_id: 'r-trust-approve', kind: 'approve', by: 'user' }),
+      ).toBe('dropped')
+      expect(sends(second)).toEqual([])
+      expect(second.orca.ops('terminalCreate')).toEqual([])
+      await first.run.cancel()
+      await second.run.cancel()
+    },
+  )
+
   test('回复提问：文字加回车送进终端，按 reply_id 幂等', async () => {
     const s = await start({}, (o) => o.show('question'))
     await ready(s)
@@ -830,6 +940,28 @@ describe('deliver 与 cancel', () => {
     expect(second.orca.ops('terminalRead')).toEqual([])
     expect(second.orca.ops('terminalCreate')).toEqual([])
     expect(sends(second)).toEqual([])
+    await first.run.cancel()
+  })
+
+  test('恢复时整个 worktree 丢失：blocked(other)，不重建目录或启动 Codex', async () => {
+    const first = await start({}, (o) => o.show('working'))
+    await ready(first)
+    const home = h
+    if (!home) throw new Error('no home')
+    rmSync(home.worktree, { recursive: true })
+    const second = await start({}, (o) => o.show('working'), { home })
+    await ready(second)
+    expect(second.outcome()).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'other',
+        message: expect.stringContaining('worktree_git_missing'),
+      },
+    })
+    expect(second.orca.ops('worktreeCreate')).toEqual([])
+    expect(second.orca.ops('terminalCreate')).toEqual([])
+    expect(existsSync(home.worktree)).toBe(false)
     await first.run.cancel()
   })
 

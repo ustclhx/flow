@@ -48,6 +48,8 @@ export const codexExecPermissions = z.strictObject({
 /** Codex 0.164.0 实测字段，允许新增字段；未知事件和不合法的已知事件均忽略。 */
 const eventSchema = z.looseObject({
   type: z.string(),
+  message: z.string().optional(),
+  error: z.looseObject({ message: z.string().optional() }).optional(),
   thread_id: z.string().min(1).max(512).optional(),
   item: z
     .looseObject({
@@ -107,6 +109,15 @@ async function taskPrompt(home: string, role: Role, contract: TaskContract, resu
   ].join('\n\n')
 }
 
+/** 只识别 Codex 明确指出指定会话不存在的诊断，不把认证、网络等失败当成可恢复。 */
+function missingSession(message: string, id: string): boolean {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(
+    `(?:^|\\n)(?:Error: )?(?:Session not found: |thread not found: |no rollout found for (?:thread|conversation) id )${escaped}(?:[.\\s]|$)`,
+    'i',
+  ).test(message)
+}
+
 /** 保留原只读入口，统一委托隔离目录准备逻辑。 */
 export function prepareReadCodexHome(home: string, authSource: string): Promise<Result<string>> {
   return prepareCodexHome(readCodexHome(home), authSource)
@@ -141,6 +152,8 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
       let lastText: string | undefined
       let cost: TaskCost | undefined
       let stderr = ''
+      let diagnostics = ''
+      let executionStarted = false
       let lastActivity = clock.now()
       let settle: (r: Result<ExecutorOutcome>) => void = () => {}
       const done = new Promise<Result<ExecutorOutcome>>((resolve) => {
@@ -197,7 +210,19 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
         const parsed = eventSchema.safeParse(json)
         if (!parsed.success) return
         const event = parsed.data
+        if (
+          event.type === 'turn.started' ||
+          event.type === 'turn.completed' ||
+          event.type.startsWith('item.')
+        )
+          executionStarted = true
         switch (event.type) {
+          case 'error':
+          case 'turn.failed': {
+            const message = event.message ?? event.error?.message
+            if (message) diagnostics = `${diagnostics}\n${message}`.slice(-64_000)
+            break
+          }
           case 'thread.started':
             if (event.thread_id) session = event.thread_id
             output('Codex 会话已启动', 'status')
@@ -274,10 +299,6 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
         }
         if (finished) return
         const childEnv = { ...env.data, CODEX_HOME: isolated.data }
-        const prompt = ctx.resume?.session
-          ? replyPrompt(ctx.resume)
-          : await taskPrompt(options.home, role.data, contract, ctx.resume)
-        if (finished) return
         // exec 无 -a 选项、不走交互审批，无需默认覆盖 reviewer。
         const args = [...command.slice(1), 'exec', '--json']
         for (const [key, value] of Object.entries(perms.data.config))
@@ -286,76 +307,108 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
         if (role.data.effort) args.push('-c', `model_reasoning_effort=${role.data.effort}`)
         // exec 层的 -s 对 resume 同样生效，且优先于 permissions.config 中的 sandbox_mode。
         args.push('-s', perms.data.sandbox)
-        if (ctx.resume?.session) args.push('resume', ctx.resume.session)
-        args.push('--', prompt)
-        child = spawn(command[0] ?? 'codex', args, {
-          cwd: ctx.cwd,
-          env: childEnv,
-          shell: false,
-          detached: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        })
-        const lines = createInterface({
-          input: child.stdout as NodeJS.ReadableStream,
-          crlfDelay: Infinity,
-        })
-        lines.on('line', onLine)
-        child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
-          stderr = (stderr + chunk).slice(-64_000)
-        })
-        let spawnError: Error | undefined
-        child.on('error', (err) => {
-          spawnError = err
-        })
-        child.on('close', (code, signal) => {
-          lines.close()
-          if (cancelled) {
-            finish(ok({ outcome: 'cancelled' }))
-            return
-          }
-          const errorTail = redactSecrets(stderr).slice(-4000)
-          if (errorTail.trim()) output(errorTail)
-          if (signal) {
-            finish(
-              ok({
-                outcome: 'exited',
-                exit_code: code,
-                signal,
-                message: safe(`Codex 被信号 ${signal} 终止\n${errorTail}`),
-              }),
-            )
-            return
-          }
-          if (spawnError || code !== 0 || !lastText?.trim()) {
-            const reason = spawnError
-              ? 'spawn_error'
-              : code !== 0
-                ? 'nonzero_exit'
-                : 'missing_final_message'
-            finish(
-              ok({
-                outcome: 'failed',
-                result: result(
-                  `Codex 执行失败（${reason}，退出码 ${code}）\n${spawnError?.message ?? ''}\n${errorTail}`,
-                  reason,
-                ),
-              }),
-            )
-            return
-          }
-          const question = questionMessage(lastText.split('\n'))
-          if (question !== undefined) {
-            finish(
-              ok({
-                outcome: 'blocked',
-                reason: 'question',
-                message: question,
-                tail: clipTail(redactSecrets(lastText).split('\n')),
-                ...(session ? { session } : {}),
-              }),
-            )
-          } else finish(ok({ outcome: 'done', result: result(lastText), workdir: ctx.cwd }))
-        })
+        const start = async (resumeSession?: string) => {
+          let prompt =
+            resumeSession && ctx.resume
+              ? replyPrompt(ctx.resume)
+              : await taskPrompt(options.home, role.data, contract, ctx.resume)
+          if (ctx.resume?.session && !resumeSession)
+            prompt = `原会话不存在，以下是原任务与用户回复。请先核对工作目录、git 历史与已有 PR，避免重复提交、推送或创建 PR。\n\n${prompt}`
+          if (finished) return
+          const processArgs = [...args]
+          if (resumeSession) processArgs.push('resume', resumeSession)
+          processArgs.push('--', prompt)
+          child = spawn(command[0] ?? 'codex', processArgs, {
+            cwd: ctx.cwd,
+            env: childEnv,
+            shell: false,
+            detached: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+          const lines = createInterface({
+            input: child.stdout as NodeJS.ReadableStream,
+            crlfDelay: Infinity,
+          })
+          lines.on('line', onLine)
+          child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+            stderr = (stderr + chunk).slice(-64_000)
+          })
+          let spawnError: Error | undefined
+          child.on('error', (err) => {
+            spawnError = err
+          })
+          child.on('close', (code, signal) => {
+            lines.close()
+            if (cancelled) {
+              finish(ok({ outcome: 'cancelled' }))
+              return
+            }
+            // 旧会话可能仍在升级前的 CODEX_HOME；仅明确缺失时在同一租约新建会话一次。
+            if (
+              resumeSession &&
+              !signal &&
+              !spawnError &&
+              !executionStarted &&
+              code !== 0 &&
+              missingSession(`${stderr}\n${diagnostics}`, resumeSession)
+            ) {
+              child = undefined
+              session = undefined
+              cost = undefined
+              lastText = undefined
+              stderr = ''
+              diagnostics = ''
+              output('Codex 原会话不存在，使用原任务和回复启动新会话', 'status')
+              void start().catch((err) =>
+                finish(fail('failure', 'codex_exec_error', safe(String(err)))),
+              )
+              return
+            }
+            const errorTail = redactSecrets(stderr).slice(-4000)
+            if (errorTail.trim()) output(errorTail)
+            if (signal) {
+              finish(
+                ok({
+                  outcome: 'exited',
+                  exit_code: code,
+                  signal,
+                  message: safe(`Codex 被信号 ${signal} 终止\n${errorTail}`),
+                }),
+              )
+              return
+            }
+            if (spawnError || code !== 0 || !lastText?.trim()) {
+              const reason = spawnError
+                ? 'spawn_error'
+                : code !== 0
+                  ? 'nonzero_exit'
+                  : 'missing_final_message'
+              finish(
+                ok({
+                  outcome: 'failed',
+                  result: result(
+                    `Codex 执行失败（${reason}，退出码 ${code}）\n${spawnError?.message ?? ''}\n${errorTail}`,
+                    reason,
+                  ),
+                }),
+              )
+              return
+            }
+            const question = questionMessage(lastText.split('\n'))
+            if (question !== undefined) {
+              finish(
+                ok({
+                  outcome: 'blocked',
+                  reason: 'question',
+                  message: question,
+                  tail: clipTail(redactSecrets(lastText).split('\n')),
+                  ...(session ? { session } : {}),
+                }),
+              )
+            } else finish(ok({ outcome: 'done', result: result(lastText), workdir: ctx.cwd }))
+          })
+        }
+        await start(ctx.resume?.session)
       }
       if (ctx.signal.aborted) onAbort()
       else {

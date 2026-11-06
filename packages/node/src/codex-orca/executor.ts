@@ -373,11 +373,32 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       const failed = (code: string, message: string) =>
         finish(ok({ outcome: 'failed', result: result(message, { reason: code }) }))
 
+      let isolationBlock: Promise<void> | undefined
       const blockProjectConfig = async (worktree: string): Promise<boolean> => {
+        if (isolationBlock) {
+          await isolationBlock
+          return true
+        }
+        if (finished || stopping) return true
         const checked = await checkProjectCodexTrust(worktree)
+        if (isolationBlock) {
+          await isolationBlock
+          return true
+        }
         if (finished || stopping) return true
         if (checked.ok) return false
-        finish(ok({ outcome: 'blocked', reason: 'other', message: checked.error.message }))
+        isolationBlock ??= (async () => {
+          const message = `[${checked.error.code}] ${checked.error.message}`
+          status(message, { reason: checked.error.code })
+          // 关闭已由本次执行接管的终端；恢复前尚未核对身份的旧 handle 不能直接关闭。
+          if (handle) {
+            const closed = await orca.terminalClose({ handle })
+            if (!closed.ok)
+              logger?.warn(`隔离检查失败后关闭终端 ${handle} 失败`, closed.error.message)
+          }
+          finish(ok({ outcome: 'blocked', reason: 'other', message }))
+        })()
+        await isolationBlock
         return true
       }
 
@@ -520,7 +541,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         return true
       }
 
-      const send = (input: Parameters<OrcaCli['terminalSend']>[0]) => orca.terminalSend(input)
+      const send = async (input: Parameters<OrcaCli['terminalSend']>[0]) => {
+        // 包括预检后、授权复核后、文字送达与补发回车，均在最后一次异步等待后重查。
+        if (!state || (await blockProjectConfig(state.worktree_path)))
+          return fail('failure', 'codex_isolation_blocked', '隔离检查未通过，没有向 Codex 发送输入')
+        return orca.terminalSend(input)
+      }
       const started = (r: OrcaSendResult) =>
         !r.send.prompt || r.send.prompt.stages.includes('turn_started')
       /** 发送失败一律按临时错误处理（stale 也不代表终端已死，见文件头注释）。 */
@@ -563,6 +589,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const st = replyState(reply.reply_id)
         if (st.done) return 'delivered'
         if (st.dropped) return 'dropped'
+        if (await blockProjectConfig(state.worktree_path)) return 'not_running'
         // 按实时的末尾内容判断（PR #24 审查第 5 条），不用上一次轮询的分析。
         const now = await orca.terminalRead({ handle, limit: 200 })
         if (!now.ok) {
@@ -572,6 +599,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (now.data.status !== 'running') return 'not_running'
         const h = handle
         const live = analyzeTail(now.data.tail)
+        if (live.kind === 'trust_prompt') {
+          st.dropped = true
+          await saveState()
+          status(`回复 ${reply.reply_id} 未送达：Codex 仍在文件夹信任弹窗，不能把回复作为信任确认`)
+          return 'dropped'
+        }
         const approval = live.kind === 'awaiting_approval'
         if (reply.kind === 'approve' && ctx.confirmApproval) {
           // D15：放行前重读实时的待批弹窗交给节点复核（supervisor 的批准须与判定时的请求一致、
@@ -675,6 +708,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         tail: readonly string[],
         popup: string,
       ): Promise<'approved' | 'changed' | 'user'> => {
+        if (!state || (await blockProjectConfig(state.worktree_path))) return 'user'
         const precheck = ctx.precheck
         if (!precheck) return 'user'
         const p = approvalForPrecheck(tail)
@@ -732,6 +766,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         while (!finished && !stopping) {
           await sleep(clock, pollMs, ctx.signal)
           if (finished || stopping || !handle) return
+          if (!state || (await blockProjectConfig(state.worktree_path))) return
           const r = await orca.terminalRead({ handle, limit: 200 })
           if (finished || stopping) return
           if (!r.ok) {
@@ -858,7 +893,13 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const scope = codexOrcaInputs.parse(contract.inputs ?? {}).scope
 
         state = await readState()
-        if (state && (state.repo !== repo || !existsSync(state.worktree_path))) state = undefined
+        if (state && state.repo !== repo) state = undefined
+        if (
+          state &&
+          !existsSync(state.worktree_path) &&
+          (await blockProjectConfig(state.worktree_path))
+        )
+          return
         let fresh = false
         if (!state) {
           const base = await baseBranchOf(repo)
@@ -961,6 +1002,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           if (!term.ok)
             return failed('terminal_create_failed', `创建 Orca 终端失败：${term.error.message}`)
           handle = term.data.handle
+          // 另一个同仓库任务可能刚写入共享信任记录，本终端可能已跳过信任弹窗。
+          if (await blockProjectConfig(st.worktree_path)) return
           launchedHere = true
           st.handle = handle
           st.codex_home = isolated.data
