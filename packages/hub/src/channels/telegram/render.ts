@@ -77,7 +77,7 @@ export function optionCallbackData(shortId: string, index: number): string {
   return `i:${shortId}:o${index}`
 }
 
-const CALLBACK_RE = /^i:([0-9a-z]{1,11}):(approve|deny|accept|reject|dismiss|o[0-3])$/
+const CALLBACK_RE = /^i:([0-9a-z]{1,11}):(approve|deny|accept|reject|dismiss|o[0-7])$/
 
 export function parseCallbackData(data: string | undefined):
   | {
@@ -108,11 +108,13 @@ export function buttonActions(item: OutboundItem): ButtonAction[] {
   return out
 }
 
-/** 提问的选项按钮：每个选项一个，按钮文字为选项本身（截断到 60 字符）。 */
+/** 最多八个选项；按钮保留短 id 与推荐标记，再把标签截到总长 60 字符。
+ * callback 仅存索引，点选从条目的 options_json 读取完整标签，截断不会改变回复。
+ */
 function optionButtons(item: OutboundItem, prefix: string): InlineButton[] {
   if (item.state !== 'open' || !item.options) return []
-  return item.options.slice(0, 4).map((o, i) => ({
-    text: clip(`${prefix}${o}`, 60),
+  return item.options.slice(0, 8).map((o, i) => ({
+    text: `${prefix}${o === item.recommended ? '★ 推荐 ' : ''}${clip(o, 60 - prefix.length - (o === item.recommended ? 5 : 0))}`,
     callback_data: optionCallbackData(item.short_id, i),
   }))
 }
@@ -197,11 +199,11 @@ function keyboard(message: ChannelMessage): ReplyMarkup {
     count += kept.length
   }
   if (message.kind === 'item') {
-    push(optionButtons(message.item, ''))
+    for (const button of optionButtons(message.item, '')) push([button])
     push(buttonsFor(message.item, ''))
   } else {
     for (const item of message.items) {
-      push(optionButtons(item, `#${item.short_id} `))
+      for (const button of optionButtons(item, `#${item.short_id} `)) push([button])
       push(buttonsFor(item, `#${item.short_id} `))
     }
   }

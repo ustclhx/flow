@@ -16,6 +16,7 @@ export * from './redact.ts'
 export * from './review.ts'
 export * from './supervisor-api.ts'
 export * from './task.ts'
+export * from './worker-report.ts'
 
 type SchemaEntry = { schema: z.ZodType; io: 'input' | 'output' }
 

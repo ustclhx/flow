@@ -287,6 +287,8 @@ describe('端点清单与 JSON Schema 导出', () => {
   test('端点', () => {
     const list = Object.entries(ENDPOINTS).map(([, d]) => `${d.method} ${d.path}`)
     expect(list).toEqual([
+      'GET /v1/binding',
+      'POST /v1/tasks/:id/report',
       'GET /v1/inbox',
       'POST /v1/inbox/:id/act',
       'POST /v1/policy/check',

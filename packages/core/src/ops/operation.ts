@@ -21,6 +21,8 @@ export interface OpContext {
 
 /** MCP 会话绑定的 workspace 与任务。 */
 export interface OpBinding {
+  /** task 为 worker 的受限派工绑定；缺省沿用 supervisor 的 workspace 绑定。 */
+  kind?: 'task' | 'wake'
   /** 绑定的 workspace，完整引用 `ws/<id>`。 */
   workspace: string
   /** 绑定的任务（supervisor 唤醒任务）；`task_create` 未写 parent 时以它为 parent。 */

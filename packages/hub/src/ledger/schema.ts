@@ -52,8 +52,23 @@ CREATE TABLE IF NOT EXISTS events (
   payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_task ON events (task_id, seq);
+CREATE INDEX IF NOT EXISTS events_task_type ON events (task_id, type, seq);
 CREATE INDEX IF NOT EXISTS events_workspace ON events (workspace, seq);
 CREATE INDEX IF NOT EXISTS events_type_ts ON events (type, ts);
+-- 高频派工核对仅查询对应 attempt / lease，避免读取任务的全部历史事件。
+CREATE INDEX IF NOT EXISTS events_attempt_ended ON events
+  (task_id, json_extract(payload_json, '$.attempt'), seq)
+  WHERE type = 'task.attempt_ended';
+CREATE INDEX IF NOT EXISTS events_worker_report ON events
+  (task_id, json_extract(payload_json, '$.lease_id'), json_extract(payload_json, '$.attempt'), seq, ts)
+  WHERE type = 'task.reported';
+CREATE INDEX IF NOT EXISTS events_worker_report_consumed ON events
+  (task_id, json_extract(payload_json, '$.lease_id'), json_extract(payload_json, '$.attempt'),
+   json_extract(payload_json, '$.report_seq'), seq)
+  WHERE type = 'task.report_consumed';
+CREATE INDEX IF NOT EXISTS events_task_reply ON events
+  (task_id, json_extract(payload_json, '$.reply_id'), seq)
+  WHERE type = 'task.replied';
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
   BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events

@@ -917,6 +917,59 @@
                 "other"
               ]
             },
+            "basis": {
+              "type": "string",
+              "enum": [
+                "reported",
+                "inferred"
+              ]
+            },
+            "question": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "options": {
+                  "minItems": 2,
+                  "maxItems": 8,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
+                      }
+                    },
+                    "required": [
+                      "label",
+                      "description"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "recommended": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                }
+              },
+              "required": [
+                "text",
+                "options",
+                "recommended"
+              ],
+              "additionalProperties": false
+            },
             "decision_id": {
               "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",
               "type": "integer",
@@ -1199,6 +1252,16 @@
               "additionalProperties": false,
               "title": "Task cost",
               "description": "执行器上报的费用与用量（估算）"
+            },
+            "reported_reason": {
+              "description": "worker 上报的失败或无需处理原因原文",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "dropped": {
+              "description": "经核实无需处理，不推送通知",
+              "type": "boolean"
             },
             "review": {
               "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",

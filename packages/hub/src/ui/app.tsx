@@ -142,6 +142,13 @@ function boardModel(deps: InboxActionDeps, now: number): BoardModel {
       snippet: snippetOf(deps, item),
       pending: pending ? { kind: pending.kind } : null,
     }
+    if (item.source === 'task' && item.reason === 'question' && item.task_id) {
+      const seq = Number(item.id.slice('blk.'.length))
+      const blocked = deps.ledger.taskEvents(item.task_id).find((event) => event.seq === seq)
+      if (blocked?.type === 'task.blocked' && blocked.payload.question) {
+        entry.recommended = redactSecrets(blocked.payload.question.recommended)
+      }
+    }
     if (item.source === 'task_proposal') {
       const proposal = proposalOf(deps, item)
       if (proposal) entry.goal = redactSecrets(proposal.payload.draft.goal)

@@ -20,6 +20,7 @@ import {
 import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import { acceptedReplyKinds } from '../ledger/tasks.ts'
 import type { HubLogger } from '../server/maintenance.ts'
+import { blockedText } from './blocked.ts'
 
 /**
  * 收件箱反应器（add-m1-inbox design D1；inbox spec "条目来源""默认分级""自动关闭"）。
@@ -232,7 +233,10 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         source_ref: task.id,
         reason: p.reason,
         title: delegatedNow(task, e.seq) ? delegatedTitle(title) : title,
-        body: blockedBody(p.message, p.tail),
+        body: blockedBody(blockedText(p), p.tail),
+        ...(p.reason === 'question' && p.question
+          ? { options: p.question.options.map((option) => option.label) }
+          : {}),
         actions: blockedActions(p.reason, p.prior_reason),
         source_seq: e.seq,
       },
@@ -535,7 +539,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         }`,
         600,
       )
-      const original = blockedBody(blocked.payload.message, blocked.payload.tail)
+      const original = blockedBody(blockedText(blocked.payload), blocked.payload.tail)
       body = clipText(`${line}\n\n${original}`, INBOX_BODY_MAX)
     }
     if (title === item.title && body === item.body) return

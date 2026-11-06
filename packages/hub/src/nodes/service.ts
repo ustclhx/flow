@@ -21,6 +21,7 @@ import {
   type RenewLeaseData,
   type RenewLeaseRequest,
   type ReplyView,
+  type ReportQuestion,
   type Result,
   registerNodeRequest,
   renewLeaseRequest,
@@ -82,6 +83,9 @@ export interface NodeServiceOptions extends NodeProtocolConfig {
    * （`wake_token`）；不是唤醒任务时返回 undefined。缺省不签发。
    */
   issueWakeToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
+  issueTaskToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
+  /** 中枢重启等导致派工凭证记录丢失时，在续约响应补发。 */
+  renewTaskToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
   /** 不影响请求结果的失败（例如任务分支上报写入失败）只记日志。 */
   logger?: Pick<HubLogger, 'warn'>
 }
@@ -165,8 +169,12 @@ function delegationFields(b: {
   request?: BlockedRequest | undefined
   diff_stat?: string | undefined
   no_delegate?: boolean | undefined
+  basis?: 'reported' | 'inferred' | undefined
+  question?: ReportQuestion | undefined
 }) {
   return {
+    basis: b.basis ?? 'inferred',
+    ...(b.question ? { question: b.question } : {}),
     ...(b.decision_id !== undefined ? { decision_id: b.decision_id } : {}),
     ...(b.request !== undefined ? { request: b.request } : {}),
     // 协议允许 8192 字符，入账前截到 2000（clipDiffStat，与 scrub 的 clipText 同一截断标记）。
@@ -187,12 +195,13 @@ export function completionDrafts(
   lease: LeaseRecord,
   req: CompleteLeaseRequest,
   pendingReply: ReplyView | null = null,
+  lastReport?: string,
 ): EventInput[] {
   const base = { task_id: task.id, workspace: task.workspace }
   const ended = (reason: 'done' | 'failed' | 'blocked' | 'cancelled'): EventInput => ({
     ...base,
     type: 'task.attempt_ended',
-    payload: { attempt: lease.attempt, reason },
+    payload: { attempt: lease.attempt, reason, ...(lastReport ? { last_report: lastReport } : {}) },
   })
   switch (req.outcome) {
     case 'done':
@@ -402,19 +411,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
 
   /** 回复绑定到写入 task.replied 之前的卡住，不能借用之后出现的新回合。 */
   function replyBinding(taskId: string, replyId: string) {
-    let binding: { block_seq: number; approval_fingerprint?: string } | undefined
-    for (const event of ledger.taskEvents(taskId)) {
-      if (event.type === 'task.blocked') {
-        binding = {
-          block_seq: event.seq,
-          ...(event.payload.approval_fingerprint
-            ? { approval_fingerprint: event.payload.approval_fingerprint }
-            : {}),
-        }
-      }
-      if (event.type === 'task.replied' && event.payload.reply_id === replyId) return binding
-    }
-    return undefined
+    return ledger.replyBlock(taskId, replyId)
   }
 
   /** 恢复回复只属于紧接该次重新排队的派工，不能跨过其他派工或手动重新排队。 */
@@ -620,7 +617,12 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       const withWakeToken = (g: LeaseGrant | null): LeaseGrant | null => {
         if (!g || !mayIssue) return g
         const wakeToken = o.issueWakeToken?.({ lease_id: g.lease_id, task_id: g.task_id })
-        return wakeToken === undefined ? g : { ...g, wake_token: wakeToken }
+        const taskToken = o.issueTaskToken?.({ lease_id: g.lease_id, task_id: g.task_id })
+        return {
+          ...g,
+          ...(wakeToken === undefined ? {} : { wake_token: wakeToken }),
+          ...(taskToken === undefined ? {} : { dispatch_token: taskToken }),
+        }
       }
       const grant = tryGrant(nodeId, capabilities, slots)
       const waitMs = Math.min(req.data.wait_s, o.leaseWaitMaxS) * 1000
@@ -660,7 +662,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       if (!RENEWABLE.has(task.status)) {
         return fail('failure', 'lease_expired', `任务状态为 ${task.status}，租约不能续约`)
       }
-      const steps = renewSteps(task, lease, req.data)
+      const consumed = reportConsumption(task, lease, req.data.report_seq)
+      if (!consumed.ok) return consumed
+      const steps = renewSteps(task, lease, req.data, consumed.data)
       if (!steps.ok) return steps
       const expiresAt = iso(clock.now() + lease.ttl_s * 1000)
       ledger.renewLease(lease.lease_id, expiresAt)
@@ -687,7 +691,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         if (!fetched.ok) return fetched
       }
       const lastBlock = req.data.blocked
-        ? ledger.taskEvents(task.id).findLast((e) => e.type === 'task.blocked')
+        ? ledger.latestTaskEvent(task.id, 'task.blocked')
         : undefined
       const reportedBlock =
         lastBlock?.type === 'task.blocked' &&
@@ -695,10 +699,14 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         after.status === 'blocked'
           ? lastBlock
           : undefined
+      // 先持久化回复交付事实，再补发凭证；记录失败的续约不能留下未送达的新凭证。
+      const dispatchToken = o.renewTaskToken?.({ lease_id: lease.lease_id, task_id: task.id })
       return ok({
         lease_id: lease.lease_id,
         expires_at: expiresAt,
+        ...(dispatchToken ? { dispatch_token: dispatchToken } : {}),
         cancel_requested: after.cancel_requested,
+        ...pendingReport(task, lease),
         ...(branchReport ? { branch_report: branchReport } : {}),
         ...(reportedBlock
           ? {
@@ -891,10 +899,26 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
           { from: task.status, type: 'task.cancelled' },
         )
       }
+      const consumed = reportConsumption(task, lease, req.data.report_seq)
+      if (!consumed.ok) return consumed
+      const completion = reportedCompletion(task, lease, req.data)
+      if (!completion.ok) return completion
       const pending = task.status === 'blocked' ? ledger.pendingReply(task.id) : null
-      const written = ledger.appendMany(completionDrafts(task, lease, req.data, pending), {
-        actor: `node:${lease.node_id}`,
-      })
+      const written = ledger.appendMany(
+        [
+          ...(consumed.data ? [consumed.data] : []),
+          ...completionDrafts(
+            task,
+            lease,
+            completion.data,
+            pending,
+            ledger.latestWorkerReport(task.id, lease.lease_id, lease.attempt)?.payload.summary,
+          ),
+        ],
+        {
+          actor: `node:${lease.node_id}`,
+        },
+      )
       if (!written.ok) return written
       ledger.touchNode(lease.node_id)
       const after = ledger.getTask(task.id)
@@ -924,6 +948,91 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       unsubscribe()
       for (const w of [...waiters]) w.resolve(null)
     },
+  }
+
+  function reportFor(task: TaskView, lease: LeaseRecord, seq: number) {
+    return ledger.workerReport(task.id, lease.lease_id, lease.attempt, seq)
+  }
+
+  /** 消费以 seq 作水位，确认较新的上报后不再重新投递旧上报；重复确认幂等。 */
+  function reportConsumption(
+    task: TaskView,
+    lease: LeaseRecord,
+    seq?: number,
+  ): Result<EventInput | null> {
+    if (seq === undefined) return ok(null)
+    if (!reportFor(task, lease, seq))
+      return fail('usage', 'invalid_arguments', 'report_seq 必须引用本派工的上报')
+    if (ledger.workerReportWatermark(task.id, lease.lease_id, lease.attempt) >= seq) return ok(null)
+    return ok({
+      task_id: task.id,
+      workspace: task.workspace,
+      type: 'task.report_consumed',
+      payload: { lease_id: lease.lease_id, attempt: lease.attempt, report_seq: seq },
+    })
+  }
+
+  function pendingReport(task: TaskView, lease: LeaseRecord) {
+    const consumed = ledger.workerReportWatermark(task.id, lease.lease_id, lease.attempt)
+    const event = ledger.latestWorkerReport(task.id, lease.lease_id, lease.attempt)
+    if (!event || event.seq <= consumed) return {}
+    const { lease_id: _, ...report } = event.payload
+    return { report: { seq: event.seq, ...report } }
+  }
+
+  /** 节点只引用上报：中枢从账本取回实际内容，防止结果与被引用的上报不一致。 */
+  function reportedCompletion(
+    task: TaskView,
+    lease: LeaseRecord,
+    req: CompleteLeaseRequest,
+  ): Result<CompleteLeaseRequest> {
+    if (req.report_seq === undefined) return ok(req)
+    const report = reportFor(task, lease, req.report_seq)?.payload
+    if (!report) return fail('usage', 'invalid_arguments', 'report_seq 不属于当前派工')
+    if (
+      req.outcome === 'blocked' &&
+      (report.status === 'question' || report.status === 'blocked')
+    ) {
+      return ok({
+        ...req,
+        blocked_reason: report.status === 'question' ? 'question' : 'other',
+        message:
+          report.status === 'question'
+            ? (report.question as string)
+            : `${report.summary}\n缺少：${report.missing}\n已尝试：${report.tried}`,
+        basis: 'reported',
+        ...(report.status === 'question'
+          ? {
+              question: {
+                text: report.question as string,
+                options: report.options as ReportQuestion['options'],
+                recommended: report.recommended as string,
+              },
+            }
+          : {}),
+      })
+    }
+    if (
+      (req.outcome === 'done' && (report.status === 'ready' || report.status === 'dropped')) ||
+      (req.outcome === 'failed' && report.status === 'failed')
+    ) {
+      const artifacts = [...req.result.artifacts]
+      for (const ref of report.deliverables ?? []) {
+        if (!artifacts.some((artifact) => artifact.kind === 'pr' && artifact.ref === ref))
+          artifacts.push({ kind: 'pr', ref })
+      }
+      return ok({
+        ...req,
+        result: {
+          ...req.result,
+          summary: report.summary,
+          ...(report.reason ? { reported_reason: report.reason } : {}),
+          artifacts,
+          ...(report.status === 'dropped' ? { dropped: true } : {}),
+        },
+      })
+    }
+    return fail('usage', 'invalid_arguments', '完成状态与引用的上报状态不一致')
   }
 
   /**
@@ -964,8 +1073,13 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     }
   }
 
-  /** 续约附带的动作：记录活动、阶段切换、卡住与自行恢复（D7a）。各步独立。 */
-  function renewSteps(task: TaskView, lease: LeaseRecord, req: RenewLeaseRequest): Result<null> {
+  /** 续约附带事件与消费确认在同一事务入账。 */
+  function renewSteps(
+    task: TaskView,
+    lease: LeaseRecord,
+    req: RenewLeaseRequest,
+    consumed: EventInput | null,
+  ): Result<null> {
     const base = { task_id: task.id, workspace: task.workspace }
     const actor = { actor: `node:${lease.node_id}` }
     if (req.activity.length > 0) ledger.recordActivity(task.id, req.activity)
@@ -977,7 +1091,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
             .flatMap((e) => (e.type === 'task.out_of_band' ? [e.payload.id] : []))
         : [],
     )
-    const signals: EventInput[] = []
+    const signals: EventInput[] = consumed ? [consumed] : []
     let externalApproval = false
     for (const signal of req.out_of_band ?? []) {
       if (seen.has(signal.id)) continue
@@ -1003,48 +1117,36 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         },
       })
     }
+    const current =
+      (req.resumed || externalApproval) && task.status === 'blocked' ? 'running' : task.status
+    if (req.blocked && (current === 'running' || current === 'verifying')) {
+      signals.push({
+        ...base,
+        type: 'task.blocked',
+        payload: {
+          reason: req.blocked.reason,
+          ...(req.blocked.request_id ? { request_id: req.blocked.request_id } : {}),
+          ...(req.blocked.approval_fingerprint
+            ? { approval_fingerprint: req.blocked.approval_fingerprint }
+            : {}),
+          message: sanitizeMessage(req.blocked.message),
+          ...(req.blocked.tail ? { tail: sanitizeTail(req.blocked.tail) } : {}),
+          ...(req.blocked.session ? { session: req.blocked.session } : {}),
+          ...delegationFields(req.blocked),
+          node_id: lease.node_id,
+          lease_held: true,
+        },
+      })
+    } else if (req.phase === 'verifying' && current === 'running') {
+      signals.push({
+        task_id: task.id,
+        workspace: task.workspace,
+        type: 'task.verifying',
+        payload: { node_id: lease.node_id },
+      })
+    }
     if (signals.length > 0) {
       const written = ledger.appendMany(signals, actor)
-      if (!written.ok) return written
-    }
-    const current = ledger.getTask(task.id)?.status ?? task.status
-    if (req.blocked && (current === 'running' || current === 'verifying')) {
-      const written = ledger.append(
-        {
-          ...base,
-          type: 'task.blocked',
-          payload: {
-            reason: req.blocked.reason,
-            ...(req.blocked.request_id ? { request_id: req.blocked.request_id } : {}),
-            ...(req.blocked.approval_fingerprint
-              ? { approval_fingerprint: req.blocked.approval_fingerprint }
-              : {}),
-            message: sanitizeMessage(req.blocked.message),
-            ...(req.blocked.tail ? { tail: sanitizeTail(req.blocked.tail) } : {}),
-            ...(req.blocked.session ? { session: req.blocked.session } : {}),
-            ...delegationFields(req.blocked),
-            node_id: lease.node_id,
-            lease_held: true,
-          },
-        },
-        actor,
-      )
-      if (!written.ok) return written
-      return ok(null)
-    }
-    if (
-      req.phase === 'verifying' &&
-      (ledger.getTask(task.id)?.status ?? task.status) === 'running'
-    ) {
-      const written = ledger.append(
-        {
-          task_id: task.id,
-          workspace: task.workspace,
-          type: 'task.verifying',
-          payload: { node_id: lease.node_id },
-        },
-        { actor: `node:${lease.node_id}` },
-      )
       if (!written.ok) return written
     }
     return ok(null)

@@ -101,6 +101,59 @@
             "other"
           ]
         },
+        "basis": {
+          "type": "string",
+          "enum": [
+            "reported",
+            "inferred"
+          ]
+        },
+        "question": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "options": {
+              "minItems": 2,
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                },
+                "required": [
+                  "label",
+                  "description"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "recommended": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "text",
+            "options",
+            "recommended"
+          ],
+          "additionalProperties": false
+        },
         "decision_id": {
           "description": "策略判定为 supervisor 档位时，这次卡住对应的 policy.decided seq",
           "type": "integer",

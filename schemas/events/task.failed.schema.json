@@ -213,6 +213,16 @@
               "title": "Task cost",
               "description": "执行器上报的费用与用量（估算）"
             },
+            "reported_reason": {
+              "description": "worker 上报的失败或无需处理原因原文",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "dropped": {
+              "description": "经核实无需处理，不推送通知",
+              "type": "boolean"
+            },
             "review": {
               "description": "审查任务的结论；只有 reviewer_roles 角色的 claude-sdk 任务会被中枢采信",
               "type": "object",

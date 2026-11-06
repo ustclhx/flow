@@ -11,6 +11,8 @@ const keys = [
   'FLOW_HUB_TOKEN',
   'RAINDOWN_HUB_TOKEN_FILE',
   'FLOW_HUB_TOKEN_FILE',
+  'RAINDOWN_LEASE_TOKEN_FILE',
+  'FLOW_LEASE_TOKEN_FILE',
 ] as const
 const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
 const roots: string[] = []
@@ -58,6 +60,34 @@ test('HubClient token 新名优先、空白回退旧名，只发送新身份头'
     ok: false,
     error: { code: 'token_file_missing' },
   })
+})
+
+test('派工 token 文件优先于 wake 与 user 凭证，丢失时不降级', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'raindown-client-lease-'))
+  roots.push(home)
+  for (const key of keys) delete process.env[key]
+  const file = join(home, 'dispatch.token')
+  await writeFile(file, 'fls_fixture')
+  process.env.RAINDOWN_LEASE_TOKEN_FILE = file
+  process.env.RAINDOWN_HUB_TOKEN_FILE = join(home, 'wake.token')
+  process.env.RAINDOWN_HUB_TOKEN = 'user-fixture'
+  let calls = 0
+  const client = new HubClient({
+    home,
+    actor: 'developer',
+    fetch: async (req) => {
+      calls++
+      expect(req.headers.get('authorization')).toBe('Bearer fls_fixture')
+      return Response.json({ ok: true, data: { tasks: [] } })
+    },
+  })
+  expect((await client.listTasks()).ok).toBe(true)
+  await rm(file)
+  expect(await client.listTasks()).toMatchObject({
+    ok: false,
+    error: { code: 'token_file_missing' },
+  })
+  expect(calls).toBe(1)
 })
 
 const timestamp = '2026-10-24T00:00:00.000Z'

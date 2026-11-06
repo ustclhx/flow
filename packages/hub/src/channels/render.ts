@@ -6,6 +6,7 @@ import {
   type InboxVia,
   redactSecrets,
 } from '@raindown/core'
+import { blockedText } from '../inbox/blocked.ts'
 import type { LedgerStore } from '../ledger/store.ts'
 import type { ChannelMessage, OutboundItem } from './types.ts'
 
@@ -79,7 +80,7 @@ export function toOutbound(item: InboxItemView, o: RenderOptions): OutboundItem 
   let text = item.body
   let snippet: string | null = null
   if (source) {
-    text = source.payload.message
+    text = blockedText(source.payload)
     const tail = (source.payload.tail ?? []).join('\n')
     if (tail.length > 0 && o.snippetMax > 0) snippet = clipTailText(redact(tail), o.snippetMax)
   }
@@ -95,6 +96,9 @@ export function toOutbound(item: InboxItemView, o: RenderOptions): OutboundItem 
     snippet,
     actions: item.state === 'open' ? [...item.actions] : [],
     ...(item.state === 'open' && item.options ? { options: item.options.map(redact) } : {}),
+    ...(item.state === 'open' && source?.payload.reason === 'question' && source.payload.question
+      ? { recommended: redact(source.payload.question.recommended) }
+      : {}),
     state: item.state,
     closed: item.closed ? { reason: item.closed.reason, label: closedLabel(item.closed) } : null,
   }

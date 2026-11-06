@@ -59,13 +59,19 @@ const node = { actor: 'node:n1' }
 const hub = { actor: 'hub' }
 const DEADLINE = '2026-10-24T01:00:00.000Z'
 
-/** 写一次 task.blocked（缺省为持有租约的 question）。 */
+/** 写一次 task.blocked（缺省为 worker 上报、持有租约的 question）。 */
 const block = (store: LedgerStore, id: string, extra: Record<string, unknown> = {}) =>
   must(
     store.append(
       {
         ...drafts(id)['task.blocked'],
-        payload: { reason: 'question', message: '用哪个方案？', lease_held: true, ...extra },
+        payload: {
+          reason: 'question',
+          basis: 'reported',
+          message: '用哪个方案？',
+          lease_held: true,
+          ...extra,
+        },
       } as EventInput,
       node,
     ),
@@ -251,6 +257,53 @@ describe('task.blocked 的代回复字段', () => {
 })
 
 describe('task.reply_delegated 的不变量', () => {
+  test('升级前无 basis 的已委托提问仍可重建，保留原始授权记录', async () => {
+    const ledger = await tempLedger()
+    cleanups.push(ledger.cleanup)
+    const id = 't-legacy-question'
+    must(ledger.store.append(drafts(id)['task.created'], { actor: 'user' }))
+    startTask(ledger.store, id)
+    const blocked = block(ledger.store, id, { basis: undefined })
+    ledger.store.close()
+
+    // 直接追加旧版本曾允许的委托，避免用新版本的写入校验制造历史。
+    const db = await openDatabase(ledger.path)
+    const delegatedSeq = blocked.seq + 1
+    db.prepare(
+      'INSERT INTO events (seq, ts, type, workspace, task_id, actor, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(
+      delegatedSeq,
+      blocked.ts,
+      'task.reply_delegated',
+      WS,
+      id,
+      'hub',
+      JSON.stringify({ task_id: id, kind: 'question', block_seq: blocked.seq, deadline: DEADLINE }),
+    )
+    db.close()
+
+    const store = await openLedger(ledger.path)
+    cleanups.push(() => store.close())
+    must(store.rebuild())
+    expect(store.getTask(id)?.blocked?.basis).toBe('inferred')
+    expect(store.activeDelegation(id)).toMatchObject({ seq: delegatedSeq, block_seq: blocked.seq })
+    expect(store.taskEvents(id).find((event) => event.seq === blocked.seq)?.payload).toEqual(
+      blocked.payload,
+    )
+  })
+
+  test.each([undefined, 'inferred'])(
+    '推断或旧缺省提问不能直接写入委托（basis=%s）',
+    async (basis) => {
+      const { store, newTask } = await setup()
+      const task = await newTask()
+      startTask(store, task.id)
+      const blocked = block(store, task.id, { basis })
+      const before = store.seq()
+      expect(code(delegate(store, task.id, { block_seq: blocked.seq }))).toBe('not_delegable')
+      expect(store.seq()).toBe(before)
+    },
+  )
   test('question：block_seq 是当前卡住、kind 一致；离开卡住后不能委托', async () => {
     const { store, newTask } = await setup()
     const t = await newTask()

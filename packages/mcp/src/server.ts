@@ -9,14 +9,18 @@ import {
 import {
   operations as allOperations,
   fail,
+  HubClient,
   invokeOperation,
   isDeclarableActor,
   isValidActor,
+  LEASE_TOKEN_FILE_ENV,
   normalizeBindingWorkspace,
   type OpBinding,
   type Operation,
   type RaindownError,
+  readRaindownEnv,
   resolveRaindownHome,
+  taskBindingAllows,
   taskId,
   toJsonDocument,
   USER_ACTOR,
@@ -26,7 +30,7 @@ import { z } from 'zod'
 
 /**
  * `raindown mcp` 的 MCP 适配层（design D1）：遍历 core 的 `operations`，每个操作生成一个工具。
- * 这里不允许出现任何针对具体操作的分支；输入校验、执行与 JSON 渲染都交给 core 的共享函数，
+ * 按 core 的绑定策略筛选工具；输入校验、执行与 JSON 渲染都交给 core 的共享函数，
  * 与 CLI `--json` 的输出逐字节一致。
  */
 
@@ -87,6 +91,7 @@ export function checkMcpActor(actor: string | undefined): RaindownError | null {
 
 /** `raindown mcp` 的绑定参数（未规范化）。 */
 export interface McpBindingOptions {
+  kind?: 'task' | 'wake' | undefined
   workspace?: string | undefined
   task?: string | undefined
   replyOnly?: boolean | undefined
@@ -116,6 +121,7 @@ export function resolveMcpBinding(
     ok: true,
     binding: {
       workspace,
+      ...(o.kind ? { kind: o.kind } : {}),
       ...(given(o.task) ? { task: o.task as string } : {}),
       ...(o.replyOnly ? { replyOnly: true } : {}),
     },
@@ -148,7 +154,9 @@ export function createRaindownMcpServer(opts: RaindownMcpServerOptions): Server 
   const bound = resolveMcpBinding(opts.binding)
   if (!bound.ok) throw new RaindownMcpConfigError(bound.error)
   const binding = bound.binding
-  const ops = opts.operations ?? allOperations
+  const ops = (opts.operations ?? allOperations).filter((op) =>
+    binding?.kind === 'task' ? taskBindingAllows(op) : op.name !== 'raindown_report',
+  )
   const byName = new Map(ops.map((op) => [op.name, op]))
   if (byName.size !== ops.length) {
     throw new Error('operations 中存在重名的操作')
@@ -186,7 +194,8 @@ export interface StdioServerHandle {
  * 以 stdio 传输启动服务。stdout 只承载 MCP 协议消息，任何日志都必须写 stderr。
  */
 export async function startStdioServer(opts: RaindownMcpServerOptions): Promise<StdioServerHandle> {
-  const server = createRaindownMcpServer(opts)
+  const resolved = await resolveLeaseMcpOptions(opts)
+  const server = createRaindownMcpServer(resolved)
   const transport = new StdioServerTransport()
   const closed = new Promise<void>((resolve) => {
     server.onclose = () => resolve()
@@ -198,4 +207,39 @@ export async function startStdioServer(opts: RaindownMcpServerOptions): Promise<
   process.stdin.once('close', onEnd)
   await server.connect(transport)
   return { server, closed }
+}
+
+/** MCP 启动时从中枢核定派工绑定；命令行 task/workspace 只用于核对。 */
+export async function resolveLeaseMcpOptions(
+  opts: RaindownMcpServerOptions,
+): Promise<RaindownMcpServerOptions> {
+  if (!readRaindownEnv(LEASE_TOKEN_FILE_ENV)) return opts
+  const result = await new HubClient({
+    home: opts.home ?? resolveRaindownHome(process.env),
+    actor: opts.actor,
+  }).request('session-binding')
+  if (!result.ok) throw new RaindownMcpConfigError(result.error)
+  if (result.data.kind !== 'task') {
+    throw new RaindownMcpConfigError({
+      kind: 'failure',
+      code: 'forbidden',
+      message: '派工令牌未绑定 worker 任务',
+    })
+  }
+  const { task } = result.data
+  if (
+    (opts.binding?.task && opts.binding.task !== task.task_id) ||
+    (opts.binding?.workspace &&
+      normalizeBindingWorkspace(opts.binding.workspace) !== task.workspace)
+  ) {
+    throw new RaindownMcpConfigError({
+      kind: 'failure',
+      code: 'forbidden',
+      message: '命令行绑定与派工令牌不一致',
+    })
+  }
+  return {
+    ...opts,
+    binding: { kind: 'task', workspace: task.workspace, task: task.task_id },
+  }
 }

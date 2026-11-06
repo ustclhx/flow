@@ -21,6 +21,11 @@
           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
           "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
         },
+        "dispatch_token": {
+          "description": "中枢没有当前派工凭证记录时重新签发；节点须更新同一凭证文件",
+          "type": "string",
+          "minLength": 16
+        },
         "cancel_requested": {
           "type": "boolean",
           "description": "为 true 时节点应停止执行器并提交 cancelled"
@@ -42,6 +47,124 @@
           },
           "required": [
             "seq"
+          ],
+          "additionalProperties": false
+        },
+        "report": {
+          "type": "object",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "attempt": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "progress",
+                "question",
+                "ready",
+                "blocked",
+                "failed",
+                "dropped"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "options": {
+              "minItems": 2,
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                },
+                "required": [
+                  "label",
+                  "description"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "recommended": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "deliverables": {
+              "minItems": 1,
+              "maxItems": 5,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 2048,
+                "format": "uri"
+              }
+            },
+            "missing": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "tried": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "handback": {
+              "type": "object",
+              "properties": {
+                "pr_event_seq": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                }
+              },
+              "required": [
+                "pr_event_seq",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "seq",
+            "attempt",
+            "status",
+            "summary"
           ],
           "additionalProperties": false
         },

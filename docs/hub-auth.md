@@ -141,6 +141,55 @@ supervisor 的身份与"它是哪一次唤醒"只由中枢认定，**不信任**
   `node:*` 身份执行任意任务的信任边界一致（节点属于可信计算基）。
 - 日志与账本的脱敏规则识别 `fwk_` 前缀的 token。
 
+## worker 派工绑定凭证（add-harness-neutral-coordination D2）
+
+普通任务领取租约时，中枢另外签发 `fls_` 前缀的 `dispatch_token`。它与节点续约、完成租约使用的
+`lease_token` 独立，也与 supervisor 的 `fwk_` 唤醒凭证分开。中枢只保存摘要，绑定合同中的角色、任务、
+workspace、lease 与 attempt；`--actor`、`--task` 和环境变量都不能声明或改写这个绑定。
+
+每次 HTTP 请求重新检查当前活动租约、有效期、任务终态与当前 attempt；`task.attempt_ended`、重新派工、
+租约释放、清扫器确认过期或任务结束后凭证立即失效。时间暂时超过 expires_at 但租约仍为 active 时，
+凭证继续遵循租约状态，允许休眠/卡顿后的续约恢复。中枢重启使先前凭证失效；有效租约下一次续约时，
+若中枢没有该租约的凭证记录，会通过 dispatch_token 补发新凭证，节点更新同一 0600 文件，旧凭证仍不可用。
+
+任务凭证只允许读取本任务详情、向本任务的 `POST /v1/tasks/:id/report` 上报，以及
+`GET /v1/binding` 查询可信绑定（`{kind: "task", task: {actor, task_id, workspace, lease_id, attempt}}`）。
+绑定查询沿用标准的 `{ok: true, data: ...}` 响应封装；wake 凭证得到 `kind: "wake"` 与其绑定。
+任务凭证访问其他任务或调用建任务、回复任务、收件箱操作、密钥与节点协议等接口，一律返回 403 `forbidden`。
+只读知识操作由任务绑定 MCP 在本地执行，不经中枢 HTTP。
+
+节点把 `dispatch_token` 写入 `state/tasks/<task>/dispatch-tokens/<lease>.token`（目录 0700、文件 0600），
+仅通过 `ExecutorContext.leaseTokenFile` 向适配器交付路径，供后续受管 MCP 配置使用；明文不放进 argv、env 或活动日志。
+MCP 通过 `RAINDOWN_LEASE_TOKEN_FILE` 读取凭证；节点通用子进程环境移除此变量，适配器仅为受管 MCP 显式设置它。
+任务结束、取消或放弃租约后删除文件；持有节点单实例锁的启动清理只删除受管目录内的 token 文件，保留任务产物且不跟随目录符号链接。
+当前阶段只提供适配器契约，既有 harness 的具体注入在后续适配器接入阶段完成。日志与账本脱敏识别 `fls_` 前缀。
+
+MCP 启动时以该文件访问绑定查询；显式的 task/workspace 只用于核对，不一致时拒绝启动。任务绑定只列出
+`raindown_report`、`task_show`、`kb_search`、`kb_get`、`kb_query`；`task_show` 限本任务。
+未绑定会话与 supervisor 唤醒会话沿用原工具清单，不列出 worker 的 raindown_report。
+
+### 上报与节点消费
+
+`raindown_report` 使用共享 `defineOperation` 定义，经中枢验证当前派工身份后写入 `task.reported`。
+输入按状态校验：question 必须有一个问题、2–8 个不同标签的选项及对应推荐标签；ready 必须有交付物地址，
+当前支持核实 GitHub PR：仓库必须与任务的 repo_snapshot 一致，head 分支必须与 task.branch 一致，且不能是 fork。
+交付物最多 5 个，查询失败只返回通用错误，不向 worker 返回 gh 的 stderr 或私有仓库信息，也不写上报事件。
+blocked 必须说明 missing/tried，failed/dropped 必须说明 reason。handback 仅存储，后续 PR 订阅阶段消费。
+每个租约同时只处理一个上报，超出时返回可重试的 report_busy；请求体最多 32 KiB，每分钟最多 10 次、
+每次派工最多 200 次，超额返回可重试的 report_rate_limited。成功次数从账本恢复，失败尝试同样消耗额度，
+但失败额度只保留在本次中枢进程内。上报、消费水位和派工有效性均通过索引查询。
+
+报告本身不改变任务状态。续约响应的可选 `report` 返回本派工最近一次未消费的报告（包括 progress），
+含 `seq`、`attempt` 与报告字段；续约请求带 `report_seq` 确认消费，写入 `task.report_consumed`，重复确认幂等。
+节点后续实现停下时的合并，再以 renew.blocked 或 complete 提交状态；complete 可引用同派工的 `report_seq`，
+中枢从账本取回实际内容，拒绝不匹配的 outcome。dropped 引用以 done 结束并标记 `result.dropped`，不进入收件箱或唤醒 supervisor；
+failed 引用走 task.failed。报告的自由文本原因保留在 `result.reported_reason`，不改变机器码 `result.reason` 的契约。
+报告中的交付物合入节点结果，保留节点已记录的产物。
+
+旧节点没有 basis 的卡住视为 inferred；推断提问直接交用户，授权委托仍按原规则判定。
+收件箱保存完整选项标签；Telegram 每选项独占一行，按钮保留短 id 与推荐标记后将标签尾部截成 `…`，总长不超过 60 个 UTF-16 字符。
+回调只携带选项索引，从 options_json 取完整标签回复；显示截断不会改变答复。supervisor 输入使用同一结构化问题字段，仍受现有唤醒输入预算限制。
+
 ## 建任务的中枢校验（add-m1-supervisor D1、D2、D4、D5、D10）
 
 除下文的 `creatable_by` 外，中枢对所有建任务请求还做以下检查（全部在幂等键查找之前，拒绝时不产生事件）：
@@ -306,6 +355,9 @@ raindown hub token revoke tok_0123456789ab                        # 立即生效
 ## 信任边界
 
 **本机上以同一系统用户运行、能读取 `state/hub.token` 的任何进程，都可以获得 `user` 身份。**
+目前 worker 与节点以同一 Unix 用户运行，部分角色（如 dev）不启用沙箱，因此能读到 `state/hub.token`（user 令牌）
+和其他任务的派工令牌文件。0600 只隔离不同系统用户，不能隔离同一用户的任务。
+在 worker 沙箱隔离落地之前，任务绑定的范围是纵深防御，不是硬边界。
 例如，直接读取 `hub.token` 并用 curl 携带该 token、且不声明 AI 身份的进程仍是 `user`。
 这一点是有意保留的：CLI 本身就靠读这个文件工作，同一用户的进程也能读 age 私钥、改配置。
 本设计防的是：

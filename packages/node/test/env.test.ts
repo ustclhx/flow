@@ -21,6 +21,8 @@ describe('子进程环境不继承中枢凭证（design D9）', () => {
     const base = {
       [HUB_TOKEN_ENV]: fakeToken(),
       RAINDOWN_HUB_TOKEN_FILE: '/new',
+      RAINDOWN_LEASE_TOKEN_FILE: '/lease',
+      FLOW_LEASE_TOKEN_FILE: '/old-lease',
       FLOW_HUB_TOKEN: fakeToken(),
       FLOW_HUB_TOKEN_FILE: '/old',
       PATH: '/bin',
@@ -31,6 +33,8 @@ describe('子进程环境不继承中枢凭证（design D9）', () => {
     expect(env.RAINDOWN_HUB_TOKEN_FILE).toBeUndefined()
     expect(env.FLOW_HUB_TOKEN).toBeUndefined()
     expect(env.FLOW_HUB_TOKEN_FILE).toBeUndefined()
+    expect(env.RAINDOWN_LEASE_TOKEN_FILE).toBeUndefined()
+    expect(env.FLOW_LEASE_TOKEN_FILE).toBeUndefined()
     expect(env).toMatchObject({ PATH: '/bin', KEEP: '1' })
     expect(base[HUB_TOKEN_ENV]).toBe(fakeToken())
   })

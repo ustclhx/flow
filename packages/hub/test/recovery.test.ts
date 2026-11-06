@@ -2,11 +2,12 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { renderRecoveryPrompt } from '@raindown/core'
+import { acquireLeaseData, renderRecoveryPrompt } from '@raindown/core'
 import { openLedger } from '../src/ledger/store.ts'
 import { createTaskService } from '../src/ledger/tasks.ts'
 import { recoveryForTask } from '../src/nodes/recovery.ts'
 import { createNodeService } from '../src/nodes/service.ts'
+import { createTaskTokenAuthority } from '../src/server/lease-tokens.ts'
 import { anyRole, contractInput, must } from './ledger-helpers.ts'
 import { FakeClock } from './server-fixtures.ts'
 
@@ -89,6 +90,83 @@ async function setup() {
 test('首次派工不携带恢复提示', async () => {
   const ctx = await setup()
   expect(await ctx.grant()).not.toHaveProperty('recovery')
+})
+
+test('重试租约同时保留恢复事实与新派工凭证，旧派工凭证不能复用', async () => {
+  const ctx = await setup()
+  const tokens = createTaskTokenAuthority({ ledger: ctx.ledger })
+  const nodes = createNodeService({
+    ledger: ctx.ledger(),
+    clock: ctx.clock,
+    leaseTtlS: 60,
+    leaseWaitMaxS: 0,
+    issueTaskToken: (grant) => tokens.issue(grant),
+    renewTaskToken: (grant) => tokens.ensure(grant),
+  })
+  cleanups.push(() => nodes.close())
+  const acquire = async () => {
+    const granted = must(
+      await nodes.acquire(
+        { node_id: 'n1', capabilities: ['executor:codex-orca'], wait_s: 0 },
+        { actor: 'user' },
+      ),
+    )
+    const lease = acquireLeaseData.parse(granted).lease
+    if (!lease?.dispatch_token) throw new Error('派工缺少凭证')
+    return lease
+  }
+  const first = await acquire()
+  const report = must(
+    ctx.ledger().append(
+      {
+        type: 'task.reported',
+        task_id: ctx.task.id,
+        workspace: ctx.task.workspace,
+        payload: {
+          status: 'failed',
+          summary: 'PR已开出但执行器退出',
+          reason: '需要恢复执行',
+          attempt: first.attempt,
+          lease_id: first.lease_id,
+        },
+      },
+      { actor: ctx.task.contract.role },
+    ),
+  )
+  must(
+    nodes.complete(first.lease_id, {
+      lease_token: first.lease_token,
+      report_seq: report.seq,
+      outcome: 'failed',
+      result: {
+        summary: '执行器退出',
+        executor: 'codex-orca',
+        node_id: 'n1',
+        artifacts: [{ kind: 'pr', ref: PR }],
+      },
+    }),
+  )
+  must(await ctx.tasks().retryTask(ctx.task.id, { actor: 'user' }))
+  const second = await acquire()
+  expect(second).toMatchObject({
+    task_id: first.task_id,
+    attempt: 2,
+    recovery: {
+      previous_end: {
+        attempt: 1,
+        reason: 'failed',
+        last_report: 'PR已开出但执行器退出',
+        message: 'PR已开出但执行器退出',
+      },
+      prs: [PR],
+    },
+  })
+  expect(second.dispatch_token).not.toBe(first.dispatch_token)
+  expect(tokens.authenticate(first.dispatch_token as string)).toBeNull()
+  expect(tokens.authenticate(second.dispatch_token as string)).toMatchObject({
+    task_id: first.task_id,
+    attempt: 2,
+  })
 })
 
 test('节点重启后租约过期重新派工：保留账本分支，忽略临时 activity 中的 PR 和 push', async () => {

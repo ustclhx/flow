@@ -54,6 +54,7 @@ import {
   type StuckVerdict,
 } from './executor.ts'
 import { createFakeExecutor } from './fake.ts'
+import { cleanLeaseTokenFiles, removeLeaseTokenFile, writeLeaseTokenFile } from './lease-token.ts'
 import { acquireNodeLock } from './node-lock.ts'
 import { createPolicyPrecheck, type Precheck, type PrecheckRequest } from './precheck.ts'
 import {
@@ -360,6 +361,13 @@ class LeaseRunner {
   private delivering: Promise<void> | undefined
   /** 执行器已结束：之后不再重新计时。 */
   private runEnded = false
+  /** 初始写入与续约刷新共用最新 token 和串行写队列，清理关闭队列后不再创建文件。 */
+  private dispatchToken: string | undefined
+  private leaseTokenFile: string | undefined
+  private tokenWrites: Promise<void> = Promise.resolve()
+  private tokenFilesReady = false
+  private tokenFilesClosed = false
+  private tokenWriteFailed = false
   /** 剩余的超时预算（毫秒）与本段开始计时的单调时间。 */
   private timeoutLeftMs: number
   private timeoutArmedAt = 0
@@ -398,6 +406,7 @@ class LeaseRunner {
   ) {
     this.lastActivityAt = this.mono()
     this.timeoutLeftMs = grant.contract.timeout_s * 1000
+    this.dispatchToken = grant.dispatch_token
     this.finished = this.execute()
   }
 
@@ -421,6 +430,7 @@ class LeaseRunner {
     this.cancelRenew()
     this.cancelTimeout()
     this.cancelIdle()
+    this.cancelGrace()
     this.abort.abort()
     // 不再等执行器：让 execute 尽快退出。
     this.forceDone?.(ok({ outcome: 'cancelled', message: '租约已释放' }))
@@ -495,6 +505,11 @@ class LeaseRunner {
       this.release()
       await this.run?.cancel().catch(() => {})
       return
+    }
+    if (r.data.dispatch_token) {
+      this.dispatchToken = r.data.dispatch_token
+      if (this.tokenFilesReady) await this.writeDispatchToken()
+      if (this.released) return
     }
     if (this.buffer.length > 0 || this.signals.length > 0 || this.outOfBand.length > 0)
       this.renewAgain = true
@@ -951,6 +966,46 @@ class LeaseRunner {
     }, this.env.timeoutGraceMs)
   }
 
+  private dispatchTokenFailure(): Result<ExecutorOutcome> {
+    return ok({
+      outcome: 'failed',
+      result: {
+        summary: '无法写入派工绑定 token 文件',
+        reason: 'lease_token_write_failed',
+        artifacts: [],
+        verify: [],
+        executor: this.grant.contract.executor,
+        node_id: this.env.nodeId,
+      },
+    })
+  }
+
+  private writeDispatchToken(): Promise<void> {
+    const token = this.dispatchToken
+    if (!token || this.tokenFilesClosed) return Promise.resolve()
+    this.tokenWrites = this.tokenWrites.then(async () => {
+      if (this.released || this.tokenFilesClosed) return
+      try {
+        this.leaseTokenFile = await writeLeaseTokenFile(
+          this.env.home,
+          this.grant.task_id,
+          this.grant.lease_id,
+          token,
+        )
+      } catch {
+        if (this.executor?.adapterCapabilities.raindown_mcp === true) {
+          this.tokenWriteFailed = true
+          this.forceDone?.(this.dispatchTokenFailure())
+          this.abort.abort()
+          void this.run?.cancel().catch(() => {})
+        } else {
+          this.env.logger.warn(`任务 ${this.grant.task_id} 无法写入派工绑定 token 文件，继续执行`)
+        }
+      }
+    })
+    return this.tokenWrites
+  }
+
   private async execute() {
     const { grant, env } = this
     const executor = env.registry.get(grant.contract.executor)
@@ -1033,6 +1088,11 @@ class LeaseRunner {
             grant.wake_token,
           )
         }
+        this.tokenFilesReady = true
+        await this.writeDispatchToken()
+        if (this.tokenWriteFailed) throw new Error('无法写入派工绑定 token 文件')
+        // 写文件期间可能已放弃租约：不再启动会话，finally 仍会清理凭证。
+        if (this.released) return
         this.run = executor.run(grant.contract, {
           taskId: grant.task_id,
           attempt: grant.attempt,
@@ -1050,6 +1110,7 @@ class LeaseRunner {
           ...(grant.resume ? { resume: grant.resume } : {}),
           ...(grant.recovery ? { recovery: grant.recovery } : {}),
           ...(wakeTokenFile ? { wakeTokenFile } : {}),
+          ...(this.leaseTokenFile ? { leaseTokenFile: this.leaseTokenFile } : {}),
           precheck,
           reportBranch: (report) => this.reportBranch(report),
           confirmApproval: (reply, live) => this.confirmApproval(reply, live),
@@ -1066,10 +1127,11 @@ class LeaseRunner {
         })().catch(() => {})
         outcome = await Promise.race([run.done, forced])
         // 等执行器把剩余活动交出来（执行器结束时应关闭活动流），最多等一个续约周期。
-        await Promise.race([pump, forced, sleep(env.clock, this.intervalMs)])
+        await Promise.race([pump, forced, sleep(env.clock, this.intervalMs, this.abort.signal)])
       } catch (err) {
-        outcome =
-          grant.wake_token && !wakeTokenFile
+        outcome = this.tokenWriteFailed
+          ? this.dispatchTokenFailure()
+          : grant.wake_token && !wakeTokenFile
             ? ok({
                 outcome: 'failed',
                 result: {
@@ -1083,11 +1145,14 @@ class LeaseRunner {
               })
             : fail('failure', 'executor_error', (err as Error).message)
       } finally {
+        this.cancelTimeout()
+        this.cancelIdle()
+        this.cancelGrace()
+        this.tokenFilesClosed = true
+        await this.tokenWrites
         if (wakeTokenFile) await removeWakeTokenFile(wakeTokenFile).catch(() => {})
+        if (this.leaseTokenFile) await removeLeaseTokenFile(this.leaseTokenFile).catch(() => {})
       }
-      this.cancelTimeout()
-      this.cancelIdle()
-      this.cancelGrace()
     }
     this.runEnded = true
     // 回复已交给 worker、worker 随即结束：先把送达确认完（写 task.unblocked），回复才不会被当作丢弃。
@@ -1097,7 +1162,7 @@ class LeaseRunner {
       if (this.unacked && !this.released) await sleep(env.clock, env.retryMs)
     }
     if (this.released) return
-    let req = this.completion(outcome)
+    let req = this.completion(this.tokenWriteFailed ? this.dispatchTokenFailure() : outcome)
     // 卡住期间执行器完成（例如用户直接在终端里答复后 worker 做完了）：blocked 不能直接转 done，
     // 先上报恢复为 running。崩溃或以 blocked 结束时不上报恢复：中枢写 blocked → blocked，
     // 有待送达的回复时带着回复重新排队（PR #16 审查第 5 条）。
@@ -1349,6 +1414,7 @@ async function startNodeLocked(options: StartNodeOptions): Promise<Result<Runnin
   // 上次运行残留的唤醒 token 文件（进程被杀时来不及删除）：启动时清理，租约早已失效。
   // 调用方（startNode）已持有节点单实例锁，不会误删并行节点的文件。
   await cleanWakeTokenDir(home)
+  await cleanLeaseTokenFiles(home)
 
   const id =
     options.nodeId !== undefined ? ok(options.nodeId) : await loadOrCreateNodeId(home, host)

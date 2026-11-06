@@ -6,6 +6,7 @@ import {
   checkTaskEvent,
   type Database,
   DELEGATION_ENDING_EVENTS,
+  type EventOf,
   type EventPayload,
   type EventType,
   eventPayloads,
@@ -202,6 +203,37 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   prRelatedTasks(workspace: string, prNumber: number, limit: number): TaskView[]
   /** 某任务的全部事件（按 seq）。 */
   taskEvents(taskId: string): LedgerEvent[]
+  /** 本任务某类事件在 beforeSeq（不含）之前的最近一条。 */
+  latestTaskEvent(taskId: string, type: EventType, beforeSeq?: number): LedgerEvent | null
+  /** 回复只绑定到 task.replied 之前最近一次卡住。 */
+  replyBlock(
+    taskId: string,
+    replyId: string,
+  ): { block_seq: number; approval_fingerprint?: string } | undefined
+  /** 本次派工是否已明确结束。 */
+  attemptEnded(taskId: string, attempt: number): boolean
+  /** 按派工与账本序号定位上报。 */
+  workerReport(
+    taskId: string,
+    leaseId: string,
+    attempt: number,
+    seq: number,
+  ): EventOf<'task.reported'> | null
+  /** 本次派工最近一次上报。 */
+  latestWorkerReport(
+    taskId: string,
+    leaseId: string,
+    attempt: number,
+  ): EventOf<'task.reported'> | null
+  /** 本次派工已消费的最大上报序号，没有消费时为 0。 */
+  workerReportWatermark(taskId: string, leaseId: string, attempt: number): number
+  /** 本次派工的上报总数及指定时间（含）之后的上报数。 */
+  workerReportUsage(
+    taskId: string,
+    leaseId: string,
+    attempt: number,
+    sinceIso: string,
+  ): { total: number; recent: number }
   /**
    * 该任务当前有效的代回复委托（D15，core `activeDelegation`）：任务离开该次卡住
    * （包括进入新的卡住）时隐式失效。调度与 task_respond 统一用它判断。
@@ -606,6 +638,39 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
    * 全部事件，按事件查询的核对必须只看它之前的事件，否则会被"未来"的事件误导。
    */
   let before = Number.MAX_SAFE_INTEGER
+  const attemptEnded = (taskId: string, attempt: number, upto = Number.MAX_SAFE_INTEGER) =>
+    !!get(
+      `SELECT 1 FROM events WHERE task_id = ? AND type = 'task.attempt_ended'
+         AND json_extract(payload_json, '$.attempt') = ? AND seq < ? LIMIT 1`,
+      taskId,
+      attempt,
+      upto,
+    )
+  const workerReport = (taskId: string, leaseId: string, attempt: number, seq: number) => {
+    const row = get<EventRow>(
+      `SELECT * FROM events WHERE seq = ? AND task_id = ? AND type = 'task.reported'
+         AND json_extract(payload_json, '$.lease_id') = ?
+         AND json_extract(payload_json, '$.attempt') = ?`,
+      seq,
+      taskId,
+      leaseId,
+      attempt,
+    )
+    return row ? (rowToEvent(row) as EventOf<'task.reported'>) : null
+  }
+  const latestTaskEvent = (
+    taskId: string,
+    type: EventType,
+    beforeSeq = Number.MAX_SAFE_INTEGER,
+  ) => {
+    const row = get<EventRow>(
+      'SELECT * FROM events WHERE task_id = ? AND type = ? AND seq < ? ORDER BY seq DESC LIMIT 1',
+      taskId,
+      type,
+      beforeSeq,
+    )
+    return row ? rowToEvent(row) : null
+  }
   const taskEventsOf = (taskId: string, upto = Number.MAX_SAFE_INTEGER) =>
     all<EventRow>(
       'SELECT * FROM events WHERE task_id = ? AND seq < ? ORDER BY seq',
@@ -665,6 +730,12 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     const blocked = last.payload
     if (blocked.reason !== p.kind) {
       return invalidEvent(`委托的 kind ${p.kind} 与卡住原因 ${blocked.reason} 不一致`)
+    }
+    // 旧账本没有 basis 时可能已合法委托；重放保留事实，启动恢复负责转交用户。
+    // 新追加始终执行 reported 门槛，历史中显式 inferred 的记录也不豁免。
+    const legacyReplay = before !== Number.MAX_SAFE_INTEGER && blocked.basis === undefined
+    if (blocked.reason === 'question' && blocked.basis !== 'reported' && !legacyReplay) {
+      return notDelegable('推断的提问不能委托 supervisor 代答')
     }
     if (blocked.no_delegate === true) return notDelegable('这次卡住带 no_delegate，不能委托')
     if (blocked.prior_reason !== undefined) {
@@ -844,19 +915,36 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'task.reported': {
+        const lease = get('SELECT * FROM leases WHERE lease_id = ?', draft.payload.lease_id) as
+          | { task_id: string; state: string; attempt: number }
+          | undefined
+        if (
+          draft.payload.attempt !== task?.attempt ||
+          lease?.task_id !== draft.task_id ||
+          lease?.state !== 'active'
+        ) {
+          return invalidEvent('上报必须属于当前活动派工')
+        }
+        return ok(null)
+      }
+      case 'task.report_consumed': {
+        const report = workerReport(
+          draft.task_id ?? '',
+          draft.payload.lease_id,
+          draft.payload.attempt,
+          draft.payload.report_seq,
+        )
+        if (!report || report.seq >= before || draft.payload.attempt !== task?.attempt) {
+          return invalidEvent('消费确认必须引用本派工的上报')
+        }
+        return ok(null)
+      }
       case 'task.attempt_ended': {
         if (draft.payload.attempt !== task?.attempt) {
           return invalidEvent('task.attempt_ended 的 attempt 必须是当前派工')
         }
-        if (
-          get(
-            `SELECT 1 FROM events WHERE task_id = ? AND type = 'task.attempt_ended'
-               AND json_extract(payload_json, '$.attempt') = ? AND seq < ? LIMIT 1`,
-            draft.task_id ?? null,
-            draft.payload.attempt,
-            before,
-          )
-        ) {
+        if (attemptEnded(draft.task_id ?? '', draft.payload.attempt, before)) {
           return invalidEvent('同一派工只能记录一次 task.attempt_ended')
         }
         return ok(null)
@@ -961,7 +1049,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
           'SELECT task_id, state FROM leases WHERE lease_id = ?',
           draft.payload.lease_id,
         )
-        if (!lease || lease.task_id !== draft.task_id || lease.state !== 'active') {
+        if (!lease || lease.task_id !== draft.task_id || lease?.state !== 'active') {
           return invalidEvent(`租约 ${draft.payload.lease_id} 不是该任务的活动租约`)
         }
         return ok(null)
@@ -1525,6 +1613,65 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     },
     taskEvents(taskId) {
       return taskEventsOf(taskId)
+    },
+    latestTaskEvent,
+    replyBlock(taskId, replyId) {
+      const reply = get<{ seq: number }>(
+        `SELECT seq FROM events WHERE task_id = ? AND type = 'task.replied'
+           AND json_extract(payload_json, '$.reply_id') = ? ORDER BY seq LIMIT 1`,
+        taskId,
+        replyId,
+      )
+      if (!reply) return undefined
+      const block = latestTaskEvent(taskId, 'task.blocked', reply.seq)
+      return block?.type === 'task.blocked'
+        ? {
+            block_seq: block.seq,
+            ...(block.payload.approval_fingerprint
+              ? { approval_fingerprint: block.payload.approval_fingerprint }
+              : {}),
+          }
+        : undefined
+    },
+    attemptEnded,
+    workerReport,
+    latestWorkerReport(taskId, leaseId, attempt) {
+      const row = get<EventRow>(
+        `SELECT * FROM events WHERE task_id = ? AND type = 'task.reported'
+           AND json_extract(payload_json, '$.lease_id') = ?
+           AND json_extract(payload_json, '$.attempt') = ? ORDER BY seq DESC LIMIT 1`,
+        taskId,
+        leaseId,
+        attempt,
+      )
+      return row ? (rowToEvent(row) as EventOf<'task.reported'>) : null
+    },
+    workerReportWatermark(taskId, leaseId, attempt) {
+      return (
+        get<{ watermark: number }>(
+          `SELECT COALESCE(MAX(json_extract(payload_json, '$.report_seq')), 0) AS watermark
+         FROM events WHERE task_id = ? AND type = 'task.report_consumed'
+           AND json_extract(payload_json, '$.lease_id') = ?
+           AND json_extract(payload_json, '$.attempt') = ?`,
+          taskId,
+          leaseId,
+          attempt,
+        )?.watermark ?? 0
+      )
+    },
+    workerReportUsage(taskId, leaseId, attempt, sinceIso) {
+      return (
+        get<{ total: number; recent: number }>(
+          `SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END), 0) AS recent
+         FROM events WHERE task_id = ? AND type = 'task.reported'
+           AND json_extract(payload_json, '$.lease_id') = ?
+           AND json_extract(payload_json, '$.attempt') = ?`,
+          sinceIso,
+          taskId,
+          leaseId,
+          attempt,
+        ) ?? { total: 0, recent: 0 }
+      )
     },
     activeDelegation(taskId) {
       return currentDelegation(taskId)

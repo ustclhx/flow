@@ -77,7 +77,9 @@ import {
 } from '../supervisor-tools/index.ts'
 import { createUiApp, createUiLoginCodeRoutes } from '../ui/app.tsx'
 import { createUiSessions } from '../ui/sessions.ts'
+import { createWorkerReportRoutes } from '../worker-report/routes.ts'
 import { systemClock } from './clock.ts'
+import { createTaskTokenAuthority } from './lease-tokens.ts'
 import { consoleLogger } from './maintenance.ts'
 import { type RunningHub, type StartHubOptions, startHub } from './start.ts'
 import { ensureHubToken } from './token.ts'
@@ -172,10 +174,12 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   }
   // 唤醒绑定 token（add-m1-supervisor D6）：领租约时签发，鉴权时按账本核对租约与唤醒。
   const wakeTokens = createWakeTokenAuthority({ ledger: () => ledger, now: () => clock.now() })
+  const taskTokens = createTaskTokenAuthority({ ledger: () => ledger, now: () => clock.now() })
   const started = await startHub({
     ...options,
     leaseHolders,
     wakeTokens,
+    taskTokens,
     openLedger: async () => {
       // startHub 在打开账本之前已校验过 hub.yaml，这里再读一次取租约参数。
       const loaded = await loadHubConfig(options.home)
@@ -249,6 +253,8 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         leaseTtlS: config.lease_ttl_s,
         leaseWaitMaxS: config.lease_wait_max_s,
         issueWakeToken: (grant) => wakeTokens.issue(grant),
+        issueTaskToken: (grant) => taskTokens.issue(grant),
+        renewTaskToken: (grant) => taskTokens.ensure(grant),
         onResume: () => scheduler?.resume(),
         ...(options.logger ? { logger: options.logger } : {}),
       })
@@ -313,6 +319,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       return [
         { path: '/', app: status },
         { path: '/', app: createTaskRoutes({ ledger, tasks }) },
+        { path: '/', app: createWorkerReportRoutes({ ledger, now: () => clock.now() }) },
         { path: '/', app: createInboxRoutes(inboxDeps) },
         { path: '/', app: createSupervisorRoutes({ scheduler: () => wakes }) },
         {

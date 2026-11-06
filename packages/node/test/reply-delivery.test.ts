@@ -670,6 +670,11 @@ for (const fingerprint of ['a1'.repeat(32), 'A1'.repeat(32), 'a'.repeat(63)]) {
 
 test('已尝试的request_changed拒收保留D15恢复与下一轮no_delegate语义', async () => {
   const activity = new ActivityQueue()
+  let precheckFinished: () => void = () => {}
+  const prechecked = new Promise<void>((resolve) => {
+    precheckFinished = resolve
+  })
+  let checkedDecision: number | undefined
   let finish: (value: Result<ExecutorOutcome>) => void = () => {}
   const done = new Promise<Result<ExecutorOutcome>>((resolve) => {
     finish = resolve
@@ -680,11 +685,13 @@ test('已尝试的request_changed拒收保留D15恢复与下一轮no_delegate语
     classify: () => ({ reason: 'awaiting_approval', message: '等待授权' }),
     run: (_contract, ctx) => {
       void ctx.precheck?.({ tool: 'Read', command: 'cat README.md' }).then((verdict) => {
+        if (!verdict.allow) checkedDecision = verdict.decision_id
         activity.push(
           idleSignal(new Date().toISOString(), '等待授权', {
             ...(!verdict.allow ? { decision_id: verdict.decision_id } : {}),
           }),
         )
+        precheckFinished()
       })
       return {
         activity,
@@ -719,6 +726,9 @@ test('已尝试的request_changed拒收保留D15恢复与下一轮no_delegate语
   )
   current = b
   const id = await b.create({ executor: 'probe' })
+  // 策略加载使用真实文件 I/O；完成前不推进虚拟时钟，避免测试把预检推进到超时。
+  await prechecked
+  expect(checkedDecision).toBeNumber()
   await b.until(id, (task) => task.status === 'blocked')
   const firstBlock = b.events(id).find((event) => event.type === 'task.blocked')
   if (!firstBlock) throw new Error('缺少卡住事件')
@@ -737,8 +747,8 @@ test('已尝试的request_changed拒收保留D15恢复与下一轮no_delegate语
         },
       },
       { actor: 'hub' },
-    ).ok,
-  ).toBe(true)
+    ),
+  ).toMatchObject({ ok: true })
   expect(
     b.ledger.append(
       {

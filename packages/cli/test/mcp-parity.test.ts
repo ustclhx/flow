@@ -23,6 +23,7 @@ type Json = Record<string, unknown>
  * kb_journal 给出样例是为了同时覆盖可选的 workspace 选项；capture 走自动构造。
  */
 const SAMPLE_INPUTS: Record<string, Json> = {
+  raindown_report: { id: 't-parity', status: 'progress', summary: '一致性上报' },
   inbox_act: { id: 'blk.42', action: 'dismiss' },
   task_create: {
     goal: '一致性任务',
@@ -167,7 +168,14 @@ describe('CLI 与 MCP 结果一致', () => {
       const cliDoc = JSON.parse(out.stdout)
 
       const mcpHome = await initTempHome('raindown-parity-mcp-')
-      const client = await connect({ actor: ACTOR, home: mcpHome })
+      const client = await connect({
+        actor: ACTOR,
+        home: mcpHome,
+        // 上报工具只在任务绑定中列出；CLI 的 id 也只交给中枢核对。
+        ...(op.name === 'raindown_report'
+          ? { binding: { kind: 'task' as const, workspace: 'ws/product-res', task: 't-parity' } }
+          : {}),
+      })
       const { isError, doc: mcpDoc } = await callJson(client, op.name, input)
 
       expect(isError).toBe(!cliDoc.ok)

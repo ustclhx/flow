@@ -110,7 +110,10 @@ async function setup() {
       }),
     )
   }
-  const createBlocked = async (reason: 'question' | 'awaiting_approval' = 'awaiting_approval') => {
+  const createBlocked = async (
+    reason: 'question' | 'awaiting_approval' = 'awaiting_approval',
+    extra: Record<string, unknown> = {},
+  ) => {
     const task = must(await tasks.createTask(contractInput(), { actor: 'codex' })).task
     must(
       protocol.service.registerNode(
@@ -125,7 +128,7 @@ async function setup() {
     must(
       protocol.service.renew(lease.lease_id, {
         lease_token: lease.lease_token,
-        blocked: { reason, message: '要执行 git push，请确认' },
+        blocked: { reason, message: '要执行 git push，请确认', ...extra },
       }),
     )
     await reactor.idle()
@@ -189,6 +192,27 @@ describe('直接访问页面', () => {
 })
 
 describe('在页面上批准', () => {
+  test('结构化问题显示上报来源与推荐按钮，点选仍按原标签回复', async () => {
+    const ctx = await setup()
+    const question = {
+      text: '标题用哪个？',
+      options: [
+        { label: 'A', description: '短标题' },
+        { label: 'B', description: '长标题' },
+      ],
+      recommended: 'A',
+    }
+    const { task, item } = await ctx.createBlocked('question', { basis: 'reported', question })
+    const cookie = await ctx.login()
+    const html = await (await ctx.get('/ui', { Cookie: cookie })).text()
+    expect(html).toContain('来源：worker 上报')
+    expect(html).toContain('标题用哪个？')
+    expect(html).toContain('data-option="A">A（推荐）</button>')
+    const res = await ctx.act(item.id, { action: 'reply', text: 'A' }, { Cookie: cookie })
+    expect(res.status).toBe(200)
+    expect(ctx.store.taskReplies(task.id)[0]?.text).toBe('A')
+  })
+
   test('批准后任务收到回复；条目先移到"已提交"，节点送达后关闭（via web），从列表中移除', async () => {
     const ctx = await setup()
     const { task, lease, item } = await ctx.createBlocked('awaiting_approval')

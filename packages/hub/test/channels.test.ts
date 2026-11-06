@@ -437,7 +437,7 @@ describe('外发内容脱敏', () => {
     expect(sent).not.toContain(token)
     const item = itemOf(ch.sent[0]?.message)
     expect(item.snippet).toContain('[secret:cloudflare/api-token]')
-    expect(item.text).toBe('部署时报错了')
+    expect(item.text).toBe('来源：从终端推断\n部署时报错了')
   })
 
   test('疑似密钥（正则兜底）也被替换；终端片段截断到末尾 1500 字符（可配置）', async () => {

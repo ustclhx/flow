@@ -38,6 +38,7 @@ export const askUserInput = z.strictObject({
   workspace: z.string().min(1).describe('workspace（ws/<id> 或 <id>），必须是本次唤醒绑定的'),
   question: z.string().trim().min(1).max(QUESTION_MAX).describe('提问全文'),
   options: inboxOptions
+    .max(4)
     .optional()
     .describe('可选的 2–4 个候选答复；用户在 Telegram / Web 上点选即以该选项答复'),
 })

@@ -121,14 +121,14 @@ export const inboxItemId = z
 export const INBOX_TITLE_MAX = 200
 export const INBOX_BODY_MAX = 4000
 export const INBOX_NOTE_MAX = 1000
-/** supervisor 提问的选项（D11）：2–4 个，每个最多 100 字符。 */
+/** 收件箱提问的选项：2–8 个，每个标签最多 100 字符。 */
 export const INBOX_OPTION_MAX = 100
 export const inboxOptions = z
   .array(z.string().trim().min(1).max(INBOX_OPTION_MAX))
   .min(2)
-  .max(4)
+  .max(8)
   .refine((o) => new Set(o).size === o.length, '选项不能重复')
-  .meta({ description: '提问的候选答复（2–4 个）；渠道上显示为按钮，点选即以该选项答复' })
+  .meta({ description: '提问的候选答复（2–8 个）；渠道上显示为按钮，点选即以该选项答复' })
 /** 推送失败原因（`inbox.pushed` op=failed）的长度上限。 */
 export const INBOX_PUSH_REASON_MAX = 500
 

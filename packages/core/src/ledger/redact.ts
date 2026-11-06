@@ -70,6 +70,8 @@ const RULES: readonly Rule[] = [
   { id: 'raindown-hub-token', confidence: 'high', re: /\bfht_[A-Za-z0-9_-]{43}/g },
   // 中枢按唤醒租约签发的唤醒绑定 token（add-m1-supervisor D6），只在租约响应中下发一次。
   { id: 'raindown-wake-token', confidence: 'high', re: /\bfwk_[A-Za-z0-9_-]{43}/g },
+  // 与 worker 当前派工绑定的受限凭证。
+  { id: 'raindown-lease-token', confidence: 'high', re: /\bfls_[A-Za-z0-9_-]{43}/g },
   { id: 'huggingface-token', confidence: 'high', re: /\bhf_[A-Za-z0-9]{30,255}/g },
   { id: 'api-key', confidence: 'high', re: /\bsk-ant-[A-Za-z0-9_-]{20,512}/g },
   // 通用的 sk- 前缀会命中 `sk-learn-…` 这类普通名字，只用于自由文本。

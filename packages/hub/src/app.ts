@@ -15,6 +15,7 @@ import type { LedgerReader } from './ledger/port.ts'
 import { hubAuth } from './server/auth.ts'
 import type { HubClock } from './server/clock.ts'
 import { createEventsApp } from './server/events.ts'
+import type { TaskTokenAuthority } from './server/lease-tokens.ts'
 import { createTokenRoutes } from './server/token-routes.ts'
 import type { HubTokenStore } from './server/tokens.ts'
 import type { WakeTokenAuthority } from './server/wake-tokens.ts'
@@ -35,6 +36,7 @@ export interface HubDeps {
   tokens?: HubTokenStore
   /** 唤醒绑定 token（add-m1-supervisor D6）；提供时启用 supervisor 身份的鉴权。 */
   wakeTokens?: Pick<WakeTokenAuthority, 'authenticate'>
+  taskTokens?: Pick<TaskTokenAuthority, 'authenticate'>
   /** 某任务活动租约所属的节点 id；node:* 身份据此只读自己持有租约的任务。 */
   leaseHolders?: (taskId: string) => readonly string[]
   ledger?: LedgerReader
@@ -74,9 +76,11 @@ export function createHubApp(deps: HubDeps = {}): Hono {
       ...(deps.token === undefined ? {} : { token: deps.token }),
       ...(deps.tokens ? { tokens: deps.tokens } : {}),
       ...(deps.wakeTokens ? { wakeTokens: deps.wakeTokens } : {}),
+      ...(deps.taskTokens ? { taskTokens: deps.taskTokens } : {}),
       ...(deps.leaseHolders ? { leaseHolders: deps.leaseHolders } : {}),
     }),
   )
+  app.get('/v1/binding', (c) => c.json({ ok: true as const, data: c.get('auth') }))
   if (deps.tokens) app.route('/', createTokenRoutes(deps.tokens))
 
   app.get(ENDPOINTS.health.path, (c) => {

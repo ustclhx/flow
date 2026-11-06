@@ -109,7 +109,7 @@
         "options": {
           "description": "supervisor 提问的候选答复（2–4 个，D11）；只用于 source=supervisor 的条目",
           "minItems": 2,
-          "maxItems": 4,
+          "maxItems": 8,
           "type": "array",
           "items": {
             "type": "string",
