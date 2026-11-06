@@ -83,6 +83,7 @@ export type ExecutorInfo = z.infer<typeof executorInfo>
 
 /** 注册输入仍校验已知字段的类型；读取与重放使用可逐字段降级的能力 schema。 */
 export const readExecutorInfo = executorInfo.extend({
+  mode: executorInfo.shape.mode.catch(undefined),
   adapter_capabilities: readAdapterCapabilities,
 })
 
@@ -608,6 +609,20 @@ export type EventType = keyof typeof eventPayloads
 export const EVENT_TYPES = Object.keys(eventPayloads) as EventType[]
 export const isKnownEventType = (type: unknown): type is EventType =>
   typeof type === 'string' && Object.hasOwn(eventPayloads, type)
+
+/** 客户端只跳过未知类型；损坏的信封和已知事件仍交给协议 schema 严格校验。 */
+export function filterUnknownEventTypes(events: unknown): unknown {
+  return Array.isArray(events)
+    ? events.filter(
+        (event) =>
+          typeof event !== 'object' ||
+          event === null ||
+          !('type' in event) ||
+          typeof event.type !== 'string' ||
+          isKnownEventType(event.type),
+      )
+    : events
+}
 export type EventPayload<T extends EventType> = z.infer<(typeof eventPayloads)[T]>
 
 /** 信封中 task_id / workspace 的要求。 */

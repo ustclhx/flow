@@ -8,6 +8,7 @@ import {
   type AskUserRequest,
   type BriefUpdateRequest,
   type CancelTaskRequest,
+  compatibleShowTaskData,
   type DecisionReviewRequest,
   ENDPOINTS,
   type EndpointName,
@@ -148,7 +149,8 @@ export class HubClient {
       const { kind, code, message, details } = error.data.error
       return fail(kind, code, message, details)
     }
-    const parsed = okBody(endpoint.response).safeParse(body)
+    const schema = name === 'tasks-show' ? compatibleShowTaskData : endpoint.response
+    const parsed = okBody(schema).safeParse(body)
     if (!response.ok || !parsed.success) return invalidResponse()
     return ok(parsed.data.data as ResponseData<N>)
   }
