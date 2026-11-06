@@ -579,6 +579,13 @@ const ESCALATION_BY_USER: ReadonlySet<string> = new Set(['user_replied', 'user_d
 /** supervisor 保留身份（与 core 的 SUPERVISOR_ACTOR 相同）。 */
 const SUPERVISOR = 'supervisor'
 
+/**
+ * 自己创建专用分支与 worktree、因而拥有任务分支的执行器（D15；docs/executors.md 适配器契约）。
+ * claude-sdk、codex-exec 在给定 cwd 中运行，当前分支通常是 main 或用户的检出，不在此列；
+ * 新适配器只有在自己创建分支时才能加入。
+ */
+const BRANCH_OWNING_EXECUTORS: ReadonlySet<string> = new Set(['codex-orca'])
+
 const invalidEvent = (message: string, details?: unknown) =>
   fail('failure', 'invalid_event', message, details)
 
@@ -1186,11 +1193,21 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         return ok(null)
       }
       case 'task.branch_reported': {
-        // 分支报告是适配器契约，不按 harness 类型限制；只接受当前租约持有节点写入，且不可改写。
+        // D15：只有自己创建并拥有任务分支的适配器上报（push_to: task_branch、gh_scope --head 据此放行，
+        // 不能把工作目录里用户检出的分支当成任务分支）；只接受当前租约持有节点写入，且不可改写。
         const row = get<{
+          contract_json: string
           branch: string | null
           worktree: string | null
-        }>('SELECT branch, worktree FROM tasks WHERE id = ?', draft.task_id ?? null)
+        }>('SELECT contract_json, branch, worktree FROM tasks WHERE id = ?', draft.task_id ?? null)
+        const executor = row
+          ? (JSON.parse(row.contract_json) as { executor?: string }).executor
+          : null
+        if (!executor || !BRANCH_OWNING_EXECUTORS.has(executor)) {
+          return invalidEvent(
+            `只有创建任务分支的执行器（${[...BRANCH_OWNING_EXECUTORS].join('、')}）上报任务分支（该任务执行器为 ${executor}）`,
+          )
+        }
         const lease = get<{ node_id: string }>(
           "SELECT node_id FROM leases WHERE task_id = ? AND state = 'active'",
           draft.task_id ?? null,

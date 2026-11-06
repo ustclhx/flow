@@ -98,6 +98,18 @@ test('中枢重启后凭证在节点确认当前指纹前持续补发', async ()
   expect(authority.authenticate(token ?? '')).toBeNull()
 })
 
+test('不带指纹的续约在已有当前凭证时不轮换，指纹不匹配时才重新下发', async () => {
+  const e = await setup()
+  const grant = { task_id: e.id, lease_id: `l-${e.id}-1` }
+  for (let i = 0; i < 3; i++) expect(e.authority.ensure(grant)).toBeUndefined()
+  expect(e.authority.authenticate(e.token)?.task_id).toBe(e.id)
+  const rotated = e.authority.ensure({ ...grant, dispatch_token_sha256: '0'.repeat(16) })
+  expect(rotated).toMatch(/^fls_/)
+  expect(e.authority.authenticate(e.token)).toBeNull()
+  expect(e.authority.ensure(grant)).toBeUndefined()
+  expect(e.authority.authenticate(rotated ?? '')?.task_id).toBe(e.id)
+})
+
 test('HTTP 强制派工 scope，不能改 actor、task id 或调用写操作；绑定查询来自凭证', async () => {
   const e = await setup()
   const child = new Hono()

@@ -11,6 +11,7 @@ import {
   type ExecutorOutcome,
   type ExecutorPlugin,
   idleSignal,
+  resumedSignal,
 } from '../src/executor.ts'
 import { type Bench, bench, type Intercept } from './harness.ts'
 
@@ -104,6 +105,53 @@ test('idle先读取未消费的question，完整保留选项并且只消费一�
   expect(c.b.events(c.id).filter((e) => e.type === 'task.report_consumed')).toMatchObject([
     { payload: { report_seq: seq } },
   ])
+})
+
+test('推断blocked续约期间到达的上报立即消费：worker恢复后持续忙碌超过两分钟也不再以旧问题blocked', async () => {
+  // 复现：idle → 续约没有上报 → 按推断分类 → diffStat 期间 worker 的 MCP question 到达 →
+  // blocked 续约的响应带回该上报。节点不得把它存为待处理上报并启动两分钟计时。
+  let inject: (() => void) | undefined
+  const c = await setup((url, init) => {
+    const body = String(init?.body ?? '')
+    if (url.endsWith('/renew') && body.includes('"blocked"') && inject) {
+      const run = inject
+      inject = undefined
+      run()
+    }
+    return undefined
+  })
+  let seq = 0
+  inject = () => {
+    seq = c.report(question)
+  }
+  c.idle()
+  const t = await c.b.until(c.id, (task) => task.status === 'blocked')
+  expect(t.blocked?.basis).toBe('inferred')
+  expect(seq).toBeGreaterThan(0)
+  // 下一次续约即确认消费，不再重复下发。
+  await c.b.clock.advance(30_000)
+  expect(c.b.events(c.id).filter((e) => e.type === 'task.report_consumed')).toMatchObject([
+    { payload: { report_seq: seq } },
+  ])
+  c.activity.push(resumedSignal(new Date(c.b.clock.now()).toISOString(), '继续工作'))
+  await c.b.until(c.id, (task) => task.status === 'running')
+  for (let i = 0; i < 8; i++) {
+    c.activity.push({ ts: new Date(c.b.clock.now()).toISOString(), kind: 'output', text: '忙碌中' })
+    await c.b.clock.advance(25_000)
+  }
+  expect(c.b.task(c.id).status).toBe('running')
+  const blocked = c.b.events(c.id).filter((e) => e.type === 'task.blocked')
+  expect(blocked).toHaveLength(1)
+  expect(c.b.events(c.id).filter((e) => e.type === 'task.report_conflict')).toHaveLength(0)
+  // 遗留上报也不得接管下一次真正的 idle：按推断分类。
+  c.idle()
+  const again = await c.b.until(
+    c.id,
+    (task) =>
+      task.status === 'blocked' &&
+      c.b.events(c.id).filter((e) => e.type === 'task.blocked').length === 2,
+  )
+  expect(again.blocked?.basis).toBe('inferred')
 })
 
 test('blocked报告保留missing与tried，不从终端重建说明', async () => {

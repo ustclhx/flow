@@ -72,7 +72,6 @@ import {
   type GitConfigPair,
   type GitHubCli,
   type GitOptions,
-  git,
   gitConfigEnv,
   UNTRUSTED_CHECKOUT_ENV,
 } from './github.ts'
@@ -148,7 +147,7 @@ export const WORKER_MCP_AUTO_ALLOWED = [
 
 const WORKER_REPORT_CONVENTION =
   '优先使用 raindown_report，每次必填 status 和 summary：question 填 question 问题、2–8 个 options（label、description）及 recommended 推荐标签；blocked 说明 missing/tried；' +
-  '交付就绪时 ready 用 deliverables 填 PR 地址；branch_unknown 时改用 blocked 说明分支尚未登记及已尝试的操作；无需继续时 dropped 说明 reason；失败用 failed 说明 reason。' +
+  '交付就绪时 ready 用 deliverables 填 PR 地址；branch_unknown 或 deliverable_branch_mismatch 时不要反复提交 ready，改用 blocked 说明分支情况及已尝试的操作；无需继续时 dropped 说明 reason；失败用 failed 说明 reason。' +
   'question/blocked 后停下等待，progress 后继续工作，ready/failed/dropped 后结束本轮；上报不可用时才以文字说明状态。'
 
 /**
@@ -1048,31 +1047,8 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
           )
           return
         }
-        if (kind === 'write' && ctx.reportBranch) {
-          const branch = await git(ctx.cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
-            ...options.git,
-            env: options.git?.env ?? env.data,
-          })
-          if (branch.ok && branch.data.trim()) {
-            const root = await git(ctx.cwd, ['rev-parse', '--show-toplevel'], {
-              ...options.git,
-              env: options.git?.env ?? env.data,
-            })
-            if (root.ok && root.data.trim()) {
-              const repo = await resolveContractCwd(
-                options.home,
-                { ...contract, cwd: root.data.trim() },
-                true,
-              )
-              if (repo.ok)
-                await ctx.reportBranch({
-                  branch: branch.data.trim(),
-                  worktree: root.data.trim(),
-                  repo: repo.data,
-                })
-            }
-          }
-        }
+        // 不上报任务分支：本适配器不创建专用分支或 worktree，工作目录当前分支通常是 main 或用户的检出，
+        // 不是本任务拥有的分支（push_to: task_branch、gh_scope --head 会据此放行；见 docs/executors.md）。
         if (finished) return
         // 不加载项目设置时，把项目约定文件的纯文本追加到系统提示词（不含 hooks 与权限规则）。
         // 审查任务从登记仓库读取（不是 PR 的检出），PR 不能借 CLAUDE.md / AGENTS.md 改写系统提示词。

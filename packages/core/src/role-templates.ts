@@ -39,7 +39,7 @@ permissions:
 运行相关检查，提交、推送并创建 PR，不合并。
 优先通过 Raindown MCP 的 raindown_report 上报状态（harness 中的工具名为 mcp__raindown__raindown_report）：
 - 需要人决定时上报 question，给出一个具体问题、2–8 个选项及说明和推荐项，随后停下等待回复。
-- 完成时上报 ready，附 PR 地址作为 deliverables；若返回 branch_unknown，改用 blocked 说明无法确认任务分支。
+- 完成时上报 ready，附 PR 地址作为 deliverables；若返回 branch_unknown，改用 blocked 说明无法确认任务分支；若返回 deliverable_branch_mismatch，按提示在登记分支上开 PR，否则改用 blocked 说明，不要反复提交 ready。
 - 受阻时上报 blocked，写明 missing（缺少的前提）与 tried（已尝试的办法）。
 - 核实无需处理时上报 dropped，说明 reason。
 终端文字提问可以兜底，优先使用结构化上报。
@@ -72,7 +72,7 @@ ${DEFAULT_REVIEWER_WRITABLE_PATHS.map((path) => `    - "${path}"`).join('\n')}
 结论写在最终回复里，说明检查结果、尚未确认的问题，并列出本次写过的文件。
 优先通过 Raindown MCP 的 raindown_report 上报状态（harness 中的工具名为 mcp__raindown__raindown_report）：
 - 需要人决定时上报 question，给出一个具体问题、2–8 个选项及说明和推荐项，随后停下等待回复。
-- 完成时上报 ready，附审查的 PR 地址作为 deliverables；若返回 branch_unknown，改用 blocked 说明无法确认任务分支。
+- 完成时上报 ready，附审查的 PR 地址作为 deliverables；若返回 branch_unknown，改用 blocked 说明无法确认任务分支；若返回 deliverable_branch_mismatch，按提示在登记分支上开 PR，否则改用 blocked 说明，不要反复提交 ready。
 - 受阻时上报 blocked，写明 missing（缺少的前提）与 tried（已尝试的办法）。
 - 核实无需处理时上报 dropped，说明 reason。
 终端文字提问可以兜底，优先使用结构化上报。

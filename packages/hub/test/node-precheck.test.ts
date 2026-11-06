@@ -107,21 +107,24 @@ describe('续约上报任务分支（task.branch_reported）', () => {
     )
   })
 
-  test.each(['codex-exec', 'claude-sdk'])('%s 同样可以报告真实分支', async (executor) => {
-    const caps = [`executor:${executor}`]
-    const ctx = await setup(caps)
-    const id = await ctx.create({ executor })
-    const lease = await grant(ctx, caps)
-    const r = must(
-      ctx.protocol.service.renew(lease.lease_id, {
-        lease_token: lease.lease_token,
-        branch: { branch: 'ustclhx/t-1', worktree: '/w/t-1' },
-      }),
-    )
-    expect(r.branch_report).toBe('recorded')
-    expect(ctx.ledger.getTask(id)).toMatchObject({ branch: 'ustclhx/t-1', worktree: '/w/t-1' })
-    expect(ctx.warns).toEqual([])
-  })
+  test.each(['fake', 'codex-exec', 'claude-sdk'])(
+    '%s 不拥有任务分支：写入被拒、ignored 并记 warn，续约照常成功',
+    async (executor) => {
+      const caps = [`executor:${executor}`]
+      const ctx = await setup(caps)
+      const id = await ctx.create({ executor })
+      const lease = await grant(ctx, caps)
+      const r = must(
+        ctx.protocol.service.renew(lease.lease_id, {
+          lease_token: lease.lease_token,
+          branch: { branch: 'main', worktree: '/w/user-checkout' },
+        }),
+      )
+      expect(r.branch_report).toBe('ignored')
+      expect(ctx.ledger.getTask(id)).toMatchObject({ branch: null, worktree: null })
+      expect(ctx.warns.some((m) => m.includes('任务分支上报写入失败'))).toBe(true)
+    },
+  )
 
   test('首次上报固定快照；之后的租约随 grant 下发快照', async () => {
     const ctx = await setup()
@@ -239,7 +242,7 @@ describe('续约上报任务分支（task.branch_reported）', () => {
 
   test('非租约持有节点不能直接写入分支报告', async () => {
     const ctx = await setup()
-    const id = await ctx.create()
+    const id = await ctx.create({ executor: 'codex-orca' })
     await grant(ctx)
     const before = ctx.ledger.seq()
     expect(

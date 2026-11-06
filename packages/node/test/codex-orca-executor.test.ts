@@ -211,6 +211,9 @@ describe('启动', () => {
           | undefined
         expect(created?.command).toContain(`RAINDOWN_LEASE_TOKEN_FILE=${current}`)
         expect(created?.command).toContain('mcp_servers.raindown=')
+        // 进程环境带凭证路径：shell 环境排除项固定在角色配置之后（模型命令看不到它）。
+        expect(created?.command).toContain('shell_environment_policy.ignore_default_excludes=false')
+        expect(created?.command).toContain('RAINDOWN_LEASE_TOKEN_FILE"]')
       }
       const state = JSON.parse(
         readFileSync(join(home.home, 'state/tasks/t-orca-1/orca.json'), 'utf8'),

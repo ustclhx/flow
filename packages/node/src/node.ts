@@ -351,6 +351,11 @@ class LeaseRunner {
   private observedIdle: { at: number; hint?: Record<string, unknown>; text?: string } | undefined
   private pendingReport: PendingReport | undefined
   private lastReportSeq = 0
+  /**
+   * 非运行阶段到达、或因恢复而作废的上报：随下一次续约以 report_seq 确认消费，不再参与判定
+   * （避免 worker 恢复后旧问题再次转 blocked 或接管下一次 idle）。
+   */
+  private staleReportSeq: number | undefined
   private terminalReport: PendingReport | undefined
   private adapterOutcome: Result<ExecutorOutcome> | undefined
   private renewing: Promise<void> | undefined
@@ -488,6 +493,11 @@ class LeaseRunner {
     const signal = this.signals.shift()
     const branch = this.pendingBranch
     const outOfBand = this.outOfBand.splice(0, 100)
+    // 同批信号已带 report_seq 时不混发（report_conflict 须与之一致），留到下一次续约。
+    const staleAck =
+      signal && 'report_seq' in signal && signal.report_seq !== undefined
+        ? undefined
+        : this.staleReportSeq
     const r = await this.env.client.renew(this.grant.lease_id, {
       lease_token: this.grant.lease_token,
       ...(this.dispatchTokenSha256 ? { dispatch_token_sha256: this.dispatchTokenSha256 } : {}),
@@ -495,10 +505,13 @@ class LeaseRunner {
       ...(signal && 'blocked' in signal
         ? { ...signal, blocked: clipBlocked(signal.blocked) }
         : (signal ?? {})),
+      ...(staleAck !== undefined ? { report_seq: staleAck } : {}),
       ...(branch ? { branch } : {}),
       ...(outOfBand.length > 0 ? { out_of_band: outOfBand } : {}),
     })
     if (this.released) return
+    if (r.ok && staleAck !== undefined && this.staleReportSeq === staleAck)
+      this.staleReportSeq = undefined
     this.renewReadFailed = !r.ok && r.error.kind === 'retryable'
     // 中枢已处理分支上报（写入或因已上报而忽略）：不再重复发送。
     // 分支上报的结果（D15）：只有中枢明确说临时失败（retry）时保留重发；写入、忽略或旧版中枢
@@ -535,7 +548,12 @@ class LeaseRunner {
       if (this.tokenFilesReady) await this.writeDispatchToken()
       if (this.released) return
     }
-    if (this.buffer.length > 0 || this.signals.length > 0 || this.outOfBand.length > 0)
+    if (
+      this.buffer.length > 0 ||
+      this.signals.length > 0 ||
+      this.outOfBand.length > 0 ||
+      this.staleReportSeq !== undefined
+    )
       this.renewAgain = true
     if (r.data.cancel_requested && !this.cancelRequested) {
       this.cancelRequested = true
@@ -744,7 +762,16 @@ class LeaseRunner {
     this.lastReportSeq = report.seq
     this.pendingReport = report
     this.cancelReportWait()
-    if (report.status === 'ready' || report.status === 'failed' || report.status === 'dropped') {
+    const terminal =
+      report.status === 'ready' || report.status === 'failed' || report.status === 'dropped'
+    if (!terminal && this.phase !== 'running') {
+      // 已经 blocked（推断或上报）或在验收：这次上报针对的是当前这一轮，立即确认消费，
+      // 不存为待处理上报、不启动两分钟计时；当前 blocked 照常交给回复流程。
+      this.pendingReport = undefined
+      this.discardReport(report.seq)
+      return
+    }
+    if (terminal) {
       this.terminalReport = report
       this.pendingReport = undefined
       this.cancelIdle()
@@ -760,6 +787,12 @@ class LeaseRunner {
         this.stuck('idle', undefined, undefined, 'busy')
       }, REPORT_BUSY_MS)
     } else this.armIdle()
+  }
+
+  /** 作废的上报随下一次续约确认消费（中枢以 seq 作水位，较大的 seq 覆盖较小的）。 */
+  private discardReport(seq: number) {
+    this.staleReportSeq = Math.max(this.staleReportSeq ?? 0, seq)
+    void this.renewNow()
   }
 
   private reportedOutcome(report: PendingReport): Result<ExecutorOutcome> {
@@ -1060,6 +1093,14 @@ class LeaseRunner {
 
   private enterRunning() {
     this.observedIdle = undefined
+    // 从非运行阶段恢复时旧的上报已经过时：取消等待计时并确认消费，不接管之后的判定。
+    // 已在运行（幂等确认重复进入）时保留运行中刚到达的上报。
+    if (this.phase !== 'running') this.cancelReportWait()
+    if (this.phase !== 'running' && this.pendingReport) {
+      const stale = this.pendingReport
+      this.pendingReport = undefined
+      this.discardReport(stale.seq)
+    }
     this.phase = 'running'
     this.stuckGen++
     this.blockedDecision = undefined

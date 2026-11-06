@@ -292,14 +292,11 @@ describe('按角色运行', () => {
     expect(task.origin_instruction?.read?.op).toBe('event_get')
   })
 
-  test('写任务在 SDK 启动前等待任务分支报告，git 使用执行器环境', async () => {
+  test('写任务不上报工作目录的当前分支：claude-sdk 不拥有任务分支', async () => {
     const home = mkdtempSync(join(tmpdir(), 'raindown-claude-branch-'))
     const repo = join(home, 'repo')
     const reports: unknown[] = []
-    let release = () => {}
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
+    const gitCalls: (readonly string[])[] = []
     const { query, state } = mockSdk(async function* (io) {
       await io.nextUser()
       yield result()
@@ -316,12 +313,11 @@ describe('按角色运行', () => {
         query,
         resolveRole: roleResolver(reviewer()),
         git: {
-          run: async (_cmd, args, options) => {
-            expect(options.env?.PATH).toBe(process.env.PATH)
-            expect(options.env?.RAINDOWN_HUB_TOKEN).toBeUndefined()
+          run: async (_cmd, args) => {
+            gitCalls.push(args)
             return {
               code: 0,
-              stdout: args.includes('symbolic-ref') ? 'dev/task\n' : `${repo}\n`,
+              stdout: args.includes('symbolic-ref') ? 'main\n' : `${repo}\n`,
               stderr: '',
             }
           },
@@ -334,18 +330,15 @@ describe('按角色运行', () => {
           env: { PATH: process.env.PATH },
           reportBranch: async (report: unknown) => {
             reports.push(report)
-            await gate
           },
         }),
       )
-      await waitFor(() => reports.length === 1, '分支报告')
-      expect(state.calls).toHaveLength(0)
-      expect(reports).toEqual([{ branch: 'dev/task', worktree: repo, repo }])
-      release()
       expect(await run.done).toMatchObject({ ok: true, data: { outcome: 'done' } })
+      expect(state.calls).toHaveLength(1)
+      expect(reports).toEqual([])
+      expect(gitCalls.some((args) => args.includes('symbolic-ref'))).toBe(false)
       expect(createClaudeSdkExecutor({ home, query }).adapterCapabilities.raindown_mcp).toBe(true)
     } finally {
-      release()
       rmSync(home, { recursive: true, force: true })
     }
   })

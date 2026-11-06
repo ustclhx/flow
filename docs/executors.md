@@ -37,16 +37,35 @@
 加载 Raindown MCP 的 worker 必须绑定当前任务与派工：启动命令为 `raindown mcp --actor <role> --task <id>`，
 通过 `RAINDOWN_LEASE_TOKEN_FILE` 传文件路径，不传凭证明文。Codex 由 worker 环境向 MCP 透传路径，Claude 只在 MCP 子进程环境中设置路径。
 supervisor 仍使用独立的唤醒绑定，不能套用 worker 凭证。
-Codex 的工具名为 `mcp__raindown__raindown_report`、`mcp__raindown__task_show`、`mcp__raindown__kb_*`，Claude 使用相同前缀。
+Codex 的工具名为 `mcp__raindown__raindown_report`、`mcp__raindown__task_show`、`mcp__raindown__event_get`、`mcp__raindown__kb_*`，Claude 使用相同前缀。
 worker 的上报、本任务查询与只读知识工具自动放行；这只覆盖任务绑定 MCP 暴露的工具，不放行 shell 或其他授权动作。
+`event_get` 对任务绑定开放，由中枢限制为本任务的事件：Codex 的 Raindown 服务器整体免审批，Claude 的 worker 会话中
+写角色仍经审批，只读角色按绑定放行（与 supervisor 唤醒会话的规则一致）。
 
-**报告分支是写类适配器的职责。** codex-orca 在创建 worktree 后，codex-exec 与 claude-sdk 在能确定当前分支时，
-都应在启动 worker 前等待 `ctx.reportBranch({branch, worktree, repo})`，供节点采集仓库快照并经续约写入 `task.branch_reported`。
-分支报告不可改写，不能用任务 id 代替无法确认的分支。detached HEAD 或其他无法确定分支的情况不伪造报告；
-`ready` 的交付物核对在缺少任务分支时返回 `branch_unknown`，worker 应改用 `blocked` 写明缺少的前提与已尝试的办法。
+**Codex 进程环境中的凭证路径。** codex-orca 与 codex-exec 的 Codex 进程环境带有 `RAINDOWN_LEASE_TOKEN_FILE`：
+MCP 配置的 `env_vars` 只能从 Codex 自身环境透传。模型执行的 shell 命令看不到它，依赖的是 Codex
+`shell_environment_policy` 的默认排除项（`*KEY*`、`*SECRET*`、`*TOKEN*`）。为防止角色配置用
+`ignore_default_excludes = true` 或改写 `exclude` 把它重新暴露，适配器在角色配置之后追加
+`-c shell_environment_policy.ignore_default_excludes=false` 与 `-c shell_environment_policy.exclude=[…]`：
+固定排除项为上述三项加 `RAINDOWN_LEASE_TOKEN_FILE`，角色自己的 `exclude`（可解析的字符串数组）合并保留。
+
+**只有创建并拥有任务分支的适配器报告分支。** 适配器只能报告自己为本任务创建的分支：codex-orca 在创建 worktree 与专用分支后、
+启动 worker 前等待 `ctx.reportBranch({branch, worktree, repo})`，供节点采集仓库快照并经续约写入 `task.branch_reported`。
+codex-exec 与 claude-sdk 在给定工作目录中运行、不创建分支，当前分支通常是 `main` 或用户自己的检出，**不报告分支**；
+中枢只接受拥有分支的执行器（当前为 codex-orca）写入 `task.branch_reported`，新适配器只有在自己创建分支时才能加入。
+
+策略含义：任务分支一经记录不可改写，并且是 `push_to: task_branch` 与 `gh_scope --head` 放行推送、开 PR 的依据，
+也是交付物核对、"交付物已存在"判定、PR 订阅与合并资格的依据。若把用户检出的无关分支（甚至默认分支）当作任务分支，
+worker 就能向它推送或以它开 PR；worker 新建分支开出的 PR 又因 head 不一致永远无法 `ready`。因此宁可留空：
+`ready` 的交付物核对在缺少任务分支时返回 `branch_unknown`，PR 不是从登记分支开出时返回 `deliverable_branch_mismatch`
+（提示中给出登记分支）；两种情况下 worker 都不应反复提交 ready，应改用 `blocked` 写明分支情况与已尝试的办法。
+detached HEAD 或其他无法确定分支的情况同样不伪造报告，也不能用任务 id 代替。
 
 节点在续约中缓存最近一次未消费的上报。适配器报告 idle 时，question/blocked 上报优先，卡住来源为 `basis: reported`，
 问题、选项、推荐项与 missing/tried 原样保留；没有可用上报时调用适配器分类并标为 `basis: inferred`。
+任务已经 blocked（含推断判定期间）或在验收时到达的非终态上报针对的是当前这一轮：节点随下一次续约以 `report_seq`
+立即确认消费，不缓存、不启动两分钟计时；worker 从 blocked 恢复运行时，节点丢弃并确认消费仍未使用的旧上报，
+它不会在恢复后以旧问题再次转 blocked，也不会接管之后真正的 idle。
 question/blocked 上报后 harness 仍忙超过两分钟时，也进入 reported blocked，并写 `task.report_conflict`；
 progress 与超过阈值的空闲观察矛盾时，按适配器观察处理并记录冲突。ready/failed/dropped 直接结束派工，
 其中 dropped 为带标记的 done；节点按 report_seq 确认消费，重试不重复生效。

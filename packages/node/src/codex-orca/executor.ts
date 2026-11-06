@@ -21,6 +21,7 @@ import {
 import { z } from 'zod'
 import { type NodeClock, sleep, systemClock } from '../clock.ts'
 import {
+  codexShellEnvPolicyConfig,
   codexTaskMcpConfig,
   orcaCodexHome,
   prepareCodexHome,
@@ -249,11 +250,14 @@ export function buildCodexCommand(input: {
     if (p.approval) argv.push('-a', p.approval)
     if (p.sandbox) argv.push('-s', p.sandbox)
   }
-  if (input.task)
+  if (input.task) {
     argv.push(
       '-c',
       codexTaskMcpConfig({ home: input.task.home, role: input.role.name, taskId: input.task.id }),
     )
+    // 进程环境带有凭证文件路径：在角色配置之后固定 shell 环境排除项，防止角色把它重新暴露给模型命令。
+    for (const value of codexShellEnvPolicyConfig(p.config)) argv.push('-c', value)
+  }
   const cmd = argv.map(quote).join(' ')
   const taskEnv = input.task
     ? dualRaindownEnv({

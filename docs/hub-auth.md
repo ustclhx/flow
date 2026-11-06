@@ -153,6 +153,7 @@ workspace、lease 与 attempt；`--actor`、`--task` 和环境变量都不能声
 节点在续约中带 `dispatch_token_sha256`（当前已写入凭证的 SHA-256 前 16 位）。中枢没有该租约的凭证记录，
 或指纹与当前记录不一致时，通过 dispatch_token 补发新凭证，节点更新同一 0600 文件后才确认新指纹。
 补发响应丢失时，下次续约仍带旧指纹，因而会再次补发；旧凭证仍不可用。明文凭证不写入续约请求。
+续约不带指纹（旧节点，或凭证文件尚未写好）而中枢已有该租约的当前凭证时**不轮换**：轮换会让 worker 进行中的 MCP 调用拿到 401。
 
 任务凭证只允许读取本任务详情、向本任务的 `POST /v1/tasks/:id/report` 上报，以及
 `GET /v1/binding` 查询可信绑定（`{kind: "task", task: {actor, task_id, workspace, lease_id, attempt}}`）。
@@ -165,10 +166,13 @@ workspace、lease 与 attempt；`--actor`、`--task` 和环境变量都不能声
 MCP 通过 `RAINDOWN_LEASE_TOKEN_FILE` 读取凭证；节点通用子进程环境移除此变量，适配器仅为受管 MCP 显式设置它。
 任务结束、取消或放弃租约后删除文件；持有节点单实例锁的启动清理只删除受管目录内的 token 文件，保留任务产物且不跟随目录符号链接。
 codex-orca、codex-exec（含只读角色）与 claude-sdk 均注入任务绑定 MCP；supervisor 唤醒绑定保持独立。
+codex-orca 与 codex-exec 的 Codex 进程环境带有 `RAINDOWN_LEASE_TOKEN_FILE`（MCP `env_vars` 透传需要）；模型执行的 shell 命令依赖
+Codex 默认 `shell_environment_policy` 排除 `*TOKEN*` 而看不到它，适配器在角色配置之后的 `-c` 层固定该排除项，
+角色配置不能重新暴露（见 [executors.md](executors.md#适配器契约)）。claude-sdk 只在 MCP 子进程环境中设置该路径。
 日志与账本脱敏识别 `fls_` 前缀。
 
 MCP 启动时以该文件访问绑定查询；显式的 task/workspace 只用于核对，不一致时拒绝启动。任务绑定只列出
-`raindown_report`、`task_show`、`kb_search`、`kb_get`、`kb_query`；`task_show` 限本任务。
+`raindown_report`、`task_show`、`event_get`、`kb_search`、`kb_get`、`kb_query`；`task_show` 与 `event_get` 限本任务。
 未绑定会话与 supervisor 唤醒会话沿用原工具清单，不列出 worker 的 raindown_report。
 
 ### 上报与节点消费
@@ -176,7 +180,7 @@ MCP 启动时以该文件访问绑定查询；显式的 task/workspace 只用于
 `raindown_report` 使用共享 `defineOperation` 定义，经中枢验证当前派工身份后写入 `task.reported`。
 输入按状态校验：question 必须有一个问题、2–8 个不同标签的选项及对应推荐标签；ready 必须有交付物地址，
 当前支持核实 GitHub PR：仓库必须与任务的 repo_snapshot 一致，head 分支必须与 task.branch 一致，且不能是 fork。
-任务分支尚未报告时返回 `branch_unknown`，提示 worker 改用 blocked 说明情况；写类适配器的分支报告职责见 [适配器契约](executors.md#适配器契约)。
+任务分支尚未报告时返回 `branch_unknown`；PR 其余核对通过、只有 head 与登记分支不一致时返回 `deliverable_branch_mismatch`（提示中给出登记分支）。两者都提示 worker 不要反复提交 ready、改用 blocked 说明情况；只有创建并拥有任务分支的适配器才报告分支，见 [适配器契约](executors.md#适配器契约)。
 交付物最多 5 个，查询失败只返回通用错误，不向 worker 返回 gh 的 stderr 或私有仓库信息，也不写上报事件。
 blocked 必须说明 missing/tried，failed/dropped 必须说明 reason。handback 仅存储，后续 PR 订阅阶段消费。
 每个租约同时只处理一个上报，超出时返回可重试的 report_busy；请求体最多 32 KiB，每分钟最多 10 次、

@@ -102,7 +102,6 @@ ${body}
     resolveRole: async () => ok(resolvedRole),
     // 隔离 CODEX_HOME 时链接的凭证来源：临时目录，绝不读取 ~/.codex。
     codexAuthSource: join(dir, 'codex-src'),
-    git: { run: async () => ({ code: 1, stdout: '', stderr: '无分支' }) },
   }
   const run = (context = ctx, opts = options) => {
     const r = createCodexExecExecutor(opts).run(contract, context)
@@ -132,12 +131,11 @@ ${body}
 }
 
 // 旧 argv 断言只移除新增绑定层；下方独立验证它的真实内容。
+/** 去掉每个任务固定追加的 -c 层（Raindown MCP 与 shell 环境排除项），只比较角色相关参数。 */
+const pinned = (arg: string | undefined) =>
+  arg?.startsWith('mcp_servers.raindown=') || arg?.startsWith('shell_environment_policy.')
 function withoutMcp(args: string[]) {
-  return args.filter(
-    (arg, index) =>
-      !arg.startsWith('mcp_servers.raindown=') &&
-      !(arg === '-c' && args[index + 1]?.startsWith('mcp_servers.raindown=')),
-  )
+  return args.filter((arg, index) => !pinned(arg) && !(arg === '-c' && pinned(args[index + 1])))
 }
 
 async function collect(run: ExecutorRun) {
@@ -201,42 +199,23 @@ describe('codex-exec 无头执行器', () => {
     expect(createCodexExecExecutor(s.options).adapterCapabilities.raindown_mcp).toBe(true)
   })
 
-  test('写任务在 worker 启动前等待登记仓库的分支快照，cwd 子目录不作为 repo', async () => {
+  test('写任务不上报工作目录的当前分支：codex-exec 不拥有任务分支', async () => {
     const s = setup('send(resumed)', { permissions: { sandbox: 'workspace-write' } })
     mkdirSync(join(s.home, 'config', 'workspaces'), { recursive: true })
     writeFileSync(
       join(s.home, 'config', 'workspaces', 'demo.yaml'),
       `id: demo\nname: Demo\ndescription: 测试\nkind: product\nrepos:\n  - ${s.dir}\n`,
     )
-    let release = () => {}
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
     const reports: unknown[] = []
-    const run = s.run(
-      {
-        ...s.ctx,
-        reportBranch: async (report) => {
-          reports.push(report)
-          await gate
-        },
+    const run = s.run({
+      ...s.ctx,
+      reportBranch: async (report) => {
+        reports.push(report)
       },
-      {
-        ...s.options,
-        git: {
-          run: async (_cmd, args) => ({
-            code: 0,
-            stdout: args.includes('symbolic-ref') ? 'dev/task\n' : `${s.dir}\n`,
-            stderr: '',
-          }),
-        },
-      },
-    )
-    await waitFor(() => reports.length === 1, '分支快照上报')
-    expect(s.launched()).toBe(false)
-    expect(reports).toEqual([{ branch: 'dev/task', worktree: s.dir, repo: s.dir }])
-    release()
+    })
     expect((await collect(run)).outcome.outcome).toBe('done')
+    expect(s.launched()).toBe(true)
+    expect(reports).toEqual([])
   })
 
   test.each([false, true])('恢复提示放在输入开头（恢复旧会话：%s）', async (resume) => {
@@ -569,6 +548,33 @@ describe('codex-exec 无头执行器', () => {
     } finally {
       await b.close()
     }
+  })
+
+  test('角色配置不能让模型 shell 看到凭证路径：shell 环境排除项固定在角色配置之后', async () => {
+    const s = setup(undefined, {
+      permissions: {
+        config: {
+          'shell_environment_policy.ignore_default_excludes': true,
+          'shell_environment_policy.exclude': '["MY_PRIVATE"]',
+        },
+      },
+    })
+    await collect(s.run())
+    const args = s.report().args
+    const at = (value: string) => args.lastIndexOf(value)
+    const pinIgnore = at('shell_environment_policy.ignore_default_excludes=false')
+    const exclude = args.find(
+      (a, i) => i > pinIgnore && a.startsWith('shell_environment_policy.exclude='),
+    )
+    expect(pinIgnore).toBeGreaterThan(at('shell_environment_policy.ignore_default_excludes=true'))
+    expect(args[pinIgnore - 1]).toBe('-c')
+    expect(JSON.parse((exclude ?? '').slice('shell_environment_policy.exclude='.length))).toEqual([
+      'MY_PRIVATE',
+      '*KEY*',
+      '*SECRET*',
+      '*TOKEN*',
+      'RAINDOWN_LEASE_TOKEN_FILE',
+    ])
   })
 
   test('角色 model、effort、config 以独立 argv 传入，不经过 shell', async () => {

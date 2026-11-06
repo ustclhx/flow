@@ -111,6 +111,7 @@ export const PROTOCOL_ERRORS = {
   deliverable_not_found: { status: 422, kind: 'failure' },
   deliverable_check_failed: { status: 502, kind: 'failure' },
   branch_unknown: { status: 409, kind: 'failure' },
+  deliverable_branch_mismatch: { status: 409, kind: 'failure' },
   report_busy: { status: 429, kind: 'retryable' },
   report_rate_limited: { status: 429, kind: 'retryable' },
   not_blocked: { status: 409, kind: 'failure' },
@@ -811,7 +812,8 @@ export const renewLeaseRequest = z
       .regex(/^[a-f0-9]{16}$/)
       .optional()
       .meta({
-        description: '节点当前派工凭证的 SHA-256 前 16 位；缺失或不匹配时中枢重新下发凭证',
+        description:
+          '节点当前派工凭证的 SHA-256 前 16 位；不匹配、或中枢没有当前凭证时重新下发；缺失且中枢已有当前凭证时不轮换',
       }),
     report_conflict: z
       .strictObject({

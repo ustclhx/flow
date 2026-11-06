@@ -8,7 +8,7 @@
       "minLength": 16
     },
     "dispatch_token_sha256": {
-      "description": "节点当前派工凭证的 SHA-256 前 16 位；缺失或不匹配时中枢重新下发凭证",
+      "description": "节点当前派工凭证的 SHA-256 前 16 位；不匹配、或中枢没有当前凭证时重新下发；缺失且中枢已有当前凭证时不轮换",
       "type": "string",
       "pattern": "^[a-f0-9]{16}$"
     },

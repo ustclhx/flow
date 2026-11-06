@@ -30,6 +30,38 @@ export function codexTaskMcpConfig(binding: {
   return `mcp_servers.raindown={command="raindown",args=${JSON.stringify(args)},env={RAINDOWN_HOME=${JSON.stringify(binding.home)},RAINDOWN_ACTOR=${JSON.stringify(binding.role)}},env_vars=["RAINDOWN_LEASE_TOKEN_FILE"],default_tools_approval_mode="approve"}`
 }
 
+/** Codex 默认 shell 环境排除项（大小写不敏感的 glob），加上任务凭证路径本身。 */
+export const CODEX_SHELL_ENV_EXCLUDES = [
+  '*KEY*',
+  '*SECRET*',
+  '*TOKEN*',
+  'RAINDOWN_LEASE_TOKEN_FILE',
+] as const
+
+/**
+ * Codex 进程环境带有 `RAINDOWN_LEASE_TOKEN_FILE`（MCP `env_vars` 透传需要）。模型执行的 shell 命令
+ * 依赖 `shell_environment_policy` 的默认排除项（`*TOKEN*` 等）看不到它；角色配置可以用
+ * `ignore_default_excludes = true` 或改写 `exclude` 把它重新暴露。这里生成放在角色配置之后的 -c 层，
+ * 固定默认排除生效，并把角色自己的排除项（可解析时）与上面的固定排除项合并，后写的 -c 覆盖角色配置。
+ */
+export function codexShellEnvPolicyConfig(roleConfig?: Record<string, unknown>): string[] {
+  const own = roleConfig?.['shell_environment_policy.exclude']
+  let extra: string[] = []
+  if (typeof own === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(own)
+      if (Array.isArray(parsed)) extra = parsed.filter((v): v is string => typeof v === 'string')
+    } catch {
+      // 无法解析的角色排除项不再保留：固定排除项仍然生效（方向安全）。
+    }
+  }
+  const exclude = [...new Set([...extra, ...CODEX_SHELL_ENV_EXCLUDES])]
+  return [
+    'shell_environment_policy.ignore_default_excludes=false',
+    `shell_environment_policy.exclude=${JSON.stringify(exclude)}`,
+  ]
+}
+
 // 隔离目录由 Raindown 管理，不加载用户级扩展；尤其不能保留审批后积累的 allow 规则。
 const HOME_EXTENSIONS = [
   'rules',

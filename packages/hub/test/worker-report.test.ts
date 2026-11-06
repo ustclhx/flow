@@ -31,7 +31,8 @@ async function setup(
   verifyDeliverable?: WorkerReportRoutesDeps['verifyDeliverable'],
   now = Date.now,
   knownBranch = true,
-  executor = 'fake',
+  // 只有拥有任务分支的执行器能登记分支（D15），默认用 codex-orca。
+  executor = 'codex-orca',
 ) {
   const t = await tempLedger({ now })
   const ledger = t.store
@@ -407,7 +408,7 @@ test('默认交付物核对拒绝分支、fork、仓库、URL及gh响应schema�
     error: { kind: 'failure', code: 'deliverable_check_failed', message: '无法核实本任务的交付物' },
   })
   for (const changes of [
-    { headRefName: 'other-task' },
+    { headRefName: 'other-task', isCrossRepository: true },
     { isCrossRepository: true },
     { headRepository: { nameWithOwner: 'other/repo' } },
     { url: 'https://github.com/org/repo/pull/2' },
@@ -428,6 +429,19 @@ test('默认交付物核对拒绝分支、fork、仓库、URL及gh响应schema�
       }),
     ).toEqual(rejected)
   }
+})
+
+test('其余核对通过而分支不一致时返回deliverable_branch_mismatch并提示处理办法', async () => {
+  const checked = await verifyReportDeliverable(reportPr, taskRepo, async () => ({
+    stdout: JSON.stringify({ ...prInfo, headRefName: 'other-task' }),
+  }))
+  if (checked.ok) throw new Error('分支不一致时应拒绝')
+  expect(checked.error.kind).toBe('failure')
+  expect(checked.error.code).toBe('deliverable_branch_mismatch')
+  const message = String(checked.error.message)
+  expect(message).toContain('blocked')
+  expect(message).toContain(taskRepo.branch)
+  expect(message).not.toContain('other-task')
 })
 
 test('ready上报期间同租约返回可重试busy，核对失败后finally释放', async () => {
@@ -623,12 +637,12 @@ test('未登记分支的ready明确要求blocked说明前提，且不查询交�
 })
 
 test.each(['codex-exec', 'claude-sdk'])(
-  '%s 报告分支后ready可核对交付物并完成',
+  '%s 不拥有任务分支：分支报告被忽略，ready 得到 branch_unknown 而不是核对用户检出的分支',
   async (executor) => {
+    let checks = 0
     const c = await setup(
-      async (_ref, task) => {
-        expect(task.branch).toBe('dev/report')
-        expect(task.repo_snapshot?.remote_url).toBe('https://github.com/org/repo.git')
+      async () => {
+        checks++
         return ok(null)
       },
       Date.now,
@@ -638,28 +652,17 @@ test.each(['codex-exec', 'claude-sdk'])(
     expect(
       c.renew({
         branch: {
-          branch: 'dev/report',
-          worktree: '/work/task',
+          branch: 'main',
+          worktree: '/work/user-checkout',
           repo_snapshot: { remote_url: 'https://github.com/org/repo.git', default_branch: 'main' },
         },
       }).branch_report,
-    ).toBe('recorded')
+    ).toBe('ignored')
+    expect(c.ledger.getTask('t-report')?.branch ?? null).toBeNull()
     const response = await c.report(ready)
-    expect(response.status).toBe(200)
-    const { data } = await readBody(response)
-    const completed = must(
-      c.service.complete(c.lease.lease_id, {
-        lease_token: c.lease.lease_token,
-        report_seq: data.seq,
-        outcome: 'done',
-        result: { summary: '完成', executor, node_id: 'n1' },
-      }),
-    )
-    expect(completed.task.status).toBe('done')
-    expect(completed.task.result?.artifacts).toContainEqual({
-      kind: 'pr',
-      ref: reportPr,
-    })
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ error: { code: 'branch_unknown' } })
+    expect(checks).toBe(0)
   },
 )
 
