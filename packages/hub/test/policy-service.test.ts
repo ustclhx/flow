@@ -578,10 +578,38 @@ test('审查3：待送达的supervisor批准因规则删除或新增限制被撤
   }
 })
 
-async function pendingApproval(id: string) {
+function recordDeliveryTracking(store: LedgerStore, version: string) {
+  const id = 't-delivery-boundary'
+  delegateApproval(store, id, version)
+  must(
+    store.append(
+      {
+        type: 'task.replied',
+        task_id: id,
+        workspace: WS,
+        payload: { reply_id: 'r-delivery-boundary', kind: 'approve', via: 'supervisor' },
+      },
+      { actor: 'supervisor' },
+    ),
+  )
+  return must(
+    store.append(
+      {
+        type: 'task.reply_fetched',
+        task_id: id,
+        workspace: WS,
+        payload: { reply_id: 'r-delivery-boundary', lease_id: `l-${id}-1` },
+      },
+      sys,
+    ),
+  )
+}
+
+async function pendingApproval(id: string, trackDeliveryFirst = false) {
   const context = await setup()
   const { store, service, clock } = context
   must(await service.load())
+  if (trackDeliveryFirst) recordDeliveryTracking(store, service.version())
   const token = 'test-policy-approval-lease-token-0001'
   const base = delegateApproval(store, id, service.version(), token)
   const replyId = `r-${id}`
@@ -731,27 +759,75 @@ function legacyPolicyWithdraw(c: Awaited<ReturnType<typeof pendingApproval>>) {
   expect(c.store.getReply(c.replyId)?.state).toBe('dropped')
 }
 
-test('旧版本策略撤回已丢弃批准时，当前回合的迟到delivered确认保留实际送达事实', async () => {
-  const c = await pendingApproval('t-legacy-delivered')
+test('启用交付记录后创建的未交付批准撤回后拒绝伪造delivered，保留blocked与转交条目', async () => {
+  const c = await pendingApproval('t-modern-withdrawn', true)
   const node = c.nodes()
-  legacyPolicyWithdraw(c)
-  const delivered = must(
+  const reactor = createInboxReactor({ ledger: c.store })
+  reactor.start()
+  cleanups.push(() => reactor.stop())
+  c.write([])
+  must(await c.service.load())
+  await reactor.idle()
+  expect(c.store.getReply(c.replyId)).toMatchObject({ state: 'dropped' })
+  expect(c.store.getReply(c.replyId)?.fetched_at).toBeUndefined()
+  const transferred = c.store.getInboxItem(`blk.${c.block_seq}`)
+  expect(transferred).toMatchObject({ state: 'open' })
+  const seq = c.store.seq()
+  expect(
     node.ackReply(c.leaseId, {
       lease_token: c.leaseToken,
       reply_id: c.replyId,
       outcome: 'delivered',
     }),
-  )
-  expect(delivered.task.status).toBe('running')
-  expect(c.store.getReply(c.replyId)?.state).toBe('delivered')
-  expect(c.store.taskEvents(c.task_id).at(-1)).toMatchObject({
-    type: 'task.unblocked',
-    payload: {
-      reply_id: c.replyId,
-      note: expect.stringContaining('批准在撤回生效前已交给节点'),
-    },
-  })
+  ).toMatchObject({ ok: false, error: { code: 'invalid_transition' } })
+  // 不能绕过服务层，直接借用旧账本兜底写入解锁事件。
+  expect(
+    c.store.append(
+      {
+        type: 'task.unblocked',
+        task_id: c.task_id,
+        workspace: WS,
+        payload: { reply_id: c.replyId },
+      },
+      { actor: 'node:n1' },
+    ).ok,
+  ).toBe(false)
+  expect(c.store.seq()).toBe(seq)
+  expect(c.store.getTask(c.task_id)?.status).toBe('blocked')
+  expect(c.store.getReply(c.replyId)?.state).toBe('dropped')
+  expect(c.store.getInboxItem(`blk.${c.block_seq}`)).toEqual(transferred)
+  must(c.store.rebuild())
+  expect(c.store.getTask(c.task_id)?.status).toBe('blocked')
+  expect(c.store.getInboxItem(`blk.${c.block_seq}`)).toEqual(transferred)
 })
+
+for (const laterFetch of [false, true]) {
+  test(`交付机制之前的旧批准仍接受迟到delivered（${laterFetch ? '之后有交付记录' : '账本没有交付记录'}）`, async () => {
+    const c = await pendingApproval('t-legacy-delivered')
+    const node = c.nodes()
+    if (laterFetch) recordDeliveryTracking(c.store, c.service.version())
+    legacyPolicyWithdraw(c)
+    const delivered = must(
+      node.ackReply(c.leaseId, {
+        lease_token: c.leaseToken,
+        reply_id: c.replyId,
+        outcome: 'delivered',
+      }),
+    )
+    expect(delivered.task.status).toBe('running')
+    expect(c.store.getReply(c.replyId)?.state).toBe('delivered')
+    expect(c.store.taskEvents(c.task_id).at(-1)).toMatchObject({
+      type: 'task.unblocked',
+      payload: {
+        reply_id: c.replyId,
+        note: expect.stringContaining('批准在撤回生效前已交给节点'),
+      },
+    })
+    must(c.store.rebuild())
+    expect(c.store.getTask(c.task_id)?.status).toBe('running')
+    expect(c.store.getReply(c.replyId)?.state).toBe('delivered')
+  })
+}
 
 test('旧策略撤回批准的迟到delivered确认不能解锁后来的新blocked回合', async () => {
   const c = await pendingApproval('t-legacy-stale-round')

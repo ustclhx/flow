@@ -766,7 +766,8 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         req.data.outcome === 'delivered' &&
         reply.by === SUPERVISOR_ACTOR &&
         reply.kind === 'approve' &&
-        task.status === 'blocked'
+        task.status === 'blocked' &&
+        ledger.replyPredatesDeliveryTracking(reply.id)
       ) {
         const events = ledger.taskEvents(task.id)
         const blocked = events.findLast((event) => event.type === 'task.blocked')
@@ -780,7 +781,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
           withdrawal?.type === 'task.reply_escalated' &&
           blocked?.seq === withdrawal.payload.block_seq
         ) {
-          // 兼容尚无交付记录时写下的撤回：确认实际送达，同时保留原撤回与纠正说明供审计。
+          // 仅兼容交付机制之前的旧回复：确认实际送达，并保留原撤回与纠正说明供审计。
           const written = ledger.append(
             {
               type: 'task.unblocked',

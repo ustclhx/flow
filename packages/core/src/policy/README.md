@@ -40,7 +40,9 @@ hub 合并管线通过 mandate 的源唤醒追溯 supervisor，只重新检查�
 进行中的代批在策略变化、委托前与 `task_respond` 前重新判定；原命中规则删除或新规则不再允许 supervisor
 时转交用户，尚未交付的 supervisor 批准通过同一转交事件标记为丢弃。续约首次下发回复前，
 `task.reply_fetched` 事件记录 `ReplyView.fetched_at`：已交付的批准不能撤回，未交付的批准可以撤回；
-迟到的 ack 只作为交付记录缺失时的兜底。记录保留原决定/委托的 `policy_version`，
+迟到的 ack 只为交付机制之前的旧回复兜底：回复创建序号须早于账本首条 `task.reply_fetched`，
+或账本尚无任何交付记录；机制启用后创建且未交付的批准被撤回后，不能再靠 delivered 回执解锁。
+记录保留原决定/委托的 `policy_version`，
 策略变化引起的转交另记 `to_version`。
 
 ```yaml

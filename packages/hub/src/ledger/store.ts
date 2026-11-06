@@ -218,6 +218,8 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   /** 某任务最早一条待送达的回复。 */
   pendingReply(taskId: string): ReplyView | null
   getReply(replyId: string): ReplyView | null
+  /** 回复是否早于账本首次记录交付；只供旧账本的策略撤回回执兜底。 */
+  replyPredatesDeliveryTracking(replyId: string): boolean
   /** 某任务的全部回复（按收到先后）。 */
   taskReplies(taskId: string): ReplyView[]
   /** 任务带着回复重新排队后，下一次执行要带上的恢复信息。 */
@@ -546,7 +548,18 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
     !!get("SELECT 1 FROM leases WHERE task_id = ? AND state = 'active'", taskId ?? null)
   const noLease = (from: TaskStatus | null, type: string, why: string) =>
     fail('failure', 'invalid_transition', why, { from, type })
-  /** 待送达回复可以消费；策略撤回与节点交付交错时，迟到的本轮送达回执仍须如实入账。 */
+  const replyPredatesDeliveryTracking = (replyId: string): boolean => {
+    const reply = get<{ created_seq: number }>(
+      'SELECT created_seq FROM replies WHERE id = ?',
+      replyId,
+    )
+    const firstFetched = get<{ seq: number }>(
+      "SELECT seq FROM events WHERE type = 'task.reply_fetched' AND seq < ? ORDER BY seq LIMIT 1",
+      before,
+    )
+    return !!reply && (!firstFetched || reply.created_seq < firstFetched.seq)
+  }
+  /** 待送达回复可以消费；只有交付机制之前的旧批准允许用迟到回执纠正策略撤回。 */
   const pendingReplyOf = (
     draft: Extract<
       LedgerEventDraft,
@@ -565,7 +578,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         draft.type === 'task.unblocked' &&
         r.state === 'dropped' &&
         r.by === SUPERVISOR &&
-        r.kind === 'approve'
+        r.kind === 'approve' &&
+        replyPredatesDeliveryTracking(draft.payload.reply_id ?? '')
       ) {
         const block = lastBlocked(draft.task_id)
         if (
@@ -1528,6 +1542,7 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       )
       return r ? rowToReply(r) : null
     },
+    replyPredatesDeliveryTracking,
     getReply(replyId) {
       const r = get<ReplyRow>('SELECT * FROM replies WHERE id = ?', replyId)
       return r ? rowToReply(r) : null
