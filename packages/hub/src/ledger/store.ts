@@ -23,6 +23,7 @@ import {
   normalizePrUrl,
   ok,
   openDatabase,
+  type PrSubscriptionView,
   parseLedgerEventDraft,
   type RebuildData,
   type ReplyView,
@@ -186,6 +187,14 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   /** 从可重放的 PR 索引读取，按创建时间倒序分页，包含历史派工产物。 */
   tasksForPr(workspace: string, pr: string, limit?: number, offset?: number): TaskView[]
   taskPrs(taskId: string): string[]
+  /** 任务的 PR 订阅（含已结束的），按订阅先后。 */
+  prSubscriptions(taskId: string): PrSubscriptionView[]
+  /** 有效订阅（可按 workspace 过滤），按订阅先后；pr-watcher 据此决定轮询哪些 PR。 */
+  activePrSubscriptions(workspace?: string): (PrSubscriptionView & { workspace: string })[]
+  /** 某 workspace、PR 各种类已入账的最大游标（kind → cursor）。 */
+  prCursors(workspace: string, pr: string): Record<string, string>
+  /** 某 workspace、PR、种类中游标不早于 since 的已入账游标（同一秒竞态去重用）。 */
+  prEventCursorsSince(workspace: string, pr: string, kind: string, sinceIso: string): string[]
   prTasksSummary(workspace: string, pr: string): { count: number; chars: number }
   /** 某 workspace 未结束（非 done / failed / cancelled）的任务，按更新时间倒序，最多 limit 条。 */
   openTasks(workspace: string, limit: number): TaskView[]
@@ -403,6 +412,29 @@ const rowToReply = (r: ReplyRow): ReplyView => ({
   delivered_at: r.delivered_at,
 })
 
+interface PrSubscriptionRow {
+  subscribed_seq: number
+  task_id: string
+  workspace: string
+  pr: string
+  role: PrSubscriptionView['role']
+  subscribed_at: string
+  state: 'active' | 'ended'
+  ended_at: string | null
+  reason: PrSubscriptionView['reason']
+}
+
+const rowToSubscription = (r: PrSubscriptionRow): PrSubscriptionView => ({
+  task_id: r.task_id,
+  pr: r.pr,
+  role: r.role,
+  subscribed_at: r.subscribed_at,
+  subscribed_seq: r.subscribed_seq,
+  active: r.state === 'active',
+  ended_at: r.ended_at,
+  reason: r.reason,
+})
+
 interface NodeRow {
   node_id: string
   hostname: string
@@ -580,6 +612,10 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'supervisor.observed_action': ['hub'],
   // 回复只有用户本人与 supervisor（经 task_respond、落在有效委托上）能写（D15）。
   'task.replied': ['user', 'supervisor'],
+  // PR 订阅与事件（harness-neutral D11）：只由中枢写入；用户只能取消订阅。
+  'pr.subscribed': ['hub'],
+  'pr.unsubscribed': ['hub', 'user'],
+  'pr.event': ['hub'],
 }
 
 /** 由用户操作结束委托的转交原因：与用户的 task_reply / 忽略同一次 append 写入，actor 为 user。 */
@@ -1335,6 +1371,40 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         }
         return ok(null)
       }
+      case 'pr.subscribed':
+      case 'pr.unsubscribed': {
+        if (normalizePrUrl(draft.payload.pr) !== draft.payload.pr) {
+          return invalidEvent('PR 链接必须是规范化形式')
+        }
+        if (!task) return fail('failure', 'not_found', `没有任务 ${draft.task_id}`)
+        const active = get(
+          `SELECT 1 FROM pr_subscriptions WHERE task_id = ? AND pr = ? AND state = 'active'`,
+          draft.task_id ?? null,
+          draft.payload.pr,
+        )
+        if (draft.type === 'pr.subscribed' && active) {
+          return fail('failure', 'duplicate_subscription', `任务已订阅 ${draft.payload.pr}`)
+        }
+        if (draft.type === 'pr.unsubscribed' && !active) {
+          return fail('failure', 'not_subscribed', `任务没有有效的 ${draft.payload.pr} 订阅`)
+        }
+        // 用户只能以 user 原因取消；中枢判定的原因只由中枢写入。
+        if (
+          draft.type === 'pr.unsubscribed' &&
+          (draft.actor === 'user') !== (draft.payload.reason === 'user')
+        ) {
+          return fail(
+            'failure',
+            'actor_mismatch',
+            'reason 为 user 的取消只接受 user，其余原因只接受 hub',
+          )
+        }
+        return ok(null)
+      }
+      case 'pr.event':
+        return normalizePrUrl(draft.payload.pr) === draft.payload.pr
+          ? ok(null)
+          : invalidEvent('PR 链接必须是规范化形式')
       case 'supervisor.scheduler_initialized':
         // 只写一次：重复写入会让"初始化之前的事件"边界后移，丢掉真实指令。
         // 重建时重放的事件自身已在表中：只看更早的。
@@ -1731,6 +1801,40 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         'SELECT url FROM task_prs WHERE task_id = ? ORDER BY pr',
         taskId,
       ).map((row) => row.url)
+    },
+    prSubscriptions(taskId) {
+      return all<PrSubscriptionRow>(
+        'SELECT * FROM pr_subscriptions WHERE task_id = ? ORDER BY subscribed_seq',
+        taskId,
+      ).map(rowToSubscription)
+    },
+    activePrSubscriptions(workspace) {
+      return all<PrSubscriptionRow>(
+        `SELECT * FROM pr_subscriptions WHERE state = 'active' AND (? IS NULL OR workspace = ?)
+         ORDER BY subscribed_seq`,
+        workspace ?? null,
+        workspace ?? null,
+      ).map((r) => ({ ...rowToSubscription(r), workspace: r.workspace }))
+    },
+    prEventCursorsSince(workspace, pr, kind, sinceIso) {
+      return all<{ cursor: string }>(
+        `SELECT json_extract(payload_json, '$.cursor') AS cursor FROM events
+         WHERE type = 'pr.event' AND workspace = ? AND json_extract(payload_json, '$.pr') = ?
+           AND json_extract(payload_json, '$.kind') = ? AND json_extract(payload_json, '$.cursor') >= ?`,
+        workspace,
+        pr,
+        kind,
+        sinceIso,
+      ).map((r) => r.cursor)
+    },
+    prCursors(workspace, pr) {
+      return Object.fromEntries(
+        all<{ kind: string; cursor: string }>(
+          'SELECT kind, cursor FROM pr_cursors WHERE workspace = ? AND pr = ?',
+          workspace,
+          pr,
+        ).map((r) => [r.kind, r.cursor]),
+      )
     },
     prRelatedTasks(workspace, prNumber, limit) {
       return all<TaskRow>(

@@ -108,6 +108,26 @@ export const hubStatusCommand = defineCommand({
         ],
         ...(status.secrets?.error ? [['密钥解析错误', status.secrets.error]] : []),
         ['推送渠道', channelSummary(status.channels ?? [])],
+        ...(status.pr_watch?.shared.length
+          ? status.pr_watch.shared.map((x) => [`PR 共享身份（${x.workspace}）`, x.reason])
+          : []),
+        ...(status.pr_watch?.warnings.length
+          ? [['PR 订阅提示', status.pr_watch.warnings.join('；')]]
+          : []),
+        ...(status.pr_watch && (status.pr_watch.watched > 0 || status.pr_watch.errors.length)
+          ? [
+              [
+                'PR 订阅采集',
+                `轮询 ${status.pr_watch.watched} 个 PR；中枢 gh 登录：${status.pr_watch.identity ? (status.pr_watch.identity.login ?? `无法确认（${status.pr_watch.identity.message ?? ''}）`) : '尚未查询'}`,
+              ],
+              [
+                'PR 查询失败',
+                status.pr_watch.errors
+                  .map((e) => `${e.pr}（${e.workspace}）连续 ${e.failures} 次：${e.message}`)
+                  .join('；') || '（无）',
+              ],
+            ]
+          : []),
       ],
       [
         { header: '项目', value: (row) => row[0] ?? '' },

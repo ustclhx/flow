@@ -25,6 +25,11 @@ import {
   taskProposalDecision,
   taskProposalId,
 } from './events.ts'
+import {
+  prSubscriptionView,
+  unsubscribeTaskData,
+  unsubscribeTaskRequest,
+} from './pr-subscription.ts'
 import { taskRecovery } from './recovery.ts'
 import { PROTOCOL_MESSAGE_MAX, TAIL_LINE_MAX } from './redact.ts'
 import { taskStageFilter, taskStageSchema } from './stage.ts'
@@ -167,6 +172,9 @@ export const PROTOCOL_ERRORS = {
   patrol_already_reported: { status: 409, kind: 'failure' },
   /** observe 模式（D10）：autonomous 唤醒的写类动作只记录为 supervisor.observed_action，未执行。 */
   observe_not_executed: { status: 409, kind: 'failure' },
+  /** 任务没有该 PR 的有效订阅（harness-neutral 8.1）。 */
+  not_subscribed: { status: 409, kind: 'failure' },
+  duplicate_subscription: { status: 409, kind: 'failure' },
   internal_error: { status: 500, kind: 'failure' },
 } as const satisfies Record<string, { status: number; kind: 'usage' | 'failure' | 'retryable' }>
 export type ProtocolErrorCode = keyof typeof PROTOCOL_ERRORS
@@ -278,6 +286,36 @@ export const hubStatusData = healthData
     secrets: secretsStatus.default({ loaded: 0, missing: [], error: null }),
     policies: policiesStatus.default({ loaded: 0, errors: [] }),
     channels: z.array(channelStatus).default([]).meta({ description: '推送渠道的状态' }),
+    pr_watch: z
+      .object({
+        watched: z.number().int().min(0).meta({ description: '正在轮询的 PR 数' }),
+        errors: z
+          .array(
+            z.object({
+              workspace: workspaceRef,
+              pr: prUrl,
+              failures: z.number().int().min(1),
+              message: z.string(),
+              since: timestamp,
+            }),
+          )
+          .meta({ description: '连续 3 次及以上查询失败的 PR（系统问题）' }),
+        identity: z
+          .object({ ok: z.boolean(), login: z.string().nullable(), message: z.string().optional() })
+          .nullable()
+          .default(null)
+          .meta({ description: '中枢 gh 登录；查询失败（ok=false）时按共享身份处理' }),
+        shared: z
+          .array(z.object({ workspace: workspaceRef, reason: z.string() }))
+          .default([])
+          .meta({
+            description:
+              '共享身份：中枢 gh 登录在允许名单中或无法确认，PR 评论只作上下文；附原因与解除方法',
+          }),
+        warnings: z.array(z.string()).default([]),
+      })
+      .default({ watched: 0, errors: [], identity: null, shared: [], warnings: [] })
+      .meta({ description: 'PR 订阅采集（harness-neutral D11）的状态' }),
   })
   .meta({ title: 'GET /v1/hub/status' })
 export type HubStatusData = z.infer<typeof hubStatusData>
@@ -539,6 +577,10 @@ export const showTaskData = z
     events: z.array(ledgerEvent).meta({ description: '该任务的全部事件' }),
     replies: z.array(replyView).default([]).meta({ description: '该任务收到的全部回复' }),
     attempts: z.array(taskAttempt).default([]).meta({ description: '按开始时间排列的派工列表' }),
+    subscriptions: z
+      .array(prSubscriptionView)
+      .default([])
+      .meta({ description: '任务的 PR 订阅（含已结束的）；旧版中枢的响应没有该字段' }),
   })
   .meta({ title: 'GET /v1/tasks/:id' })
 export type ShowTaskData = z.infer<typeof showTaskData>
@@ -1417,6 +1459,13 @@ export const ENDPOINTS = {
     auth: true,
     request: cancelTaskRequest,
     response: cancelTaskData,
+  },
+  'tasks-unsubscribe': {
+    method: 'POST',
+    path: '/v1/tasks/:id/unsubscribe',
+    auth: true,
+    request: unsubscribeTaskRequest,
+    response: unsubscribeTaskData,
   },
   'tasks-retry': {
     method: 'POST',

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { WORKSPACE_ID_RE } from './common.ts'
+import { defaultGithubConfig, githubConfigSchema } from './github.ts'
 import { defaultSupervisorConfig, supervisorConfigSchema } from './supervisor.ts'
 
 /** `config/workspaces/<id>.yaml` 的格式（resource-registry）。 */
@@ -14,6 +15,9 @@ const shared = {
   supervisor: supervisorConfigSchema
     .default(defaultSupervisorConfig)
     .meta({ description: 'supervisor 设置（add-m1-supervisor）；缺省全部取默认值' }),
+  github: githubConfigSchema
+    .default(defaultGithubConfig)
+    .meta({ description: 'PR 订阅与直通设置（D11）；缺省不轮询 PR' }),
 }
 
 export const productWorkspace = z

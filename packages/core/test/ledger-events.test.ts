@@ -438,6 +438,45 @@ const samples: Record<
     },
     invalid: { workspace: 'ws/product-res', payload: { pr: 'https://github.com/o/r/pull/12' } },
   },
+  'pr.subscribed': {
+    valid: { ...task, payload: { pr: 'https://github.com/o/r/pull/12', role: 'author' } },
+    invalid: { ...task, payload: { pr: 'https://github.com/o/r/pull/12', role: 'owner' } },
+  },
+  'pr.unsubscribed': {
+    valid: { ...task, payload: { pr: 'https://github.com/o/r/pull/12', reason: 'user' } },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: { pr: 'https://github.com/o/r/pull/12', reason: 'user' },
+    },
+  },
+  'pr.event': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: {
+        pr: 'https://github.com/o/r/pull/12',
+        kind: 'issue_comment',
+        actor: 'octo',
+        actor_kind: 'human',
+        allowed: false,
+        text: '顺便把 X 删掉',
+        url: 'https://github.com/o/r/pull/12#issuecomment-1',
+        cursor: '2026-10-24T08:00:00.000Z|1',
+      },
+    },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: {
+        pr: 'https://github.com/o/r/pull/12',
+        kind: 'issue_comment',
+        actor: 'octo',
+        actor_kind: 'human',
+        allowed: false,
+        text: 'x',
+        url: 'https://evil.example/x',
+        cursor: '2026-10-24T08:00:00.000Z|1',
+      },
+    },
+  },
 }
 
 const envelope = (type: EventType, body: Record<string, unknown>) => ({

@@ -5,6 +5,7 @@ import { parse } from 'yaml'
 import { raindownPaths } from './home.ts'
 import { fail, ok, type Result } from './result.ts'
 import { type Role, reviewerRoleProblem } from './roles.ts'
+import { defaultGithubConfig, type GithubConfig } from './schema/github.ts'
 import {
   disabledSupervisorConfig,
   globalSupervisorConfig,
@@ -28,6 +29,8 @@ export interface Workspace {
   file: string | null
   /** supervisor 设置（已补默认值；add-m1-supervisor 1.2）。 */
   supervisor: SupervisorConfig
+  /** PR 订阅与直通设置（已补默认值；harness-neutral 8.2）。 */
+  github: GithubConfig
 }
 
 export interface WorkspaceSet {
@@ -49,6 +52,7 @@ export const GLOBAL_WORKSPACE: Workspace = {
   file: null,
   // ws/global 固定不启用 supervisor：不唤醒、不代回复（design D3）。
   supervisor: globalSupervisorConfig(),
+  github: defaultGithubConfig(),
 }
 
 /**
@@ -118,6 +122,7 @@ export async function loadWorkspaces(home: string): Promise<Result<WorkspaceSet>
       repos: ws.repos ?? [],
       file,
       supervisor: supervisorInvalid ? disabledSupervisorConfig() : ws.supervisor,
+      github: ws.github,
     })
   }
   return ok({ workspaces: [GLOBAL_WORKSPACE, ...workspaces], issues, warnings })

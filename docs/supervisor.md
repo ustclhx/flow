@@ -487,3 +487,81 @@ raindown supervisor report [product-res] [--days 30]        # observe 一致率�
 使用任务重试前，先停止服务并备份账本，升级中枢、节点与使用该账本的客户端。需要退回旧版本时，必须停止服务并使用升级前的备份，不能继续使用已经发生任何任务重试或包含其收件箱通知的账本；升级后产生的记录不会包含在该备份中，详见 [任务重试的升级与回滚限制](daemon.md#任务重试的升级与回滚限制)。其他情况下需要回到旧版本二进制时，先删掉 `node.yaml` 的 `reserved` 与 `policies.yaml` 中带 `push_to` / `gh_scope` / `level: supervisor` 的规则。
 
 `user.instruction` 的长度上限已从 4000 提高到 8192 字符；一旦账本写入超过 4000 字符的指令，旧中枢重放会校验失败，回滚必须停止服务并恢复升级前的账本备份。
+
+## 13. PR 订阅与直通（`github.watch`）
+
+开出或审查 PR 的任务可以持续跟随这个 PR：PR 上后来的 CI 结果、审查结论与评论由中枢读取并记入账本，
+之后（见下文"直通送达"）直接送到负责的 worker，不必每次都唤醒 supervisor。默认关闭；不打开时行为与之前完全相同。
+
+### 开启
+
+在 `config/workspaces/<id>.yaml` 加 `github` 段：
+
+```yaml
+github:
+  watch: true              # 轮询本 workspace 有订阅的 PR；默认 false
+  allowed_users: [ustclhx] # 可选：其评论算"请求"的 GitHub 用户（不区分大小写）
+```
+
+- 中枢用**自己所在机器上的 `gh` 登录**只读查询（`gh api --method GET`），先确认 `gh auth status` 正常；
+- PR 必须位于 workspace 登记仓库（`repos`）的 origin 所在的 github.com 仓库；有登记仓库暂时读不出 origin 时按查询失败报告、不退订；
+  所有登记仓库都读出且连续 3 天仍不匹配时自动退订（`repo_not_registered`）；
+- `raindown doctor` 显示每个打开了 `github` 段的 workspace 的开关与名单；打开了 `watch` 却没有登记仓库时给出 warning。
+
+### 订阅
+
+- 开发任务上报任务分支后，账本记录到它的 PR（`raindown_report` 的 ready 交付物、结果里的 PR）时自动订阅（关系 `author`）。
+  中枢首次轮询时用 GitHub 的 head 信息核对：PR 不是由该任务分支开出、或来自 fork，订阅即取消（`not_task_branch`）；
+- 审查任务创建时订阅它审查的 PR（关系 `reviewer`）；
+- 订阅在任务结束后保留，直到 PR 关闭或合并后再过 14 天（`pr_closed`）；
+- `raindown task show <task>` 列出订阅；`raindown task unsubscribe <task> <PR 链接>` 取消（只限你本人经 CLI，AI 身份返回 `user_only`）。
+  取消后不会被自动重新订阅。
+
+### 采集（pr-watcher）
+
+- 只轮询 `watch: true` 的 workspace 中有有效订阅的 PR：每 2 分钟一次，连续无变化时依次退避到 4、8、10 分钟，读到新内容后回到 2 分钟；
+- 读取 check runs、reviews、PR 评论与代码行评论，写 `pr.event{pr, kind, actor, actor_id, actor_kind, allowed, not_allowed, pr_state, text, url, cursor}`。
+  订阅之前的历史内容不送达（有效游标不早于最早有效订阅的时间）；每种内容按游标续读、各自提交（一类失败不阻塞其他类），
+  游标随事件落账，中枢重启后不会重复送达；以游标时间往前 1 秒重查并去重，避免同一秒的竞态漏读；
+- PR 评论用仓库级端点、代码行评论用 PR 端点，都按 updated 升序读取（中枢按 `issue_url` 过滤出本 PR），分页达到上限时只推进到已取到的部分，下一轮继续；
+  审查与检查截断时本类本次不入账并按失败报告，游标不越过没读到的内容；
+- `text` 先遮蔽疑似密钥再截断（附原始字符数）；
+- 单个 PR 查询失败只记在该 PR 上，下一轮重试；连续 3 次失败才出现在 `raindown hub status` 的"PR 查询失败"一行并写告警日志。
+
+### 共享 GitHub 身份（当前版本的保守限制）
+
+worker 目前用中枢所在机器的 `gh` 登录在 PR 上发评论与审查——通常就是你本人。这样 worker 发的评论与你的评论无法区分，
+会被当作"名单内的人类请求"：任务可以自我恢复、任务之间来回触发、陌生人的内容经 worker 转述后被洗白，
+或经 PR 评论取得 instruction 唤醒的权限。因此：
+
+- **当前版本所有 workspace 一律按共享身份处理**，不论中枢的 gh 登录是谁：PR 评论一律只作为不可信上下文送给运行中的订阅任务，
+  `allowed` 为 false（`not_allowed: shared_identity`），**不**恢复已结束任务、**不**交回 supervisor、**不**为无订阅评论唤醒 supervisor。
+  中枢的 gh 登录（启动时与每 30 分钟 `gh api user`）只用于显示：worker 在节点上用的 gh 登录中枢无法确认；
+- `raindown hub status` 的"PR 共享身份"一行写明原因，`raindown doctor` 对每个打开了 `watch` 的 workspace 给出 warning；
+- `github.worker_identity`（App 写 `<slug>[bot]`）只做配置与显示：它发的内容标为 `actor_kind: agent`，永不算请求，
+  但**当前版本该设置不解除限制**——worker 仍以本机 gh 登录发评论。解除需要后续版本把独立 bot 账号或 App 的凭证注入 worker，
+  并由节点上报 worker 实际使用的身份；届时再让 `allowed_users` 只含你本人。
+
+### 什么算"请求"
+
+`allowed` 只有全部满足才为 true（当前版本因共享身份恒为 false，下列规则仍会计算并记入 `not_allowed`）：
+
+- 种类是 PR 评论或代码行评论（审查正文、CI 检查一律只作上下文）；
+- 人类账号（不是 bot、不是 `worker_identity`），且账号**数字 id** 在该 PR 的有效名单中（改名冒用的同名账号不算）；
+- 评论没有被编辑过（编辑后再次送达只作上下文，同一条多次编辑只保留最新）；
+- 不处于共享身份。
+
+非请求内容在账本中只存 500 字（完整内容见 `url`）。陌生人（数字 id 不在名单中的人类账号）的内容按类分别计额度：
+每个 PR 每类每次轮询最多入账 20 条、每天最多 200 条，超出的丢弃并在 `hub status` 提示；CI 检查与名单内账号的内容不计入，不会被刷屏挤掉。
+
+### `allowed_users` 的安全含义
+
+仓库公开时，任何人都能在 PR 上评论。**只有名单内用户的人类评论算"请求"**：能恢复已结束的任务、被 worker 交回给 supervisor、
+或在没有订阅任务时唤醒 supervisor。名单外用户、机器人（GitHub App、`[bot]` 账号）与 CI 的内容 `allowed` 恒为 false，
+只作为不可信的上下文送达运行中的任务，不恢复任务、不唤醒 supervisor。
+
+- 不写 `allowed_users` 时，名单只取**该 PR 所属**登记仓库 origin 的 owner（例如 `git@github.com:ustclhx/raindown.git` → `ustclhx`），
+  且只在 owner 是个人账号时；owner 是组织时默认名单为空（`hub status` 提示），请显式列出成员。fork 开出的 PR 不会成为 author 订阅；
+  名单按账号数字 id 比较，同名账号的 id 变化时告警；
+- `allowed: true` 只表示"可以算请求"，**不扩大任务的授权依据或合同范围**：worker 收到超出范围的请求时应交回 supervisor；
+- 名单写错（如拼错用户名）只会让评论被当作不可信上下文，不会放宽任何权限。

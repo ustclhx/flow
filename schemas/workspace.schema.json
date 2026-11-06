@@ -198,6 +198,36 @@
           "additionalProperties": false,
           "title": "Workspace supervisor"
         },
+        "github": {
+          "default": {
+            "watch": false
+          },
+          "description": "PR 订阅与直通设置（D11）；缺省不轮询 PR",
+          "type": "object",
+          "properties": {
+            "watch": {
+              "default": false,
+              "description": "是否轮询本 workspace 有订阅的 PR（CI、审查与评论）；默认 false",
+              "type": "boolean"
+            },
+            "allowed_users": {
+              "description": "其评论算请求的 GitHub 用户（按数字 id 比较）；缺省为该 PR 所属登记仓库 origin 的 owner（仅当 owner 是个人账号），否则为空名单。名单外用户与机器人的内容只作为不可信上下文",
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+              }
+            },
+            "worker_identity": {
+              "description": "worker 在 GitHub 上使用的独立身份（bot 账号或 App）；它发的内容标为 agent，永不算请求。当前版本该设置不解除共享身份限制：worker 仍以本机 gh 登录发评论，需等 bot 凭证注入 worker 的后续变更",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\\[bot\\])?$"
+            }
+          },
+          "additionalProperties": false,
+          "title": "Workspace GitHub settings"
+        },
         "kind": {
           "type": "string",
           "const": "product",
@@ -417,6 +447,36 @@
           },
           "additionalProperties": false,
           "title": "Workspace supervisor"
+        },
+        "github": {
+          "default": {
+            "watch": false
+          },
+          "description": "PR 订阅与直通设置（D11）；缺省不轮询 PR",
+          "type": "object",
+          "properties": {
+            "watch": {
+              "default": false,
+              "description": "是否轮询本 workspace 有订阅的 PR（CI、审查与评论）；默认 false",
+              "type": "boolean"
+            },
+            "allowed_users": {
+              "description": "其评论算请求的 GitHub 用户（按数字 id 比较）；缺省为该 PR 所属登记仓库 origin 的 owner（仅当 owner 是个人账号），否则为空名单。名单外用户与机器人的内容只作为不可信上下文",
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+              }
+            },
+            "worker_identity": {
+              "description": "worker 在 GitHub 上使用的独立身份（bot 账号或 App）；它发的内容标为 agent，永不算请求。当前版本该设置不解除共享身份限制：worker 仍以本机 gh 登录发评论，需等 bot 凭证注入 worker 的后续变更",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\\[bot\\])?$"
+            }
+          },
+          "additionalProperties": false,
+          "title": "Workspace GitHub settings"
         },
         "kind": {
           "type": "string",

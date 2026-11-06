@@ -53,6 +53,9 @@ import { createNodeProtocol, type NodeProtocol } from '../nodes/protocol.ts'
 import { createPolicyRoutes } from '../policy/routes.ts'
 import { createPolicyService, type PolicyService } from '../policy/service.ts'
 import { verifyPolicyFromHome } from '../policy/verify.ts'
+import { createGhApi, type GhApi, type RepoOriginLookup } from '../pr/github.ts'
+import { createPrSubscriptionReactor } from '../pr/subscriptions.ts'
+import { createPrWatcher, type PrWatcher } from '../pr/watcher.ts'
 import { createScheduler, type Scheduler } from '../scheduler/index.ts'
 import { redactingLogger } from '../secrets/logger.ts'
 import { SecretRedactor } from '../secrets/redactor.ts'
@@ -89,6 +92,8 @@ export interface RunHubOptions
   extends Omit<StartHubOptions, 'ledger' | 'openLedger' | 'routes' | 'onStop' | 'leaseHolders'> {
   /** 已有 PR 判定的只读查询注入点（测试用）。 */
   existingPrQuery?: ExistingPrLookup
+  /** PR 订阅采集的注入点（测试用）：假的 gh 查询、登记仓库 origin 与轮询间隔。 */
+  prWatch?: { gh?: GhApi; origin?: RepoOriginLookup; tickMs?: number }
   /** 密钥解析的注入点（测试用）；默认用 sops 解密 `config/secrets.sops.yaml`。 */
   secrets?: Pick<HubSecretsOptions, 'load' | 'debounceMs' | 'onChange'> & {
     /** 是否监听 config/ 的变化，默认 true。 */
@@ -159,6 +164,9 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let delegation: DelegationService | undefined
   let stopSupervisorTools: (() => void) | undefined
   let existingPr: ReturnType<typeof createExistingPrReactor> | undefined
+  /** PR 自动订阅与采集（harness-neutral 8.1、8.3）：只对 github.watch 的 workspace 生效。 */
+  let prSubscriptions: ReturnType<typeof createPrSubscriptionReactor> | undefined
+  let prWatcher: PrWatcher | undefined
   // Web 页面（6.1）：会话只在内存中；Host 校验需要实际监听的端口，启动成功后才填入。
   const uiSessions = createUiSessions({ now: () => clock.now() })
   const activeLedgerFor = () => {
@@ -313,6 +321,13 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
                 ],
               },
           channels: inbox?.channels.status() ?? [],
+          pr_watch: prWatcher?.status() ?? {
+            watched: 0,
+            errors: [],
+            identity: null,
+            shared: [],
+            warnings: [],
+          },
         }
         return c.json({ ok: true as const, data })
       })
@@ -377,6 +392,8 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     onStop: async () => {
       await policiesService?.stop()
       await existingPr?.stop()
+      await prWatcher?.stop()
+      await prSubscriptions?.stop()
       stopSupervisorTools?.()
       wakes?.stop()
       delegation?.stop()
@@ -530,6 +547,22 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     ...(options.existingPrQuery ? { query: options.existingPrQuery } : {}),
   })
   existingPr.start()
+  prSubscriptions = createPrSubscriptionReactor({
+    ledger,
+    workspaces: workspaceLookupFromHome(options.home),
+    logger,
+  })
+  prSubscriptions.start(clock.now())
+  prWatcher = createPrWatcher({
+    ledger,
+    workspaces: workspaceLookupFromHome(options.home),
+    gh: options.prWatch?.gh ?? createGhApi(),
+    ...(options.prWatch?.origin ? { origin: options.prWatch.origin } : {}),
+    ...(options.prWatch?.tickMs !== undefined ? { tickMs: options.prWatch.tickMs } : {}),
+    clock,
+    logger,
+  })
+  prWatcher.start()
   protocol?.start()
   if (options.secrets?.watch !== false) stopWatch = secrets.watch()
   return started

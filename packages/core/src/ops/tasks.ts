@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { HubClient } from '../daemon/client.ts'
 import { renderTable } from '../format/table.ts'
 import { taskId } from '../ledger/common.ts'
+import { type PrSubscriptionView, unsubscribeTaskRequest } from '../ledger/pr-subscription.ts'
 import {
   type CreateTaskRequest,
   cancelTaskRequest,
@@ -89,7 +90,7 @@ export const taskShowOp = defineOperation({
   },
   human: (data) => {
     if ('section' in data) return JSON.stringify(data, null, 2)
-    const { task, events, attempts } = data
+    const { task, events, attempts, subscriptions } = data
     return [
       taskSummary(task),
       `阶段：${task.stage ? TASK_STAGE_LABELS[task.stage] : '—'}`,
@@ -114,10 +115,28 @@ export const taskShowOp = defineOperation({
         { header: '结束原因', value: (a) => a.reason ?? '—' },
         { header: '最后上报', value: (a) => a.last_report ?? '—', max: 80 },
       ]),
+      `PR 订阅：${subscriptions.length ? '' : '（无）'}`,
+      ...subscriptions.map(describeSubscription),
       `事件：${JSON.stringify(events, null, 2)}`,
     ].join('\n')
   },
 })
+
+const SUBSCRIPTION_ROLE_LABEL = { author: '开出', reviewer: '审查' } as const
+const UNSUBSCRIBE_REASON_LABEL = {
+  user: '用户取消',
+  pr_closed: 'PR 已关闭或合并满 14 天',
+  not_task_branch: 'PR 不是由任务分支开出',
+  repo_not_registered: 'PR 不在登记仓库',
+} as const
+
+/** 订阅的一行说明：`- <PR>（开出，订阅于 …；有效）`。 */
+export function describeSubscription(sub: PrSubscriptionView): string {
+  const state = sub.active
+    ? '有效'
+    : `已结束于 ${sub.ended_at ?? '—'}（${sub.reason ? UNSUBSCRIBE_REASON_LABEL[sub.reason] : '—'}）`
+  return `- ${sub.pr}（${SUBSCRIPTION_ROLE_LABEL[sub.role]}，订阅于 ${sub.subscribed_at}；${state}）`
+}
 
 export const taskCancelOp = defineOperation({
   name: 'task_cancel',
@@ -183,6 +202,29 @@ export function replyRequestOf(input: TaskReplyInput): ReplyTaskRequest {
   if (input.deny) return { kind: 'deny', ...(input.text === undefined ? {} : { text: input.text }) }
   return { kind: 'text', text: input.text as string }
 }
+
+export const taskUnsubscribeOp = defineOperation({
+  name: 'task_unsubscribe',
+  cli: 'task unsubscribe',
+  summary:
+    '取消任务对某个 PR 的订阅（只限用户本人经 CLI）；之后该 PR 的 CI、审查与评论不再送到该任务',
+  input: unsubscribeTaskRequest.extend({ id: taskId }),
+  positional: ['id', 'pr'],
+  run: async (input: { id: string; pr: string }, ctx) => {
+    // 订阅决定 PR 上的请求能否到达任务：只允许人取消，AI harness 经 MCP 调用一律拒绝。
+    if (ctx.via !== 'cli' || ctx.actor !== USER_ACTOR) {
+      return fail(
+        'failure',
+        'user_only',
+        `只有用户本人（actor=user，经 CLI）可以取消 PR 订阅，当前为 ${ctx.actor}`,
+        { actor: ctx.actor },
+      )
+    }
+    return client(ctx).unsubscribeTask(input.id, { pr: input.pr })
+  },
+  human: ({ subscription, changed }) =>
+    `${changed ? '已取消订阅' : '订阅原本就已结束'}：\n${describeSubscription(subscription)}`,
+})
 
 const userOnly = (actor: string) =>
   fail(

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { readRaindownEnv } from '../env.ts'
 import { raindownPaths } from '../home.ts'
 import type { InboxActRequest, inboxListQuery } from '../inbox/schema.ts'
+import type { UnsubscribeTaskRequest } from '../ledger/pr-subscription.ts'
 import {
   type AskUserRequest,
   type BriefUpdateRequest,
@@ -59,6 +60,7 @@ export type HubStatus = HealthData & {
   secrets?: HubStatusData['secrets']
   policies?: HubStatusData['policies']
   channels?: HubStatusData['channels']
+  pr_watch?: HubStatusData['pr_watch']
 }
 
 type JsonEndpoint = Exclude<EndpointName, 'events'>
@@ -180,6 +182,9 @@ export class HubClient {
   }
   retryTask(id: string, input: RetryTaskRequest = {}) {
     return this.request('tasks-retry', input, id)
+  }
+  unsubscribeTask(id: string, input: UnsubscribeTaskRequest) {
+    return this.request('tasks-unsubscribe', input, id)
   }
   replyTask(id: string, input: ReplyTaskRequest) {
     return this.request('tasks-reply', input, id)

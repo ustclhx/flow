@@ -62,9 +62,9 @@
 
 ## 8. PR 订阅与直通
 
-- [ ] 8.1 `pr.subscribed` / `pr.unsubscribed` 事件；开发任务与审查任务的自动订阅；`raindown task show` 显示订阅
-- [ ] 8.2 workspace 配置 `github.watch`（默认关）与 `github.allowed_users`（默认仓库 owner）
-- [ ] 8.3 中枢 `pr-watcher`：轮询、游标、退避、失败计数（D11）
+- [x] 8.1 `pr.subscribed` / `pr.unsubscribed` 事件；开发任务与审查任务的自动订阅；`raindown task show` 显示订阅
+- [x] 8.2 workspace 配置 `github.watch`（默认关）与 `github.allowed_users`（默认仓库 owner）
+- [x] 8.3 中枢 `pr-watcher`：轮询、游标、退避、失败计数（D11）
 - [ ] 8.4 `task.input_added` 与续约下发；不能中途注入的适配器排队到下一次派工；不可信内容包裹
 - [ ] 8.5 已结束任务因名单内用户评论恢复（经 4.5 重新校验）
 - [ ] 8.6 handback 进入 supervisor instruction 队列；无订阅任务的名单内评论进入 supervisor 队列

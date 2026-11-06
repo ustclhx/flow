@@ -1,0 +1,154 @@
+{
+  "$id": "https://raindown.local/schemas/events/pr.event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "账本序号，单调递增"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+    },
+    "type": {
+      "type": "string",
+      "const": "pr.event"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+      "description": "workspace 标识，形如 ws/<id>"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "description": "任务 id，由中枢在创建时分配"
+    },
+    "actor": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+      "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "pr": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+          "description": "规范化的 PR 链接（来自订阅，不来自评论内容）"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "check_run",
+            "review",
+            "issue_comment",
+            "review_comment"
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "GitHub 用户名或检查所属 App 的 slug"
+        },
+        "actor_id": {
+          "description": "GitHub 账号的数字 id（名单按 id 比较）",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "actor_kind": {
+          "type": "string",
+          "enum": [
+            "human",
+            "bot",
+            "agent"
+          ],
+          "description": "bot：GitHub App、[bot] 账号或 CI 检查；agent：配置的 worker 身份（永不 allowed）"
+        },
+        "allowed": {
+          "type": "boolean",
+          "description": "中枢计算：只有名单内人类账号的 PR 评论或代码行评论、未编辑、且中枢 gh 登录不与名单共享时为 true"
+        },
+        "not_allowed": {
+          "type": "string",
+          "enum": [
+            "not_listed",
+            "bot",
+            "agent",
+            "kind",
+            "edited",
+            "shared_identity"
+          ],
+          "description": "not_listed 不在允许名单；bot 机器人或 CI；agent worker 身份；kind 审查正文或检查结论只作上下文；edited 编辑过的评论；shared_identity 中枢 gh 登录与名单内用户相同或无法确认（worker 可能以该身份发言）"
+        },
+        "pr_state": {
+          "description": "读取时 PR 的状态",
+          "type": "string",
+          "enum": [
+            "open",
+            "closed",
+            "merged"
+          ]
+        },
+        "state": {
+          "description": "审查结论（approved / changes_requested / commented）或检查结论",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z_]+$"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 8192,
+          "description": "内容（疑似密钥已遮蔽、超长截断）"
+        },
+        "chars": {
+          "description": "截断前的字符数；只在截断时出现（完整内容见 url）",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^https:\\/\\/github\\.com\\/[\\x21-\\x7e]*$",
+          "description": "该条内容在 GitHub 上的链接（截断时的读取指针）"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T[0-9:.]+Z\\|\\d{1,20}$"
+        }
+      },
+      "required": [
+        "pr",
+        "kind",
+        "actor",
+        "actor_kind",
+        "allowed",
+        "text",
+        "url",
+        "cursor"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "seq",
+    "ts",
+    "type",
+    "workspace",
+    "actor",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "title": "pr.event"
+}

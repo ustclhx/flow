@@ -216,7 +216,7 @@ function fakeHub(s: Setup) {
       if (s.hubDown) return fail('retryable', 'hub_unavailable', '中枢不可用')
       const task = id === s.self.id ? s.self : id === s.review.id ? s.review : undefined
       return task
-        ? ok({ task, events: [], replies: [], attempts: [] })
+        ? ok({ task, events: [], replies: [], attempts: [], subscriptions: [] })
         : fail('failure', 'not_found', id)
     },
     async listTasks(q: { status?: string }): Promise<Result<{ tasks: TaskView[] }>> {

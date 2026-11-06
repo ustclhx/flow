@@ -1,5 +1,6 @@
 import {
   activeDelegation,
+  hasActivePrSubscription,
   isTerminalStatus,
   type LedgerEvent,
   type TaskView,
@@ -19,7 +20,13 @@ export function readTaskStage(ledger: Pick<LedgerStore, 'taskEvents'>, task: Tas
   return stageFromEvents(task, ledger.taskEvents(task.id))
 }
 
-/** 已持有该任务全部事件（按 seq 升序）时直接派生，不再读账本。 */
+/**
+ * 已持有该任务全部事件（按 seq 升序）时直接派生，不再读账本。
+ * "有活跃订阅"由同一份事件中的 pr.subscribed / pr.unsubscribed 折叠得到（harness-neutral 8.1）。
+ */
 export function stageFromEvents(task: TaskView, events: readonly LedgerEvent[]) {
-  return taskStage(task, activeDelegation(task, events), { events })
+  return taskStage(task, activeDelegation(task, events), {
+    events,
+    hasActiveSubscription: hasActivePrSubscription(events),
+  })
 }

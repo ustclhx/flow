@@ -27,6 +27,7 @@ import {
   type Role,
   SUPERVISOR_ACTOR,
 } from './roles.ts'
+import type { GithubConfig } from './schema/github.ts'
 import type { SupervisorConfig } from './schema/supervisor.ts'
 import { loadWorkspaces, reviewerRoleIssues } from './workspaces.ts'
 
@@ -530,6 +531,25 @@ export function describeSupervisorConfig(c: SupervisorConfig): string {
   ].join('；')
 }
 
+/** github 设置的一行摘要（harness-neutral 8.2：doctor 显示）。 */
+export function describeGithubConfig(c: GithubConfig): string {
+  const users =
+    c.allowed_users === undefined
+      ? '缺省为 PR 所属登记仓库 origin 的 owner（仅个人账号；组织或解析不出时为空名单，没有人的评论算请求）'
+      : c.allowed_users.length
+        ? c.allowed_users.join('、')
+        : '空（没有人的评论算请求）'
+  return [
+    c.watch
+      ? '轮询有订阅的 PR（CI、审查与评论直通给订阅的任务）'
+      : '不轮询 PR（github.watch: false）',
+    `允许名单：${users}；名单外用户与机器人的内容只作为不可信上下文送达运行中的任务`,
+    c.worker_identity
+      ? `worker 身份：${c.worker_identity}（它发的内容标为 agent，永不算请求）。当前版本该设置不生效：worker 仍以本机 gh 登录发评论；需等 bot 凭证注入`
+      : 'worker 身份：未配置',
+  ].join('；')
+}
+
 /** workspace 定义文件的问题与每个 workspace 的 supervisor 设置。 */
 async function checkWorkspaces(home: string, roles?: Role[]): Promise<DoctorCheck[]> {
   const loaded = await loadWorkspaces(home)
@@ -575,6 +595,40 @@ async function checkWorkspaces(home: string, roles?: Role[]): Promise<DoctorChec
       severity: 'info',
       message: `${ws.ref} supervisor：${describeSupervisorConfig(ws.supervisor)}`,
     })
+    if (ws.github.watch || ws.github.allowed_users !== undefined) {
+      checks.push({
+        id: `workspace.${ws.id}.github`,
+        ok: true,
+        severity: 'info',
+        message: `${ws.ref} github：${describeGithubConfig(ws.github)}`,
+      })
+    }
+    if (ws.github.watch) {
+      checks.push({
+        id: `workspace.${ws.id}.github_shared_identity`,
+        ok: false,
+        severity: 'warning',
+        message: `${ws.ref} 共享 GitHub 身份：worker 以本机 gh 登录发评论，与允许名单中的你无法区分；当前版本所有 PR 评论一律只作上下文，不恢复已结束任务、不交回、不唤醒 supervisor`,
+        hint: '需等后续版本把独立 bot 账号或 App 的凭证注入 worker 后才能解除；github.worker_identity 在当前版本不生效',
+      })
+    }
+    if (ws.github.watch && ws.github.allowed_users === undefined) {
+      checks.push({
+        id: `workspace.${ws.id}.github_default_users`,
+        ok: true,
+        severity: 'info',
+        message: `${ws.ref} 允许名单取 PR 所属仓库的 owner；owner 是组织时默认名单为空，请在 github.allowed_users 中显式列出`,
+      })
+    }
+    if (ws.github.watch && ws.repos.length === 0) {
+      checks.push({
+        id: `workspace.${ws.id}.github_repo`,
+        ok: false,
+        severity: 'warning',
+        message: `${ws.ref} 打开了 github.watch 但没有登记仓库：中枢无法确认 PR 所在仓库，不会轮询`,
+        hint: `在 config/workspaces/${ws.id}.yaml 的 repos 中登记仓库，或设置 github.watch: false`,
+      })
+    }
     // 唤醒任务以登记仓库为工作目录：没有仓库时视为不可唤醒（design D3），积压事件会被丢弃。
     if (ws.supervisor.enabled && ws.repos.length === 0) {
       checks.push({
