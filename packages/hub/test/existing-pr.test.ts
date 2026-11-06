@@ -283,6 +283,48 @@ test('仍持有租约时依据 PR 完成会结束派工并释放租约', async (
   })
 })
 
+test('已消费上报后崩溃仍可依据 PR 完成，重建保留上报与派工结束事实', async () => {
+  const s = await setup()
+  s.branch()
+  const report = {
+    type: 'task.reported' as const,
+    task_id: 'dev',
+    workspace: WS,
+    payload: {
+      status: 'progress' as const,
+      summary: '已推送任务分支，等待交付核验',
+      lease_id: 'l-dev-1',
+      attempt: 1,
+    },
+  }
+  const reported = must(s.store.append(report, { actor: 'developer' }))
+  must(
+    s.store.append(
+      {
+        type: 'task.report_consumed',
+        task_id: 'dev',
+        workspace: WS,
+        payload: { lease_id: 'l-dev-1', attempt: 1, report_seq: reported.seq },
+      },
+      { actor: 'node:n1' },
+    ),
+  )
+  s.block('crashed', true)
+  s.reactor.start()
+  await s.reactor.idle()
+  expect(s.store.getTask('dev')).toMatchObject({
+    status: 'done',
+    result: { completed_via: 'existing_pr', prs: [PR] },
+  })
+  expect(s.store.activeLease('dev')).toBeNull()
+  expect(s.store.append(report, { actor: 'developer' }).ok).toBe(false)
+  must(s.store.rebuild())
+  expect<unknown>(s.store.workerReport('dev', 'l-dev-1', 1, reported.seq)).toEqual(reported)
+  expect(s.store.workerReportWatermark('dev', 'l-dev-1', 1)).toBe(reported.seq)
+  expect(s.store.attemptEnded('dev', 1)).toBe(true)
+  expect(s.store.getTask('dev')?.result?.completed_via).toBe('existing_pr')
+})
+
 test('本任务已记录的旧 PR 可作为依据，保留先前派工的 blocked 结束事实', async () => {
   const s = await setup(async () => ok([pr({ createdAt: '2026-10-23T00:00:00Z' })]))
   s.branch()
