@@ -69,8 +69,8 @@ describe('fixture 清单', () => {
 })
 
 describe('analyzeTail', () => {
-  test('信任提示', () => {
-    const a = analyzeTail(tuiFixture('trust-prompt').tail)
+  test.each(['trust-prompt', 'trust-prompt-0167'])('信任提示：%s', (fixture) => {
+    const a = analyzeTail(tuiFixture(fixture).tail)
     expect(a.kind).toBe('trust_prompt')
   })
 
@@ -497,6 +497,13 @@ describe('对抗与顺序（PR #24 审查第 1、2、5 条）', () => {
     expect(analyzeTail(trust().filter((l) => !l.includes('2. Quit'))).kind).not.toBe('trust_prompt')
     // 真实布局仍然识别。
     expect(analyzeTail(trust()).kind).toBe('trust_prompt')
+    const current = tuiFixture('trust-prompt-0167').tail
+    expect(analyzeTail(current.filter((l) => !l.includes('Folder access'))).kind).not.toBe(
+      'trust_prompt',
+    )
+    expect(analyzeTail(current.map((l) => l.replace('esc back', 'esc quit'))).kind).not.toBe(
+      'trust_prompt',
+    )
   })
 
   test('信任提示的三段文字必须同时出现在末尾 8 行内，且最后一行是 enter continue', () => {

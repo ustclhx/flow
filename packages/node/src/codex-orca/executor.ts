@@ -18,7 +18,7 @@ import {
 } from '@raindown/core'
 import { z } from 'zod'
 import { type NodeClock, sleep, systemClock } from '../clock.ts'
-import { prepareCodexHome, workCodexHome } from '../codex-home.ts'
+import { orcaCodexHome, prepareCodexHome, sameCodexHome } from '../codex-home.ts'
 import { CHILD_ENV_DENYLIST, dualRaindownEnv, executorRoleEnv } from '../env.ts'
 import {
   ActivityQueue,
@@ -50,6 +50,7 @@ import {
   orcaErrorCode,
 } from './orca.ts'
 import { renderTaskSpec, resolveContext, taskStateDir, writeTaskSpec } from './spec.ts'
+import { checkProjectCodexTrust } from './trust.ts'
 
 /**
  * codex-orca 执行器（add-m1-executors 2.1–2.3；executor-codex-orca spec；design D2–D4）。
@@ -60,7 +61,7 @@ import { renderTaskSpec, resolveContext, taskStateDir, writeTaskSpec } from './s
  * 监控循环（D4）：
  * - 有忙碌标记：在工作；终端有新内容时作为 output 上报，否则上报 heartbeat（无进展计时只看"既无输出也不忙"）；
  *   之前报告过停下的，补一个 resumed 信号（用户直接在终端里答复的情形）；
- * - 信任提示：只在本执行器新建的终端里、第一次出现忙碌标记之前，只发回车确认（最多 3 次）。
+ * - 信任提示：启动、恢复与确认前均拒绝项目 `.codex/`；仅在本次新终端首次忙碌之前发回车（最多 3 次）。
  *   之后再看到信任提示文字也不自动确认，交给 classify（PR #24 审查第 1 条）；
  * - 连续两次没有忙碌标记：查本任务分支上的 PR（`gh pr list --head`），有则以 done 结束（`workdir` 为 worktree，
  *   验收在这里运行）；gh 不可用时**不判 done**，上报 idle 并在 hint 中带上 gh 的错误，classify 判为 other；
@@ -379,6 +380,35 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       const failed = (code: string, message: string) =>
         finish(ok({ outcome: 'failed', result: result(message, { reason: code }) }))
 
+      let isolationBlock: Promise<void> | undefined
+      const blockProjectConfig = async (worktree: string): Promise<boolean> => {
+        if (isolationBlock) {
+          await isolationBlock
+          return true
+        }
+        if (finished || stopping) return true
+        const checked = await checkProjectCodexTrust(worktree)
+        if (isolationBlock) {
+          await isolationBlock
+          return true
+        }
+        if (finished || stopping) return true
+        if (checked.ok) return false
+        isolationBlock ??= (async () => {
+          const message = `[${checked.error.code}] ${checked.error.message}`
+          status(message, { reason: checked.error.code })
+          // 关闭已由本次执行接管的终端；恢复前尚未核对身份的旧 handle 不能直接关闭。
+          if (handle) {
+            const closed = await orca.terminalClose({ handle })
+            if (!closed.ok)
+              logger?.warn(`隔离检查失败后关闭终端 ${handle} 失败`, closed.error.message)
+          }
+          finish(ok({ outcome: 'blocked', reason: 'other', message }))
+        })()
+        await isolationBlock
+        return true
+      }
+
       const stop = async (message: string) => {
         if (finished || stopping) return
         stopping = true
@@ -518,7 +548,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         return true
       }
 
-      const send = (input: Parameters<OrcaCli['terminalSend']>[0]) => orca.terminalSend(input)
+      const send = async (input: Parameters<OrcaCli['terminalSend']>[0]) => {
+        // 包括预检后、授权复核后、文字送达与补发回车，均在最后一次异步等待后重查。
+        if (!state || (await blockProjectConfig(state.worktree_path)))
+          return fail('failure', 'codex_isolation_blocked', '隔离检查未通过，没有向 Codex 发送输入')
+        return orca.terminalSend(input)
+      }
       const started = (r: OrcaSendResult) =>
         !r.send.prompt || r.send.prompt.stages.includes('turn_started')
       /** 发送失败一律按临时错误处理（stale 也不代表终端已死，见文件头注释）。 */
@@ -561,6 +596,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const st = replyState(reply.reply_id)
         if (st.done) return 'delivered'
         if (st.dropped) return 'dropped'
+        if (await blockProjectConfig(state.worktree_path)) return 'not_running'
         // 按实时的末尾内容判断（PR #24 审查第 5 条），不用上一次轮询的分析。
         const now = await orca.terminalRead({ handle, limit: 200 })
         if (!now.ok) {
@@ -570,6 +606,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (now.data.status !== 'running') return 'not_running'
         const h = handle
         const live = analyzeTail(now.data.tail)
+        if (live.kind === 'trust_prompt') {
+          st.dropped = true
+          await saveState()
+          status(`回复 ${reply.reply_id} 未送达：Codex 仍在文件夹信任弹窗，不能把回复作为信任确认`)
+          return 'dropped'
+        }
         const approval = live.kind === 'awaiting_approval'
         if (reply.kind === 'approve' && ctx.confirmApproval) {
           // D15：放行前重读实时的待批弹窗交给节点复核（supervisor 的批准须与判定时的请求一致、
@@ -673,6 +715,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         tail: readonly string[],
         popup: string,
       ): Promise<'approved' | 'changed' | 'user'> => {
+        if (!state || (await blockProjectConfig(state.worktree_path))) return 'user'
         const precheck = ctx.precheck
         if (!precheck) return 'user'
         const p = approvalForPrecheck(tail)
@@ -730,6 +773,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         while (!finished && !stopping) {
           await sleep(clock, pollMs, ctx.signal)
           if (finished || stopping || !handle) return
+          if (!state || (await blockProjectConfig(state.worktree_path))) return
           const r = await orca.terminalRead({ handle, limit: 200 })
           if (finished || stopping) return
           if (!r.ok) {
@@ -777,10 +821,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             continue
           }
           if (a.kind === 'trust_prompt' && launchedHere && !seenBusy && trustSent < trustRetries) {
-            // 新终端启动时的信任提示（仓库已确认属于 workspace）：只发回车确认（发 "1" 会被拒绝）。
-            // Codex 0.166 实测：确认信任会在同一进程加载项目 .codex/config.toml 和 rules，
-            // linked worktree 也可继承主仓库信任。CODEX_HOME 只隔离用户层，不能隔离项目层；
-            // 项目规则仍可绕过 Raindown 审批，需后续独立约束，不能把自动确认当作纯 UI 操作。
+            // Codex 0.167 没有不信任继续选项；确认前重查，防止启动后才出现的项目配置被激活。
+            if (!state || (await blockProjectConfig(state.worktree_path))) return
             trustSent++
             const s = await send({ handle, enter: true })
             // 信任提示只会出现一次：成功确认过一次就关闭自动确认，只有发送失败时才重试。
@@ -858,7 +900,13 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const scope = codexOrcaInputs.parse(contract.inputs ?? {}).scope
 
         state = await readState()
-        if (state && (state.repo !== repo || !existsSync(state.worktree_path))) state = undefined
+        if (state && state.repo !== repo) state = undefined
+        if (
+          state &&
+          !existsSync(state.worktree_path) &&
+          (await blockProjectConfig(state.worktree_path))
+        )
+          return
         let fresh = false
         if (!state) {
           const base = await baseBranchOf(repo)
@@ -910,7 +958,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (finished || stopping) return
 
         const isolated = await prepareCodexHome(
-          workCodexHome(options.home),
+          orcaCodexHome(options.home),
           options.codexAuthSource ??
             actorEnv.data.CODEX_HOME ??
             process.env.CODEX_HOME ??
@@ -919,12 +967,15 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (!isolated.ok) return failed(isolated.error.code, isolated.error.message)
         if (finished || stopping) return
 
+        // 每次派工都检查，包含已运行终端的恢复；worker 上轮可能自行创建了项目配置。
+        if (await blockProjectConfig(st.worktree_path)) return
+
         // 上一次执行留下的终端仍在运行且属于这个 worktree：接着用它，把带来的回复送进去。
         if (st.handle) {
           const tail = await reusable(st.handle, st.worktree_path)
           if (tail) {
             // 无法改变存活进程的 CODEX_HOME；升级前的终端不能通过重挂接绕过隔离。
-            if (st.codex_home !== isolated.data)
+            if (!(await sameCodexHome(st.codex_home, isolated.data)))
               return failed(
                 'codex_home_mismatch',
                 '已有 Codex 终端未使用当前隔离目录；请先关闭旧终端后重试',
@@ -958,6 +1009,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           if (!term.ok)
             return failed('terminal_create_failed', `创建 Orca 终端失败：${term.error.message}`)
           handle = term.data.handle
+          // 另一个同仓库任务可能刚写入共享信任记录，本终端可能已跳过信任弹窗。
+          if (await blockProjectConfig(st.worktree_path)) return
           launchedHere = true
           st.handle = handle
           st.codex_home = isolated.data

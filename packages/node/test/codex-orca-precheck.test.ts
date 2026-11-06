@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { rmSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Activity, ok, type Result, taskContract } from '@raindown/core'
 import { approvalForPrecheck, CODEX_ORCA_PRECHECK_TOOL } from '../src/codex-orca/classify.ts'
@@ -193,6 +193,43 @@ describe('严格解析授权弹窗', () => {
 })
 
 describe('codex-orca 监控循环中的预检', () => {
+  test('运行中已有 .codex：不进入预检、不发按键，关闭终端并 blocked', async () => {
+    const { precheck, calls } = stub(ALLOW)
+    const s = await start([APPROVAL], precheck)
+    mkdirSync(join(h?.worktree ?? '', '.codex'))
+    await s.poll()
+    expect(await s.run.done).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'other',
+        message: expect.stringContaining('project_codex_config'),
+      },
+    })
+    expect(calls).toEqual([])
+    expect(s.orca.ops('terminalSend')).toEqual([])
+    expect(s.orca.ops('terminalClose')).toHaveLength(1)
+  })
+
+  test('等待预检结果时出现 .codex：即使策略放行也不发 Enter', async () => {
+    const { precheck, calls } = stub(ALLOW, () => {
+      mkdirSync(join(h?.worktree ?? '', '.codex'))
+    })
+    const s = await start([APPROVAL], precheck)
+    await s.poll()
+    expect(await s.run.done).toMatchObject({
+      ok: true,
+      data: {
+        outcome: 'blocked',
+        reason: 'other',
+        message: expect.stringContaining('project_codex_config'),
+      },
+    })
+    expect(calls).toHaveLength(1)
+    expect(s.orca.ops('terminalSend')).toEqual([])
+    expect(s.orca.ops('terminalClose')).toHaveLength(1)
+  })
+
   test('auto：发回车放行、记活动，不上报停下；同一弹窗只预检一次', async () => {
     const { precheck, calls } = stub(ALLOW)
     const s = await start([APPROVAL, APPROVAL, tuiFixture('working')], precheck)

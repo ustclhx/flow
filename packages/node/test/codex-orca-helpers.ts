@@ -48,6 +48,8 @@ export function sendFixture(name: string): OrcaSendResult {
 
 export const TUI_FIXTURES = [
   'trust-prompt',
+  // 0.167 临时环境 PTY 实测文本，路径脱敏并套用 Orca 输出信封。
+  'trust-prompt-0167',
   'starting',
   'working',
   'streaming',
@@ -98,6 +100,7 @@ export class FakeOrca implements OrcaCli {
   async worktreeCreate(input: unknown) {
     this.calls.push({ op: 'worktreeCreate', input })
     mkdirSync(this.worktreePath, { recursive: true })
+    writeFileSync(join(this.worktreePath, '.git'), 'gitdir: /unused-test-git-dir\n')
     return this.worktreeResult
   }
   async worktreeRm(input: unknown): Promise<Result<void>> {
