@@ -264,9 +264,7 @@ test.each(['failed', 'dropped'] as const)(
 test('报告的自由文本及结构化选项在入账时脱敏', async () => {
   const fakeKey = ['sk-', 'secret0123456789'.repeat(2)].join('')
   const c = await setup()
-  expect(
-    (await c.report({ ...question, summary: `token=${fakeKey}` })).status,
-  ).toBe(200)
+  expect((await c.report({ ...question, summary: `token=${fakeKey}` })).status).toBe(200)
   const event = c.ledger.taskEvents(c.lease.task_id).findLast((e) => e.type === 'task.reported')
   expect(JSON.stringify(event)).not.toContain(fakeKey)
 })
