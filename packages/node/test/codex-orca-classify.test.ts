@@ -751,5 +751,9 @@ describe('composerReady：只有最后几行是 Codex 输入框才能敲入文�
     expect(composerReady(['› ', ''])).toBe(true)
     expect(composerReady(['› Ask Codex', 'a', 'b', 'c'])).toBe(false)
     expect(composerReady([])).toBe(false)
+    // 末行只剩裸提示符（精简主题的 shell）也不算输入框。
+    expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', '$ '])).toBe(false)
+    expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', '  ❯'])).toBe(false)
+    expect(composerReady(['› Ask Codex to do anything', '  ? for shortcuts', 'repo %'])).toBe(false)
   })
 })

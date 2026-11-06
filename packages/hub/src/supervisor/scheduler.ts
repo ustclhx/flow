@@ -35,7 +35,7 @@ import type { TaskService, WorkspaceInfo, WorkspaceLookup } from '../ledger/task
 import type { HubClock } from '../server/clock.ts'
 import { consoleLogger, type HubLogger } from '../server/maintenance.ts'
 import { wakeCosts } from './cost.ts'
-import { prSourcedTask } from './observe.ts'
+import { wakeSourceFromEvents } from './observe.ts'
 import {
   NORMAL_QUEUES,
   type Queue,
@@ -872,11 +872,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     const seqs = events.map((e) => e.seq)
     // 合并了 PR 评论的唤醒（instruction:pr）：保留 instruction 优先级，但不满足 auto_merge、受 observe 约束。
     // 事件涉及带 PR 来源污染的任务时同样标为 PR 来源（污染沿唤醒链向下传递）。
-    const prSourced = events.some(
-      (e) =>
-        e.type === 'pr.wake_requested' ||
-        (e.task_id !== undefined && prSourcedTask(ledger, ledger.getTask(e.task_id))),
-    )
+    const prSourced = wakeSourceFromEvents(ledger, events) === 'pr'
     if (prSourced) {
       note = [
         note,

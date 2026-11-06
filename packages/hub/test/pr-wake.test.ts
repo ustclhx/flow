@@ -172,3 +172,43 @@ test('交回的评论唤醒 supervisor（instruction），输入里有评论与 
     '来源 instruction:pr',
   )
 })
+
+test('调度器创建唤醒时由事件涉及任务的已固化污染计算 source', async () => {
+  const s = await setup()
+  must(
+    s.store.append(
+      {
+        type: 'task.created',
+        task_id: 'tainted',
+        workspace: WS,
+        payload: {
+          contract: contract(),
+          origin: 'instruction',
+          mandate: {
+            created_by: 'supervisor',
+            origin: 'supervisor',
+            policy_version: '012345abcdef',
+            pr_sourced: true,
+          },
+        },
+      },
+      { actor: 'user' },
+    ),
+  )
+  startTask(s.store, 'tainted')
+  must(
+    s.store.append(
+      {
+        type: 'task.done',
+        task_id: 'tainted',
+        workspace: WS,
+        payload: { result: { summary: '完成', executor: 'fake', node_id: 'n1' } },
+      },
+      { actor: 'node:n1' },
+    ),
+  )
+  await s.scheduler.idle()
+  const [wake] = s.wakes()
+  expect(wake).toMatchObject({ origin: 'instruction' })
+  expect(s.store.wakeOf(wake?.task_id ?? '')?.source).toBe('pr')
+})

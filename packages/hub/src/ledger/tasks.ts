@@ -951,7 +951,8 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         prSourcedWake(ledger, contract.parent) ||
         prSourcedTask(ledger, source) ||
         prSourcedTask(ledger, contract.parent ? ledger.getTask(contract.parent) : null)
-          ? { pr_sourced: true as const }
+          ? // 以上每项只读一层已固化的标记（见 observe.ts），不递归重算。
+            { pr_sourced: true as const }
           : {}),
         policy_version: policy.version,
         matched_rules: auditRules(creationDecision.matched_rules),

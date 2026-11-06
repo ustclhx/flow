@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { defaultSupervisorConfig, ok } from '@raindown/core'
 import { createTaskService } from '../src/index.ts'
+import { wakeSourceFromEvents } from '../src/supervisor/observe.ts'
 import { contractInput, must, tempLedger, WS } from './ledger-helpers.ts'
 
 const cleanups: (() => void)[] = []
@@ -52,6 +53,16 @@ async function setup() {
     source?: 'pr',
   ) => {
     const g = ++generation
+    // 与唤醒调度器相同：创建唤醒时由已固化的标记计算一次 source（不递归）。
+    const derived =
+      source ??
+      wakeSourceFromEvents(
+        ledger,
+        events.flatMap((seq) => {
+          const e = ledger.eventsAfter(seq - 1, {}, 1)[0]
+          return e?.seq === seq ? [e] : []
+        }),
+      )
     return must(
       await tasks.createTask(contractInput({ role: 'supervisor' }), {
         actor: 'hub',
@@ -66,7 +77,7 @@ async function setup() {
               origin,
               events,
               generation: g,
-              ...(source ? { source } : {}),
+              ...(derived ? { source: derived } : {}),
             },
           },
         ],
@@ -284,7 +295,7 @@ test('PR 评论引起的唤醒（source: pr）建的任务不继承来源任务�
   const dev = must(await s.create(first)).task
   expect(dev.mandate?.instruction_seq).toBe(seq)
   const pr = 'https://github.com/acme/repo/pull/8'
-  await complete(s, dev.id, pr)
+  const devDone = await complete(s, dev.id, pr)
   const wakeEvent = (n: number) => {
     const comment = must(
       s.ledger.append(
@@ -317,8 +328,9 @@ test('PR 评论引起的唤醒（source: pr）建的任务不继承来源任务�
       ),
     ).seq
   }
-  // 对照：同样的关联任务，普通 instruction 唤醒会继承原始指令。
-  const plain = await s.wake([wakeEvent(1)])
+  // 对照：同一个开发任务，普通 instruction 唤醒（由完成事件引起）会继承原始指令。
+  const plain = await s.wake([devDone])
+  expect(s.ledger.wakeOf(plain)?.source).toBeUndefined()
   expect(must(await s.create(plain)).task.mandate?.instruction_seq).toBe(seq)
   const fromPr = await s.wake([wakeEvent(2)], 'instruction', 'pr')
   expect(s.ledger.wakeOf(fromPr)?.source).toBe('pr')
@@ -337,7 +349,8 @@ test('PR 来源的污染沿唤醒链向下传递：两跳之后的任务仍带 p
   // D 完成 → 普通 instruction 唤醒（payload 没有 source 标记），从事件涉及的任务推导为 PR 来源。
   const done = await complete(s, d.id)
   const w2 = await s.wake([done])
-  expect(s.ledger.wakeOf(w2)?.source).toBeUndefined()
+  // 普通唤醒的 source 在创建时由事件涉及的任务的已固化标记计算一次。
+  expect(s.ledger.wakeOf(w2)?.source).toBe('pr')
   expect(prSourcedWake(s.ledger, w2)).toBe(true)
   const d2 = must(await s.create(w2)).task
   expect(d2.mandate?.pr_sourced).toBe(true)
@@ -421,4 +434,57 @@ test('PR 来源唤醒重试未污染的任务：重试记录 pr_sourced，之后
   const w2 = await s.wake([done])
   expect(prSourcedWake(s.ledger, w2)).toBe(true)
   expect(must(await s.create(w2)).task.mandate?.pr_sourced).toBe(true)
+})
+
+test('40 代未污染的唤醒链保持未污染，且每次检查的开销与代数无关', async () => {
+  const { prSourcedTask, prSourcedWake } = await import('../src/supervisor/observe.ts')
+  const s = await setup()
+  let events = [s.instruction('长期迭代')]
+  let last: { id: string; wake: string } | undefined
+  for (let g = 0; g < 40; g++) {
+    const w = await s.wake(events)
+    const t = must(await s.create(w)).task
+    expect(t.mandate?.pr_sourced).toBeUndefined()
+    events = [await complete(s, t.id)]
+    last = { id: t.id, wake: w }
+  }
+  if (!last) throw new Error('没有任务')
+  const started = performance.now()
+  for (let i = 0; i < 100; i++) {
+    expect(prSourcedWake(s.ledger, last.wake)).toBe(false)
+    expect(prSourcedTask(s.ledger, s.ledger.getTask(last.id))).toBe(false)
+  }
+  // 只读已固化标记：100 次检查远小于 1 秒（递归重算时第 15 代左右单次就约 1 秒）。
+  expect(performance.now() - started).toBeLessThan(1000)
+  const w = await s.wake(events)
+  expect(s.ledger.wakeOf(w)?.source).toBeUndefined()
+  expect(must(await s.create(w)).task.mandate?.pr_sourced).toBeUndefined()
+})
+
+test('三跳：PR 来源的污染经固化标记逐层传递', async () => {
+  const s = await setup()
+  const prWake = await s.wake([], 'instruction', 'pr')
+  let task = must(await s.create(prWake)).task
+  for (let hop = 0; hop < 3; hop++) {
+    const w = await s.wake([await complete(s, task.id)])
+    expect(s.ledger.wakeOf(w)?.source).toBe('pr')
+    task = must(await s.create(w)).task
+    expect(task.mandate?.pr_sourced).toBe(true)
+  }
+})
+
+test('父任务就是 PR 来源唤醒：直接建在其下的任务带污染', async () => {
+  const s = await setup()
+  const prWake = await s.wake([], 'instruction', 'pr')
+  const t = must(
+    await s.tasks.createTask(
+      contractInput({
+        parent: prWake,
+        cwd: s.ledger.getTask(prWake)?.contract.cwd,
+        executor: 'claude-sdk',
+      }),
+      { actor: 'user' },
+    ),
+  ).task
+  expect(t.mandate?.pr_sourced).toBe(true)
 })

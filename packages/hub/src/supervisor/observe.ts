@@ -33,57 +33,54 @@ export const observeAutonomous = (
 
 type TaintLedger = Pick<LedgerStore, 'wakeOf' | 'eventsAfter' | 'getTask' | 'taskEvents'>
 
-/** 沿唤醒链回溯的最大深度（链只会指向更早的唤醒与任务，不会成环；这里只是防御）。 */
-const TAINT_DEPTH = 32
-
 /**
- * 唤醒是否为 PR 来源（instruction:pr）：不只信 payload 标记，也从唤醒合并的事件推导——
- * 事件中有 `pr.wake_requested`，或事件涉及的任务（实时检查，见 `prSourcedTask`）带 PR 来源污染。
- * 用户接受提案或重试都**不清除**污染（当前版本）。
+ * PR 来源污染（instruction:pr）只读**已固化的标记**，不递归重算：
+ * - 唤醒：`supervisor.wake_started.source`（调度器写入时由 `wakeSourceFromEvents` 计算一次）；
+ *   没有该字段的旧唤醒只在其事件本身含 `pr.wake_requested` 时算 PR 来源（缺失即未污染，不 fail closed）；
+ * - 任务：`mandate.pr_sourced`（建任务时由中枢计算一次），或 `task.requeued.pr_sourced`（PR 来源唤醒的重试），
+ *   或其来源唤醒（`mandate.wake_task`）的已固化标记。
+ * 每个检查只看一层已存储的事实，开销与唤醒代数无关；污染在每次写入时向下传递一层。
  */
-export function prSourcedWake(
-  ledger: TaintLedger,
-  wakeTaskId: string | undefined,
-  depth = 0,
-): boolean {
-  if (wakeTaskId === undefined || depth > TAINT_DEPTH) return depth > TAINT_DEPTH
+export function prSourcedWake(ledger: TaintLedger, wakeTaskId: string | undefined): boolean {
+  if (wakeTaskId === undefined) return false
   const wake = ledger.wakeOf(wakeTaskId)
   if (!wake) return false
   if (wake.source === 'pr') return true
-  for (const seq of wake.events) {
+  return wake.events.some((seq) => {
     const e = ledger.eventsAfter(seq - 1, {}, 1)[0]
-    if (e?.seq !== seq) continue
-    if (e.type === 'pr.wake_requested') return true
-    if (e.task_id !== undefined && prSourcedTask(ledger, ledger.getTask(e.task_id), depth + 1))
-      return true
-  }
-  return false
+    return e?.seq === seq && e.type === 'pr.wake_requested'
+  })
 }
 
-/**
- * 任务是否带 PR 来源污染（实时检查）：授权依据带 `pr_sourced`；来源唤醒或父任务（含父任务本身就是
- * PR 来源唤醒）为 PR 来源；或曾被 PR 来源唤醒重试（`task.requeued{pr_sourced}`）。
- */
+/** 任务的已固化污染标记（授权依据、重试记录、来源唤醒的标记）。 */
 export function prSourcedTask(
   ledger: TaintLedger,
-  task: (Pick<TaskView, 'mandate'> & Partial<Pick<TaskView, 'id' | 'contract'>>) | null | undefined,
-  depth = 0,
+  task: (Pick<TaskView, 'mandate'> & Partial<Pick<TaskView, 'id'>>) | null | undefined,
 ): boolean {
   if (!task) return false
-  if (depth > TAINT_DEPTH) return true
   if (task.mandate?.pr_sourced) return true
-  if (prSourcedWake(ledger, task.mandate?.wake_task, depth + 1)) return true
-  const parent = task.contract?.parent
-  if (parent !== undefined && parent !== task.id) {
-    if (prSourcedWake(ledger, parent, depth + 1)) return true
-    if (prSourcedTask(ledger, ledger.getTask(parent), depth + 1)) return true
-  }
-  if (task.id !== undefined) {
-    for (const e of ledger.taskEvents(task.id)) {
-      if (e.type === 'task.requeued' && e.payload.pr_sourced === true) return true
-    }
-  }
-  return false
+  if (
+    task.id !== undefined &&
+    ledger
+      .taskEvents(task.id)
+      .some((e) => e.type === 'task.requeued' && e.payload.pr_sourced === true)
+  )
+    return true
+  return prSourcedWake(ledger, task.mandate?.wake_task)
+}
+
+/** 调度器创建唤醒时计算一次 `source`：事件含 `pr.wake_requested`，或事件涉及的任务带已固化的污染。 */
+export function wakeSourceFromEvents(
+  ledger: TaintLedger,
+  events: readonly { type: string; task_id?: string }[],
+): 'pr' | undefined {
+  return events.some(
+    (e) =>
+      e.type === 'pr.wake_requested' ||
+      (e.task_id !== undefined && prSourcedTask(ledger, ledger.getTask(e.task_id))),
+  )
+    ? 'pr'
+    : undefined
 }
 
 /** 参数摘要：JSON 序列化后遮蔽疑似密钥，再截断到 `OBSERVED_ARGS_MAX`（先遮蔽后截断，避免切开密钥）。 */
