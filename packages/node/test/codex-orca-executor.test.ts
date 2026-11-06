@@ -72,6 +72,7 @@ async function start(
   extra: {
     home?: OrcaHome
     resume?: TaskResume
+    reportResumeReplyDropped?: () => void
     directoryStat?: (path: string) => { isDirectory(): boolean }
   } = {},
 ) {
@@ -107,6 +108,9 @@ async function start(
     nodeId: 'n-test',
     signal: abort.signal,
     ...(extra.resume ? { resume: extra.resume } : {}),
+    ...(extra.reportResumeReplyDropped
+      ? { reportResumeReplyDropped: extra.reportResumeReplyDropped }
+      : {}),
   })
   const activity: Activity[] = []
   // 直接运行执行器的测试模拟中枢 blocked 回执，以及每条回复固定的来源 seq。
@@ -1238,6 +1242,150 @@ function approvalCommand(command: string) {
     tail: approval.tail.map((line) => line.replaceAll(APPROVAL_COMMAND, command)),
   }
 }
+
+describe('授权回合跨重启恢复', () => {
+  async function pendingApproval() {
+    const first = await start({}, (o) => o.show('approval'))
+    await first.poll(2)
+    const home = h
+    if (!home) throw new Error('no home')
+    const path = join(home.home, 'state/tasks/t-orca-1/orca.json')
+    await until(
+      () => JSON.parse(readFileSync(path, 'utf8')).approval_round?.blockSeq === 1,
+      '授权回合及中枢 blockSeq 落盘',
+    )
+    const saved = JSON.parse(readFileSync(path, 'utf8'))
+    const hint = idles(first)[0]?.data?.hint as { request_id?: string } | undefined
+    expect(saved.approval_round.request_id).toBe(hint?.request_id)
+    return { first, home, path, saved }
+  }
+
+  test.each(['approve', 'deny'] as const)(
+    '恢复原授权回合的 %s：核对持久化 seq 和实时指纹后送达',
+    async (kind) => {
+      const { first, home } = await pendingApproval()
+      let dropped = 0
+      const reply = {
+        reply_id: 'r-resume',
+        kind,
+        by: 'user',
+        text: '不要写 /tmp',
+        block_seq: 1,
+      }
+      // 模拟进程消失，保留终端和 orca.json，由新执行器接管。
+      const second = await start({}, (o) => o.show('approval'), {
+        home,
+        resume: { reply },
+        reportResumeReplyDropped: () => dropped++,
+      })
+      if (kind === 'deny') {
+        await until(() => second.clock.pendingTimers() > 0, '恢复拒绝后的 Esc 延时')
+        second.orca.reads = [ok(tuiFixture('question'))]
+        await second.clock.advance(1_000)
+      }
+      await ready(second)
+      expect(await second.run.deliver?.(reply)).toBe('delivered')
+      expect(sends(second)).toEqual(
+        kind === 'approve'
+          ? [{ handle: second.orca.handle, enter: true }]
+          : [
+              { handle: second.orca.handle, text: '\u001b' },
+              {
+                handle: second.orca.handle,
+                text: '不同意：不要写 /tmp',
+                enter: true,
+                waitSubmitS: 10,
+              },
+            ],
+      )
+      expect(second.orca.ops('terminalCreate')).toHaveLength(0)
+      expect(dropped).toBe(0)
+      await second.run.cancel()
+      await first.run.cancel()
+    },
+  )
+
+  test('恢复投递连续临时失败跨过两次轮询，不重建原授权回合，恢复后仍可送达', async () => {
+    const { first, home, path, saved } = await pendingApproval()
+    let dropped = 0
+    const reply = {
+      reply_id: 'r-resume-retry',
+      kind: 'approve' as const,
+      by: 'user',
+      block_seq: 1,
+    }
+    const second = await start(
+      {},
+      (o) => {
+        o.show('approval')
+        o.sends = Array.from({ length: 3 }, () =>
+          fail('retryable', 'orca_unavailable', '临时不可访问'),
+        )
+      },
+      { home, resume: { reply }, reportResumeReplyDropped: () => dropped++ },
+    )
+    await second.poll(2)
+    expect(JSON.parse(readFileSync(path, 'utf8')).approval_round.request_id).toBe(
+      saved.approval_round.request_id,
+    )
+    expect(idles(second)).toHaveLength(0)
+    await second.poll()
+    expect(await second.run.deliver?.(reply)).toBe('delivered')
+    expect(sends(second)).toHaveLength(4)
+    expect(dropped).toBe(0)
+    await second.run.cancel()
+    await first.run.cancel()
+  })
+
+  test.each(['seq_changed', 'prompt_changed', 'legacy_state', 'escaped_before_restart'])(
+    '恢复授权回复不再匹配（%s）：不发送按键，主动报告回复未送达',
+    async (mismatch) => {
+      const { first, home, path, saved } = await pendingApproval()
+      if (mismatch === 'legacy_state') {
+        delete saved.approval_round
+        writeFileSync(path, JSON.stringify(saved))
+      }
+      if (mismatch === 'escaped_before_restart') {
+        saved.replies['r-resume'] = {
+          round_id: saved.approval_round.request_id,
+          esc_sent: true,
+        }
+        saved.approval_round.attempted = true
+        writeFileSync(path, JSON.stringify(saved))
+      }
+      let dropped = 0
+      const reply = {
+        reply_id: 'r-resume',
+        kind: mismatch === 'escaped_before_restart' ? ('deny' as const) : ('approve' as const),
+        by: 'user',
+        block_seq: mismatch === 'seq_changed' ? 2 : 1,
+      }
+      const second = await start(
+        {},
+        (o) => {
+          o.reads = [
+            ok(
+              mismatch === 'prompt_changed'
+                ? approvalCommand('git push --force origin HEAD')
+                : tuiFixture(mismatch === 'escaped_before_restart' ? 'question' : 'approval'),
+            ),
+          ]
+        },
+        { home, resume: { reply }, reportResumeReplyDropped: () => dropped++ },
+      )
+      await ready(second)
+      expect(dropped).toBe(1)
+      expect(sends(second)).toEqual([])
+      expect(await second.run.deliver?.(reply)).toEqual({
+        outcome: 'dropped',
+        reason: 'round_closed',
+      })
+      await second.run.cancel()
+      expect(dropped).toBe(1)
+      await first.run.cancel()
+    },
+  )
+})
 
 describe('第二轮审查回归', () => {
   test('1：弹窗离开为提问后，同指纹弹窗重现会建立新回合', async () => {

@@ -41,6 +41,11 @@ export interface ExecutorContext {
   /** 任务带着回复重新排队后的这一次执行：上一轮的会话 id 与回复（D6、D7）。 */
   resume?: TaskResume
   /**
+   * 恢复时发现回复所属授权回合已关闭或请求不匹配：节点拒收当前 resume.reply，通知回复者。
+   * 不接受回复 id；可在 run 初始化期间调用，节点在执行结束前完成确认与临时失败重试。
+   */
+  reportResumeReplyDropped?: () => void
+  /**
    * 策略预检（add-m1-inbox 2.3）：执行器把审批请求交给用户之前先调用，`allow` 时在本地放行。
    * 节点为每个租约绑定任务 id；缺省（例如单元测试直接运行执行器）时执行器一律交给用户。
    */
