@@ -171,7 +171,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
   function closeTaskDrafts(
     task: { id: string; workspace: string },
     reason: InboxCloseReason,
-    cause: { seq?: number; actor?: string; via?: InboxVia },
+    cause: { seq?: number; actor?: string; via?: InboxVia; note?: string },
   ): EventInput[] {
     const out: EventInput[] = []
     for (const item of openTaskItems(task.id)) {
@@ -184,6 +184,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         payload: {
           item_id: item.id,
           reason,
+          ...(cause.note === undefined ? {} : { note: cause.note }),
           ...(cause.seq === undefined ? {} : { cause_seq: cause.seq }),
           ...(cause.actor === undefined ? {} : { cause_actor: cause.actor }),
           ...(cause.via === undefined ? {} : { via: cause.via }),
@@ -435,6 +436,14 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
       ...closeTaskDrafts(task, reason, {
         seq: e.seq,
         actor: by ?? e.actor,
+        ...(e.type === 'task.done' && e.payload.result.completed_via === 'existing_pr'
+          ? {
+              note: clipText(
+                `依据本任务已有 PR 判定完成：${e.payload.result.prs?.join('、')}；原卡住条目自动关闭，审查与合并资格仍须核对。`,
+                1000,
+              ),
+            }
+          : {}),
         // supervisor 代回复不是收件箱渠道：关闭记录只留 cause_actor（supervisor），不写 via。
         ...(via && via !== 'supervisor' ? { via } : {}),
       }),
@@ -660,7 +669,18 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         type: 'inbox.item_closed',
         task_id: task.id,
         workspace: task.workspace,
-        payload: { item_id: item.id, reason: STATUS_CLOSE[task.status] },
+        payload: {
+          item_id: item.id,
+          reason: STATUS_CLOSE[task.status],
+          ...(task.status === 'done' && task.result?.completed_via === 'existing_pr'
+            ? {
+                note: clipText(
+                  `依据本任务已有 PR 判定完成：${task.result.prs?.join('、')}；原卡住条目自动关闭，审查与合并资格仍须核对。`,
+                  1000,
+                ),
+              }
+            : {}),
+        },
       })
     }
     // 游标可能已越过终态，通知也可能在补齐历史时才创建，因此按源 seq 再核对一次。

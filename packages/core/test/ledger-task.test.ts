@@ -194,6 +194,7 @@ describe('状态与状态机', () => {
     'blocked>running',
     'blocked>cancelled',
     'blocked>failed',
+    'blocked>done',
     'queued>cancelled',
     'running>cancelled',
     'verifying>cancelled',

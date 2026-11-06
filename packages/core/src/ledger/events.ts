@@ -850,7 +850,7 @@ export const TASK_EVENT_RULES: Readonly<
   },
   'lease.granted': { from: ['running'], to: 'unchanged' },
   'task.verifying': { from: ['running'], to: 'verifying' },
-  'task.done': { from: ['running', 'verifying'], to: 'done' },
+  'task.done': { from: ['running', 'verifying', 'blocked'], to: 'done' },
   'task.failed': { from: ['running', 'verifying', 'blocked'], to: 'failed' },
   // blocked → blocked：只用于"本轮结束"（lease_held=false），例如卡住期间 worker 崩溃、节点掉线（D7a）。
   'task.blocked': { from: ['running', 'verifying', 'blocked'], to: 'blocked' },
@@ -900,6 +900,12 @@ export function checkTaskEvent(
       type: event.type,
     })
   if (!rule.from.includes(current)) return reject(`不能接受 ${event.type}`)
+  if (event.type === 'task.done' && current === 'blocked') {
+    const result = (event.payload as EventPayload<'task.done'>).result
+    if (result.completed_via !== 'existing_pr' || !result.prs?.length) {
+      return reject('卡住的任务只能依据已存在的 PR 判定完成')
+    }
+  }
   if (event.type === 'task.blocked' && current === 'blocked') {
     const held = (event.payload as { lease_held?: boolean }).lease_held === true
     if (held) return reject('已卡住的任务只能以 lease_held=false 再次上报 task.blocked（本轮结束）')

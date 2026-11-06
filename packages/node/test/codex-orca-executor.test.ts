@@ -18,6 +18,8 @@ import {
   NO_ADAPTER_CAPABILITIES,
   ok,
   type Result,
+  renderRecoveryPrompt,
+  type TaskRecovery,
   type TaskResume,
   taskContract,
 } from '@raindown/core'
@@ -73,6 +75,7 @@ async function start(
   extra: {
     home?: OrcaHome
     resume?: TaskResume
+    recovery?: TaskRecovery
     reportResumeReplyDropped?: (options?: { attempted?: boolean }) => void
     directoryStat?: (path: string) => { isDirectory(): boolean }
   } = {},
@@ -109,6 +112,7 @@ async function start(
     nodeId: 'n-test',
     signal: abort.signal,
     ...(extra.resume ? { resume: extra.resume } : {}),
+    ...(extra.recovery ? { recovery: extra.recovery } : {}),
     ...(extra.reportResumeReplyDropped
       ? { reportResumeReplyDropped: extra.reportResumeReplyDropped }
       : {}),
@@ -179,6 +183,63 @@ const idles = (s: Started) => s.activity.filter((a) => a.data?.idle === true)
 const sends = (s: Started) => s.orca.ops('terminalSend').map((c) => c.input)
 
 describe('启动', () => {
+  test('重挂接直接送达恢复提示，普通输入框出现前不向授权弹窗输入文字', async () => {
+    const first = await start({}, (o) => o.show('question'))
+    await ready(first)
+    const home = h
+    if (!home) throw new Error('no home')
+    const recovery: TaskRecovery = { previous_end: { attempt: 1, reason: 'node_lost' }, prs: [] }
+    const second = await start({}, (o) => o.show('approval'), { home, recovery })
+    await ready(second)
+    expect(sends(second)).toEqual([])
+    second.orca.reads.splice(0)
+    second.orca.show('question')
+    await second.poll()
+    const recoveryInput = renderRecoveryPrompt(recovery).replace(/\n/g, ' ')
+    expect(sends(second)).toEqual([
+      { handle: second.orca.handle, text: recoveryInput, enter: true, waitSubmitS: 10 },
+    ])
+    second.orca.reads.splice(0)
+    // 旧 Orca 只返回 accepted、没有 prompt 元数据；下一次仍空闲也不能重复发送。
+    second.orca.show('question')
+    await second.poll()
+    expect(sends(second)).toHaveLength(1)
+    expect(second.orca.ops('terminalCreate')).toEqual([])
+    expect(readFileSync(join(home.home, 'state/tasks/t-orca-1/spec.md'), 'utf8')).toStartWith(
+      renderRecoveryPrompt(recovery),
+    )
+    await second.run.cancel()
+    await first.run.cancel()
+  })
+
+  test('恢复提示补回车失败时不记送达，下一轮用原 request id 重验', async () => {
+    const first = await start({}, (o) => o.show('question'))
+    await ready(first)
+    const home = h
+    if (!home) throw new Error('no home')
+    const recovery: TaskRecovery = { previous_end: { attempt: 1, reason: 'retry' }, prs: [] }
+    const noTurn = ok(sendFixture('terminal-send-no-turn'))
+    const second = await start(
+      {},
+      (o) => {
+        o.show('question')
+        o.sends.push(noTurn, noTurn, noTurn, fail('failure', 'orca_error', '发送失败'))
+      },
+      { home, recovery },
+    )
+    await ready(second)
+    const statePath = join(home.home, 'state/tasks/t-orca-1/orca.json')
+    expect(JSON.parse(readFileSync(statePath, 'utf8')).replies['recovery-2'].done).toBeUndefined()
+    second.orca.sends.push(ok(sendFixture('terminal-send-retry')))
+    await second.poll()
+    expect(JSON.parse(readFileSync(statePath, 'utf8')).replies['recovery-2'].done).toBe(true)
+    const inputs = sends(second) as Array<{ text?: string; retryRequest?: string }>
+    expect(inputs.filter((input) => input.text && !input.retryRequest)).toHaveLength(1)
+    expect(inputs.at(-1)?.retryRequest).toBe('00000000-0000-4000-8000-000000000003')
+    await second.run.cancel()
+    await first.run.cancel()
+  })
+
   test('0：codex-orca 声明带外检测能力', () => {
     expect(
       createCodexOrcaExecutor({ home: '/unused' }).adapterCapabilities.out_of_band_detection,

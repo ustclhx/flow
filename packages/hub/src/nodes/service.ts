@@ -36,6 +36,7 @@ import type { EventInput, LeaseRecord, LedgerStore } from '../ledger/store.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { type HubClock, systemClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
+import { recoveryForTask } from './recovery.ts'
 
 /**
  * 节点协议的中枢侧（tasks.md 4.1；node-protocol spec；design D4）。
@@ -434,6 +435,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   function grantTask(task: TaskView, nodeId: string): LeaseGrant | null {
     // resume 只交给紧接着的这一次执行：task.started 会在投影里清空它（PR #16 审查第 1 条）。
     const resume = ledger.taskResume(task.id)
+    const recovery = recoveryForTask(ledger, task)
     const leaseId = newLeaseId()
     const token = newLeaseToken()
     const attempt = task.attempt + 1
@@ -473,6 +475,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       attempt,
       ttl_s: ttl,
       expires_at: expiresAt,
+      ...(recovery ? { recovery } : {}),
       ...(resume
         ? {
             resume: {

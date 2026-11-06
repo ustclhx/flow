@@ -12,6 +12,7 @@ import {
   type Result,
   type Role,
   redactSecrets,
+  renderRecoveryPrompt,
   type TaskContract,
   type TaskCost,
   type TaskResult,
@@ -321,6 +322,7 @@ export function createCodexExecExecutor(options: CodexExecOptions): ExecutorPlug
               : await taskPrompt(options.home, role.data, contract, ctx.resume)
           if (ctx.resume?.session && !resumeSession)
             prompt = `原会话不存在，以下是原任务与用户回复。请先核对工作目录、git 历史与已有 PR，避免重复提交、推送或创建 PR。\n\n${prompt}`
+          if (ctx.recovery) prompt = `${renderRecoveryPrompt(ctx.recovery)}\n\n${prompt}`
           if (finished) return
           const processArgs = [...args]
           if (resumeSession) processArgs.push('resume', resumeSession)

@@ -14,7 +14,9 @@ import {
   operations,
   type Result,
   type Role,
+  renderRecoveryPrompt,
   type TaskContract,
+  type TaskRecovery,
   taskResult,
 } from '@raindown/core'
 import { DEFAULT_ROLE_FILES } from '../../core/src/role-templates.ts'
@@ -808,6 +810,39 @@ describe('工具审批挂起等待', () => {
 // ---------------------------------------------------------------------------
 
 describe('运行中的回复与会话恢复', () => {
+  test.each([false, true])('恢复提示放在首条消息开头（恢复旧会话：%s）', async (resume) => {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    const recovery: TaskRecovery = {
+      previous_end: { attempt: 1, reason: 'blocked', blocked_reason: 'crashed' },
+      prs: ['https://github.com/example/repo/pull/32'],
+    }
+    const ex = createClaudeSdkExecutor({
+      home: '/nonexistent',
+      query,
+      resolveRole: roleResolver(reviewer()),
+    })
+    await ex.run(
+      contract(),
+      ctx({
+        attempt: 2,
+        recovery,
+        ...(resume
+          ? {
+              resume: {
+                session: 's-old',
+                reply: { reply_id: 'r-recovery', kind: 'text', text: '继续', by: 'user' },
+              },
+            }
+          : {}),
+      }),
+    ).done
+    expect(state.prompts[0]).toStartWith(`${renderRecoveryPrompt(recovery)}\n\n`)
+    expect(state.calls[0]?.resume).toBe(resume ? 's-old' : undefined)
+  })
+
   test('无进展后的文字回复：作为用户消息推入流式输入，Claude 接着完成', async () => {
     const { b, state, create } = await sdkBench(async function* (io) {
       await io.nextUser()

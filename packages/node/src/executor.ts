@@ -6,6 +6,7 @@ import type {
   ExecutorInfo,
   Result,
   TaskContract,
+  TaskRecovery,
   TaskResult,
   TaskResume,
 } from '@raindown/core'
@@ -40,6 +41,8 @@ export interface ExecutorContext {
   signal: AbortSignal
   /** 任务带着回复重新排队后的这一次执行：上一轮的会话 id 与回复（D6、D7）。 */
   resume?: TaskResume
+  /** 同一任务上一次派工的结束与交付事实；适配器用 core 模板放在输入开头。 */
+  recovery?: TaskRecovery
   /**
    * 恢复时发现回复所属授权回合已关闭或请求不匹配：节点拒收当前 resume.reply，通知回复者。
    * 不接受回复 id；可在 run 初始化期间调用，节点在执行结束前完成确认与临时失败重试。

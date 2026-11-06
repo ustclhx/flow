@@ -48,6 +48,7 @@ import {
   workspaceCheckFromHome,
   workspaceLookupFromHome,
 } from '../ledger/tasks.ts'
+import { createExistingPrReactor, type ExistingPrLookup } from '../nodes/existing-pr.ts'
 import { createNodeProtocol, type NodeProtocol } from '../nodes/protocol.ts'
 import { createPolicyRoutes } from '../policy/routes.ts'
 import { createPolicyService, type PolicyService } from '../policy/service.ts'
@@ -84,6 +85,8 @@ import { createWakeTokenAuthority } from './wake-tokens.ts'
 
 export interface RunHubOptions
   extends Omit<StartHubOptions, 'ledger' | 'openLedger' | 'routes' | 'onStop' | 'leaseHolders'> {
+  /** 已有 PR 判定的只读查询注入点（测试用）。 */
+  existingPrQuery?: ExistingPrLookup
   /** 密钥解析的注入点（测试用）；默认用 sops 解密 `config/secrets.sops.yaml`。 */
   secrets?: Pick<HubSecretsOptions, 'load' | 'debounceMs' | 'onChange'> & {
     /** 是否监听 config/ 的变化，默认 true。 */
@@ -153,6 +156,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   /** 卡住时由 supervisor 代用户回复（add-m1-supervisor 3.5、4.9）。 */
   let delegation: DelegationService | undefined
   let stopSupervisorTools: (() => void) | undefined
+  let existingPr: ReturnType<typeof createExistingPrReactor> | undefined
   // Web 页面（6.1）：会话只在内存中；Host 校验需要实际监听的端口，启动成功后才填入。
   const uiSessions = createUiSessions({ now: () => clock.now() })
   const activeLedgerFor = () => {
@@ -362,6 +366,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     },
     onStop: async () => {
       await policiesService?.stop()
+      await existingPr?.stop()
       stopSupervisorTools?.()
       wakes?.stop()
       delegation?.stop()
@@ -506,6 +511,15 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     const tools = await startSupervisorTools(supervisorTools, { scheduler, logger })
     stopSupervisorTools = tools.stop
   }
+  existingPr = createExistingPrReactor({
+    ledger,
+    clock,
+    roles: roleLookupFromHome(options.home),
+    workspaces: workspaceLookupFromHome(options.home),
+    logger,
+    ...(options.existingPrQuery ? { query: options.existingPrQuery } : {}),
+  })
+  existingPr.start()
   protocol?.start()
   if (options.secrets?.watch !== false) stopWatch = secrets.watch()
   return started

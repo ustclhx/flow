@@ -38,6 +38,7 @@ import {
   WakeProjection,
 } from '../src/index.ts'
 import type { RoleForKind } from '../src/ledger/supervisor-checks.ts'
+import { createExistingPrReactor } from '../src/nodes/existing-pr.ts'
 import { must, SHA, tempLedger } from './ledger-helpers.ts'
 import { FakeClock, testToken } from './server-fixtures.ts'
 
@@ -208,7 +209,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
     opts: {
       origin?: TaskOrigin
       ws?: string
-      status?: 'done' | 'failed' | 'queued'
+      status?: 'done' | 'failed' | 'blocked' | 'queued'
       /** codex-orca 任务上报的任务分支（task.branch_reported）。 */
       branch?: string
       /** 随分支上报的登记仓库快照的 origin 地址；null 表示不带快照。缺省为 acme/demo。 */
@@ -275,11 +276,17 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
             : []),
           status === 'done'
             ? { ...base, type: 'task.done', payload: { result: { node_id: 'nr', ...result } } }
-            : {
-                ...base,
-                type: 'task.failed',
-                payload: { message: '失败', result: { node_id: 'nr', ...result } },
-              },
+            : status === 'blocked'
+              ? {
+                  ...base,
+                  type: 'task.blocked',
+                  payload: { reason: 'workdir_missing', message: '目录已丢失', lease_held: false },
+                }
+              : {
+                  ...base,
+                  type: 'task.failed',
+                  payload: { message: '失败', result: { node_id: 'nr', ...result } },
+                },
         ] as EventInput[],
         { actor: 'node:nr' },
       ),
@@ -300,7 +307,7 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       remoteUrl?: string | null
       parent?: string
     } = {},
-    status: 'done' | 'failed' = 'done',
+    status: 'done' | 'failed' | 'blocked' = 'done',
   ) =>
     task(
       {
@@ -1180,4 +1187,36 @@ describe('自动合并与收尾', () => {
       [...p.workspace(WS).queues.instruction.pending.values()].some((q) => q.task_id === merger.id),
     ).toBe(true)
   })
+})
+
+test('已有 PR 判定完成的开发任务仍必须通过可信审查才可请求合并', async () => {
+  const s = await setup()
+  const id = s.dev({}, 'blocked')
+  const reactor = createExistingPrReactor({
+    ledger: s.ledger,
+    clock: s.clock,
+    roles: s.tools.roles,
+    workspaces: s.tools.workspaces,
+    query: async () =>
+      ok([
+        {
+          url: PR,
+          state: 'OPEN',
+          headRefName: BRANCH,
+          createdAt: '2026-10-26T09:00:00Z',
+          isCrossRepository: false,
+          isDraft: false,
+        },
+      ]),
+  })
+  reactor.start()
+  await reactor.idle()
+  await reactor.stop()
+  expect(s.ledger.getTask(id)?.result?.completed_via).toBe('existing_pr')
+  const wake = await s.wake('instruction')
+  const missing = await s.request(wake.token, 't-missing-review')
+  expect(code(missing)).toBe('merge_not_eligible')
+  const review = s.review()
+  const accepted = must(await s.request(wake.token, review))
+  expect(accepted.mode).toBe('approval')
 })

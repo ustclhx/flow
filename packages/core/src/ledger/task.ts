@@ -99,7 +99,7 @@ export type TaskAttemptEndReason = z.infer<typeof taskAttemptEndReason>
  * - queued → running
  * - running → verifying | done | failed | blocked
  * - verifying → done | failed | blocked
- * - blocked → queued | running | cancelled | failed
+ * - blocked → queued | running | cancelled | failed | done（done 仅用于已存在 PR 判定）
  * - failed → queued：仅允许手动重试
  * - 任何非终态 → cancelled
  *
@@ -110,7 +110,7 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]
   queued: ['running', 'cancelled'],
   running: ['verifying', 'done', 'failed', 'blocked', 'cancelled', 'queued'],
   verifying: ['done', 'failed', 'blocked', 'cancelled', 'queued'],
-  blocked: ['queued', 'running', 'cancelled', 'failed'],
+  blocked: ['queued', 'running', 'cancelled', 'failed', 'done'],
   done: [],
   failed: ['queued'],
   cancelled: [],
@@ -774,6 +774,10 @@ export type TaskCost = z.infer<typeof taskCost>
 export const taskResult = z
   .strictObject({
     summary: z.string().min(1).meta({ description: '结果摘要' }),
+    completed_via: z.literal('existing_pr').optional().meta({
+      description: '工作目录丢失或崩溃后，中枢依据本任务已存在的 PR 判定完成',
+    }),
+    prs: z.array(prUrl).min(1).optional().meta({ description: '已存在 PR 判定所依据的 PR' }),
     artifacts: z.array(artifact).default([]),
     verify: z.array(verifyOutcome).default([]).meta({ description: '每条验收命令的结果' }),
     executor: executorType,

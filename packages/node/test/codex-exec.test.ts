@@ -13,7 +13,15 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type Activity, ok, type Role, taskContract, taskResult } from '@raindown/core'
+import {
+  type Activity,
+  ok,
+  type Role,
+  renderRecoveryPrompt,
+  type TaskRecovery,
+  taskContract,
+  taskResult,
+} from '@raindown/core'
 import {
   type CodexExecOptions,
   createCodexExecExecutor,
@@ -134,6 +142,32 @@ const say = (text: string) =>
   `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`
 
 describe('codex-exec 无头执行器', () => {
+  test.each([false, true])('恢复提示放在输入开头（恢复旧会话：%s）', async (resume) => {
+    const s = setup()
+    const recovery: TaskRecovery = {
+      previous_end: { attempt: 1, reason: 'node_lost' },
+      reported_branch: 'dev/t-test',
+      prs: ['https://github.com/example/repo/pull/32'],
+    }
+    await collect(
+      s.run({
+        ...s.ctx,
+        attempt: 2,
+        recovery,
+        ...(resume
+          ? {
+              resume: {
+                session: SID,
+                reply: { reply_id: 'r-recovery', kind: 'text' as const, text: '继续', by: 'user' },
+              },
+            }
+          : {}),
+      }),
+    )
+    expect(s.report().args.at(-1)).toStartWith(`${renderRecoveryPrompt(recovery)}\n\n`)
+    if (resume) expect(s.report().args.at(-1)).toContain('继续')
+  })
+
   test('只读分诊：默认只读、任务目录、最后一条代理消息、会话和 token 用量', async () => {
     // 使用实测首轮的命令事件与实测恢复轮的最终消息，确认摘要覆盖之前的提问。
     const s = setup('send(question + "\\n" + resumed)')

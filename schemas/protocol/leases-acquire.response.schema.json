@@ -909,6 +909,95 @@
                   "additionalProperties": false,
                   "title": "Task resume"
                 },
+                "recovery": {
+                  "type": "object",
+                  "properties": {
+                    "previous_end": {
+                      "type": "object",
+                      "properties": {
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "reason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "done",
+                                "failed",
+                                "cancelled",
+                                "blocked",
+                                "lease_expired",
+                                "node_lost",
+                                "retry"
+                              ]
+                            },
+                            {
+                              "type": "string",
+                              "const": "unknown"
+                            }
+                          ]
+                        },
+                        "ended_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                        },
+                        "last_report": {
+                          "type": "string",
+                          "maxLength": 16384
+                        },
+                        "blocked_reason": {
+                          "type": "string",
+                          "enum": [
+                            "awaiting_approval",
+                            "question",
+                            "no_progress",
+                            "crashed",
+                            "workdir_missing",
+                            "node_lost",
+                            "other"
+                          ],
+                          "description": "卡住原因：awaiting_approval 等审批、question 提问、no_progress 无进展、crashed 崩溃、workdir_missing 工作目录或会话丢失、node_lost 节点掉线（租约过期）、other 其他"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "attempt",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "reported_branch": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255,
+                      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$",
+                      "description": "执行器创建的任务分支，例如 ustclhx/t-1"
+                    },
+                    "prs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 512,
+                        "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+                        "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+                      }
+                    }
+                  },
+                  "required": [
+                    "previous_end",
+                    "prs"
+                  ],
+                  "additionalProperties": false,
+                  "title": "Task recovery",
+                  "description": "同一任务上一次派工的结束与交付事实"
+                },
                 "wake_token": {
                   "description": "唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略",
                   "type": "string",
