@@ -74,6 +74,7 @@ async function setup(roles: RoleLookup = anyRole) {
     id: string,
     reason:
       | 'crashed'
+      | 'workdir_missing'
       | 'node_lost'
       | 'other'
       | 'question'
@@ -106,6 +107,70 @@ async function setup(roles: RoleLookup = anyRole) {
 }
 
 describe('task_retry', () => {
+  test('workdir_missing 在目录恢复后可重试，沿用原任务合同', async () => {
+    const e = await setup()
+    const target = await e.task()
+    e.block(target.id, 'workdir_missing')
+    const retried = must(await e.tasks.retryTask(target.id, { actor: 'user' })).task
+    expect(retried).toMatchObject({ id: target.id, status: 'queued', contract: target.contract })
+    expect(e.store.taskEvents(target.id).at(-1)).toMatchObject({
+      type: 'task.requeued',
+      payload: { reason: 'manual', requested_by: 'user' },
+    })
+    expect(e.store.taskEvents(target.id).at(-1)?.payload).not.toHaveProperty('retry_reason')
+  })
+
+  test('supervisor 必须提供非空 reason，拒绝时无写入；成功使用鉴权身份与脱敏理由', async () => {
+    const e = await setup()
+    const caller = await e.wake()
+    const target = await e.task(caller)
+    e.block(target.id)
+    const seq = e.store.seq()
+    for (const reason of [undefined, '', '   ']) {
+      expect(
+        await e.tasks.retryTask(target.id, {
+          actor: 'supervisor',
+          wake: { task_id: caller },
+          ...(reason === undefined ? {} : { reason }),
+        }),
+      ).toMatchObject({
+        ok: false,
+        error: { kind: 'usage', code: 'invalid_arguments', details: { field: 'reason' } },
+      })
+      expect(e.store.seq()).toBe(seq)
+    }
+    const token = e.wakeTokens.issue({
+      task_id: caller,
+      lease_id: e.store.activeLease(caller)?.lease_id ?? '',
+    })
+    const response = await e.app.request(`/v1/tasks/${target.id}/retry`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({
+      error: { kind: 'usage', code: 'invalid_arguments', details: { field: 'reason' } },
+    })
+    expect(e.store.seq()).toBe(seq)
+    const secret = `ghp_${'R1'.repeat(18)}`
+    must(
+      await e.tasks.retryTask(target.id, {
+        actor: 'supervisor',
+        wake: { task_id: caller },
+        reason: `  恢复目录后重试 ${secret}  `,
+      }),
+    )
+    const event = e.store.taskEvents(target.id).at(-1)
+    expect(event).toMatchObject({
+      type: 'task.requeued',
+      actor: 'supervisor',
+      payload: { reason: 'manual', requested_by: 'supervisor' },
+    })
+    expect(event?.payload).toHaveProperty('retry_reason')
+    expect(JSON.stringify(event?.payload)).not.toContain(secret)
+    expect(JSON.stringify(event?.payload)).toContain('恢复目录后重试')
+  })
+
   test('原子结束派工并重排，保留合同、工作目录、分支与 PR', async () => {
     const e = await setup()
     const task = must(
@@ -155,7 +220,16 @@ describe('task_retry', () => {
     expect(seen).toEqual(['queued'])
     expect(e.store.taskEvents(task.id).slice(-2)).toMatchObject([
       { type: 'task.attempt_ended', actor: 'user', payload: { attempt: 1, reason: 'retry' } },
-      { type: 'task.requeued', actor: 'user', payload: { reason: 'manual', note: '再次审查 PR' } },
+      {
+        type: 'task.requeued',
+        actor: 'user',
+        payload: {
+          reason: 'manual',
+          requested_by: 'user',
+          retry_reason: '再次审查 PR',
+          note: '再次审查 PR',
+        },
+      },
     ])
     startTask(e.store, task.id, 2)
     expect(e.store.getTask(task.id)?.attempt).toBe(2)
@@ -209,21 +283,39 @@ describe('task_retry', () => {
     e.block(unrelated.id)
     expect(
       code(
-        await e.tasks.retryTask(unrelated.id, { actor: 'supervisor', wake: { task_id: newWake } }),
+        await e.tasks.retryTask(unrelated.id, {
+          actor: 'supervisor',
+          reason: '核对后重试',
+          wake: { task_id: newWake },
+        }),
       ),
     ).toBe('scope_denied')
-    expect(code(await e.tasks.retryTask(target.id, { actor: 'supervisor' }))).toBe('scope_denied')
+    expect(
+      code(await e.tasks.retryTask(target.id, { actor: 'supervisor', reason: '核对后重试' })),
+    ).toBe('scope_denied')
     expect(code(await e.tasks.retryTask(target.id, { actor: 'codex' }))).toBe('role_not_allowed')
     expect(
       code(await e.tasks.retryTask(target.id, { actor: 'user', wake: { task_id: newWake } })),
     ).toBe('actor_mismatch')
     const reply = await e.wake('reply')
     expect(
-      code(await e.tasks.retryTask(target.id, { actor: 'supervisor', wake: { task_id: reply } })),
+      code(
+        await e.tasks.retryTask(target.id, {
+          actor: 'supervisor',
+          reason: '核对后重试',
+          wake: { task_id: reply },
+        }),
+      ),
     ).toBe('reply_only_wake')
     const other = await e.wake('instruction', 'ws/other')
     expect(
-      code(await e.tasks.retryTask(target.id, { actor: 'supervisor', wake: { task_id: other } })),
+      code(
+        await e.tasks.retryTask(target.id, {
+          actor: 'supervisor',
+          reason: '核对后重试',
+          wake: { task_id: other },
+        }),
+      ),
     ).toBe('workspace_mismatch')
     const token = e.wakeTokens.issue({
       task_id: newWake,
@@ -231,7 +323,8 @@ describe('task_retry', () => {
     })
     const response = await e.app.request(`/v1/tasks/${target.id}/retry`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: '核对后重试' }),
     })
     expect(response.status).toBe(200)
     expect(okBody(retryTaskData).parse(await response.json()).data.task.status).toBe('queued')
@@ -286,7 +379,11 @@ describe('task_retry', () => {
     const target = await e.task(caller)
     e.block(target.id, 'other', true)
     loading = true
-    const retry = e.tasks.retryTask(target.id, { actor: 'supervisor', wake: { task_id: caller } })
+    const retry = e.tasks.retryTask(target.id, {
+      actor: 'supervisor',
+      reason: '核对后重试',
+      wake: { task_id: caller },
+    })
     await started
     must(e.tasks.cancelTask(target.id, { actor: 'user' }))
     const seq = e.store.seq()
@@ -348,6 +445,7 @@ describe('task_retry', () => {
         code(
           await e.tasks.retryTask(targetWake, {
             actor,
+            reason: '核对后重试',
             ...(actor === 'supervisor' ? { wake: { task_id: caller } } : {}),
           }),
         ),
@@ -364,7 +462,11 @@ describe('task_retry', () => {
       must(e.store.append(d['task.failed'], sys))
       expect(
         code(
-          await e.tasks.retryTask(target.id, { actor: 'supervisor', wake: { task_id: caller } }),
+          await e.tasks.retryTask(target.id, {
+            actor: 'supervisor',
+            reason: '核对后重试',
+            wake: { task_id: caller },
+          }),
         ),
       ).toBe('role_not_allowed')
     }
@@ -397,8 +499,13 @@ describe('task_retry', () => {
       ).task
       e.block(read.id)
       expect(
-        must(await e.tasks.retryTask(read.id, { actor: 'supervisor', wake: { task_id: wake } }))
-          .task.status,
+        must(
+          await e.tasks.retryTask(read.id, {
+            actor: 'supervisor',
+            reason: '核对后重试',
+            wake: { task_id: wake },
+          }),
+        ).task.status,
       ).toBe('queued')
     }
     const write = await e.task(instruction)
@@ -406,13 +513,21 @@ describe('task_retry', () => {
     const seq = e.store.seq()
     expect(
       code(
-        await e.tasks.retryTask(write.id, { actor: 'supervisor', wake: { task_id: autonomous } }),
+        await e.tasks.retryTask(write.id, {
+          actor: 'supervisor',
+          reason: '核对后重试',
+          wake: { task_id: autonomous },
+        }),
       ),
     ).toBe('proposal_required')
     expect(e.store.seq()).toBe(seq)
     expect(
       must(
-        await e.tasks.retryTask(write.id, { actor: 'supervisor', wake: { task_id: instruction } }),
+        await e.tasks.retryTask(write.id, {
+          actor: 'supervisor',
+          reason: '核对后重试',
+          wake: { task_id: instruction },
+        }),
       ).task.status,
     ).toBe('queued')
   })
@@ -429,7 +544,11 @@ describe('task_retry', () => {
         const seq = e.store.seq()
         expect(
           code(
-            await e.tasks.retryTask(target.id, { actor: 'supervisor', wake: { task_id: caller } }),
+            await e.tasks.retryTask(target.id, {
+              actor: 'supervisor',
+              reason: '核对后重试',
+              wake: { task_id: caller },
+            }),
           ),
         ).toBe('scope_denied')
         expect(e.store.seq()).toBe(seq)
@@ -456,5 +575,14 @@ describe('task_retry', () => {
     })
     expect(response.status).toBe(400)
     expect(taskRetryOp.input.safeParse({ id: target.id, reason: '' }).success).toBe(false)
+    expect(taskRetryOp.input.safeParse({ id: target.id, requested_by: 'supervisor' }).success).toBe(
+      false,
+    )
+    const spoof = await e.app.request(`/v1/tasks/${target.id}/retry`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${testToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: '恢复', requested_by: 'supervisor' }),
+    })
+    expect(spoof.status).toBe(400)
   })
 })

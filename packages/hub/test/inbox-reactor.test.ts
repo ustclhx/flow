@@ -525,7 +525,7 @@ describe('幂等、续跑与重建', () => {
       }
       await reactor.idle()
       for (const id of tasks) {
-        const open = store.listInboxItems({ task_id: id, state: 'open' })
+        const open = store.listInboxItems({ task_id: id, source: 'task', state: 'open' })
         const task = store.getTask(id)
         if (task?.status === 'blocked') {
           const lastBlocked = store

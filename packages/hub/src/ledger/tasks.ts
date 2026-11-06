@@ -24,6 +24,7 @@ import {
   type RetryTaskData,
   type Role,
   replyTaskRequest,
+  retryTaskRequest,
   reviewTaskGoal,
   type ShowTaskData,
   SUPERVISOR_ACTOR,
@@ -735,6 +736,18 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       if (opts.wake && opts.actor !== SUPERVISOR_ACTOR) {
         return fail('failure', 'actor_mismatch', '唤醒绑定只能用于 supervisor 身份')
       }
+      const input = retryTaskRequest.safeParse({ reason: opts.reason })
+      if (!input.success || (opts.actor === SUPERVISOR_ACTOR && !input.data.reason)) {
+        return fail(
+          'usage',
+          'invalid_arguments',
+          '重试理由 reason 必须为非空且不超过 8192 字符的文字；supervisor 必填',
+          {
+            field: 'reason',
+          },
+        )
+      }
+      const reason = input.data.reason
       const before = ledger.getTask(id)
       if (!before) return notFound(id)
       let role: RoleForKind | null = null
@@ -848,7 +861,8 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
             type: 'task.requeued',
             payload: {
               reason: 'manual',
-              ...(opts.reason === undefined ? {} : { note: opts.reason }),
+              requested_by: opts.actor,
+              ...(reason === undefined ? {} : { retry_reason: reason, note: reason }),
             },
           },
         ],

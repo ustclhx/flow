@@ -2611,6 +2611,18 @@
               ],
               "description": "lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队"
             },
+            "requested_by": {
+              "type": "string",
+              "enum": [
+                "user",
+                "supervisor"
+              ]
+            },
+            "retry_reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
             "note": {
               "type": "string"
             }
@@ -3976,6 +3988,7 @@
               "type": "string",
               "enum": [
                 "task",
+                "task_retry",
                 "out_of_band",
                 "reply_delivery",
                 "proposal",

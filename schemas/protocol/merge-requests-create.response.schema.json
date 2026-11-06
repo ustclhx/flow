@@ -1412,6 +1412,7 @@
               "type": "string",
               "enum": [
                 "task",
+                "task_retry",
                 "out_of_band",
                 "reply_delivery",
                 "proposal",

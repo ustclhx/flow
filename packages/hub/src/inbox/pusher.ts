@@ -36,8 +36,8 @@ import {
  * - **定时唤醒**：用调度器的内部规则（id 以 `inbox:` 开头，不写进 schedules.yaml）在 Decide 时间点、
  *   静默时段结束、每日摘要时间唤醒，交给渠道管理器按 `planPushes` 推送；
  * - **每日摘要**：在摘要时间生成 `dig.<本地日期>` 条目（昨天完成和失败的任务、auto-report 记录、
- *   待处理的 Decide 条目数、可能过时的知识条目数、supervisor 巡检日报与花费），同时关闭上一份摘要
- *   （superseded）和已写进摘要的策略记录与巡检日报（digested）。条目 id 按日期确定，重复触发、重启补发都不会生成第二份；
+ *   待处理的 Decide 条目数、可能过时的知识条目数、Digest 级重试派工、supervisor 巡检日报与花费），同时关闭上一份摘要
+ *   （superseded）和已写进摘要的策略记录、重试派工与巡检日报（digested）。条目 id 按日期确定，重复触发、重启补发都不会生成第二份；
  *   中枢停机期间错过的摘要时间，由调度器在内部规则首次设置时补发最近一次（同 schedules.yaml）；
  * - 账本中有新的收件箱事件时，也做一次（微任务里，避免在账本通知循环中同步写入）。
  */
@@ -205,6 +205,7 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
     const failed = ledger.listTasks({ status: 'failed', limit: 100_000 }).filter(yesterday)
     const open = ledger.listInboxItems({ state: 'open', limit: 10_000 })
     const policy = open.filter((i) => i.source === 'policy')
+    const retries = open.filter((i) => i.source === 'task_retry' && i.level === 'digest')
     const quietTasks = open.filter((i) => i.source === 'task' && i.level === 'digest')
     const decide = open.filter((i) => i.level === 'decide').length
     let stale = 0
@@ -219,6 +220,10 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
     if (failed.length > 0) lines.push('失败：', ...listLines(failed, taskLine))
     lines.push(`策略自动放行记录 ${policy.length} 条。`)
     if (policy.length > 0) lines.push(...listLines(policy, (i) => `- ${i.title}`))
+    if (retries.length > 0) {
+      lines.push(`任务重试派工 ${retries.length} 条：`)
+      lines.push(...listLines(retries, (i) => `- ${i.title}\n${i.body}`))
+    }
     if (quietTasks.length > 0) {
       lines.push(`只进摘要的卡住任务 ${quietTasks.length} 个：`)
       lines.push(...listLines(quietTasks, (i) => `- ${i.title}`))
@@ -292,7 +297,7 @@ export function createInboxPusher(o: InboxPusherOptions): InboxPusher {
         body: clipText(lines.join('\n'), INBOX_BODY_MAX),
       },
     })
-    for (const p of [...policy, ...patrols]) {
+    for (const p of [...policy, ...patrols, ...retries]) {
       drafts.push({
         type: 'inbox.item_closed',
         ...(p.task_id ? { task_id: p.task_id } : {}),

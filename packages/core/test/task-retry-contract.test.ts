@@ -6,7 +6,7 @@ import { DEFAULT_ROLE_FILES } from '../src/role-templates.ts'
 
 test('重试原因从 core 统一导出，工具说明与 supervisor 提示使用同一列表', () => {
   const reasons = RETRYABLE_BLOCKED_REASONS
-  expect(reasons).toEqual(['crashed', 'node_lost', 'other'])
+  expect(reasons).toEqual(['crashed', 'workdir_missing', 'node_lost', 'other'])
   for (const reason of reasons) expect(BLOCKED_REASONS).toContain(reason)
   const states = `blocked(${reasons.join('/')})`
   expect(taskRetryOp.summary).toContain(states)
@@ -22,6 +22,7 @@ test('工具说明与 supervisor 提示说明租约、取消、唤醒与自主�
     expect(text).toContain('merge/supervisor')
     expect(text).toContain('自主唤醒')
     expect(text).toContain('写类任务只能提案')
+    expect(text).toContain('supervisor 必须提供非空 reason')
   }
 })
 

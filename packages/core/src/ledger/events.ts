@@ -22,6 +22,7 @@ import { fail, ok, type Result } from '../result.ts'
 import { dateString, workspaceRef } from '../schema/common.ts'
 import { adapterCapabilities, NO_ADAPTER_CAPABILITIES, readAdapterCapabilities } from './adapter.ts'
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
+import { PROTOCOL_MESSAGE_MAX } from './redact.ts'
 import {
   blockedDelegationShape,
   blockedReason,
@@ -296,6 +297,8 @@ export const eventPayloads = {
     reason: z.enum(['lease_expired', 'manual']).meta({
       description: 'lease_expired：允许重试的任务租约过期；manual：人或 supervisor 重新排队',
     }),
+    requested_by: z.enum(['user', 'supervisor']).optional(),
+    retry_reason: z.string().trim().min(1).max(PROTOCOL_MESSAGE_MAX).optional(),
     note: z.string().optional(),
   }),
   'task.cancel_requested': z.strictObject({ reason: z.string().optional() }),

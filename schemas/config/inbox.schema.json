@@ -15,6 +15,7 @@
             "type": "string",
             "enum": [
               "task",
+              "task_retry",
               "out_of_band",
               "reply_delivery",
               "proposal",
@@ -41,7 +42,7 @@
             ]
           },
           "reason": {
-            "description": "只匹配该卡住原因（任务来源）；缺省匹配所有原因",
+            "description": "只匹配该卡住原因或重试发起者（user、supervisor）；缺省匹配所有原因",
             "type": "string",
             "enum": [
               "awaiting_approval",
@@ -50,7 +51,9 @@
               "crashed",
               "workdir_missing",
               "node_lost",
-              "other"
+              "other",
+              "user",
+              "supervisor"
             ]
           },
           "level": {

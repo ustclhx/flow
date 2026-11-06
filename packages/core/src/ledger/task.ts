@@ -49,6 +49,7 @@ export type BlockedReason = (typeof BLOCKED_REASONS)[number]
 /** 手动重试可重新派工的卡住原因；提示与工具说明共用此列表。 */
 export const RETRYABLE_BLOCKED_REASONS = [
   'crashed',
+  'workdir_missing',
   'node_lost',
   'other',
 ] as const satisfies BlockedReason[]

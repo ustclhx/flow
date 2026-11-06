@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DEFAULT_INBOX_CADENCE, type InboxItemView, parseInboxConfig } from '@raindown/core'
+import {
+  DEFAULT_INBOX_CADENCE,
+  type InboxItemView,
+  parseInboxConfig,
+  resolveInboxLevel,
+} from '@raindown/core'
 import {
   type EventInput,
   isQuiet,
@@ -378,6 +383,93 @@ describe('每日摘要', () => {
     await inbox.pusher.tick()
     expect(r.ledger.getInboxItem('dig.2026-10-26')?.state).toBe('open')
     expect(channel.sentIds()).toContainEqual(['dig.2026-10-26'])
+  })
+})
+
+describe('重试通知的推送与摘要', () => {
+  const retryBody = (initiator: string) =>
+    `重试派工：已排队，等待下一次派工。\n发起者：${initiator}\n上次结局：failed\n理由：修复权限后重试`
+
+  function retryItem(
+    ledger: LedgerStore,
+    id: string,
+    initiator: 'user' | 'supervisor',
+    config = must(parseInboxConfig({})),
+  ) {
+    must(
+      ledger.append(
+        {
+          type: 'inbox.item_created',
+          workspace: WS,
+          payload: {
+            item_id: id,
+            source: 'task_retry',
+            source_ref: id,
+            reason: initiator,
+            level: resolveInboxLevel(config, {
+              source: 'task_retry',
+              workspace: WS,
+              reason: initiator,
+            }),
+            title: `任务重新排队 ${id}`,
+            body: retryBody(initiator),
+          },
+        },
+        { actor: 'hub' },
+      ),
+    )
+  }
+
+  test('user 不立即推送，摘要包含重试全文并关闭；supervisor 立即推送且不被摘要消费', async () => {
+    const r = await rig(local(26, 10))
+    mkdirSync(join(r.home, 'config'), { recursive: true })
+    writeFileSync(join(r.home, 'config', 'inbox.yaml'), 'quiet_hours: false\n')
+    await r.inbox.reloadConfig()
+    retryItem(r.ledger, 'retry.user', 'user')
+    retryItem(r.ledger, 'retry.supervisor', 'supervisor')
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.channel.sentIds()).toEqual([['retry.supervisor']])
+
+    await r.clock.advance(local(27, 8, 30) - r.clock.now())
+    await r.settle()
+    const digest = r.ledger.getInboxItem('dig.2026-10-27') as InboxItemView
+    expect(digest.body).toContain('任务重新排队 retry.user')
+    expect(digest.body).toContain(retryBody('user'))
+    expect(digest.body).not.toContain('任务重新排队 retry.supervisor')
+    expect(r.ledger.getInboxItem('retry.user')?.closed?.reason).toBe('digested')
+    expect(r.ledger.getInboxItem('retry.supervisor')?.state).toBe('open')
+    await r.inbox.pusher.fireDigest()
+    expect(r.ledger.getInboxItem('dig.2026-10-27')?.body).toBe(digest.body)
+    expect(r.channel.sentIds()).toEqual([['retry.supervisor'], ['dig.2026-10-27']])
+    expect(
+      r.ledger
+        .eventsAfter(0)
+        .filter((e) => e.type === 'inbox.item_closed' && e.payload.item_id === 'retry.user'),
+    ).toHaveLength(1)
+  })
+
+  test('分级覆盖可互换重试发起者的推送节奏', async () => {
+    const r = await rig(local(26, 10))
+    const config = must(
+      parseInboxConfig({
+        levels: [
+          { source: 'task_retry', reason: 'user', level: 'interrupt' },
+          { source: 'task_retry', reason: 'supervisor', workspace: WS, level: 'digest' },
+        ],
+      }),
+    )
+    retryItem(r.ledger, 'retry.promoted', 'user', config)
+    retryItem(r.ledger, 'retry.demoted', 'supervisor', config)
+    await r.settle()
+    await r.inbox.pusher.tick()
+    expect(r.channel.sentIds()).toEqual([['retry.promoted']])
+    await r.inbox.pusher.fireDigest()
+    const digest = r.ledger.getInboxItem('dig.2026-10-26') as InboxItemView
+    expect(digest.body).toContain('任务重新排队 retry.demoted')
+    expect(digest.body).toContain(retryBody('supervisor'))
+    expect(r.ledger.getInboxItem('retry.demoted')?.closed?.reason).toBe('digested')
+    expect(r.ledger.getInboxItem('retry.promoted')?.state).toBe('open')
   })
 })
 

@@ -55,9 +55,10 @@ export const inboxLevelRuleSchema = z
       .union([z.literal('*'), workspaceRef])
       .optional()
       .meta({ description: '只匹配该 workspace（ws/<id>）；缺省或 * 匹配所有' }),
-    reason: z.enum(BLOCKED_REASONS).optional().meta({
-      description: '只匹配该卡住原因（任务来源）；缺省匹配所有原因',
-    }),
+    reason: z
+      .enum([...BLOCKED_REASONS, 'user', 'supervisor'])
+      .optional()
+      .meta({ description: '只匹配该卡住原因或重试发起者（user、supervisor）；缺省匹配所有原因' }),
     level: levelInput,
   })
   .meta({ title: 'Inbox level rule', description: '一条分级覆盖规则' })
@@ -268,7 +269,7 @@ export async function loadInboxConfig(home: string): Promise<Result<InboxConfig>
   return parseInboxConfig(input)
 }
 
-/** 分级的输入：条目来源、所属 workspace、来源内原因（任务的卡住原因）。 */
+/** 分级的输入：条目来源、所属 workspace、来源内原因（任务的卡住原因或重试发起者）。 */
 export interface LevelQuery {
   source: InboxSource
   workspace?: string | null
@@ -280,9 +281,12 @@ export interface LevelQuery {
  * - awaiting_approval、question、crashed、node_lost：Interrupt；
  * - no_progress、other、待确认提案、supervisor 提问、任务提案、合并请求：Decide；
  * - auto-report 策略记录、每日完成情况、决策回看提醒：Digest。
+ * - 任务重试：supervisor 发起为 Interrupt，用户发起为 Digest。
  */
 export function defaultInboxLevel(q: LevelQuery): InboxLevel {
   switch (q.source) {
+    case 'task_retry':
+      return q.reason === 'supervisor' ? 'interrupt' : 'digest'
     case 'reply_delivery':
     case 'out_of_band':
       return 'interrupt'

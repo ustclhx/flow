@@ -68,7 +68,7 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task.out_of_band': [['command'], ['message']],
   // reason：supervisor 代回复的理由（D15），只进每日摘要。
   'task.replied': [['text'], ['reason']],
-  'task.requeued': [['note']],
+  'task.requeued': [['note'], ['retry_reason']],
   'task.cancel_requested': [['reason']],
   // 收件箱条目的文字会外发到渠道（notify-channel "外发内容脱敏"），入账前就按自由文本处理。
   'inbox.item_created': [['title'], ['body'], ['options', '*']],
@@ -86,6 +86,7 @@ export const FREE_TEXT_LIMITS: Partial<Record<EventType, Readonly<Record<string,
   'task.blocked': { diff_stat: DIFF_STAT_MAX, 'request.reason': 2000 },
   'task.reply_escalated': { note: 2000 },
   'task.replied': { reason: 2000 },
+  'task.requeued': { retry_reason: PROTOCOL_MESSAGE_MAX },
   'supervisor.answered': { text: INBOX_BODY_MAX },
   'task_proposal.created': { reason: 2000 },
   'task_proposal.rejected': { note: 2000 },

@@ -21,6 +21,7 @@ import {
   actOnInbox,
   approveMergeRequest,
   createHubApp,
+  createInboxReactor,
   createInboxRoutes,
   createNodeProtocol,
   createSupervisorToolRoutes,
@@ -548,11 +549,36 @@ describe('合并请求的资格（D10 第 4 步）', () => {
     )
     expect(reasonsOf(await s.request(w.token, rv)).join()).toContain('未结束的审查任务')
 
+    const reactor = createInboxReactor({ ledger: s.ledger })
+    reactor.start()
+    cleanups.push(() => reactor.stop())
+    await reactor.idle()
+    const beforeRetry = s.ledger.seq()
+    const missingReason = await s.post(`/v1/tasks/${rv}/retry`, {}, w.token)
+    expect(missingReason.status).toBe(400)
+    expect(await missingReason.json()).toMatchObject({
+      error: { kind: 'usage', code: 'invalid_arguments' },
+    })
+    expect(s.ledger.seq()).toBe(beforeRetry)
+    expect(s.ledger.listInboxItems({ source: 'task_retry' })).toHaveLength(0)
     const response = await s.post(`/v1/tasks/${rv}/retry`, { reason: '重跑审查' }, w.token)
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
       data: { task: { id: rv, status: 'queued', attempt: 1 } },
     })
+    await reactor.idle()
+    const notices = s.ledger.listInboxItems({ source: 'task_retry' })
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toMatchObject({
+      title: `任务 ${rv} 被重试`,
+      level: 'interrupt',
+      reason: 'supervisor',
+      task_id: rv,
+      state: 'open',
+    })
+    for (const text of ['第 2 次派工', 'supervisor', 'crashed', '重跑审查']) {
+      expect(notices[0]?.body).toContain(text)
+    }
     const queued = await s.request(w.token, rv)
     expect(code(queued)).toBe('merge_not_eligible')
     expect(reasonsOf(queued).join()).toContain(`未结束的审查任务 ${rv}（queued）`)
@@ -589,6 +615,8 @@ describe('合并请求的资格（D10 第 4 步）', () => {
         { actor: 'hub' },
       ),
     )
+    await reactor.idle()
+    expect(s.ledger.listInboxItems({ source: 'task_retry' })).toEqual(notices)
     const approved = must(await s.request(w.token, rv))
     expect(approved.mode).toBe('approval')
     expect(

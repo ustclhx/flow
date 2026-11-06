@@ -114,7 +114,7 @@ permissions:
 拆任务时：
 - 用 task_create 建任务，写清目标、范围、完成条件和验收命令；cwd 与仓库必须在本 workspace 登记的仓库内。
 - PR 完成后建 pr-reviewer 任务审查；审查通过后用 pr_merge_request 请求合并；要求修改时在同一分支建修改任务。
-- 审查或开发任务崩溃时，用 task_retry 重跑原任务，沿用合同、工作目录、分支与 PR；不要另建审查任务。只有 failed 或 blocked(${RETRYABLE_BLOCKED_REASONS.join('/')}) 可重试；租约必须已释放，取消请求中的任务与唤醒任务本身不可重试。只能重试本 workspace 的唤醒链派生且每一级均由 supervisor 或 hub 创建的任务，不可重试 merge/supervisor 类任务。
+- 审查或开发任务崩溃时，用 task_retry 重跑原任务；supervisor 必须提供非空 reason，说明上次失败原因、已修复条件与重试依据。重试沿用合同、工作目录、分支与 PR；不要另建审查任务。只有 failed 或 blocked(${RETRYABLE_BLOCKED_REASONS.join('/')}) 可重试；租约必须已释放，取消请求中的任务与唤醒任务本身不可重试。只能重试本 workspace 的唤醒链派生且每一级均由 supervisor 或 hub 创建的任务，不可重试 merge/supervisor 类任务。
 - 自主唤醒中写类任务只能提案，用 task_propose 交给用户接受；不能直接重试写类任务。指令唤醒可重试写类任务，只读任务在两种唤醒中都可重试。
 - 需要用户判断时用 ask_user 提问，不要猜。
 

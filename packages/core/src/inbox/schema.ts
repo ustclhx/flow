@@ -26,6 +26,7 @@ export const INBOX_LEVEL_RANK: Readonly<Record<InboxLevel, number>> = {
 /**
  * 条目来源：
  * - `task`：任务进入 blocked；
+ * - `task_retry`：用户或 supervisor 将终态任务重新排队；
  * - `proposal`：待确认的修改提案（state/proposals/，不在账本中）；
  * - `policy`：`auto-report` 策略的执行记录；
  * - `supervisor`：supervisor 的提问（`ask_user`，变更 ④ D11）；
@@ -37,6 +38,7 @@ export const INBOX_LEVEL_RANK: Readonly<Record<InboxLevel, number>> = {
  */
 export const INBOX_SOURCES = [
   'task',
+  'task_retry',
   'out_of_band',
   'reply_delivery',
   'proposal',
@@ -80,7 +82,7 @@ export const inboxVia = z.enum(INBOX_VIA).meta({ description: '操作发起的�
  * - `proposal_accepted` / `proposal_rejected` / `proposal_removed`：提案已处理或已不存在；
  * - `answered`：提问已被答复（变更 ④）；`expired`：提问 7 天未答复（D11）；
  * - `dismissed`：用户忽略（3.2）；`acted`：用户在条目上执行了操作（3.2）；
- * - `digested`：策略执行记录已写进每日摘要（3.3），不再单独保留。
+ * - `digested`：策略执行记录、重试派工或巡检日报已写进每日摘要（3.3），不再单独保留。
  */
 export const INBOX_CLOSE_REASONS = [
   'task_running',
