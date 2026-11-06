@@ -12,6 +12,7 @@ import {
 } from '@raindown/core'
 import {
   createHubApp,
+  createNodeService,
   createTaskRoutes,
   createTaskService,
   createWakeTokenAuthority,
@@ -111,7 +112,7 @@ async function setup(roles: RoleLookup = anyRole, policy?: TaskServiceOptions['p
 }
 
 describe('task_retry', () => {
-  test('重试记录当前策略版本，新派工可追溯且不改写原 mandate', async () => {
+  test('重试派工同时保留恢复提示、当前策略版本和原 mandate', async () => {
     let policy: PolicyConfig = { rules: [], version: policyVersion([]), errors: [], warnings: [] }
     const e = await setup(anyRole, { load: async () => ok(policy), current: () => policy })
     const target = await e.task()
@@ -139,7 +140,31 @@ describe('task_retry', () => {
         policy_version: policy.version,
       },
     })
-    startTask(e.store, target.id, 2)
+    const nodes = createNodeService({ ledger: e.store, leaseTtlS: 60, leaseWaitMaxS: 0 })
+    cleanups.push(() => nodes.close())
+    must(
+      nodes.registerNode(
+        {
+          node_id: 'n2',
+          hostname: 'test',
+          version: '0.0.0',
+          capabilities: ['executor:fake'],
+        },
+        'node:n2',
+      ),
+    )
+    const lease = must(
+      await nodes.acquire({
+        node_id: 'n2',
+        capabilities: ['executor:fake'],
+        wait_s: 0,
+      }),
+    ).lease
+    expect(lease).toMatchObject({
+      task_id: target.id,
+      attempt: 2,
+      recovery: { previous_end: { attempt: 1, reason: 'retry' }, prs: [] },
+    })
     const shown = must(e.tasks.getTask(target.id))
     expect(shown.attempts).toMatchObject([
       { attempt: 1, policy_version: originalMandate?.policy_version },
