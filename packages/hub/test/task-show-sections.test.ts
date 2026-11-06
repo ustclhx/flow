@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, spyOn, test } from 'bun:test'
 import { taskShowResponse } from '@raindown/core'
 import { createTaskService } from '../src/index.ts'
 import {
@@ -87,4 +87,50 @@ test('分页参数验证与越界空页', async () => {
     has_more: false,
     total: 7,
   })
+})
+
+test('分段事件与tail遮蔽完整密钥后分页，默认详情保持兼容', async () => {
+  const { tasks, task, ledger } = await setup()
+  const token = 'x'.repeat(36)
+  startTask(ledger, task.id, 2)
+  const blocked = drafts(task.id)['task.blocked']
+  must(
+    ledger.append(
+      { ...blocked, payload: { ...blocked.payload, tail: [`前缀 Bearer ${token} 后缀`] } },
+      sys,
+    ),
+  )
+  // 模拟正则遮蔽上线前已经入账的历史片段，当前写入层会主动遮蔽。
+  const historicalEvents = ledger
+    .taskEvents(task.id)
+    .map((event) =>
+      event.type === 'task.blocked'
+        ? { ...event, payload: { ...event.payload, tail: [`前缀 Bearer ${token} 后缀`] } }
+        : event,
+    )
+  const stored = ledger.getTask(task.id)
+  if (!stored?.blocked) throw new Error('缺少卡住任务')
+  const eventSpy = spyOn(ledger, 'taskEvents').mockReturnValue(historicalEvents)
+  const taskSpy = spyOn(ledger, 'getTask').mockReturnValue({
+    ...stored,
+    blocked: { ...stored.blocked, tail: [`前缀 Bearer ${token} 后缀`] },
+  })
+  cleanups.push(() => {
+    eventSpy.mockRestore()
+    taskSpy.mockRestore()
+  })
+  const full = must(tasks.getTask(task.id))
+  expect(JSON.stringify(full.events)).toContain(token)
+  const events = must(tasks.getTask(task.id, { section: 'events', limit: 1000 }))
+  expect(JSON.stringify(events)).not.toContain(token)
+  expect(JSON.stringify(events)).toContain('[REDACTED:bearer]')
+  const expected = '前缀 Bearer [REDACTED:bearer] 后缀'
+  let text = ''
+  for (let offset = 0; offset < expected.length; offset += 5) {
+    const page = must(tasks.getTask(task.id, { section: 'tail', offset, limit: 5 }))
+    if (!('section' in page) || page.section !== 'tail') throw new Error('不是tail分页')
+    expect(page.total).toBe(expected.length)
+    text += page.tail
+  }
+  expect(text).toBe(expected)
 })

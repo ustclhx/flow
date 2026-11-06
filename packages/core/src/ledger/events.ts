@@ -593,6 +593,12 @@ export const eventPayloads = {
   'task_proposal.created': z.strictObject({
     proposal_id: taskProposalId,
     wake_task_id: taskId.meta({ description: '提交提案的唤醒任务' }),
+    instruction_seq: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .meta({ description: '经中枢校验的提案原始指令序号' }),
     draft: taskContract,
     decision: taskProposalDecision.optional(),
     decision_path: decisionPath.optional().meta({

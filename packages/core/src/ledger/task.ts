@@ -322,6 +322,11 @@ export const taskMandate = z.strictObject({
   origin: z.string().min(1).meta({ description: '创建来源，例如 user、supervisor、schedule' }),
   wake_task: taskId.optional(),
   instruction_seq: z.number().int().min(1).optional(),
+  instruction_note: z
+    .string()
+    .max(2000)
+    .optional()
+    .meta({ description: '未能确定原始指令的中枢说明' }),
   policy_version: policyVersionSchema,
   matched_rules: z.array(indexedPolicyRuleSchema).optional(),
 })
@@ -383,6 +388,11 @@ export const wakeInputs = z
     origin: wakeOrigin,
     generation: wakeGeneration,
     events: z.array(wakeEventInput).max(WAKE_EVENTS_MAX).default([]),
+    tasks: z.array(z.record(z.string(), z.unknown())).optional(),
+    prs: z.array(z.record(z.string(), z.unknown())).optional(),
+    overflow: z
+      .strictObject({ chars: z.number().int().nonnegative(), read: readOperation })
+      .optional(),
     note: z
       .string()
       .max(WAKE_EVENT_SUMMARY_MAX)

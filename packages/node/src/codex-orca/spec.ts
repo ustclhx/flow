@@ -120,7 +120,7 @@ export function renderTaskSpec(input: TaskSpecInput): string {
     '',
     UNTRUSTED_NOTE,
     '',
-    renderWorkerTaskPrompt(contract),
+    renderWorkerTaskPrompt(contract, input.taskId),
     '',
     '## 上下文',
     '',

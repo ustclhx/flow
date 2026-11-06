@@ -153,3 +153,115 @@ test('原文沿合同送给worker时沿用event_get的疑似密钥遮蔽', async
     text: '排查 Bearer [REDACTED:bearer] 的请求',
   })
 })
+
+async function complete(s: Awaited<ReturnType<typeof setup>>, id: string, pr?: string) {
+  const { startTask, sys, drafts } = await import('./ledger-helpers.ts')
+  startTask(s.ledger, id)
+  const done = drafts(id)['task.done']
+  return must(
+    s.ledger.append(
+      {
+        ...done,
+        payload: {
+          result: {
+            ...done.payload.result,
+            ...(pr ? { artifacts: [{ kind: 'pr' as const, ref: pr }] } : {}),
+          },
+        },
+      },
+      sys,
+    ),
+  ).seq
+}
+
+test('真实第二次唤醒从开发完成事件为审查和普通后续任务继承同一指令', async () => {
+  const s = await setup()
+  const seq = s.instruction('实现缓存并审查')
+  const first = await s.wake([seq])
+  const dev = must(await s.create(first)).task
+  const pr = 'https://github.com/acme/repo/pull/8'
+  const done = await complete(s, dev.id, pr)
+  const second = await s.wake([done])
+  for (const extra of [{ role: 'pr-reviewer', inputs: { review: { pr } } }, {}]) {
+    const task = must(await s.create(second, extra)).task
+    expect(task.contract.origin_instruction).toEqual({ seq, text: '实现缓存并审查' })
+    expect(task.mandate?.instruction_seq).toBe(seq)
+  }
+})
+
+test('多个任务对应不同指令时不继承并记录原因，相同指令去重', async () => {
+  const s = await setup()
+  const seq = s.instruction('第一条工作')
+  const first = await s.wake([seq])
+  const one = must(await s.create(first)).task
+  const two = must(await s.create(first)).task
+  const oneDone = await complete(s, one.id)
+  const twoDone = await complete(s, two.id)
+  const sameWake = await s.wake([oneDone, twoDone])
+  expect(must(await s.create(sameWake)).task.mandate?.instruction_seq).toBe(seq)
+  const other = s.instruction('另一条工作')
+  const otherWake = await s.wake([other])
+  const three = must(await s.create(otherWake)).task
+  const threeDone = await complete(s, three.id)
+  const ambiguous = await s.wake([oneDone, threeDone])
+  const task = must(await s.create(ambiguous)).task
+  expect(task.contract.origin_instruction).toBeUndefined()
+  expect(task.mandate?.instruction_seq).toBeUndefined()
+  expect(task.mandate?.instruction_note).toContain('多条不同用户指令')
+})
+
+test('原始指令回溯拒绝跨workspace任务与不匹配的PR产物', async () => {
+  const s = await setup()
+  const seq = s.instruction('本workspace的指令')
+  const first = await s.wake([seq])
+  const dev = must(await s.create(first)).task
+  const done = await complete(s, dev.id, 'https://github.com/acme/repo/pull/1')
+  const second = await s.wake([done])
+  const unrelated = must(
+    await s.create(second, { inputs: { review: { pr: 'https://github.com/acme/repo/pull/2' } } }),
+  ).task
+  expect(unrelated.contract.origin_instruction).toBeUndefined()
+  const other = must(
+    await s.tasks.createTask(contractInput({ workspace: 'ws/other' }), { actor: 'user' }),
+  ).task
+  const { drafts, sys } = await import('./ledger-helpers.ts')
+  const foreign = drafts(other.id, { ws: 'ws/other' })
+  must(s.ledger.appendMany([foreign['task.started'], foreign['lease.granted']], sys))
+  const event = must(s.ledger.append(drafts(other.id, { ws: 'ws/other' })['task.done'], sys))
+  const foreignWake = await s.wake([event.seq])
+  expect(must(await s.create(foreignWake)).task.contract.origin_instruction).toBeUndefined()
+})
+
+test('开发任务重试清空当前结果后，审查仍沿历史PR产物继承指令', async () => {
+  const s = await setup()
+  const seq = s.instruction('保留已有PR并继续审查')
+  const first = await s.wake([seq])
+  const dev = must(await s.create(first)).task
+  const { startTask, sys, result } = await import('./ledger-helpers.ts')
+  startTask(s.ledger, dev.id)
+  const pr = 'https://github.com/acme/repo/pull/11'
+  const failed = must(
+    s.ledger.append(
+      {
+        type: 'task.failed',
+        task_id: dev.id,
+        workspace: WS,
+        payload: { result: { ...result(), artifacts: [{ kind: 'pr', ref: pr }] } },
+      },
+      sys,
+    ),
+  )
+  must(
+    s.ledger.append(
+      { type: 'task.requeued', task_id: dev.id, workspace: WS, payload: { reason: 'manual' } },
+      sys,
+    ),
+  )
+  expect(s.ledger.getTask(dev.id)?.result).toBeNull()
+  const second = await s.wake([failed.seq])
+  const review = must(
+    await s.create(second, { role: 'pr-reviewer', inputs: { review: { pr } } }),
+  ).task
+  expect(review.contract.origin_instruction).toEqual({ seq, text: '保留已有PR并继续审查' })
+  expect(review.mandate?.instruction_seq).toBe(seq)
+})

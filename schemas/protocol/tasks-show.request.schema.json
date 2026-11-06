@@ -10,7 +10,8 @@
         "events",
         "tail",
         "attempts",
-        "replies"
+        "replies",
+        "instruction"
       ]
     },
     "offset": {

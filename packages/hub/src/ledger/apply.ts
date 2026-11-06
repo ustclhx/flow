@@ -1,5 +1,6 @@
 import type { Database, LedgerEvent, Statement, TaskStatus } from '@raindown/core'
 import { readExecutorInfo } from '@raindown/core'
+import { indexTaskPrs } from './pr-index.ts'
 
 /**
  * 投影维护：唯一的 `apply(event)`（design D2）。
@@ -83,6 +84,7 @@ export function createApplier(db: Database): Applier {
   return (e) => {
     if (releases(e)) releaseLease(e)
     applyEvent(e)
+    indexTaskPrs(db, e)
     if (DROPPING_REPLIES.has(e.type)) dropPendingReplies(e)
   }
 

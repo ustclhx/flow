@@ -15,6 +15,7 @@ import {
   type Result,
   type Role,
   renderRecoveryPrompt,
+  renderWorkerTaskPrompt,
   type TaskContract,
   type TaskRecovery,
   taskResult,
@@ -264,6 +265,30 @@ const MIN = 60_000
 // ---------------------------------------------------------------------------
 
 describe('按角色运行', () => {
+  test('长原文读取指针使用实际 SDK 执行上下文的任务 id', async () => {
+    const { query, state } = mockSdk(async function* (io) {
+      await io.nextUser()
+      yield result()
+    })
+    const task = contract({
+      origin_instruction: {
+        seq: 12,
+        text: '原文预览',
+        chars: 5000,
+        read: { op: 'event_get', args: { seq: 12 } },
+      },
+    })
+    const ex = createClaudeSdkExecutor({
+      home: '/tmp/raindown-home-not-used',
+      query,
+      resolveRole: roleResolver(reviewer()),
+    })
+    const outcome = await ex.run(task, ctx({ taskId: 't-real' })).done
+    expect(outcome.ok && outcome.data.outcome).toBe('done')
+    expect(state.prompts[0]).toContain(renderWorkerTaskPrompt(task, 't-real'))
+    expect(task.origin_instruction?.read?.op).toBe('event_get')
+  })
+
   test('审查一个 PR：在仓库目录运行，账本可见活动，结果含审查摘要、会话 id 与费用', async () => {
     const { b, state, create } = await sdkBench(async function* (io) {
       await io.nextUser()
@@ -416,6 +441,7 @@ describe('注入 Raindown MCP', () => {
     expect(allowed).toContain('mcp__raindown__kb_journal')
     // 不再整体放行 raindown 服务；创建、取消任务等不在清单里。
     expect(allowed).not.toContain('mcp__raindown')
+    expect(allowed).not.toContain('mcp__raindown__event_get')
     for (const tool of ['task_create', 'task_cancel', 'task_reply', 'kb_proposals_accept']) {
       expect(allowed).not.toContain(`mcp__raindown__${tool}`)
     }
@@ -424,7 +450,26 @@ describe('注入 Raindown MCP', () => {
   test('放行清单与 raindown 的实际工具名一致；PENDING 只列尚未实现的 supervisor 操作', () => {
     const names = new Set(operations.map((op) => op.name))
     for (const n of RAINDOWN_MCP_AUTO_ALLOWED) expect(names.has(n)).toBe(true)
-    expect(readRoleMayUse('mcp__raindown__event_get', false)).toBe(true)
+    expect(RAINDOWN_MCP_AUTO_ALLOWED as readonly string[]).not.toContain('event_get')
+    expect(readRoleMayUse('mcp__raindown__event_get', false)).toBe(false)
+    for (const binding of ['task', 'wake'] as const) {
+      expect(
+        readRoleMayUse(
+          'mcp__raindown__event_get',
+          false,
+          { name: 'raindown', source: 'dynamic' },
+          binding,
+        ),
+      ).toBe(true)
+      expect(
+        readRoleMayUse(
+          'mcp__raindown__event_get',
+          false,
+          { name: 'foreign', source: 'dynamic' },
+          binding,
+        ),
+      ).toBe(false)
+    }
     for (const n of SUPERVISOR_MCP_AUTO_ALLOWED) {
       expect(names.has(n) || RAINDOWN_MCP_AUTO_ALLOWED_PENDING.includes(n)).toBe(true)
     }
@@ -1571,7 +1616,11 @@ describe('supervisor 会话绑定', () => {
         // 会话读不到 token：read_scope 下 Bash 被拒，Read token 文件被拒。
         const pre = io.options.hooks?.PreToolUse?.[0]?.hooks[0]
         if (!pre) throw new Error('缺少 PreToolUse hook')
-        const call = async (tool_name: string, tool_input: unknown) =>
+        const call = async (
+          tool_name: string,
+          tool_input: unknown,
+          mcp_server?: { name: string; source: string },
+        ) =>
           (
             (await pre(
               {
@@ -1581,6 +1630,7 @@ describe('supervisor 会话绑定', () => {
                 hook_event_name: 'PreToolUse',
                 tool_name,
                 tool_input,
+                ...(mcp_server ? { mcp_server } : {}),
                 tool_use_id: 'tu',
               },
               'tu',
@@ -1589,6 +1639,20 @@ describe('supervisor 会话绑定', () => {
           ).hookSpecificOutput?.permissionDecision
         expect(await call('Bash', { command: 'ps eww' })).toBe('deny')
         expect(await call('Read', { file_path: f.tokenFile })).toBe('deny')
+        expect(
+          await call(
+            'mcp__raindown__event_get',
+            { seq: 1 },
+            { name: 'raindown', source: 'dynamic' },
+          ),
+        ).not.toBe('deny')
+        expect(
+          await call(
+            'mcp__raindown__event_get',
+            { seq: 1 },
+            { name: 'foreign', source: 'dynamic' },
+          ),
+        ).toBe('deny')
         yield say('完成')
         yield result()
       })
@@ -1668,6 +1732,7 @@ describe('supervisor 会话绑定', () => {
       for (const n of SUPERVISOR_MCP_AUTO_ALLOWED)
         expect(o?.allowedTools).toContain(`mcp__raindown__${n}`)
       expect(o?.allowedTools).toContain('mcp__raindown__brief_update')
+      expect(o?.allowedTools).toContain('mcp__raindown__event_get')
       expect(o?.allowedTools).not.toContain('mcp__raindown__task_create')
     } finally {
       f.done()

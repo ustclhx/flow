@@ -104,7 +104,15 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
   })
 
   app.get(ENDPOINTS['tasks-list'].path, (c) => {
-    return respond(c, tasks.listTasks(c.req.query()), listTasksData)
+    const query = c.req.query()
+    const auth = c.get('auth')
+    // PR 关联读取指针同样按可信唤醒检查范围，不能通过修改指针参数跨 workspace。
+    if (auth?.kind === 'wake' && query.pr !== undefined) {
+      if (query.workspace !== undefined && query.workspace !== auth.wake.workspace)
+        return respond(c, fail('failure', 'not_found', '没有可见的 PR 任务列表'), listTasksData)
+      query.workspace = auth.wake.workspace
+    }
+    return respond(c, tasks.listTasks(query), listTasksData)
   })
 
   app.get(ENDPOINTS['tasks-show'].path, (c) => {
@@ -115,22 +123,18 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     const auth = c.get('auth')
     const task = ledger.getTask(id)
     if (task && auth?.kind === 'wake' && task.workspace !== auth.wake.workspace) {
-      return respond(
-        c,
-        fail('failure', 'forbidden', '本次唤醒不能读取其他 workspace 的任务'),
-        taskShowResponse,
-      )
+      return respond(c, fail('failure', 'not_found', `没有任务 ${id}`), taskShowResponse)
     }
     return respond(c, tasks.getTask(id, parsed.data), taskShowResponse)
   })
 
   app.get(ENDPOINTS['events-get'].path, (c) => {
     const auth = c.get('auth')
-    // 派工绑定接入前，仅用户与可信的 supervisor 唤醒可以读取事件。
-    if (auth?.kind !== 'wake' && c.get('actor') !== USER_ACTOR)
+    // 事件可见范围只取自中枢校验的任务或唤醒凭证。
+    if (auth?.kind !== 'wake' && auth?.kind !== 'task' && c.get('actor') !== USER_ACTOR)
       return respond(
         c,
-        fail('failure', 'forbidden', '只有用户与 supervisor 唤醒可以读取事件'),
+        fail('failure', 'forbidden', '只有用户、任务绑定与 supervisor 唤醒可以读取事件'),
         eventGetData,
       )
     const parsed = eventGetQuery.safeParse({ seq: c.req.param('id') })
@@ -138,7 +142,11 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
       return respond(c, usage('事件序号必须为正整数', parsed.error.issues), eventGetData)
     const { seq } = parsed.data
     const event = ledger.eventsAfter(seq - 1, undefined, 1)[0]
-    if (event?.seq !== seq)
+    if (
+      event?.seq !== seq ||
+      (auth?.kind === 'task' &&
+        (event.task_id !== auth.task.task_id || event.workspace !== auth.task.workspace))
+    )
       return respond(c, fail('failure', 'not_found', '账本事件不存在'), eventGetData)
     if (auth?.kind === 'wake') {
       const visible =

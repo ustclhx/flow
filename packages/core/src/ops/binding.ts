@@ -45,7 +45,9 @@ export const replyOnlyWake = (name: string) =>
 
 /** worker 只能访问只读知识、本任务详情与结构化上报。 */
 export function taskBindingAllows(op: Pick<Operation<never, unknown>, 'name' | 'access'>): boolean {
-  return ['raindown_report', 'task_show', 'kb_search', 'kb_get', 'kb_query'].includes(op.name)
+  return ['raindown_report', 'task_show', 'event_get', 'kb_search', 'kb_get', 'kb_query'].includes(
+    op.name,
+  )
 }
 
 /** 按会话绑定检查并改写操作输入；没有绑定时原样返回。 */

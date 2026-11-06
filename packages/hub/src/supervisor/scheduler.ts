@@ -9,7 +9,9 @@ import {
   type LedgerEvent,
   loadWorkspaces,
   MANUAL_WAKE_TEXT,
+  normalizePrUrl,
   ok,
+  prTasksReadPointer,
   type QueueDropReason,
   type Result,
   type Role,
@@ -19,11 +21,11 @@ import {
   type SupervisorWorkspaceStatus,
   type TaskContractInput,
   type TaskOrigin,
-  type TaskView,
   taskReadPointer,
   WAKE_EVENT_SUMMARY_MAX,
   WAKE_EVENTS_MAX,
   type WakeEventInput,
+  type WakeInputs,
   type WakeOrigin,
   type WakeSummary,
 } from '@raindown/core'
@@ -64,7 +66,7 @@ export const PAUSE_MAX_MS = 24 * 60 * 60 * 1000
 
 /** 一次唤醒最多合并的事件数（取最新的）。 */
 const WAKE_MERGE_MAX = WAKE_EVENTS_MAX
-/** `inputs.wake.events` 的总字符预算：超出时只带事件引用（seq、类型、任务）。 */
+/** 整个 `inputs.wake` 的字符预算，包含全部元数据。 */
 export const WAKE_INPUT_BUDGET = 16_000
 /** 唤醒创建失败后的重试退避：30 秒起翻倍，最长 1 小时；连续失败到 3 次写 Interrupt。 */
 const CREATE_RETRY_BASE_MS = 30_000
@@ -642,97 +644,95 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     }
   }
 
-  /**
-   * `inputs.wake.events`，按字符预算逐级降级：
-   * 1. 完整（说明 + 结构化上下文）；
-   * 2. 裁掉 data（tail、diff_stat、请求等），只留说明；
-   * 3. 只保留 user.instruction 的原文，从新到旧放进说明直到装满预算，其余只带引用。
-   * `bare`（说明里有疑似密钥时）直接只带引用。
-   * 指针与关联 id 是不可省略的元数据；数量多时它们构成预算下界，不再追加正文。
-   */
-  function wakeEvents(events: readonly QueuedEvent[], bare: boolean): WakeEventInput[] {
-    const size = (x: unknown) => JSON.stringify(x).length
-    const full = describeAll(events, bare ? 'bare' : 'full')
-    if (bare) return full
+  /** 预算覆盖整个 wake，元数据同样参与降级；完整消费清单始终保存在 wake_started。 */
+  function wakeInputs(
+    wakeId: string,
+    origin: Queue,
+    generation: number,
+    events: readonly QueuedEvent[],
+    bare: boolean,
+    note?: string,
+  ): WakeInputs {
+    const size = (value: unknown) => JSON.stringify(value).length
+    const described = describeAll(events, bare)
+    const full: WakeInputs = { origin, generation, ...described, ...(note ? { note } : {}) }
     if (size(full) <= WAKE_INPUT_BUDGET) return full
-    const lean = full.map(({ data: _data, ...head }) => head)
+    const lean: WakeInputs = {
+      ...full,
+      events: full.events.map(({ data: _data, ...event }) => event),
+      tasks: full.tasks?.map((task) => ({
+        id: task.id,
+        chars: task.chars,
+        ...taskReadPointer(task.id as string, 'events', 0),
+      })),
+      prs: full.prs?.map((pr) => ({
+        pr: pr.pr,
+        url: pr.url,
+        tasks: [],
+        chars: pr.chars,
+        read: pr.read,
+      })),
+    }
     if (size(lean) <= WAKE_INPUT_BUDGET) return lean
-    const out = lean.map(({ summary: _summary, ...head }) => head)
-    let total = size(out)
-    for (let i = out.length - 1; i >= 0; i--) {
-      const l = lean[i]
-      const head = out[i]
-      if (!l || !head || l.type !== 'user.instruction' || l.summary === undefined) continue
-      const withText = { ...head, summary: l.summary }
-      const delta = size(withText) - size(head)
-      if (total + delta > WAKE_INPUT_BUDGET) continue
-      out[i] = withText
-      total += delta
+    const compact: WakeInputs = {
+      origin,
+      generation,
+      events: full.events.map((event) => ({
+        seq: event.seq,
+        type: event.type,
+        chars: event.chars,
+        read: event.read,
+      })),
+      note: `${note ? `${note}\n` : ''}省略的事件与关联上下文：按 overflow 指针分页读取本唤醒的 supervisor.wake_started，其 events 是完整消费序号清单；逐个 event_get 后沿 task_id 与 PR 指针读取。`,
+      overflow: { chars: size(full), ...taskReadPointer(wakeId, 'events', 0) },
     }
-    return out
-  }
-
-  /** PR 关联来自合同与历次结果，重试不能隐藏旧审查或已开出的 PR。 */
-  function taskPrs(task: TaskView): string[] {
-    const prs = new Set<string>()
-    if (task.contract.inputs?.pr) prs.add(task.contract.inputs.pr)
-    if (task.contract.inputs?.review) prs.add(task.contract.inputs.review.pr)
-    for (const ev of ledger.taskEvents(task.id)) {
-      if (ev.type !== 'task.done' && ev.type !== 'task.failed' && ev.type !== 'task.cancelled')
+    // 最小事件指针也可能超预算：保留最近的引用，其余仍在可分页读取的完整消费清单中。
+    while (size(compact) > WAKE_INPUT_BUDGET && compact.events.length) compact.events.shift()
+    for (let i = compact.events.length - 1; i >= 0; i--) {
+      const event = compact.events[i]
+      const original = full.events.find((item) => item.seq === event?.seq)
+      if (!event || original?.type !== 'user.instruction' || original.summary === undefined)
         continue
-      const result = ev.payload.result
-      for (const artifact of result?.artifacts ?? []) {
-        if (artifact.kind === 'pr') prs.add(artifact.ref)
-      }
+      event.summary = original.summary
+      if (size(compact) > WAKE_INPUT_BUDGET) delete event.summary
     }
-    return [...prs]
+    return compact
   }
 
   function describeAll(
     events: readonly QueuedEvent[],
-    mode: 'full' | 'lean' | 'bare',
-  ): WakeEventInput[] {
-    const workspaces = new Set(events.map((q) => eventAt(q.seq)?.workspace))
-    const tasks = [...workspaces].flatMap((workspace) =>
-      workspace === undefined
-        ? []
-        : ledger.listTasks({ workspace, limit: Number.MAX_SAFE_INTEGER }),
-    )
-    const prsByTask = new Map(tasks.map((task) => [task.id, taskPrs(task)]))
-    const prObject = (url: string) => ({
-      pr: /\/pull\/(\d+)$/.test(url) ? Number(url.split('/').at(-1)) : url,
-      url,
-      tasks: tasks
-        .filter((task) => prsByTask.get(task.id)?.includes(url))
-        .map((task) => ({ id: task.id, role: task.contract.role, status: task.status })),
-    })
-    return events.map((q) => {
+    bare: boolean,
+  ): Pick<WakeInputs, 'events' | 'tasks' | 'prs'> {
+    const tasks = new Map<string, Record<string, unknown>>()
+    const involvedPrs = new Map<string, string>()
+    const eventInputs = events.map((q) => {
       const ev = eventAt(q.seq)
       const task = q.task_id === undefined ? null : ledger.getTask(q.task_id)
-      const attempts = task ? foldTaskAttempts(task, ledger.taskEvents(task.id)) : []
-      // 关联事实在三级降级中都保留；任务正文与派工的详细字段可沿各自的指针读取。
-      const taskInput = task
-        ? {
-            id: task.id,
-            parent: task.contract.parent ?? null,
-            status: task.status,
-            role: task.contract.role,
-            attempts: {
-              items: attempts.slice(-3).map((attempt) => ({
-                attempt: attempt.attempt,
-                executor: attempt.executor,
-                node_id: attempt.node_id,
-                reason: attempt.reason ?? null,
-              })),
-              chars: JSON.stringify(attempts).length,
-              ...taskReadPointer(task.id, 'attempts', 0),
-            },
-            prs: (prsByTask.get(task.id) ?? []).map(prObject),
-            instruction_seq: task.mandate?.instruction_seq ?? null,
-            chars: JSON.stringify(task).length,
-            ...taskReadPointer(task.id),
-          }
-        : undefined
+      if (!bare && task && !tasks.has(task.id)) {
+        const attempts = foldTaskAttempts(task, ledger.taskEvents(task.id))
+        const prs = ledger.taskPrs(task.id)
+        for (const pr of prs) involvedPrs.set(normalizePrUrl(pr) ?? pr, task.contract.workspace)
+        tasks.set(task.id, {
+          id: task.id,
+          parent: task.contract.parent ?? null,
+          status: task.status,
+          role: task.contract.role,
+          attempts: {
+            items: attempts.slice(-3).map((attempt) => ({
+              attempt: attempt.attempt,
+              executor: attempt.executor,
+              node_id: attempt.node_id,
+              reason: attempt.reason ?? null,
+            })),
+            chars: JSON.stringify(attempts).length,
+            ...taskReadPointer(task.id, 'attempts', 0),
+          },
+          prs,
+          instruction_seq: task.mandate?.instruction_seq ?? null,
+          chars: JSON.stringify(task).length,
+          ...taskReadPointer(task.id),
+        })
+      }
       // 委托的终端、命令与目标来自其他对象；只给委托事件指针无法找回它们。
       const sources: {
         field?: string
@@ -778,23 +778,37 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         ...(q.task_id === undefined ? {} : { task_id: q.task_id }),
         chars: ev ? JSON.stringify(ev).length : 0,
         ...eventReadPointer(q.seq),
-        ...(taskInput ? { task: taskInput } : {}),
         ...(sources.length ? { sources } : {}),
       }
-      if (mode === 'bare' || !ev) return head
+      if (bare || !ev) return head
       const description = describe(ev)
-      // 事件中的 PR 与任务快照共用中枢关联信息，保留旧审查的状态。
-      if (typeof description.data?.pr === 'string') {
-        description.data.pr = prObject(description.data.pr)
+      const rememberPr = (pr: unknown) => {
+        if (typeof pr === 'string' && ev.workspace)
+          involvedPrs.set(normalizePrUrl(pr) ?? pr, ev.workspace)
       }
-      if (description.data?.prs && Array.isArray(description.data.prs)) {
-        description.data.prs = description.data.prs.map((pr) =>
-          typeof pr === 'string' ? prObject(pr) : pr,
-        )
-      }
-      const { data: _data, ...rest } = description
-      return mode === 'lean' ? { ...head, ...rest } : { ...head, ...description }
+      rememberPr(description.data?.pr)
+      if (Array.isArray(description.data?.prs)) description.data.prs.forEach(rememberPr)
+      return { ...head, ...description }
     })
+    const prs = [...involvedPrs].map(([url, workspace]) => {
+      const summary = ledger.prTasksSummary(workspace, url)
+      return {
+        pr: /\/pull\/(\d+)$/.test(url) ? Number(url.split('/').at(-1)) : url,
+        url,
+        tasks: ledger.tasksForPr(workspace, url, 20).map((task) => ({
+          id: task.id,
+          role: task.contract.role,
+          status: task.status,
+        })),
+        chars: summary.chars,
+        ...prTasksReadPointer(workspace, url),
+      }
+    })
+    return {
+      events: eventInputs,
+      ...(tasks.size ? { tasks: [...tasks.values()] } : {}),
+      ...(prs.length ? { prs } : {}),
+    }
   }
 
   // ---- 创建唤醒 ----
@@ -808,7 +822,7 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
     const ref = a.ws.ref
     const generation = projection.workspace(ref).generation + 1
     const seqs = events.map((e) => e.seq)
-    const contract = (bare: boolean): TaskContractInput => ({
+    const contract = (): TaskContractInput => ({
       goal:
         origin === 'reply'
           ? `supervisor 代回复唤醒（第 ${generation} 代）：只处理 inputs.wake 中委托给你的 ${events.length} 次卡住，只能用 task_respond 与只读操作。`
@@ -821,14 +835,15 @@ export function createWakeScheduler(o: WakeSchedulerOptions): WakeScheduler {
         wake: {
           origin,
           generation,
-          events: wakeEvents(events, bare),
+          events: [],
           ...(note ? { note } : {}),
         },
       },
     })
     const create = (bare: boolean) =>
-      o.tasks.createTask(contract(bare), {
+      o.tasks.createTask(contract(), {
         actor: 'hub',
+        wakeInputs: (taskId) => wakeInputs(taskId, origin, generation, events, bare, note),
         mandateOrigin: events.some((e) => e.type === 'schedule.fired')
           ? 'schedule'
           : events.some((e) => e.type === 'user.instruction')

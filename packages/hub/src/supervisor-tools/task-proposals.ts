@@ -185,7 +185,12 @@ export async function proposeTask(
     ])
   }
   // parent 与幂等键由中枢在接受时填写，草稿中的值不采用。
-  const { parent: _parent, idempotency_key: _key, ...rest } = raw
+  const {
+    parent: _parent,
+    idempotency_key: _key,
+    instruction_seq: requestedInstruction,
+    ...rest
+  } = raw
   const checked = await checkDraft(deps, rest)
   if (!checked.ok) return checked
   const verified = await checkVerify(deps, checked.data)
@@ -203,6 +208,38 @@ export async function proposeTask(
   if (!wakeTask || ['done', 'failed', 'cancelled'].includes(wakeTask.status)) {
     return fail('failure', 'scope_denied', '本次唤醒已结束，不能再提交提案')
   }
+  const provenance = ledger.wakeOf(wake.task_id)
+  const instructions =
+    provenance?.origin === 'instruction'
+      ? provenance.events.flatMap((seq) => {
+          const event = ledger.eventsAfter(seq - 1, undefined, 1)[0]
+          return event?.seq === seq &&
+            event.type === 'user.instruction' &&
+            event.actor === 'user' &&
+            event.workspace === draft.workspace
+            ? [event]
+            : []
+        })
+      : []
+  if (
+    (requestedInstruction !== undefined &&
+      !instructions.some((event) => event.seq === requestedInstruction)) ||
+    (requestedInstruction === undefined && instructions.length > 1)
+  ) {
+    return fail(
+      'usage',
+      'invalid_arguments',
+      'draft.instruction_seq 必须选择本次提案唤醒的 user.instruction 事件',
+      [
+        {
+          field: 'draft.instruction_seq',
+          code: 'invalid_field',
+          message: '必须选择本次唤醒的用户指令',
+        },
+      ],
+    )
+  }
+  const instructionSeq = requestedInstruction ?? instructions[0]?.seq
   const r = ledger.appendMany(
     [
       {
@@ -211,6 +248,7 @@ export async function proposeTask(
         payload: {
           proposal_id: proposalId,
           wake_task_id: wake.task_id,
+          ...(instructionSeq === undefined ? {} : { instruction_seq: instructionSeq }),
           draft,
           ...(input.decision ? { decision: input.decision } : {}),
           ...(decisionPath ? { decision_path: decisionPath } : {}),
@@ -299,6 +337,11 @@ export async function acceptTaskProposal(
     // D11：验收命令出自 supervisor 的草稿，按非 user 身份的规则判定，不借 user 身份跳过。
     enforceVerify: true,
     proposalKey: key,
+    ...(p.instruction_seq === undefined
+      ? {}
+      : {
+          instructionSource: { seq: p.instruction_seq, wake: p.wake_task_id },
+        }),
   })
   if (!created.ok) return created
   const task = created.data.task

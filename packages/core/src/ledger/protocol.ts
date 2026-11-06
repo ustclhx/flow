@@ -508,6 +508,8 @@ export const listTasksQuery = z
     workspace: workspaceRef.optional(),
     status: taskStatus.optional(),
     parent: taskId.optional(),
+    pr: prUrl.optional(),
+    offset: z.coerce.number().int().nonnegative().optional(),
     limit: limit.default(50),
   })
   .meta({ title: 'GET /v1/tasks 查询参数', description: '按创建时间倒序' })
@@ -532,7 +534,7 @@ export const compatibleShowTaskData = showTaskData.extend({
 })
 
 export const showTaskQuery = z.strictObject({
-  section: z.enum(['summary', 'events', 'tail', 'attempts', 'replies']).optional(),
+  section: z.enum(['summary', 'events', 'tail', 'attempts', 'replies', 'instruction']).optional(),
   offset: z.coerce.number().int().nonnegative().default(0),
   limit: z.coerce.number().int().min(1).max(1000).default(100),
 })
@@ -545,17 +547,21 @@ const taskPage = {
   has_more: z.boolean(),
   next_offset: z.number().int().nonnegative().optional(),
 }
-export const taskSectionData = z
-  .object({ task: taskView })
-  .and(
-    z.discriminatedUnion('section', [
-      z.object({ section: z.literal('summary') }),
-      z.object({ ...taskPage, section: z.literal('events'), events: z.array(ledgerEvent) }),
-      z.object({ ...taskPage, section: z.literal('tail'), tail: z.string() }),
-      z.object({ ...taskPage, section: z.literal('attempts'), attempts: z.array(taskAttempt) }),
-      z.object({ ...taskPage, section: z.literal('replies'), replies: z.array(replyView) }),
-    ]),
-  )
+export const taskSectionData = z.object({ task: taskView }).and(
+  z.discriminatedUnion('section', [
+    z.object({ section: z.literal('summary') }),
+    z.object({ ...taskPage, section: z.literal('events'), events: z.array(ledgerEvent) }),
+    z.object({ ...taskPage, section: z.literal('tail'), tail: z.string() }),
+    z.object({
+      ...taskPage,
+      section: z.literal('instruction'),
+      text: z.string(),
+      instruction_seq: z.number().int().positive().optional(),
+    }),
+    z.object({ ...taskPage, section: z.literal('attempts'), attempts: z.array(taskAttempt) }),
+    z.object({ ...taskPage, section: z.literal('replies'), replies: z.array(replyView) }),
+  ]),
+)
 export type TaskSectionData = z.infer<typeof taskSectionData>
 export const taskShowResponse = z.union([taskSectionData, showTaskData])
 export type TaskShowResponse = z.infer<typeof taskShowResponse>

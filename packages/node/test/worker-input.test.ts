@@ -22,6 +22,32 @@ describe('worker 输入适配', () => {
     expect(prompt).toContain('bun test')
   })
 
+  test('Claude 与 Orca 的长原文读取指针使用独立传入的任务 id', () => {
+    const input = {
+      ...contract,
+      origin_instruction: {
+        seq: 12,
+        text: '原文预览',
+        chars: 5000,
+        read: { op: 'event_get' as const, args: { seq: 12 } },
+      },
+    }
+    const expected = renderWorkerTaskPrompt(input, 't-real')
+    expect(renderTaskPrompt(input, '/test/worktree', 't-real')).toContain(expected)
+    expect(
+      renderTaskSpec({
+        taskId: 't-real',
+        contract: { ...input, executor: 'codex-orca' },
+        role: { name: 'dev', prompt: '开发角色提示' },
+        worktree: { path: '/test/worktree', branch: 'dev/t-real' },
+        baseBranch: 'origin/main',
+        context: [],
+      }),
+    ).toContain(expected)
+    expect(expected).toContain('"section": "instruction"')
+    expect(input.origin_instruction.read.op).toBe('event_get')
+  })
+
   test('Orca 保留 core 来源模板、角色、范围、上下文与完成标准', () => {
     const prompt = renderTaskSpec({
       taskId: 't-test',

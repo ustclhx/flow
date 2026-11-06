@@ -530,6 +530,61 @@ describe('task_propose 与收件箱接受 / 驳回（4.5、4.6）', () => {
     })
   })
 
+  test('多指令提案校验并持久化所选序号，接受与重建后仍保留同一原文', async () => {
+    const { ledger, inbox, repo, wake, ctx } = await setup()
+    const instruction = (text: string, workspace = WS) =>
+      must(
+        ledger.append(
+          { type: 'user.instruction', workspace, payload: { text, via: 'cli' } },
+          { actor: 'user' },
+        ),
+      )
+    const first = instruction('第一条')
+    const second = instruction('第二条')
+    const outside = instruction('其他唤醒的指令')
+    const foreign = instruction('其他workspace', OTHER)
+    const w = await wake('instruction', { events: [first.seq, second.seq, foreign.seq] })
+    for (const instruction_seq of [undefined, outside.seq, foreign.seq]) {
+      const result = await taskProposeOp.run(
+        {
+          draft: {
+            ...draft(repo),
+            ...(instruction_seq === undefined ? {} : { instruction_seq }),
+          } as never,
+        },
+        ctx(w.token),
+      )
+      expect(code(result)).toBe('invalid_arguments')
+    }
+    const proposed = must(
+      await taskProposeOp.run(
+        {
+          draft: { ...draft(repo), instruction_seq: second.seq } as never,
+        },
+        ctx(w.token),
+      ),
+    )
+    const event = ledger.eventsByPayload(
+      'task_proposal.created',
+      'proposal_id',
+      proposed.proposal_id,
+    )[0]
+    expect(event?.payload).toMatchObject({ instruction_seq: second.seq })
+    if (event?.type !== 'task_proposal.created') throw new Error('缺少提案事件')
+    expect('instruction_seq' in event.payload.draft).toBe(false)
+    must(ledger.rebuild())
+    must(await actOnInbox(inbox, proposed.item.id, { action: 'accept', via: 'cli' }, 'user'))
+    const accepted = ledger.eventsByPayload(
+      'task_proposal.accepted',
+      'proposal_id',
+      proposed.proposal_id,
+    )[0]
+    if (accepted?.type !== 'task_proposal.accepted') throw new Error('缺少接受事件')
+    const task = ledger.getTask(accepted.payload.task_id)
+    expect(task?.contract.origin_instruction).toEqual({ seq: second.seq, text: '第二条' })
+    expect(task?.mandate?.instruction_seq).toBe(second.seq)
+  })
+
   test('Web 上修改目标后接受：任务用新目标，accepted 记录新目标', async () => {
     const { ledger, inbox, repo, wake, ctx } = await setup()
     const w = await wake('autonomous')

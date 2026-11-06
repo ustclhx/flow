@@ -96,9 +96,9 @@ PR 也不能被 supervisor 请求合并（卡住仍可能被委托代回复）�
 
 - 每个 workspace 有三条队列：instruction、autonomous、reply。同一时刻最多一个**普通唤醒**（instruction 或 autonomous），
   空闲时 instruction 优先；另可并行一个 reply 唤醒。
-- 一次唤醒只合并同一条队列里的事件（最新 200 个；`inputs.wake.events` 以 16000 字符为预算，超出时逐级省略正文）。每条事件保留原始长度 `chars` 和 `{read: {op, args}}` 读取指针，任务带父任务、派工、PR 与用户指令 seq。必需的引用与关联 id 本身超过预算时，保留这些元数据，不再追加正文；200 条事件仍会在同次唤醒中处理。
-- 按读取指针调用 `event_get` 或带 `section`、`offset`、`limit` 的 `task_show` 补读内容；`tail` 按字符分页，其他列表按条目分页。supervisor 只能读本 workspace 的事件；无 workspace 的全局事件只有被本次唤醒引用时可读，其他返回 `forbidden`。用户可读取全部事件，疑似密钥会被遮蔽。
-- supervisor 建任务时，中枢附加 `origin_instruction`，原文与 supervisor 的补充分段显示，以原始指令为准。本次唤醒只有一条用户指令时自动选择，多条时必须传本次唤醒中的 `instruction_seq`；autonomous 没有原始指令。用户指令最多 8192 字符，合同内联前 4000 字符，超出部分附原长和 `event_get` 指针。中枢创建的 PR 审查继承开发任务的原始指令。
+- 一次唤醒只合并同一条队列里的事件（最新 200 个；`inputs.wake.events` 以 16000 字符为预算，超出时逐级省略正文）。任务快照按 id 在顶层去重，PR 只关联本次涉及的对象并限制内联任务数。降级同时裁剪正文和元数据，最终 `inputs.wake` 不超过 16000 字符；省略部分附 `chars` 与读取指针。事件引用也装不下时，`overflow.read` 指向本次唤醒的 `task_show section=events`，其中 `supervisor.wake_started.events` 保留完整 seq 清单，可逐条用 `event_get` 读取；队列仍一次消费最多 200 条事件。
+- 按读取指针调用 `event_get` 或带 `section`、`offset`、`limit` 的 `task_show` 补读内容；`tail` 与 `instruction` 按字符分页，其他列表按条目分页。supervisor 只能读本 workspace 的事件；无 workspace 的全局事件只有被本次唤醒引用时可读，其他返回 `forbidden`。用户可读取全部事件。`event_get` 与 `task_show section=events/tail` 都对疑似密钥做正则遮蔽；tail 先遮蔽再分页，避免秘密跨页边界泄露。任务绑定的 worker 只能读取本任务、同 workspace 的事件，越界与不存在均返回 `not_found`；唤醒读取其他 workspace 的任务同样返回 `not_found`。
+- supervisor 建任务时，中枢附加 `origin_instruction`，原文与 supervisor 的补充分段显示，以原始指令为准。本次唤醒只有一条用户指令时自动选择，多条时必须传本次唤醒中的 `instruction_seq`；autonomous 没有原始指令。用户指令最多 8192 字符，合同内联前 4000 字符，超出部分附原长和 `event_get` 指针。由开发任务完成等事件引出的审查与后续任务从关联开发任务继承原始指令；候选任务对应多条不同指令时不自动继承，授权依据中的 `instruction_note` 解释原因。提案通过 `draft.instruction_seq` 指定本次唤醒中的指令，接受后保留相同来源。没有原始指令的输入明确写出“本任务没有用户原始指令”，目标仍按 JSON 数据包裹。 长原文注入 worker 时，core 把读取指针转为本任务的 `task_show section=instruction`；中枢只从该任务合同关联的指令读取并脱敏分页，worker 仍不能直接读取没有本任务归属的原始事件。
 - 普通唤醒失败重试一次；仍失败则出现一条 Interrupt 条目，**该队列暂停**，直到你 `--release` 或 1 小时后自动恢复一次
   （再失败则退避翻倍，最长 24 小时）。
 - 唤醒任务 `blocked` 时新事件继续排队；你取消它即放行队列。
@@ -417,3 +417,5 @@ raindown supervisor status [product-res]                    # 当前唤醒、各
 旧版 `task.requeued` 的 `strictObject` 不认识新增的 `requested_by` / `retry_reason` 字段；旧版 `inbox.item_created` 的 `source` 枚举不认识 `task_retry`，旧 CLI 列收件箱也可能解析失败。此外，`failed → queued` 转换及后续 `task.started` 在旧状态机中不合法，重建会以 `ledger_inconsistent` 中止。
 
 使用任务重试前，先停止服务并备份账本，升级中枢、节点与使用该账本的客户端。需要退回旧版本时，必须停止服务并使用升级前的备份，不能继续使用已经发生任何任务重试或包含其收件箱通知的账本；升级后产生的记录不会包含在该备份中，详见 [任务重试的升级与回滚限制](daemon.md#任务重试的升级与回滚限制)。其他情况下需要回到旧版本二进制时，先删掉 `node.yaml` 的 `reserved` 与 `policies.yaml` 中带 `push_to` / `gh_scope` / `level: supervisor` 的规则。
+
+`user.instruction` 的长度上限已从 4000 提高到 8192 字符；一旦账本写入超过 4000 字符的指令，旧中枢重放会校验失败，回滚必须停止服务并恢复升级前的账本备份。

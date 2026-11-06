@@ -23,6 +23,7 @@ test('任务绑定只列只读知识、本任务详情与上报；隐藏操作�
   try {
     const { tools } = await client.listTools()
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'event_get',
       'kb_get',
       'kb_query',
       'kb_search',
@@ -57,7 +58,7 @@ test('任务绑定只列只读知识、本任务详情与上报；隐藏操作�
 })
 
 test.each([undefined, { workspace: 'ws/demo', task: 'wake-a', replyOnly: true }])(
-  '无绑定与 supervisor 唤醒保持原工具集，不列出 worker 上报（binding=%j）',
+  'event_get仅在任务或唤醒绑定列出，worker上报仅任务绑定可用（binding=%j）',
   async (binding) => {
     const client = await connect({
       actor: 'supervisor',
@@ -65,8 +66,18 @@ test.each([undefined, { workspace: 'ws/demo', task: 'wake-a', replyOnly: true }]
     })
     try {
       expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(
-        operations.filter((op) => op.name !== 'raindown_report').map((op) => op.name),
+        operations
+          .filter(
+            (op) =>
+              op.name !== 'raindown_report' && (op.name !== 'event_get' || binding !== undefined),
+          )
+          .map((op) => op.name),
       )
+      if (!binding)
+        expect(await callJson(client, 'event_get', { seq: 1 })).toMatchObject({
+          isError: true,
+          doc: { error: { code: 'unknown_tool' } },
+        })
       expect(
         await callJson(client, 'raindown_report', { status: 'progress', summary: '不应调用' }),
       ).toMatchObject({

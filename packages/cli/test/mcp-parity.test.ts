@@ -174,7 +174,9 @@ describe('CLI 与 MCP 结果一致', () => {
         // 上报工具只在任务绑定中列出；CLI 的 id 也只交给中枢核对。
         ...(op.name === 'raindown_report'
           ? { binding: { kind: 'task' as const, workspace: 'ws/product-res', task: 't-parity' } }
-          : {}),
+          : op.name === 'event_get'
+            ? { binding: { kind: 'wake' as const, workspace: 'ws/product-res', task: 't-parity' } }
+            : {}),
       })
       const { isError, doc: mcpDoc } = await callJson(client, op.name, input)
 

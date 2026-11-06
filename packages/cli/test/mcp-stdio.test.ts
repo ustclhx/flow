@@ -28,7 +28,9 @@ describe('raindown mcp（真实进程）', () => {
     try {
       const { tools } = await client.listTools()
       expect(tools.map((t) => t.name)).toEqual(
-        operations.filter((op) => op.name !== 'raindown_report').map((op) => op.name),
+        operations
+          .filter((op) => !['raindown_report', 'event_get'].includes(op.name))
+          .map((op) => op.name),
       )
       const res = await client.callTool({ name: 'kb_journal', arguments: { text: 'stdio 日志' } })
       expect(res.isError).toBeFalsy()
