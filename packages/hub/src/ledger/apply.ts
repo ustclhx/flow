@@ -254,10 +254,17 @@ export function createApplier(db: Database): Applier {
           e.payload.repo_snapshot ? JSON.stringify(e.payload.repo_snapshot) : null,
         )
         return
+      case 'task.reply_escalated':
+        if (e.payload.dropped_reply_id !== undefined) {
+          stmt(
+            `UPDATE replies SET state = 'dropped' WHERE id = ? AND task_id = ? AND state = 'pending'`,
+          ).run(e.payload.dropped_reply_id, e.task_id ?? null)
+        }
+        touchTask(e, '')
+        return
       case 'task.attempt_ended':
       case 'task.policy_changed':
       case 'task.reply_delegated':
-      case 'task.reply_escalated':
       case 'supervisor.wake_started':
         // 代回复委托与唤醒的队列投影由调度器（tasks 3.x）维护；这里只推进任务的 last_seq。
         touchTask(e, '')

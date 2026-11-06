@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -16,6 +16,7 @@ import {
   policyVersion,
   type Result,
   type Role,
+  raindownPaths,
   type SupervisorConfig,
   type TaskRespondRequest,
   taskRespondOp,
@@ -41,6 +42,7 @@ import {
   type WakeScheduler,
   type WorkspaceInfo,
 } from '../src/index.ts'
+import { createPolicyService } from '../src/policy/service.ts'
 import { createItem, MemoryChannel, specOf } from './channel-fixtures.ts'
 import { contractInput, must, tempLedger } from './ledger-helpers.ts'
 import { authHeaders, FakeClock, testToken, tick } from './server-fixtures.ts'
@@ -85,7 +87,11 @@ const ROLES: Record<string, unknown> = {
 }
 
 interface SetupOptions {
-  policy?: { load(): Promise<Result<PolicyConfig>>; version(): string }
+  policy?: {
+    load(): Promise<Result<PolicyConfig>>
+    version(): string
+    current(): PolicyConfig | undefined
+  }
   supervisor?: Partial<SupervisorConfig>
   supervisorRole?: () => Promise<Result<Role | null>>
   roles?: RoleLookup
@@ -429,7 +435,7 @@ describe('委托判定（3.5）', () => {
   })
 
   test.each(['approve', 'escalate'] as const)(
-    '代批 %s 记录当前策略版本与原审批规则',
+    '代批 %s 记录原判定的策略版本与审批规则',
     async (decision) => {
       const matched: IndexedPolicyRule = {
         rule_index: 0,
@@ -452,7 +458,11 @@ describe('委托判定（3.5）', () => {
         warnings: [],
       }
       const env = await setup({
-        policy: { load: async () => ok(config), version: () => config.version },
+        policy: {
+          load: async () => ok(config),
+          version: () => config.version,
+          current: () => config,
+        },
       })
       const id = await create(env)
       const lease = await grant(env, 'fake')
@@ -461,7 +471,7 @@ describe('委托判定（3.5）', () => {
         matchedRules: [matched],
       })
       await env.settle()
-      const basis = { policy_version: config.version, matched_rules: [matched] }
+      const basis = { policy_version: policyVersion([matched]), matched_rules: [matched] }
       expect(delegationsOf(env, id)[0]?.payload).toMatchObject(basis)
       const { caller } = await replyCaller(env)
       must(respond(env, caller, { task_id: id, block_seq: blockSeq, decision, text: undefined }))
@@ -479,7 +489,11 @@ describe('委托判定（3.5）', () => {
     }
     const config: PolicyConfig = { version: policyVersion([]), rules: [], errors: [], warnings: [] }
     const env = await setup({
-      policy: { load: async () => ok(config), version: () => config.version },
+      policy: {
+        load: async () => ok(config),
+        version: () => config.version,
+        current: () => config,
+      },
     })
     const id = await create(env)
     const lease = await grant(env, 'fake')
@@ -507,6 +521,7 @@ describe('委托判定（3.5）', () => {
           return ok(config)
         },
         version: () => version,
+        current: () => config,
       },
     })
     const id = await create(env)
@@ -515,6 +530,71 @@ describe('委托判定（3.5）', () => {
     await env.settle()
     expect(delegationsOf(env, id)).toHaveLength(0)
   })
+
+  test.each(['same_scope', 'narrower_scope'] as const)(
+    '新增更严格规则（%s）：建立委托和同步代批都重新判定',
+    async (scope) => {
+      const matched: IndexedPolicyRule = {
+        rule_index: 0,
+        rule: {
+          scope: scope === 'same_scope' ? WS : 'developer',
+          action: 'tool:CodexCommand',
+          level: 'supervisor',
+          when: { command_prefix: 'pnpm check' },
+        },
+      }
+      const initial: PolicyConfig = {
+        version: policyVersion([matched]),
+        rules: [matched],
+        errors: [],
+        warnings: [],
+      }
+      const stricter: IndexedPolicyRule = {
+        rule_index: 1,
+        rule: { ...matched.rule, scope: WS, level: 'draft-approve' },
+      }
+      const changed: PolicyConfig = {
+        ...initial,
+        version: policyVersion([matched, stricter]),
+        rules: [matched, stricter],
+      }
+      let config = initial
+      const env = await setup({
+        policy: {
+          load: async () => ok(config),
+          version: () => config.version,
+          current: () => config,
+        },
+      })
+      const id = await create(env)
+      const lease = await grant(env, 'fake')
+      const { blockSeq } = blockApproval(env, lease, {
+        policyVersion: initial.version,
+        matchedRules: [matched],
+      })
+      await env.settle()
+      expect(delegationsOf(env, id)).toHaveLength(1)
+      const { caller } = await replyCaller(env)
+      config = changed
+      expect(
+        code(
+          respond(env, caller, {
+            task_id: id,
+            block_seq: blockSeq,
+            decision: 'approve',
+            text: undefined,
+          }),
+        ),
+      ).toBe('stale_block')
+      expect(env.store.pendingReply(id)).toBeNull()
+
+      const next = await create(env)
+      const nextLease = await grant(env, 'fake')
+      blockApproval(env, nextLease, { policyVersion: initial.version, matchedRules: [matched] })
+      await env.settle()
+      expect(delegationsOf(env, next)).toHaveLength(0)
+    },
+  )
 
   test.each([
     ['策略判定为 user', { level: 'user' }],
@@ -1494,8 +1574,8 @@ describe('端到端：提问委托 → reply 唤醒 → answer → 节点继续�
 })
 
 describe('HTTP 路由与操作（4.9）', () => {
-  async function withApp() {
-    const env = await setup()
+  async function withApp(options: SetupOptions = {}) {
+    const env = await setup(options)
     const app = createHubApp({
       token: testToken,
       wakeTokens: env.wakeTokens,
@@ -1505,6 +1585,7 @@ describe('HTTP 路由与操作（4.9）', () => {
           path: '/',
           app: createSupervisorToolRoutes({
             delegation: env.delegation,
+            ...(options.policy ? { policy: options.policy } : {}),
           } as unknown as SupervisorToolsDeps),
         },
         { path: '/', app: createTaskRoutes({ ledger: env.store, tasks: env.tasks }) },
@@ -1520,6 +1601,87 @@ describe('HTTP 路由与操作（4.9）', () => {
       )
     return { env, app, post }
   }
+
+  test('删除代批规则后轮询之前 HTTP respond 重新加载并转交，保留原版本与目标版本', async () => {
+    const fixture = await tempLedger()
+    cleanups.push(fixture.cleanup)
+    const home = join(fixture.dir, 'home')
+    mkdirSync(join(home, 'config'), { recursive: true })
+    const matched: IndexedPolicyRule = {
+      rule_index: 0,
+      rule: {
+        scope: WS,
+        action: 'tool:CodexCommand',
+        level: 'supervisor',
+        when: { command_prefix: 'pnpm check' },
+      },
+    }
+    const path = raindownPaths(home).policiesConfig
+    writeFileSync(path, JSON.stringify([matched.rule]))
+    const clock = new FakeClock(T0)
+    const policy = createPolicyService({
+      home,
+      ledger: fixture.store,
+      clock,
+      logger: { warn() {} },
+    })
+    cleanups.push(() => policy.stop())
+    const initial = must(await policy.load())
+    const { env, post } = await withApp({ policy, store: fixture.store, clock })
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const { blockSeq } = blockApproval(env, lease, {
+      policyVersion: initial.version,
+      matchedRules: [matched],
+    })
+    await env.settle()
+    const wake = await grant(env, 'claude-sdk')
+    writeFileSync(path, '[]')
+    const result = await post(
+      '/v1/supervisor/respond',
+      {
+        task_id: id,
+        block_seq: blockSeq,
+        decision: 'approve',
+        reason: '范围内',
+      },
+      { Authorization: `Bearer ${wake.wake_token}` },
+    )
+    expect(((await result.json()) as { error: { code: string } }).error.code).toBe('stale_block')
+    expect(env.store.pendingReply(id)).toBeNull()
+    expect(escalationsOf(env, id)[0]?.payload).toMatchObject({
+      reason: 'policy_changed',
+      policy_version: initial.version,
+      to_version: policyVersion([]),
+    })
+  })
+
+  test('HTTP respond 当前策略读取失败时不写回复', async () => {
+    let broken = false
+    const config: PolicyConfig = { version: policyVersion([]), rules: [], errors: [], warnings: [] }
+    const { env, post } = await withApp({
+      policy: {
+        load: async () => (broken ? fail('failure', 'config_error', '策略无法读取') : ok(config)),
+        version: () => config.version,
+        current: () => config,
+      },
+    })
+    const { id, blockSeq, wakeLease } = await delegatedQuestion(env)
+    broken = true
+    const result = await post(
+      '/v1/supervisor/respond',
+      {
+        task_id: id,
+        block_seq: blockSeq,
+        decision: 'answer',
+        text: 'A',
+        reason: '范围内',
+      },
+      { Authorization: `Bearer ${wakeLease.wake_token}` },
+    )
+    expect(((await result.json()) as { error: { code: string } }).error.code).toBe('config_error')
+    expect(env.store.pendingReply(id)).toBeNull()
+  })
 
   test('reply 唤醒 token 经 HTTP 回复；user token 声明 supervisor 被拒；user 调用 role_not_allowed', async () => {
     const { env, post } = await withApp()

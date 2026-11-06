@@ -964,6 +964,29 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
             block_seq: draft.payload.block_seq,
           })
         }
+        const p = draft.payload
+        if (
+          (p.dropped_reply_id !== undefined || p.to_version !== undefined) &&
+          p.reason !== 'policy_changed'
+        ) {
+          return invalidEvent('只有策略变化转交可以撤回批准或记录新策略版本')
+        }
+        if (p.dropped_reply_id !== undefined) {
+          const reply = get<{ task_id: string; state: string; by: string; kind: string }>(
+            'SELECT task_id, state, by, kind FROM replies WHERE id = ?',
+            p.dropped_reply_id,
+          )
+          if (
+            active.kind !== 'awaiting_approval' ||
+            !reply ||
+            reply.task_id !== draft.task_id ||
+            reply.state !== 'pending' ||
+            reply.by !== SUPERVISOR ||
+            reply.kind !== 'approve'
+          ) {
+            return invalidEvent(`回复 ${p.dropped_reply_id} 不是该委托尚未送达的 supervisor 批准`)
+          }
+        }
         return ok(null)
       }
       case 'task.branch_reported': {

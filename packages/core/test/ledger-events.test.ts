@@ -418,6 +418,24 @@ describe('事件 schema', () => {
     }
   })
 
+  test('策略变化转交保留原判定版本，并校验新版本与撤回回复 id', () => {
+    const payload = {
+      reason: 'policy_changed',
+      block_seq: 7,
+      policy_version: '012345abcdef',
+      to_version: 'abcdef012345',
+      dropped_reply_id: 'r-policy',
+    }
+    const event = envelope('task.reply_escalated', { ...task, payload })
+    expect(ledgerEvent.parse(event).payload).toEqual(payload)
+    expect(
+      ledgerEvent.safeParse({ ...event, payload: { ...payload, to_version: 'invalid' } }).success,
+    ).toBe(false)
+    expect(
+      ledgerEvent.safeParse({ ...event, payload: { ...payload, dropped_reply_id: 'bad' } }).success,
+    ).toBe(false)
+  })
+
   test('信封：seq、ts、actor 与未知 type', () => {
     const good = envelope('hub.rebuilt', samples['hub.rebuilt'].valid)
     expect(ledgerEvent.safeParse({ ...good, seq: 0 }).success).toBe(false)

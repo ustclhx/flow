@@ -76,6 +76,29 @@ describe('策略版本与规则摘要', () => {
 })
 
 describe('授权依据与旧事件兼容', () => {
+  test('当前角色已删除时所有来源都拒绝恢复', () => {
+    for (const created_by of ['user', 'supervisor', 'hub']) {
+      expect(
+        checkTaskMandateForResume({ created_by }, { supervisor_enabled: true, role: null }),
+      ).toMatchObject({ ok: false, error: { code: 'role_missing' } })
+    }
+  })
+
+  test('hub 合并管线追溯到 supervisor 时检查启用状态，保留 hub 角色创建权限', () => {
+    const task = {
+      created_by: 'hub',
+      mandate: { ...mandate, created_by: 'hub', origin: 'pipeline:merge' },
+    }
+    expect(checkTaskMandateForResume(task, { supervisor_enabled: false, role: {} })).toMatchObject({
+      ok: false,
+      error: { code: 'supervisor_disabled' },
+    })
+    expect(checkTaskMandateForResume(task, { supervisor_enabled: true, role: {} }).ok).toBe(true)
+    expect(
+      checkTaskMandateForResume({ created_by: 'hub' }, { supervisor_enabled: false, role: {} }).ok,
+    ).toBe(true)
+  })
+
   test('创建与三种代回复事件保存版本和命中规则，旧载荷仍能重放', () => {
     const provenance = { policy_version: mandate.policy_version, matched_rules: [rule] }
     const replies = [

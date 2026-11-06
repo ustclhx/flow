@@ -298,11 +298,17 @@ async function setup(o: { supervisor?: Partial<SupervisorConfig> } = {}) {
       branch?: string | null
       /** 仓库快照的 origin 地址；null 表示没有快照。 */
       remoteUrl?: string | null
+      parent?: string
     } = {},
     status: 'done' | 'failed' = 'done',
   ) =>
     task(
-      { role: o.role ?? 'dev', executor: o.executor ?? 'codex-orca', cwd: repo },
+      {
+        role: o.role ?? 'dev',
+        executor: o.executor ?? 'codex-orca',
+        cwd: repo,
+        ...(o.parent ? { parent: o.parent } : {}),
+      },
       {
         summary: '开了 PR',
         executor: o.executor ?? 'codex-orca',
@@ -858,6 +864,7 @@ describe('批准与驳回（只有 user）', () => {
       origin: 'instruction',
       workspace: WS,
       status: 'queued',
+      mandate: { origin: 'pipeline:merge' },
       contract: {
         role: 'merger',
         executor: 'pr-merge',
@@ -870,6 +877,22 @@ describe('批准与驳回（只有 user）', () => {
     expect(MIN_MERGER_TIMEOUT_S).toBe(2400)
     // 批准事件早于 merger 的创建
     expect(approved?.seq).toBeLessThan(s.events('task.created').at(-1)?.seq ?? 0)
+  })
+
+  test('merger 授权依据从源 dev 追溯唤醒，不取请求合并的唤醒', async () => {
+    const s = await setup()
+    const sourceWake = await s.wake('instruction')
+    s.dev({ parent: sourceWake.id })
+    const rv = s.review()
+    const requestWake = await s.wake('instruction')
+    const requested = must(await s.request(requestWake.token, rv))
+    if (!requested.item) throw new Error('没有合并条目')
+    must(await actOnInbox(s.inbox, requested.item.id, { action: 'approve', via: 'cli' }, 'user'))
+    expect(s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)?.mandate).toMatchObject({
+      created_by: 'hub',
+      origin: 'pipeline:merge',
+      wake_task: sourceWake.id,
+    })
   })
 
   test('supervisor 不能批准或驳回合并（2.7）：403 user_only，不建 merger', async () => {

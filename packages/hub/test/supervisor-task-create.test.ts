@@ -717,6 +717,7 @@ describe('supervisor 建任务的检查（2.4，D5）', () => {
     const triage = await s.supCreate(a.token, { parent: a.id, role: 'triage' })
     expect(triage.code).toBe('ok')
     expect(triage.body.data?.task?.origin).toBe('autonomous')
+    expect(s.store.getTask(triage.body.data?.task?.id ?? '')?.mandate?.origin).toBe('autonomous')
     // 默认 reviewer（无只读配置）是 write
     expect((await s.supCreate(a.token, { parent: a.id, role: 'reviewer' })).code).toBe(
       'proposal_required',
@@ -1314,6 +1315,63 @@ describe('第二轮复核：只有节点与 user 能走节点协议并拿到唤�
 })
 
 describe('创建时固化授权依据', () => {
+  test('策略加载失败时授权依据沿用最近已知有效快照', async () => {
+    const s = await setup()
+    mkdirSync(join(s.raindownHome, 'config'), { recursive: true })
+    await writeFile(
+      join(s.raindownHome, 'config/policies.yaml'),
+      '- scope: user\n  action: task.create\n  level: auto\n',
+    )
+    const snapshot = must(await loadPoliciesConfig(s.raindownHome))
+    await writeFile(join(s.raindownHome, 'config/policies.yaml'), '[invalid yaml')
+    const tasks = createTaskService({
+      ledger: s.store,
+      workspaceExists: () => true,
+      roles,
+      policy: { load: () => loadPoliciesConfig(s.raindownHome), current: () => snapshot },
+    })
+    const task = must(
+      await tasks.createTask(
+        { goal: '用户任务', workspace: WS, role: 'triage', executor: 'claude-sdk' },
+        { actor: 'user' },
+      ),
+    ).task
+    expect(task.mandate).toMatchObject({
+      policy_version: snapshot.version,
+      matched_rules: [{ rule: snapshot.rules[0]?.rule }],
+    })
+  })
+
+  test('策略文件损坏不阻止原本合法的创建，授权依据不使用损坏规则', async () => {
+    const s = await setup()
+    mkdirSync(join(s.raindownHome, 'config'), { recursive: true })
+    await writeFile(join(s.raindownHome, 'config/policies.yaml'), '[invalid yaml')
+    const task = must(await s.userTask()).task
+    expect(task.mandate).toMatchObject({ origin: 'user', matched_rules: [] })
+    const wake = await s.wake()
+    expect((await s.supCreate(wake.token, { parent: wake.id })).status).toBe(201)
+    expect(code(await s.userTask({ verify: [{ cmd: ['pnpm', 'check'] }] }, 'reviewer'))).toBe(
+      'verify_not_allowed',
+    )
+  })
+
+  test('hub 审查管线写明来源', async () => {
+    const s = await setup()
+    const task = must(
+      await s.tasks.createTask(
+        {
+          goal: '审查',
+          workspace: WS,
+          role: 'pr-reviewer',
+          executor: 'claude-sdk',
+          inputs: { review: { pr: 'https://github.com/acme/repo/pull/1' } },
+        },
+        { actor: 'hub' },
+      ),
+    ).task
+    expect(task.mandate?.origin).toBe('pipeline:review')
+  })
+
   test('由中枢记录创建策略、唯一原始指令与唤醒；重建后相同', async () => {
     const s = await setup()
     mkdirSync(join(s.raindownHome, 'config'), { recursive: true })
@@ -1340,7 +1398,7 @@ describe('创建时固化授权依据', () => {
     if (!task) throw new Error('任务投影不存在')
     expect(task.mandate).toMatchObject({
       created_by: 'supervisor',
-      origin: 'supervisor',
+      origin: 'instruction',
       wake_task: wake.id,
       instruction_seq: instruction.seq,
       policy_version: must(await loadPoliciesConfig(s.raindownHome)).version,

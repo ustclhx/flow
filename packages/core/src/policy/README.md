@@ -14,10 +14,20 @@
 `flow.admin` 与 `raindown.admin` 归一后语义一致，因此版本相同；旧 MCP 工具规则与直接写新名的规则
 因 `legacy_tool_action` 的保守合并语义不同，版本也不同。
 中枢在启动与每 60 秒检查文件 mtime，所有判定与建任务的加载也共用版本比较入口。
-首次基线写入 `hub.started`，之后用 `policy.changed` 记录规则摘要的增删；受影响任务记录
+首次有效基线写入 `hub.started`；若启动时配置损坏，运行中首次成功加载以 `policy.changed{from:null}`
+补记基线。重启只读取最近有效启动基线及其后的策略变化。
+全局 `policy.changed` 先入账，单任务通知写入失败记警告并跳过，不阻断其他任务或策略加载；受影响任务记录
 `task.policy_changed` 并显示在详情和收件箱。通用追加输入由第 8 阶段统一送达。
 `checkTaskMandateForResume(task, { supervisor_enabled, role })` 在恢复前检查 supervisor
-是否仍启用、角色的 `creatable_by` 是否仍允许它，旧任务使用账本中的 `created_by`。
+是否仍启用、角色的 `creatable_by` 是否仍允许它，角色不存在返回 `role_missing`。
+hub 合并管线通过 mandate 的源唤醒追溯 supervisor，只重新检查启用状态；合并角色仍由 hub/user 创建。
+旧任务使用账本中的 `created_by`。
+授权来源与创建者分开：直接 supervisor 派生任务取唤醒的 `instruction/autonomous`，定时唤醒为 `schedule`；
+hub 审查/合并管线分别记 `pipeline:review`、`pipeline:merge`，接受提案仍保留提出草稿的唤醒与指令。
+任务创建在策略文件损坏时沿用原有创建权限检查，以最近有效快照或空规则记录 mandate；验收命令的策略拒绝语义不变。
+进行中的代批在策略变化、委托前与 `task_respond` 前重新判定；原命中规则删除或新规则不再允许 supervisor
+时转交用户，待送达的 supervisor 批准通过同一转交事件标记为丢弃。记录保留原决定/委托的 `policy_version`，
+策略变化引起的转交另记 `to_version`。
 
 ```yaml
 - scope: dev

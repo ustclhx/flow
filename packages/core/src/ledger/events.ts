@@ -350,6 +350,12 @@ export const eventPayloads = {
     reason: replyEscalationReason,
     policy_version: policyVersionSchema.optional(),
     matched_rules: z.array(indexedPolicyRuleSchema).optional(),
+    to_version: policyVersionSchema.optional().meta({
+      description: '策略变化导致转交时的新策略版本；policy_version 保留原委托的判定版本',
+    }),
+    dropped_reply_id: replyId.optional().meta({
+      description: '策略变化时撤回的尚未送达的 supervisor 批准回复；任务保持 blocked',
+    }),
     block_seq: z
       .number()
       .int()

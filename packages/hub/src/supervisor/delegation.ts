@@ -10,7 +10,6 @@ import {
   type LedgerEvent,
   ok,
   type PolicyConfig,
-  policyRuleHash,
   policyVersion,
   type ReplyEscalationReason,
   type Result,
@@ -22,6 +21,7 @@ import {
 import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import { HUB_ACTOR, taskKind } from '../ledger/supervisor-checks.ts'
 import { generateReplyId, type RoleLookup, type WorkspaceLookup } from '../ledger/tasks.ts'
+import { approvalAuthorization } from '../policy/approval.ts'
 import type { HubClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
 import type { WakeCaller } from '../server/wake-tokens.ts'
@@ -62,7 +62,11 @@ export interface DelegationServiceOptions {
   workspaces: WorkspaceLookup
   roles: RoleLookup
   /** 与策略判定共用的加载器：委托前复核审批依据仍然有效。 */
-  policy?: { load(): Promise<Result<PolicyConfig>>; version(): string }
+  policy?: {
+    load(): Promise<Result<PolicyConfig>>
+    version(): string
+    current(): PolicyConfig | undefined
+  }
   /**
    * 唯一的 supervisor 角色（core `findSupervisorRole`，与唤醒调度器相同）：没有、多个或可写时不委托——
    * 注定唤醒不了的委托只会立即转交，不如直接交给用户。缺省不检查（由调度器按 `wake_unavailable` 转交）。
@@ -126,6 +130,7 @@ type Verdict =
       delegate: true
       timeoutS: number
       policy_version: string
+      evaluated_version: string
       matched_rules: IndexedPolicyRule[]
     }
   | { delegate: false; why: string /** 判定本身超时（不是判为不委托）。 */; timedOut?: true }
@@ -171,14 +176,22 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
     return e?.seq === seq ? e : null
   }
 
-  function policyBasis(decisionId?: number) {
+  function policyBasis(decisionId?: number, delegation?: ActiveDelegation | null) {
     const decision = decisionId === undefined ? null : eventAt(decisionId)
+    const delegated = delegation ? eventAt(delegation.seq) : null
     return {
       policy_version:
-        o.policy?.version() ??
         (decision?.type === 'policy.decided' ? decision.payload.policy_version : undefined) ??
+        (delegated?.type === 'task.reply_delegated'
+          ? delegated.payload.policy_version
+          : undefined) ??
         policyVersion([]),
-      matched_rules: decision?.type === 'policy.decided' ? decision.payload.matched_rules : [],
+      matched_rules:
+        decision?.type === 'policy.decided'
+          ? decision.payload.matched_rules
+          : delegated?.type === 'task.reply_delegated'
+            ? (delegated.payload.matched_rules ?? [])
+            : [],
     }
   }
 
@@ -248,6 +261,7 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
     if (!role.ok || role.data === null) return no('角色查不到或加载失败')
     const kind = taskKind(role.data, task.contract, { actor: task.created_by })
     if (kind === 'merge' || kind === 'supervisor') return no(`有效类别为 ${kind}`)
+    let approval: EventOf<'policy.decided'> | undefined
     if (p.reason === 'awaiting_approval') {
       if (p.lease_held !== true) return no('授权请求卡住时节点没有持有租约')
       if (p.decision_id === undefined) return no('没有策略判定（decision_id）')
@@ -274,23 +288,26 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
       if (!delegationRequestMatches(p.request, decision.payload.request)) {
         return no('卡住上报的请求与策略判定的请求不一致（或没有命令）')
       }
+      approval = decision
     }
     const basis = policyBasis(p.reason === 'awaiting_approval' ? p.decision_id : undefined)
+    let evaluatedVersion = basis.policy_version
     if (o.policy) {
       // 配置读取完成后才复核：规则可能在 policy.decided 与卡住之间被删除，此时尚无委托可供 watcher 转交。
       const loaded = await o.policy.load()
       if (!loaded.ok) return no('当前策略无法加载')
-      const currentRules = new Set(loaded.data.rules.map(policyRuleHash))
-      if (
-        basis.matched_rules.some(
-          (rule) => !currentRules.has(rule.rule_hash ?? policyRuleHash(rule)),
-        )
-      ) {
-        return no('审批依据规则已修改或删除')
+      if (approval && !approvalAuthorization(loaded.data.rules, task, approval).allowed) {
+        return no('审批依据已失效或当前策略不再允许 supervisor 代批')
       }
-      basis.policy_version = loaded.data.version
+      evaluatedVersion = loaded.data.version
+      if (!approval) basis.policy_version = loaded.data.version
     }
-    return { delegate: true, timeoutS: ws.supervisor.reply_timeout_s, ...basis }
+    return {
+      delegate: true,
+      timeoutS: ws.supervisor.reply_timeout_s,
+      evaluated_version: evaluatedVersion,
+      ...basis,
+    }
   }
 
   /** 判定通过后的同步段：重新核对投影并写入（与 append 之间没有 await）。 */
@@ -298,7 +315,7 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
     e: EventOf<'task.blocked'>,
     verdict: Extract<Verdict, { delegate: true }>,
   ): boolean {
-    if (o.policy && o.policy.version() !== verdict.policy_version) return false
+    if (o.policy && o.policy.version() !== verdict.evaluated_version) return false
     const taskId = e.task_id as string
     const task = ledger.getTask(taskId)
     if (task?.status !== 'blocked' || latestBlockSeq(taskId) !== e.seq) return false
@@ -392,7 +409,8 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
         payload: {
           reason,
           block_seq: d.block_seq,
-          ...policyBasis(d.decision_id),
+          ...policyBasis(d.decision_id, d),
+          ...(reason === 'policy_changed' && o.policy ? { to_version: o.policy.version() } : {}),
           ...(note ? { note } : {}),
         },
       },
@@ -582,7 +600,8 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
       const task = ledger.getTask(input.task_id)
       const requeue = task !== null && ledger.activeLease(task.id) === null
       const base = { task_id: input.task_id, workspace: task?.workspace ?? caller.workspace }
-      const basis = policyBasis(ledger.activeDelegation(input.task_id)?.decision_id)
+      const delegation = ledger.activeDelegation(input.task_id)
+      const basis = policyBasis(delegation?.decision_id, delegation)
 
       /** 全部核对：在写入的同一事务里执行（AppendOptions.check）。 */
       const check = (): Result<null> => {
@@ -620,6 +639,17 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
         // 下一轮执行（可能是另一个请求）拿到它，拒绝。
         if (d.kind === 'awaiting_approval' && ledger.activeLease(t.id) === null) {
           return staleBlock('节点已不持有该任务的租约，这次授权请求已不在等待')
+        }
+        if (d.kind === 'awaiting_approval' && o.policy) {
+          const decision = d.decision_id === undefined ? null : eventAt(d.decision_id)
+          const current = o.policy.current()
+          if (
+            !current ||
+            decision?.type !== 'policy.decided' ||
+            !approvalAuthorization(current.rules, t, decision).allowed
+          ) {
+            return staleBlock('审批依据已失效或当前策略不再允许 supervisor 代批')
+          }
         }
         if (d.kind === 'question' && (input.decision === 'approve' || input.decision === 'deny')) {
           return invalidArguments('提问只能 answer 或 escalate，不能 approve / deny', 'decision')

@@ -472,6 +472,8 @@ async function createMerger(
 ): Promise<Result<{ task: TaskView; created: boolean }>> {
   const created = await deps.tasks.createTask(contract, {
     actor: HUB_ACTOR,
+    mandateOrigin: 'pipeline:merge',
+    mandateSourceTask: e.dev.id,
     // origin 直接取自开出 PR 的任务（资格要求它是 instruction），不继承审查任务。
     ...(e.dev.origin ? { origin: e.dev.origin } : {}),
     ...(o.withCreated ? { withCreated: o.withCreated } : {}),

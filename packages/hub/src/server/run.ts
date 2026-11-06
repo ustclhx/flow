@@ -228,6 +228,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         ledger,
         tasks,
         delegation,
+        policy,
         home: options.home,
         workspaces: workspaceLookupFromHome(options.home),
         roles: roleLookupFromHome(options.home),

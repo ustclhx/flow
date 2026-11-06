@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { openDatabase, policyDecisionSchema, policyVersion, taskView } from '@raindown/core'
 import {
   completionDrafts,
+  createInboxReactor,
   createNodeProtocol,
   createTaskService,
   type EventInput,
@@ -407,6 +408,192 @@ describe('task.reply_delegated 的不变量', () => {
 })
 
 describe('task.reply_escalated', () => {
+  const approvalReply = async () => {
+    const ctx = await setup()
+    const task = await ctx.newTask()
+    startTask(ctx.store, task.id)
+    const decision = decide(ctx.store, task.id, 'supervisor')
+    const blocked = block(ctx.store, task.id, {
+      reason: 'awaiting_approval',
+      decision_id: decision.seq,
+    })
+    must(
+      delegate(ctx.store, task.id, {
+        block_seq: blocked.seq,
+        kind: 'awaiting_approval',
+        decision_id: decision.seq,
+      }),
+    )
+    return { ...ctx, task, blocked }
+  }
+
+  const withdraw = (store: LedgerStore, id: string, block_seq: number, reply_id = 'r-policy') =>
+    store.append(
+      {
+        type: 'task.reply_escalated',
+        task_id: id,
+        workspace: WS,
+        payload: {
+          reason: 'policy_changed',
+          block_seq,
+          dropped_reply_id: reply_id,
+          policy_version: '012345abcdef',
+          to_version: 'abcdef012345',
+        },
+      } as EventInput,
+      hub,
+    )
+
+  test('策略变化只撤回待送达的 supervisor 批准，保持 blocked 并转交用户；重建一致', async () => {
+    const { store, task, blocked, tasks } = await approvalReply()
+    must(
+      store.append(
+        {
+          type: 'task.replied',
+          task_id: task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-policy', kind: 'approve', via: 'supervisor' },
+        },
+        { actor: 'supervisor' },
+      ),
+    )
+    must(withdraw(store, task.id, blocked.seq))
+    expect(store.getReply('r-policy')?.state).toBe('dropped')
+    expect(store.pendingReply(task.id)).toBeNull()
+    expect(store.getTask(task.id)?.status).toBe('blocked')
+    expect(store.activeDelegation(task.id)).toBeNull()
+    const before = store.snapshot({ includeSoft: false })
+    must(store.rebuild())
+    expect(store.snapshot({ includeSoft: false })).toEqual(before)
+    expect(code(tasks.replyTask(task.id, { kind: 'approve' }, { actor: 'user' }))).toBe('ok')
+  })
+
+  test('策略撤回不能指向其他任务、用户回复或 supervisor 的非批准回复', async () => {
+    for (const [actor, kind] of [
+      ['user', 'approve'],
+      ['supervisor', 'deny'],
+    ] as const) {
+      const { store, task, blocked } = await approvalReply()
+      if (actor === 'user') must(escalate(store, task.id, blocked.seq))
+      must(
+        store.append(
+          {
+            type: 'task.replied',
+            task_id: task.id,
+            workspace: WS,
+            payload: {
+              reply_id: 'r-policy',
+              kind,
+              ...(actor === 'supervisor' ? { via: 'supervisor' as const } : {}),
+            },
+          },
+          { actor },
+        ),
+      )
+      expect(withdraw(store, task.id, blocked.seq).ok).toBe(false)
+      expect(store.getReply('r-policy')?.state).toBe('pending')
+    }
+    const a = await approvalReply()
+    const b = await a.newTask()
+    startTask(a.store, b.id)
+    block(a.store, b.id)
+    must(
+      a.store.append(
+        {
+          type: 'task.replied',
+          task_id: b.id,
+          workspace: WS,
+          payload: { reply_id: 'r-policy', kind: 'approve' },
+        },
+        { actor: 'user' },
+      ),
+    )
+    expect(withdraw(a.store, a.task.id, a.blocked.seq).ok).toBe(false)
+    expect(a.store.getReply('r-policy')?.state).toBe('pending')
+  })
+
+  test('已经送达的批准不能因策略变化撤回', async () => {
+    const { store, task, blocked } = await approvalReply()
+    must(
+      store.append(
+        {
+          type: 'task.replied',
+          task_id: task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-policy', kind: 'approve', via: 'supervisor' },
+        },
+        { actor: 'supervisor' },
+      ),
+    )
+    must(
+      store.append(
+        {
+          type: 'task.unblocked',
+          task_id: task.id,
+          workspace: WS,
+          payload: { reply_id: 'r-policy' },
+        },
+        node,
+      ),
+    )
+    expect(withdraw(store, task.id, blocked.seq).ok).toBe(false)
+    expect(store.getReply('r-policy')?.state).toBe('delivered')
+    expect(store.getTask(task.id)?.status).toBe('running')
+  })
+
+  test('策略通知不宣称已核对委托，真正转交才在卡住条目中说明', async () => {
+    const { store, task, blocked } = await approvalReply()
+    const reactor = createInboxReactor({ ledger: store })
+    reactor.start()
+    cleanups.push(() => reactor.stop())
+    await reactor.idle()
+    const policy = must(
+      store.append(
+        {
+          type: 'policy.changed',
+          payload: {
+            from: '012345abcdef',
+            to: 'abcdef012345',
+            added: [],
+            removed: ['a'.repeat(64)],
+          },
+        },
+        hub,
+      ),
+    )
+    must(
+      store.append(
+        {
+          type: 'task.policy_changed',
+          task_id: task.id,
+          workspace: WS,
+          payload: { policy_seq: policy.seq, rules: ['a'.repeat(64)] },
+        },
+        hub,
+      ),
+    )
+    await reactor.idle()
+    expect(store.listInboxItems({ source: 'policy' })[0]?.body).not.toContain(
+      '代批委托已按当前策略核对',
+    )
+    must(
+      store.append(
+        {
+          type: 'task.reply_escalated',
+          task_id: task.id,
+          workspace: WS,
+          payload: { reason: 'policy_changed', block_seq: blocked.seq },
+        },
+        hub,
+      ),
+    )
+    await reactor.idle()
+    expect(store.getInboxItem(`blk.${blocked.seq}`)?.body).toContain('已转交给你')
+    expect(store.getInboxItem(`blk.${blocked.seq}`)?.body).toContain(
+      '代批依据的策略规则已删除或修改',
+    )
+  })
+
   test('actor 按 reason 区分：user_replied / user_dismissed 只接受 user，其他只接受 hub', async () => {
     const { store, newTask } = await setup()
     const t = await newTask()

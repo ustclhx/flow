@@ -167,7 +167,7 @@ export interface TaskServiceOptions {
   /** 仓库检查的选项（测试注入家目录）。 */
   repoCheck?: RepoCheckOptions
   /** 创建时固化授权依据所用的策略；生产环境注入共享策略加载器。 */
-  policy?: { load(): Promise<Result<PolicyConfig>> }
+  policy?: { load(): Promise<Result<PolicyConfig>>; current?(): PolicyConfig | undefined }
   /** 验收命令的策略判定；缺省为没有规则（全部拒绝）。 */
   verifyPolicy?: VerifyPolicyCheck
   now?: () => number
@@ -179,6 +179,10 @@ export interface TaskServiceOptions {
 
 export interface CreateTaskOptions {
   actor: string
+  /** 仅中枢内部创建路径可指定授权来源；HTTP 与 MCP 不得取自请求。 */
+  mandateOrigin?: string
+  /** 仅中枢内部管线：从此账本任务追溯唤醒与原始指令（如 merger 的源 dev）。 */
+  mandateSourceTask?: string
   /** 幂等键；也可以写在合同的 `idempotency_key` 中（两处都给时必须一致）。 */
   idempotency_key?: string
   /**
@@ -616,23 +620,47 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
       }
 
       // 授权依据只由中枢计算；与策略检查共用加载与版本比较入口。
-      const policy = o.policy
+      const loadedPolicy = o.policy
         ? await o.policy.load()
         : ok({ rules: [], version: policyVersion([]) })
-      if (!policy.ok) return policy
-      const creationDecision = decide(policy.data.rules, {
+      // 任务创建权限沿用角色与 verify 校验；策略损坏不能额外阻止原本合法的创建。
+      // mandate 只记录最近成功加载的快照或空规则，不能把损坏配置当成已授权的依据。
+      const policy = loadedPolicy.ok
+        ? loadedPolicy.data
+        : (o.policy?.current?.() ?? { rules: [], version: policyVersion([]) })
+      const creationDecision = decide(policy.rules, {
         scope: { workspace: contract.workspace, role: opts.actor },
         actions: ['task.create'],
       })
-      const instructions = (callerWake?.events ?? []).filter(
-        (seq) => ledger.eventsAfter(seq - 1, undefined, 1)[0]?.type === 'user.instruction',
-      )
+      const source = opts.mandateSourceTask ? ledger.getTask(opts.mandateSourceTask) : parent
+      let provenanceWake = opts.mandateSourceTask ? null : (callerWake ?? parentWake)
+      let ancestor = source
+      const seen = new Set<string>()
+      while (!provenanceWake && ancestor && !seen.has(ancestor.id)) {
+        seen.add(ancestor.id)
+        provenanceWake = ledger.wakeOf(ancestor.mandate?.wake_task ?? ancestor.id)
+        ancestor = ancestor.contract.parent ? ledger.getTask(ancestor.contract.parent) : null
+      }
+      const instructions = (provenanceWake?.events ?? []).filter((seq) => {
+        const event = ledger.eventsAfter(seq - 1, undefined, 1)[0]
+        return event?.type === 'user.instruction' && event.actor === USER_ACTOR
+      })
+      const sourceInstruction = source?.mandate?.instruction_seq
+      const instructionSeq =
+        sourceInstruction !== undefined && instructions.includes(sourceInstruction)
+          ? sourceInstruction
+          : instructions.length === 1
+            ? instructions[0]
+            : undefined
       const mandate = {
         created_by: opts.actor,
-        origin: opts.actor,
-        ...(callerWake ? { wake_task: callerWake.task_id } : {}),
-        ...(instructions.length === 1 ? { instruction_seq: instructions[0] as number } : {}),
-        policy_version: policy.data.version,
+        origin:
+          opts.mandateOrigin ??
+          callerWake?.origin ??
+          (isHub && review !== undefined ? 'pipeline:review' : opts.actor),
+        ...(provenanceWake ? { wake_task: provenanceWake.task_id } : {}),
+        ...(instructionSeq === undefined ? {} : { instruction_seq: instructionSeq }),
+        policy_version: policy.version,
         matched_rules: auditRules(creationDecision.matched_rules),
       }
 

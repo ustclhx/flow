@@ -492,6 +492,7 @@ describe('task_propose 与收件箱接受 / 驳回（4.5、4.6）', () => {
     const task = ledger.getTask(accepted.payload.task_id)
     expect(task).toMatchObject({ created_by: 'user', origin: 'instruction' })
     expect(task?.contract.parent).toBe(w.id)
+    expect(task?.mandate).toMatchObject({ origin: 'user', wake_task: w.id })
     const path = accepted.payload.decision_path as string
     expect(path).toMatch(/^decisions\/\d{4}-\d{2}-\d{2}-cache-ttl-[0-9a-f]+\.md$/)
     expect(task?.contract.context).toContain(path)
@@ -502,6 +503,30 @@ describe('task_propose 与收件箱接受 / 驳回（4.5、4.6）', () => {
       workspace: WS,
       review_date: '2026-11-25',
       sources: [`task:${task?.id}`],
+    })
+  })
+
+  test('接受指令唤醒提出的草稿，授权依据保留该唤醒的唯一原始指令', async () => {
+    const { ledger, inbox, repo, wake, ctx } = await setup()
+    const instruction = must(
+      ledger.append(
+        { type: 'user.instruction', workspace: WS, payload: { text: '优化缓存', via: 'cli' } },
+        { actor: 'user' },
+      ),
+    )
+    const w = await wake('instruction', { events: [instruction.seq] })
+    const proposed = must(await taskProposeOp.run({ draft: draft(repo) as never }, ctx(w.token)))
+    must(await actOnInbox(inbox, proposed.item.id, { action: 'accept', via: 'cli' }, 'user'))
+    const accepted = ledger.eventsByPayload(
+      'task_proposal.accepted',
+      'proposal_id',
+      proposed.proposal_id,
+    )[0]
+    if (accepted?.type !== 'task_proposal.accepted') throw new Error('缺少接受事件')
+    expect(ledger.getTask(accepted.payload.task_id)?.mandate).toMatchObject({
+      origin: 'user',
+      wake_task: w.id,
+      instruction_seq: instruction.seq,
     })
   })
 

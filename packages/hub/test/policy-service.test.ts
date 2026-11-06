@@ -79,7 +79,7 @@ async function setup(rules: IndexedPolicyRule[] = [rule]) {
       ),
     )
   const service = create()
-  return { store: ledger.store, clock, warnings, write, create, baseline, service }
+  return { home, store: ledger.store, clock, warnings, write, create, baseline, service }
 }
 
 function createTask(
@@ -227,7 +227,7 @@ test('删除命中规则只通知 running、verifying、blocked 的受影响任�
   expect(store.getTask('t-unaffected')?.status).toBe('running')
 })
 
-test('进行中的 approval 委托依赖规则删除后原子转交用户，收件箱恢复可处理条目', async () => {
+test('进行中的 approval 委托依赖规则删除后转交用户，收件箱恢复可处理条目', async () => {
   const { service, store, write } = await setup()
   must(await service.load())
   const reactor = createInboxReactor({ ledger: store })
@@ -302,7 +302,8 @@ test('进行中的 approval 委托依赖规则删除后原子转交用户，收�
     payload: {
       block_seq: blocked.seq,
       reason: 'policy_changed',
-      policy_version: policyVersion([]),
+      policy_version: policyVersion([rule]),
+      to_version: policyVersion([]),
     },
   })
   expect(store.activeDelegation(base.task_id)).toBeNull()
@@ -318,7 +319,7 @@ test('进行中的 approval 委托依赖规则删除后原子转交用户，收�
   )
 })
 
-test('整批追加失败不发布策略变化或推进基线，重试补齐同一变化及任务通知', async () => {
+test('全局变化追加失败不推进基线，重试记录同一变化及任务通知', async () => {
   const { service, store, create, baseline, write } = await setup()
   must(await service.load())
   baseline(service, [rule])
@@ -327,10 +328,10 @@ test('整批追加失败不发布策略变化或推进基线，重试补齐同�
   let reject = true
   const failing = create({
     ...store,
-    appendMany(events, options) {
-      return reject && events.some((event) => event.type === 'policy.changed')
-        ? fail('failure', 'write_failed', '模拟整批追加失败')
-        : store.appendMany(events, options)
+    append(event, options) {
+      return reject && event.type === 'policy.changed'
+        ? fail('failure', 'write_failed', '模拟全局追加失败')
+        : store.append(event, options)
     },
   })
   const seq = store.seq()
@@ -345,4 +346,215 @@ test('整批追加失败不发布策略变化或推进基线，重试补齐同�
     'task.policy_changed',
   ])
   expect(failing.version()).toBe(policyVersion([]))
+})
+
+test('审查5：单个任务通知写入失败不会阻断策略加载或其他任务通知', async () => {
+  const { store, service, create, baseline, write, warnings } = await setup()
+  must(await service.load())
+  baseline(service, [rule])
+  await service.stop()
+  createTask(store, 't-bad', 'running')
+  createTask(store, 't-good', 'running')
+  const failing = create({
+    ...store,
+    append(event, options) {
+      return event.task_id === 't-bad'
+        ? fail('failure', 'write_failed', '单个任务草稿失败')
+        : store.append(event, options)
+    },
+    appendMany(events, options) {
+      return events.some((event) => event.task_id === 't-bad')
+        ? fail('failure', 'write_failed', '单个任务草稿失败')
+        : store.appendMany(events, options)
+    },
+  })
+  write([])
+  const loaded = await failing.load()
+  expect(loaded.ok).toBe(true)
+  expect(failing.version()).toBe(policyVersion([]))
+  expect(changes(store)).toHaveLength(1)
+  expect(store.taskEvents('t-good').some((event) => event.type === 'task.policy_changed')).toBe(
+    true,
+  )
+  expect(warnings).toEqual([expect.objectContaining({ task_id: 't-bad' })])
+})
+
+test('审查6：启动策略损坏，运行中建立基线落账，离线修改后重启仍能报告变化', async () => {
+  const { home, store, service, write, create } = await setup()
+  writeFileSync(raindownPaths(home).policiesConfig, '[broken yaml')
+  expect((await service.load()).ok).toBe(false)
+  must(
+    store.append(
+      {
+        type: 'hub.started',
+        payload: { version: 'test', pid: 1, runtime: 'bun', port: 1234 },
+      },
+      sys,
+    ),
+  )
+  service.start()
+  write([rule.rule])
+  must(await service.load())
+  expect(changes(store)).toMatchObject([
+    {
+      payload: {
+        from: null,
+        to: policyVersion([rule]),
+        added: [policyRuleHash(rule)],
+        removed: [],
+      },
+    },
+  ])
+  await service.stop()
+  write([])
+  const restarted = create()
+  must(await restarted.load())
+  expect(changes(store)).toHaveLength(2)
+  expect(changes(store)[1]).toMatchObject({
+    payload: { from: policyVersion([rule]), to: policyVersion([]) },
+  })
+})
+
+test('审查7：恢复只读取最近策略启动基线之后的策略变化，不重放无关账本', async () => {
+  const { store, service, baseline, create, write } = await setup()
+  for (let i = 0; i < 20; i++)
+    must(store.append({ type: 'hub.resumed', payload: { slept_ms: i, extended_leases: 0 } }, sys))
+  must(await service.load())
+  const start = baseline(service, [rule])
+  write([otherRule.rule])
+  must(await service.load())
+  await service.stop()
+  const reads: { after: number; type: string }[] = []
+  const restarted = create({
+    ...store,
+    eventsAfter() {
+      throw new Error('恢复不应读取完整账本')
+    },
+    eventsBetween(type, from, to, limit, after = 0) {
+      reads.push({ after, type })
+      return store.eventsBetween(type, from, to, limit, after)
+    },
+  })
+  expect(restarted.version()).toBe(policyVersion([otherRule]))
+  expect(reads.length).toBeGreaterThan(0)
+  expect(reads.every((read) => read.type === 'policy.changed' && read.after >= start.seq)).toBe(
+    true,
+  )
+})
+
+function delegateApproval(store: LedgerStore, id: string, version: string) {
+  createTask(store, id, 'running', [])
+  const base = { task_id: id, workspace: WS }
+  const decision = must(
+    store.append(
+      {
+        ...base,
+        type: 'policy.decided',
+        payload: {
+          task_id: id,
+          policy_version: version,
+          request: { tool: 'Bash', command: 'bun test', actions: ['tool:Bash'] },
+          level: 'supervisor',
+          matched_rules: auditRules([rule]),
+          actions: [],
+        },
+      },
+      { actor: 'policy' },
+    ),
+  )
+  const blocked = must(
+    store.append(
+      {
+        ...base,
+        type: 'task.blocked',
+        payload: {
+          reason: 'awaiting_approval',
+          message: '等待测试授权',
+          lease_held: true,
+          decision_id: decision.seq,
+          request: { tool: 'Bash', command: 'bun test', reason: '测试' },
+        },
+      },
+      { actor: 'node:n1' },
+    ),
+  )
+  must(
+    store.append(
+      {
+        ...base,
+        type: 'task.reply_delegated',
+        payload: {
+          task_id: id,
+          block_seq: blocked.seq,
+          kind: 'awaiting_approval',
+          decision_id: decision.seq,
+          policy_version: version,
+          deadline: '2026-11-06T01:00:00Z',
+        },
+      },
+      sys,
+    ),
+  )
+  return { ...base, block_seq: blocked.seq }
+}
+
+test('审查2：新增同范围更保守规则，即使原规则未删除也结束已有代批', async () => {
+  const { store, service, write } = await setup()
+  must(await service.load())
+  const base = delegateApproval(store, 't-stricter', service.version())
+  write([rule.rule, { ...rule.rule, level: 'draft-approve' }])
+  const loaded = must(await service.load())
+  expect(store.activeDelegation(base.task_id)).toBeNull()
+  expect(store.taskEvents(base.task_id).at(-1)).toMatchObject({
+    type: 'task.reply_escalated',
+    payload: {
+      reason: 'policy_changed',
+      policy_version: policyVersion([rule]),
+      to_version: loaded.version,
+    },
+  })
+  expect(store.taskEvents(base.task_id).some((event) => event.type === 'task.policy_changed')).toBe(
+    true,
+  )
+})
+
+test('审查3：待送达的supervisor批准因规则删除或新增限制被撤回，保持卡住并转交用户', async () => {
+  for (const change of ['removed', 'restricted']) {
+    const { store, service, write } = await setup()
+    must(await service.load())
+    const base = delegateApproval(store, `t-pending-${change}`, service.version())
+    const replyId = `r-${change}`
+    must(
+      store.append(
+        {
+          task_id: base.task_id,
+          workspace: WS,
+          type: 'task.replied',
+          payload: {
+            reply_id: replyId,
+            kind: 'approve',
+            via: 'supervisor',
+            reason: '批准测试',
+            policy_version: service.version(),
+          },
+        },
+        { actor: 'supervisor' },
+      ),
+    )
+    write(change === 'removed' ? [] : [rule.rule, { ...rule.rule, level: 'draft-approve' }])
+    const loaded = must(await service.load())
+    expect(store.getReply(replyId)?.state).toBe('dropped')
+    expect(store.pendingReply(base.task_id)).toBeNull()
+    expect(store.activeDelegation(base.task_id)).toBeNull()
+    expect(store.getTask(base.task_id)?.status).toBe('blocked')
+    expect(store.taskEvents(base.task_id).at(-1)).toMatchObject({
+      type: 'task.reply_escalated',
+      payload: {
+        reason: 'policy_changed',
+        dropped_reply_id: replyId,
+        policy_version: policyVersion([rule]),
+        to_version: loaded.version,
+      },
+    })
+  }
 })

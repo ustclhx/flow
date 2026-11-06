@@ -13,6 +13,7 @@ import {
 import type { EventInput, LedgerStore } from '../ledger/store.ts'
 import type { HubClock } from '../server/clock.ts'
 import type { HubLogger } from '../server/maintenance.ts'
+import { approvalAuthorization } from './approval.ts'
 
 /** 入账前保存未脱敏的内容摘要；规则正文仍沿用账本脱敏。 */
 export const auditRules = (rules: readonly IndexedPolicyRule[]): IndexedPolicyRule[] =>
@@ -22,11 +23,12 @@ const ruleHash = (rule: IndexedPolicyRule) => rule.rule_hash ?? policyRuleHash(r
 export interface PolicyService {
   load(): Promise<Result<PolicyConfig>>
   version(): string
+  current(): PolicyConfig | undefined
   start(): void
   stop(): Promise<void>
 }
 
-/** 所有加载串行比较版本；启动基线在 hub.started 固化，变化与任务通知原子入账。 */
+/** 所有加载串行比较版本；启动基线在 hub.started 固化，全局变化与任务通知分别入账，单任务失败不阻断加载。 */
 export function createPolicyService(o: {
   home: string
   ledger: LedgerStore
@@ -35,23 +37,46 @@ export function createPolicyService(o: {
 }): PolicyService {
   const { ledger } = o
   let previous: { version: string; rules: Set<string> } | undefined
+  // 只回溯启动事件寻找最近有效快照，再读取它之后的策略事件；不解析无关任务历史。
+  let before: number | undefined
   let after = 0
   for (;;) {
-    const events = ledger.eventsAfter(after, undefined, 1000)
-    if (events.length === 0) break
-    for (const e of events) {
-      if (e.type === 'hub.started' && e.payload.policy_version && e.payload.policy_rules) {
-        previous = { version: e.payload.policy_version, rules: new Set(e.payload.policy_rules) }
-      } else if (e.type === 'policy.changed') {
-        const rules = previous?.rules ?? new Set<string>()
-        for (const hash of e.payload.removed) rules.delete(hash)
-        for (const hash of e.payload.added) rules.add(hash)
-        previous = { version: e.payload.to, rules }
+    const event = ledger.latestEvent(before, 'hub.started')
+    if (!event) break
+    if (
+      event.type === 'hub.started' &&
+      event.payload.policy_version &&
+      event.payload.policy_rules
+    ) {
+      previous = {
+        version: event.payload.policy_version,
+        rules: new Set(event.payload.policy_rules),
       }
-      after = e.seq
+      after = event.seq
+      break
+    }
+    before = event.seq
+  }
+  for (;;) {
+    const events = ledger.eventsBetween(
+      'policy.changed',
+      '0000-01-01T00:00:00.000Z',
+      '9999-12-31T23:59:59.999Z',
+      1000,
+      after,
+    )
+    if (events.length === 0) break
+    for (const event of events) {
+      if (event.type !== 'policy.changed') continue
+      const rules = previous?.rules ?? new Set<string>()
+      for (const hash of event.payload.removed) rules.delete(hash)
+      for (const hash of event.payload.added) rules.add(hash)
+      previous = { version: event.payload.to, rules }
+      after = event.seq
     }
   }
   let currentVersion = previous?.version ?? policyVersion([])
+  let currentConfig: PolicyConfig | undefined
   let mtime: number | undefined
   let stopped = false
   let started = false
@@ -68,19 +93,21 @@ export function createPolicyService(o: {
 
   function record(config: PolicyConfig): Result<null> {
     const rules = new Set(config.rules.map(policyRuleHash))
-    if (previous && previous.version !== config.version) {
-      const oldRules = previous.rules
+    if ((previous && previous.version !== config.version) || (!previous && started)) {
+      const oldRules = previous?.rules ?? new Set<string>()
       const removed = [...oldRules].filter((hash) => !rules.has(hash))
       const added = [...rules].filter((hash) => !oldRules.has(hash))
       const removedSet = new Set(removed)
-      const policySeq = ledger.seq() + 1
-      const drafts: EventInput[] = [
+      // 全局变化先固化；任务侧某一草稿失败只报告该任务，不阻断其他任务与后续策略加载。
+      const changed = ledger.append(
         {
           type: 'policy.changed',
-          payload: { from: previous.version, to: config.version, added, removed },
+          payload: { from: previous?.version ?? null, to: config.version, added, removed },
         },
-      ]
-      // 内部查询没有分页上限；每个受影响任务只记一条，不通知排队或已结束任务。
+        { actor: 'hub' },
+      )
+      if (!changed.ok) return changed
+      const policySeq = changed.data.seq
       for (const status of ['running', 'verifying', 'blocked'] as const) {
         for (const task of ledger.listTasks({ status, limit: Number.MAX_SAFE_INTEGER })) {
           const affected = new Set(
@@ -88,48 +115,74 @@ export function createPolicyService(o: {
               .map(ruleHash)
               .filter((hash) => removedSet.has(hash)),
           )
-          const delegation = ledger.pendingReply(task.id) ? null : ledger.activeDelegation(task.id)
-          let approvalAffected = false
-          if (delegation?.kind === 'awaiting_approval' && delegation.decision_id !== undefined) {
-            const decision = ledger
-              .taskEvents(task.id)
-              .find((e) => e.seq === delegation.decision_id)
+          const pending = ledger.pendingReply(task.id)
+          const delegation = ledger.activeDelegation(task.id)
+          const pendingApproval = pending?.by === 'supervisor' && pending.kind === 'approve'
+          let escalation: EventInput | undefined
+          if (
+            delegation?.kind === 'awaiting_approval' &&
+            delegation.decision_id !== undefined &&
+            (!pending || pendingApproval)
+          ) {
+            const events = ledger.taskEvents(task.id)
+            const decision = events.find((event) => event.seq === delegation.decision_id)
             if (decision?.type === 'policy.decided') {
-              for (const rule of decision.payload.matched_rules) {
-                const hash = ruleHash(rule)
-                if (removedSet.has(hash)) {
-                  affected.add(hash)
-                  approvalAffected = true
+              const authorization = approvalAuthorization(config.rules, task, decision)
+              if (!authorization.allowed) {
+                for (const rule of [
+                  ...decision.payload.matched_rules,
+                  ...authorization.matched_rules,
+                ])
+                  affected.add(ruleHash(rule))
+                const delegated = events.find((event) => event.seq === delegation.seq)
+                const version =
+                  decision.payload.policy_version ??
+                  (delegated?.type === 'task.reply_delegated'
+                    ? delegated.payload.policy_version
+                    : undefined) ??
+                  previous?.version
+                escalation = {
+                  type: 'task.reply_escalated',
+                  task_id: task.id,
+                  workspace: task.workspace,
+                  payload: {
+                    block_seq: delegation.block_seq,
+                    reason: 'policy_changed',
+                    ...(version ? { policy_version: version } : {}),
+                    to_version: config.version,
+                    matched_rules: decision.payload.matched_rules,
+                    ...(pendingApproval ? { dropped_reply_id: pending.id } : {}),
+                    note: `当前策略已不再允许 supervisor 代批（策略变化 #${policySeq}）`,
+                  },
                 }
               }
             }
           }
-          if (affected.size === 0) continue
-          drafts.push({
-            type: 'task.policy_changed',
-            task_id: task.id,
-            workspace: task.workspace,
-            payload: { policy_seq: policySeq, rules: [...affected] },
-          })
-          if (approvalAffected && delegation)
+          const drafts: EventInput[] = []
+          if (affected.size > 0)
             drafts.push({
-              type: 'task.reply_escalated',
+              type: 'task.policy_changed',
               task_id: task.id,
               workspace: task.workspace,
-              payload: {
-                block_seq: delegation.block_seq,
-                reason: 'policy_changed',
-                policy_version: config.version,
-                note: `代批依赖的规则已删除或修改（策略变化 #${policySeq}）`,
-              },
+              payload: { policy_seq: policySeq, rules: [...affected] },
             })
+          if (escalation) drafts.push(escalation)
+          for (const draft of drafts) {
+            const written = ledger.append(draft, { actor: 'hub' })
+            if (!written.ok)
+              o.logger.warn('策略变化的任务事件写入失败', {
+                task_id: task.id,
+                type: draft.type,
+                policy_seq: policySeq,
+                error: written.error,
+              })
+          }
         }
       }
-      const written = ledger.appendMany(drafts, { actor: 'hub' })
-      if (!written.ok) return written
     }
     previous = { version: config.version, rules }
     currentVersion = config.version
+    currentConfig = config
     return ok(null)
   }
 
@@ -165,6 +218,7 @@ export function createPolicyService(o: {
   return {
     load,
     version: () => currentVersion,
+    current: () => currentConfig,
     start() {
       if (!started && !stopped) {
         started = true
