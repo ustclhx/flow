@@ -489,3 +489,15 @@ policy:
    ② 和 ③ 依赖 ①，④ 依赖 ② 和 ③。
 
    **M1 验收场景**：用户在 Telegram 给 product-res 下一条指令 → supervisor 拆成任务 → Codex 在 worktree 中执行 → 卡住时用户收到推送并回复，worker 继续 → 提 PR → Claude 审查 → 合并 → 验证 main 的发布流水线 → 写 journal。整个过程中用户只操作两次手机。
+
+9. **harness 无关的协调模型**（变更 add-harness-neutral-coordination，2026-11 合并）。中枢与 core 只认与 harness 无关的契约，Codex、Claude 等的差异全部封装在执行器适配器里：
+   - **适配器自描述**：注册时声明能力（授权请求的识别方式、能否中途注入、能否恢复会话、是否加载 Raindown MCP、能否检测带外操作）。中枢按声明选择交互方式，不按执行器类型名分支。适配器还负责把授权请求转成统一结构、隔离 harness 自带的放行配置，并发现绕过 Raindown 的操作。
+   - **worker 主动上报**：每次派工签发只授予本任务的派工令牌，worker 经受限的 Raindown MCP 调用 `raindown_report`，上报进展、带选项的提问、受阻、交付或放弃。节点把上报与适配器的推断合并，卡住记录来源（`reported` / `inferred`），只有 worker 上报的提问才委托 supervisor 代答。终端分类保留为兜底。
+   - **派工与恢复**：任务可多次派工，重试作用于原任务而不是另建任务。新派工带结构化的恢复提示；写类开发任务的交付物已存在时，由中枢直接判定完成。
+   - **授权依据**：策略有版本，任务创建时由中枢固化授权依据（mandate）；策略变化会通知受影响的任务，依赖被删规则的代批转交用户。
+   - **用户原话直达 worker**：supervisor 建任务时，中枢附加用户的原始指令，worker 输入分"原始指令（以此为准）"与"supervisor 的补充"两段。
+   - **observe 模式**：代答、代批、自主工作可以逐项只记录不执行，用一致率决定何时放开。
+   - **PR 订阅与直通**：PR 上的 CI、审查与评论由中枢轮询入账，作为不可信上下文直接送到负责的 worker，不唤醒 supervisor。worker 目前与用户共用 GitHub 身份，所以评论恢复任务、交回 supervisor 暂不生效。
+   - **阶段**：由账本派生"在等谁"，CLI、收件箱与 supervisor 状态的说法统一。
+
+   接入新 harness 见 [executors.md 的适配器契约](executors.md#适配器契约)，supervisor 侧的行为见 [supervisor.md](supervisor.md) 第 2、3、8、13、14 节。

@@ -72,5 +72,5 @@
 
 ## 9. 文档与验收
 
-- [ ] 9.1 `docs/executors.md`（适配器接入指南）、`docs/supervisor.md`（observe、原始指令、交回）、`docs/prd.md` §19 补充
+- [x] 9.1 `docs/executors.md`（适配器接入指南）、`docs/supervisor.md`（observe、原始指令、交回）、`docs/prd.md` §19 补充
 - [ ] 9.2 真实验收：一轮 product-res 任务，worker 用 raindown_report 提问并由 supervisor 代答；PR 上 CI 失败直通 worker 修复；审查崩溃后 task_retry；observe 跑一轮并看一致率

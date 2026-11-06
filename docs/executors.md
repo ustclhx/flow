@@ -12,41 +12,139 @@
 
 中枢和节点需要运行；前台命令分别是 `raindown hub start`、`raindown node start`，各占一个终端。
 常驻方式见 [守护进程](daemon.md)。Orca 模式的仓库必须登记在合同所属 workspace 的 `repos` 中，
-并已导入 Orca；节点还需要能访问远端仓库的 git、gh 环境。Raindown 不负责合并 PR 或清理 worktree。
+并已导入 Orca；节点还需要能访问远端仓库的 git、gh 环境。PR 只经 merger 角色（pr-merge 执行器）在核对资格后合并；Raindown 不清理 worker 的 worktree。
 
 ## 适配器契约
 
-每个 harness 的差异由执行器适配器封装。以下是接入与验收要求；现有实现的隔离范围和未解决边界见下文「Codex 配置隔离」及「安全边界」，不能把契约当作所有边界均已实现的声明。
+本节是接入新 harness 的指南（变更 add-harness-neutral-coordination，规范见其 `specs/harness-adapter`、`specs/worker-report`）。
+每个 harness 的差异都封装在执行器适配器里；core 的类型、事件与操作不出现任何 harness 专有概念。
+下文描述的是 main 上的实际实现。现有适配器的隔离范围和未解决的边界见下文「Codex 配置隔离」与「安全边界」，
+不能把契约当作所有边界都已实现的声明。
 
-适配器在节点注册时随 `type`、`mode` 声明五项能力：
+### 插件接口
 
-| 能力 | 取值与含义 |
+适配器实现 `packages/node/src/executor.ts` 的 `ExecutorPlugin`，节点的通用循环只调用这些方法：
+
+| 成员 | 作用 |
 | --- | --- |
-| `approval_requests` | `structured`：由 SDK/协议获取授权请求；`inferred`：由适配器从输出推断；`none`：没有授权请求通道 |
-| `inject_while_running` | 是否能在当前运行中注入消息 |
-| `resume_session` | 是否能恢复原会话 |
-| `raindown_mcp` | 是否加载 Raindown MCP，供 worker 使用 `raindown_report` 等受限工具 |
-| `out_of_band_detection` | 是否能检测绕过 Raindown 的批准及会话、工作目录被外部移除 |
+| `type`、`mode` | 执行器类型（与合同 `executor` 一致）、`interactive` 或 `headless` |
+| `adapterCapabilities` | 能力声明，见下一小节 |
+| `taskInputs` | 是否把派工的 `ctx.inputs` 放进输入并由节点确认（缺省 true），见「PR 输入送达」 |
+| `run(contract, ctx)` | 启动 worker，返回活动流、最终结果 `done`、`cancel`，可选 `deliver`（送达回复）、`inject`（运行中注入输入）、`bindBlocked` |
+| `classify(snapshot)` | 从末尾输出等快照判定卡住原因；无法识别时返回 null |
+| `prepare` | 节点启动、领取任务前清理上次残留 |
 
-中枢的派送、消息直通与代答限制只依赖能力声明，不按执行器类型名维护分支。不能中途注入消息时，
-直通输入留在任务的待送达队列，下一次派工开始时送达；声明不支持的能力不得靠假定 harness 行为补足。
+适配器经活动流报告两种状态信号：`data.idle === true`（worker 停下，可附 `data.hint`）与 `data.resumed === true`（worker 未经回复自行恢复）。
+长时间无活动（`no_progress`）、进程意外退出（`crashed`）与超时由节点统一判定。
+启动子进程必须使用 `ctx.env`（已去掉中枢凭证），不能直接传 `process.env`。
 
-各适配器对 PR 直通输入（harness-neutral 8.4）的声明：claude-sdk 与 fake 为 `inject_while_running: true`（推入流式输入）；
-codex-exec 与 codex-orca 为 `false`，输入排队到下一次派工。codex-orca 只能在"回合结束后的普通空闲输入框、且尚未上报停下"的
-极短窗口里安全地敲入文字（提问、授权或信任弹窗、回到 shell 时都不能），因此如实声明为不支持；新终端从 spec 读取派工输入，
-重挂接已有终端时随恢复提示送入。codex-orca 任何敲入文字的送达（恢复提示、文字回复、派工输入）都要求终端最后几行是 Codex 输入框，
-最后一行是 shell 提示符时不发送任何按键。
+### 能力声明
 
-授权请求由适配器统一为：**动作、命令或参数、理由、命令执行目录（cwd）、请求 id、识别方式（`structured` 或 `inferred`）**。
-策略、supervisor 代批与推送只消费这个结构，不解析 harness 原始输出；SDK 与终端适配器对同一动作应产生同样的策略输入。
+适配器在节点注册时随 `type`、`mode` 上报五项能力，中枢存入节点投影；旧节点没有上报时按最保守的取值处理，不按执行器类型名推断。
 
-加载 Raindown MCP 的 worker 必须绑定当前任务与派工：启动命令为 `raindown mcp --actor <role> --task <id>`，
-通过 `RAINDOWN_LEASE_TOKEN_FILE` 传文件路径，不传凭证明文。Codex 由 worker 环境向 MCP 透传路径，Claude 只在 MCP 子进程环境中设置路径。
-supervisor 仍使用独立的唤醒绑定，不能套用 worker 凭证。
-Codex 的工具名为 `mcp__raindown__raindown_report`、`mcp__raindown__task_show`、`mcp__raindown__event_get`、`mcp__raindown__kb_*`，Claude 使用相同前缀。
-worker 的上报、本任务查询与只读知识工具自动放行；这只覆盖任务绑定 MCP 暴露的工具，不放行 shell 或其他授权动作。
-`event_get` 对任务绑定开放，由中枢限制为本任务的事件：Codex 的 Raindown 服务器整体免审批，Claude 的 worker 会话中
-写角色仍经审批，只读角色按绑定放行（与 supervisor 唤醒会话的规则一致）。
+| 能力 | 取值与含义 | 当前谁读取、做什么 |
+| --- | --- | --- |
+| `approval_requests` | `structured`：由 SDK 或协议拿到授权请求；`inferred`：由适配器从输出推断；`none`：没有授权请求通道 | 只入账、展示；不改变中枢行为 |
+| `inject_while_running` | 能否在当前运行中注入消息 | 中枢：为 true 时 PR 输入经续约下发给运行中的 worker，否则排队到下一次派工 |
+| `resume_session` | 进程结束后能否继续同一个 harness 会话；重新挂接存活终端不算恢复 | 只入账、展示 |
+| `raindown_mcp` | 是否加载任务绑定的 Raindown MCP，能否调用 `raindown_report`；只加载知识库 MCP 不算 | 节点：派工令牌文件写入失败时，声明为 true 的适配器以 `failed(lease_token_write_failed)` 结束本次派工，其余只记警告 |
+| `out_of_band_detection` | 能否发现绕过 Raindown 的批准，以及会话、工作目录被外部移除 | 只入账、展示 |
+
+另一个注册字段 `task_inputs` 声明执行器会处理派工输入；中枢只对声明了它的执行器随派工下发 PR 输入，旧节点不声明，输入保持待送达。
+
+中枢的交互方式只依赖声明与账本中的事实，不维护按执行器类型名区分的分支。目前中枢读取的只有 `inject_while_running` 与 `task_inputs`；
+其余三项是如实的自我描述，供展示、验收与后续使用。声明不支持的能力，不能靠假定 harness 行为补足。
+supervisor 是否代答提问看的是卡住的 `basis`（见下文「上报与推断的合并」），不是 `approval_requests`。
+
+现有适配器的声明：
+
+| 执行器 | approval_requests | inject_while_running | resume_session | raindown_mcp | out_of_band_detection | task_inputs |
+| --- | --- | --- | --- | --- | --- | --- |
+| `codex-orca` | inferred | false | false | true | true | true |
+| `codex-exec` | none | false | true | true | false | true |
+| `claude-sdk` | structured | true | true | true | false | true |
+| `pr-merge` | none | false | false | false | false | false |
+| `fake` | structured | true | true | false | false | true |
+
+### 授权请求
+
+适配器把原生授权请求转换成统一的 `PrecheckRequest`（`packages/node/src/precheck.ts`）：工具 `tool`、命令 `command`、路径 `paths`、
+命令实际执行目录 `cwd`、`workdirTrusted`（只有适配器能可靠确定执行目录时才为 true），以及理由 `reason`（只随卡住上报，不送去判定）。
+策略判定、supervisor 代批与推送只消费这个结构，不解析 harness 的原始输出；SDK 型和终端型适配器对同一个 `pnpm check` 应产生相同的结构，命中同一条规则。
+
+流程：
+
+1. 适配器在把请求交给人之前调用 `ctx.precheck`，节点向中枢 `POST /v1/policy/check`。只有明确、合法的 `auto` / `auto-report` 才在本地放行；网络错误、超时、响应不合规一律按需要人处理。
+2. 其余档位上报 `blocked(awaiting_approval)`。档位为 `supervisor` 时，适配器把中枢返回的 `decision_id` 放进 idle 信号的 `hint.decision_id`；节点只认本租约最近一次预检的判定，随卡住上报节点自己记录的请求文本（`request{tool, command, paths, reason}`），不采信适配器的说法。
+3. 续约确认卡住事件后，节点调用 `bindBlocked({seq, request_id})`，把账本里的卡住与适配器本地的请求 id 对应起来；回复按它送达原请求。
+4. 送达批准前，适配器重新读取实时的待批请求并调用 `ctx.confirmApproval`；返回 false 时不得放行，`deliver` 返回 `dropped`，节点以 `no_delegate` 重新上报卡住。
+5. `deliver` 必须按 `reply_id` 幂等；worker 已不在时返回 `not_running`，中枢让任务带着回复重新排队。
+
+`workdirTrusted` 为 true 时节点才计算并上报 `command_cwd`、`push_env_ok`、`gh_env_ok`，带 `push_to` / `gh_scope` 条件的规则才可能命中。
+codex-orca 拿不到 Codex 提权命令的实际目录，claude-sdk 的 Bash 会在调用之间保留 cwd，二者都不设置，所以推送与开 PR 目前不会委托给 supervisor。
+
+### 上报与推断的合并
+
+每次卡住都带 `basis`：`reported` 表示 worker 经 `raindown_report` 主动上报，`inferred` 表示由适配器的观察（`classify`、idle 信号、节点的无进展与崩溃判定）得出。
+`inferred` 不等于"终端推断"：claude-sdk 的授权卡住来自 SDK 的结构化回调，但不是 worker 上报的，同样记为 `inferred`。
+旧节点没有 `basis` 的卡住视为 `inferred`。
+
+节点在续约中缓存最近一次未消费的上报。适配器报告 idle 时，question/blocked 上报优先，卡住来源为 `basis: reported`，
+问题、选项、推荐项与 missing/tried 原样保留；没有可用上报时调用适配器分类并标为 `basis: inferred`。
+任务已经 blocked（含推断判定期间）或在验收时到达的非终态上报针对的是当前这一轮：节点随下一次续约以 `report_seq`
+立即确认消费，不缓存、不启动两分钟计时；worker 从 blocked 恢复运行时，节点丢弃并确认消费仍未使用的旧上报，
+它不会在恢复后以旧问题再次转 blocked，也不会接管之后真正的 idle。
+question/blocked 上报后 harness 仍忙超过两分钟时，也进入 reported blocked，并写 `task.report_conflict`；
+progress 与超过阈值的空闲观察矛盾时，按适配器观察处理并记录冲突。ready/failed/dropped 直接结束派工，
+其中 dropped 为带标记的 done；节点按 report_seq 确认消费，重试不重复生效。
+
+`basis` 的用途：只有 `reported` 的提问会委托给 supervisor 代答，推断出的提问直接交给用户；授权委托另按策略档位判定（见 [supervisor.md](supervisor.md) 第 8 节）。
+收件箱与 Telegram 显示来源，结构化选项成为回复按钮；`raindown supervisor report` 按执行器统计两种来源的比例，用来决定何时淘汰终端分类兜底。
+
+### 隔离要求
+
+适配器必须隔离 harness 的用户级及全局自动放行规则、自动审批器、hooks、额外 MCP 服务器与项目信任记录，
+不得让这些配置削弱 Raindown 的授权。需要的配置只能来自角色配置与 Raindown 生成的配置。
+登录凭证可通过符号链接共享，适配器不读取、复制或输出凭证内容。可见会话应有统一标识和任务 id，
+例如 Orca 终端标题 `[Raindown] <task id>`，让用户能区分自己的会话和受管 worker。
+
+现有实现：
+
+- Codex（codex-orca、codex-exec 全部角色）：使用 Raindown 管理的 `CODEX_HOME`，每次启动覆盖 `config.toml`、清除 `rules/` 与扩展，只共享 `auth.json` 链接，见下文「Codex 配置隔离」。
+- Codex 项目层：信任项目会加载其 `.codex/`（rules、mcp_servers、hooks、notify），所以 codex-orca 在启动、恢复、终端创建后、轮询及发送输入前都检查 worktree 中没有 `.codex`，发现即 `blocked(other)`（`project_codex_config`），只在确认不存在时才自动确认信任弹窗；同一仓库多个 worktree 共享信任状态等残余窗口见下文。
+- Claude（claude-sdk）：只读角色、审查与 supervisor 会话 `settingSources: []`、`strictMcpConfig: true`、关闭 claude.ai connector；reviewer 模板同样不加载项目设置，见下文 reviewer 与 pr-reviewer 小节。
+- 仍未隔离：系统层 `/etc/codex` 与 MDM、`~/.agents/skills`、项目级 `.agents/`。
+
+### 带外检测
+
+声明 `out_of_band_detection` 的适配器应关联待处理的请求与任务：Raindown 未送达回复而授权已执行或消失，
+或工作目录、会话被外部删除或关闭时，经续约上报带外信号，中枢写 `task.out_of_band` 并在收件箱生成 Interrupt 条目。
+
+- 带外批准：`approval_outside_raindown`（带命令文本），中枢同时以 `handled_externally` 关闭该任务待处理的授权条目，条目标题"授权在 Raindown 之外被批准"。
+- 外部移除：`session_removed`，条目标题"工作目录或会话被删除"；目录丢失另报 `blocked(workdir_missing)`。节点在运行验收命令前发现工作目录不存在时也按此上报，不限于声明了该能力的适配器。
+
+检测不撤销已执行的动作，也不把它补记为 Raindown 批准；任务按实际状态继续运行或卡住。
+终端型适配器只应依据明确的批准/执行信号判定，不将输出暂时变化或请求暂时不可见直接当作授权完成。
+codex-orca 在 `gh pr list` 等查询中改在登记仓库目录执行，worktree 丢失不影响 PR 查询；命令不存在与目录不存在分别如实说明。
+
+### 派工令牌与任务绑定工具
+
+加载 Raindown MCP 的 worker 必须绑定当前任务与派工（与 supervisor 的唤醒绑定是两套凭证，不能互相套用）：
+
+- 中枢在派工时签发 `fls_` 前缀的派工令牌（与节点续约用的 `lease_token` 分离），只存在中枢内存、不入账本；中枢重启后全部失效，节点续约时补发。每次请求都重新核对租约仍有效、任务未结束、派工次数与角色一致、本次派工没有结束。
+- 节点把令牌写入 `state/tasks/<task>/dispatch-tokens/<lease>.token`（目录 0700、文件 0600，原子替换），派工结束即删除。适配器只拿到 `ctx.leaseTokenFile` 路径。
+- MCP 启动命令为 `raindown mcp --actor <role> --task <id>`，经 `RAINDOWN_LEASE_TOKEN_FILE` 传文件路径，不传凭证明文。MCP 启动时向中枢查询绑定；命令行的 task/workspace 只用于核对，不一致时拒绝启动。
+- Codex 由 worker 进程环境向 MCP 透传路径（见下文「Codex 进程环境中的凭证路径」）；Claude 只在 MCP 子进程环境中设置路径。
+
+任务绑定的 MCP 只列出六个工具（`taskBindingAllows`，`packages/core/src/ops/binding.ts`）：`raindown_report`、`task_show`、`event_get`、
+`kb_search`、`kb_get`、`kb_query`。`task_show` 与 `raindown_report` 只能针对本任务；`event_get` 由中枢限制为本任务、同 workspace 的事件，
+以及直通给本任务的 PR 事件，越界与不存在都返回 `not_found`。observe 判断、未执行的自主动作与 `inbox.*` 事件对 worker 不可见。
+没有 `task_create`、`task_reply`、知识写入或其他写类工具；未绑定的 CLI 会话和 supervisor 唤醒会话沿用各自的工具清单，不列出 `raindown_report`。
+工具全名带 `mcp__raindown__` 前缀。
+
+审批：Codex 的 Raindown 服务器设 `default_tools_approval_mode = "approve"`，整体免审批；claude-sdk 的 worker 会话自动放行
+`raindown_report`、`task_show`、`kb_search`、`kb_get`、`kb_query`，`event_get` 对只读角色按绑定放行、对写类角色仍经审批。
+这些只覆盖任务绑定 MCP 暴露的工具，不放行 shell 或其他授权动作。
 
 **Codex 进程环境中的凭证路径。** codex-orca 与 codex-exec 的 Codex 进程环境带有 `RAINDOWN_LEASE_TOKEN_FILE`：
 MCP 配置的 `env_vars` 只能从 Codex 自身环境透传。模型执行的 shell 命令看不到它，依赖的是 Codex
@@ -54,6 +152,29 @@ MCP 配置的 `env_vars` 只能从 Codex 自身环境透传。模型执行的 sh
 `ignore_default_excludes = true` 或改写 `exclude` 把它重新暴露，适配器在角色配置之后追加
 `-c shell_environment_policy.ignore_default_excludes=false` 与 `-c shell_environment_policy.exclude=[…]`：
 固定排除项为上述三项加 `RAINDOWN_LEASE_TOKEN_FILE`，角色自己的 `exclude`（可解析的字符串数组）合并保留。
+
+### 结构化上报：`raindown_report`
+
+worker 用 `raindown_report{status, summary, …}` 告诉 Raindown 自己的状态；角色提示（dev、reviewer 模板与 claude-sdk 追加的约定）要求优先用它提问和报告完成。
+
+| status | 必填字段 | 节点如何处理 |
+| --- | --- | --- |
+| `progress` | — | 只记录；与空闲观察矛盾时按观察处理并记冲突 |
+| `question` | `question`、2–8 个 `options{label, description}`（标签不重复）、`recommended`（必须是某个标签） | worker 停下时转 `blocked(question)`，`basis: reported` |
+| `blocked` | `missing`、`tried` | 转 `blocked(other)`，`basis: reported` |
+| `ready` | `deliverables`（1–5 个 PR 地址） | 结束派工；交付物合入结果 |
+| `failed` | `reason` | 以 `failed(worker_failed)` 结束，原因记入 `result.reported_reason` |
+| `dropped` | `reason` | 以带 `result.dropped` 标记的 done 结束，不进收件箱、不唤醒 supervisor |
+
+- 只接受当前有效派工的令牌，调用者身份始终取自令牌。上报本身不改变任务状态，由节点消费后经续约或完成协议提交。
+- `ready` 的交付物由中枢用 `gh pr view` 核实：仓库与任务的 `repo_snapshot` 一致、head 分支等于登记的任务分支、不是 fork。
+  缺少任务分支返回 `branch_unknown`，只有分支不一致返回 `deliverable_branch_mismatch`；其他失败只返回通用的 `deliverable_check_failed`，不泄露 gh 的诊断。
+- 限额：请求体 32 KiB；每个派工同时只处理一个上报（`report_busy`）、每分钟 10 次、每次派工 200 次（`report_rate_limited`），都可重试。
+- `handback{pr_event_seq, reason}`：把一条名单内人类的 PR 评论交回 supervisor，见 [supervisor.md](supervisor.md) 第 13 节。当前共享 GitHub 身份下没有评论满足条件，交回一律返回 `handback_invalid`。
+
+协议细节（消费水位、`task.report_consumed`、complete 引用 `report_seq`）见 [hub-auth.md](hub-auth.md) 的「上报与节点消费」。
+
+### 分支归属
 
 **只有创建并拥有任务分支的适配器报告分支。** 适配器只能报告自己为本任务创建的分支：codex-orca 在创建 worktree 与专用分支后、
 启动 worker 前等待 `ctx.reportBranch({branch, worktree, repo})`，供节点采集仓库快照并经续约写入 `task.branch_reported`。
@@ -67,33 +188,47 @@ worker 就能向它推送或以它开 PR；worker 新建分支开出的 PR 又�
 （提示中给出登记分支）；两种情况下 worker 都不应反复提交 ready，应改用 `blocked` 写明分支情况与已尝试的办法。
 detached HEAD 或其他无法确定分支的情况同样不伪造报告，也不能用任务 id 代替。
 
-节点在续约中缓存最近一次未消费的上报。适配器报告 idle 时，question/blocked 上报优先，卡住来源为 `basis: reported`，
-问题、选项、推荐项与 missing/tried 原样保留；没有可用上报时调用适配器分类并标为 `basis: inferred`。
-任务已经 blocked（含推断判定期间）或在验收时到达的非终态上报针对的是当前这一轮：节点随下一次续约以 `report_seq`
-立即确认消费，不缓存、不启动两分钟计时；worker 从 blocked 恢复运行时，节点丢弃并确认消费仍未使用的旧上报，
-它不会在恢复后以旧问题再次转 blocked，也不会接管之后真正的 idle。
-question/blocked 上报后 harness 仍忙超过两分钟时，也进入 reported blocked，并写 `task.report_conflict`；
-progress 与超过阈值的空闲观察矛盾时，按适配器观察处理并记录冲突。ready/failed/dropped 直接结束派工，
-其中 dropped 为带标记的 done；节点按 report_seq 确认消费，重试不重复生效。
+**交付物已存在。** 写类开发任务卡在 `crashed` 或 `workdir_missing` 时，中枢在**登记仓库**中查询任务分支上的 PR：
+同仓库、非 fork、head 为任务分支、非草稿的 OPEN 或 MERGED，并且创建于首次派工之后或已由本任务记录。找到时以 `task.done`
+结束任务（`completed_via: existing_pr`），否则保持 blocked 等待重试或取消。唤醒、审查与合并任务不适用；之后仍要经过审查与合并资格检查。
 
-适配器必须隔离 harness 的用户级及全局自动放行规则、自动审批器、hooks、额外 MCP 服务器与项目信任记录，
-不得让这些配置削弱 Raindown 的授权。需要的配置只能来自角色配置与 Raindown 生成的配置。
-登录凭证可通过符号链接共享，适配器不读取、复制或输出凭证内容。可见会话应有统一标识和任务 id，
-例如 Orca 终端标题 `[Raindown] <task id>`，让用户能区分自己的会话和受管 worker。
+### 恢复提示
 
-声明带外检测能力的适配器应关联待处理的请求与任务：Raindown 未送达回复而授权已执行或消失，
-或工作目录、会话被外部删除或关闭时，记录 `task.out_of_band` 并通知用户。
-带外批准记录 `approval_outside_raindown`，外部移除记录 `session_removed`；目录丢失另报 `blocked(workdir_missing)`。
-检测不撤销已执行的动作，也不把它补记为 Raindown 批准；任务按实际状态继续运行或卡住。
-终端型适配器只应依据明确的批准/执行信号判定，不将输出暂时变化或请求暂时不可见直接当作授权完成。
+任务在中断后重新派工（租约过期、节点失联、`crashed`/`node_lost` 卡住后重试）、经 `task_retry` 主动重试，或已结束任务因 PR 评论恢复（`task.requeued`）时，中枢在派工中附
+`ctx.recovery = {previous_end{attempt, reason, ended_at?, last_report?, blocked_reason?, message?}, reported_branch?, prs[]}`。
+普通的提问回复沿用原任务输入，不附恢复提示。`prs` 只取账本中本任务结果里的 PR，不采信临时活动或终端文字；设计中的 `pushed_sha` 尚未提供。
 
-新 harness 接入清单：
+适配器调用 core 的 `renderRecoveryPrompt` 原样放在派工输入最前面，不自行改写：模板说明这是同一任务的新一次派工，
+把事实放进转义过的 `<untrusted-recovery-facts>` 数据块，并要求 worker 先核对工作目录、git 历史、远端推送与 PR 的实际状态，
+不重复 push、不重复开 PR；工作目录丢失时说明情况并停下，不静默新建目录。
+codex-orca 新终端写进任务说明，重挂接存活终端时随恢复提示敲入；codex-exec 与 claude-sdk 放在首条输入的开头。
 
-1. 按真实行为声明五项能力，验证节点注册及中枢按能力选择交互方式；覆盖不能注入、不能恢复等声明的限制。
-2. 将原生授权转换为统一结构，验证相同请求命中相同策略，批准、拒绝和文字回复送达原请求。
+### PR 输入送达
+
+PR 直通的内容（见 [supervisor.md](supervisor.md) 第 13 节）由中枢统一渲染为 `<untrusted-pr-event>` 数据块，适配器不得改写或解包：
+
+- `inject_while_running: true` 的适配器实现 `inject(input)`，按 `input_seq` 幂等，返回 `delivered`（节点下一次续约确认 `task.input_delivered`）、
+  `not_now`（例如正停在授权弹窗，中枢下一次续约再给）或 `not_running`（留到下一次派工）。注入不解除 blocked，也不能当作授权回复；任务卡住期间中枢扣留输入。
+- 其他适配器从 `ctx.inputs` 取任务未运行期间到达的输入，用 `renderTaskInputs` 放在派工输入开头、恢复提示之后；节点确认后才记为送达。
+- codex-orca 只在"回合结束后的普通空闲输入框、且尚未上报停下"的极短窗口里能安全敲入文字，因此如实声明不支持运行中注入；
+  新终端从任务说明读取派工输入，重挂接已有终端时随恢复提示送入。它任何敲入文字的送达（恢复提示、文字回复、派工输入）都要求终端最后几行是 Codex 输入框，
+  最后一行是 shell 提示符时不发送任何按键。
+
+### 原始指令与 worker 输入
+
+所有适配器用 core 的 `renderWorkerTaskPrompt` 生成任务来源部分，分两段："用户原始指令（以此为准）"放中枢附加的
+`origin_instruction`，"supervisor 的补充"放 `goal`；两段都是转义过的数据块，没有原始指令时明确写出。
+原文被截断时，读取指针改写为本任务的 `task_show section=instruction`，worker 经任务绑定工具读取全文。规则见 [supervisor.md](supervisor.md) 第 2 节。
+
+### 新 harness 接入清单
+
+1. 实现 `ExecutorPlugin`，按真实行为声明五项能力与 `task_inputs`；验证节点注册、中枢按声明选择送达方式，并覆盖不能注入、不能恢复等声明的限制。
+2. 将原生授权转换为 `PrecheckRequest`，先预检再上报；验证相同请求命中相同策略，批准、拒绝和文字回复经 `bindBlocked` 送达原请求，`confirmApproval` 拒收时不放行。
 3. 盘点用户、项目、系统配置及扩展加载来源，隔离规则、审批器、hooks、MCP 和信任记录；用临时凭证路径验证符号链接，不读取真实凭证。
-4. 验证会话标识、恢复身份、目录丢失与带外操作；支持检测时，检查事件关联和用户通知，以及任务按实际状态恢复或卡住。
-5. 记录已验证版本、真实 harness 证据与尚未覆盖的边界；若加载来源尚无法隔离，应明确限制，不能宣称完整满足隔离契约。
+4. 声明 `raindown_mcp` 时注入任务绑定 MCP，只传令牌文件路径，确认 worker 的 shell 看不到该路径，工具清单只有上述六个；在角色提示中要求用 `raindown_report`。
+5. 只在自己创建分支时调用 `reportBranch`；把 `ctx.recovery` 与 `ctx.inputs` 用 core 模板放在输入开头。
+6. 验证会话标识、恢复身份、目录丢失与带外操作；支持检测时，检查事件关联和用户通知，以及任务按实际状态恢复或卡住。
+7. 记录已验证版本、真实 harness 证据与尚未覆盖的边界；若加载来源尚无法隔离，应明确限制，不能宣称完整满足隔离契约。
 
 ## Codex 配置隔离
 
@@ -240,27 +375,33 @@ creatable_by:
 ```
 
 - `user` 永远可以创建；字段缺省时只有 `user` 可以创建，AI 和节点会得到 403 `role_not_allowed`。
-- 默认模板：dev 不写（只有 user 能派发开发任务，AI 不能借 dev 跳过审批和沙箱）；reviewer、triage 为 `["*"]`，
+- 默认模板：dev 只列 `supervisor`（除 user 外只有 supervisor 能派发开发任务，其他 AI 与节点不能借 dev 跳过审批和沙箱；
+  升级前生成的 dev.yaml 需手动补上，见 [supervisor.md](supervisor.md) 第 12 节）；reviewer、triage 为 `["*"]`，
   任何非 user 身份都可以拆出审查、分诊子任务。
-- 本机 AI 的身份由执行器设置的 `RAINDOWN_ACTOR=<角色名>` 声明（claude-sdk 另注入 `raindown mcp --actor <角色名>`）：reviewer 执行器的身份是 `reviewer`，不是 `node:*`。
+- 本机 AI 的身份由执行器设置的 `RAINDOWN_ACTOR=<角色名>` 声明（受管 MCP 同样以 `--actor <角色名>` 启动）：reviewer 执行器的身份是 `reviewer`，不是 `node:*`。
   要只放开某个执行器，写它的角色名，例如 `creatable_by: [reviewer]`。
+  任务绑定的 MCP 不提供 `task_create`（见上文「派工令牌与任务绑定工具」），worker 不能经受管 MCP 建任务；
+  `creatable_by` 约束的是 supervisor，以及经 CLI 或未绑定 MCP 声明 AI 身份的调用方。
 - 节点 token 和 remote token 在本机端口都不能创建任务（`scope_denied`、`remote_not_allowed`），`*` 不会放开它们。
 - `raindown init` 不覆盖已有角色文件，升级前创建的 reviewer、triage 没有这个字段（只有 user 能创建），
   需要时手动补上；`raindown doctor` 会对缺少字段的角色给出 info 提示（不是错误，不影响退出码）。
 - 给高权限角色（例如跳过审批的 dev）加 `creatable_by` 等于允许这些身份间接取得该权限，应和 `permissions` 一起审查。
 
+## 默认角色
 
 ### dev：codex-orca
 
 `config/roles/dev.yaml`（提示词来自同目录 `dev.md`）：
 
 ```yaml
-# 没有 creatable_by：只有 user 可以创建 dev 任务（AI 与节点不能借 dev 提权）。
+# creatable_by 只列 supervisor：除 user 外只有 supervisor 能创建 dev 任务（其他 AI 与节点不能借 dev 提权）。
 name: dev
 executor: codex-orca
 model: gpt-6.1-sol
 effort: high
 prompt: dev.md
+creatable_by:
+  - supervisor
 permissions:
   approval: never
   sandbox: danger-full-access
@@ -430,12 +571,15 @@ SDK 0.3.310（随包 Claude Code 2.1.310）的本地 `sdk.d.ts` 将两组工具�
 明确说明，无 matcher 的 hook 会接收该类型的每个事件。因此不依赖 `.*` 正则来表达全工具匹配。
 以上由类型定义和文档确认，未运行真实 Claude 或调用模型 API。
 
-执行器自动注入 `raindown mcp --actor reviewer`（其他角色用各自名字）。Raindown MCP 的固定放行清单为：
-`kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、`ws_brief`、`brief_update`、`task_list`、`task_show`，
-工具全名带 `mcp__raindown__` 前缀。这些写入仍受 AI 写入边界限制，提交提案不等于接受提案；`brief_update` 只写 supervisor 自己的简报笔记，身份、workspace 与 `base_hash` 由中枢核对。
-`task_create` 可借 dev 角色扩大权限（中枢另按 `creatable_by` 拒绝，见上文），`task_cancel`、`task_reply` 可干预任务，
-接受/拒绝提案、转移资源及以后新增的工具也不在固定清单中。不要用宽泛的 allowedTools 绕过这层审批。
-`task_reply` 另有用户身份限制：worker 不能代替用户批准自己。
+执行器自动注入任务绑定的 `raindown mcp --actor reviewer --task <id>`（其他角色用各自名字），工具清单与放行规则见上文
+「派工令牌与任务绑定工具」：worker 会话只有 `raindown_report`、`task_show`、`event_get`、`kb_search`、`kb_get`、`kb_query`，
+没有知识写入、`task_create`、`task_cancel`、`task_reply` 等写类工具。
+
+supervisor 唤醒会话使用唤醒绑定，自动放行的 Raindown 工具为 `kb_search`、`kb_get`、`kb_query`、`kb_journal`、`capture`、`kb_propose`、
+`ws_brief`、`brief_update`、`task_list`、`task_show`、`event_get`，以及 supervisor 专用的 `ask_user`、`task_propose`、`decision_review`、
+`patrol_report`、`task_respond`；`task_create`、`pr_merge_request` 仍走策略。这些写入受 AI 写入边界限制，提交提案不等于接受提案；
+`brief_update` 只写 supervisor 自己的简报笔记，身份、workspace 与 `base_hash` 由中枢核对。不要用宽泛的 allowedTools 绕过这层审批。
+`task_reply` 另有用户身份限制：AI 不能代替用户批准自己。
 
 ### pr-reviewer：审查准备与结构化输出（add-m1-supervisor D10）
 
@@ -740,7 +884,7 @@ wait "$RAINDOWN_DEMO_NODE_PID" "$RAINDOWN_DEMO_HUB_PID"
 临时目录保留供检查日志。
 执行完后应在新的终端继续日常工作，避免沿用本次导出的临时 RAINDOWN_HOME。
 
-## 真实环境验证（任务 6.1、6.2）
+## 真实环境验证（add-m1-executors 任务 6.1、6.2）
 
 7.1 只完成 doctor 和 fake 冒烟，不能代表 6.1、6.2；两者已于 2026-10-26 在真实 harness 上完成，见下方实测记录。真实验证要另外记录任务 id、版本、PR、
 信任提示与授权请求片段、回复和最终验收结果；不要把 fake 的结果当作真实 harness 的证据。
@@ -762,8 +906,8 @@ codex-exec 的提问与 resume，均在真实 harness 上走通。挂起中的�
 
 未覆盖与发现：
 
-- **信任提示没有出现**：本机 Codex 已信任 home 目录，新 worktree 不弹信任提示，6.1 没有覆盖信任提示的自动处理；
-  该路径仍只有 fixture 测试。
+- **信任提示没有出现**：当时 worker 仍加载用户的 Codex 配置，本机已信任 home 目录，新 worktree 不弹信任提示，6.1 没有覆盖信任提示的自动处理。
+  PR #68 之后 worker 使用隔离的 CODEX_HOME，信任弹窗的真实 TUI 行为见上文「Codex 配置隔离」中的 0.166 / 0.167 实测。
 - **卡住的任务占住并发槽**：`concurrency: 1` 时，690b74 等用户批准期间，reviewer 任务排队约 2 小时 40 分钟。
   ④ `add-m1-supervisor` 的预留执行槽（D12）处理这个问题。
 - **默认 reviewer 在用户主检出里跑 shell**：它请求 `git fetch … :pr28`，会在用户的仓库里留下本地分支。
@@ -775,9 +919,9 @@ codex-exec 的提问与 resume，均在真实 harness 上走通。挂起中的�
 
 临时角色 `dev-approval` 在验证后已从 `config/roles/` 删除，未提交到 config 仓库。
 
-本机已知环境：`~/.codex/config.toml` 信任了 home 目录，并启用了 `approvals_reviewer = "auto_review"`。
-因此新 worktree 不一定出现信任提示；此前 `on-request` 角色也可能由 Codex 自审批准授权请求。
-这不能用来证明信任提示处理或审批送达已被覆盖。6.2 验收时另建了上面的 dev-approval 角色，
+当时的本机环境：`~/.codex/config.toml` 信任了 home 目录，并启用了 `approvals_reviewer = "auto_review"`；
+worker 加载用户配置，所以新 worktree 不一定出现信任提示，`on-request` 角色也可能由 Codex 自审批准授权请求。
+PR #68 起受管 worker 不再加载用户 Codex 配置（见「Codex 配置隔离」），这两点不再影响它们；当时的记录也不能用来证明信任提示处理或审批送达已被覆盖。6.2 验收时另建了上面的 dev-approval 角色，
 当时在 `permissions.config` 中显式设 `approvals_reviewer: user`；现在 Raindown 默认即设为 `user`，显式设置仅用于覆盖默认值。
 验证审批送达时仍需选择确实需要越出沙箱的操作，再用 task reply 的 approve 走完闭环。
 不要为此修改个人 Codex 配置或取消现有 home 信任。
