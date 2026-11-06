@@ -343,6 +343,26 @@
                     "type": "null"
                   }
                 ]
+              },
+              "task_stage": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "waiting-human-approval",
+                      "waiting-human-answer",
+                      "waiting-supervisor",
+                      "waiting-human-review",
+                      "stalled",
+                      "queued",
+                      "idle",
+                      "working"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -366,9 +386,7 @@
               "channels",
               "closed"
             ],
-            "additionalProperties": false,
-            "title": "Inbox item",
-            "description": "收件箱条目（inbox_items 投影的一行）"
+            "additionalProperties": false
           }
         }
       },

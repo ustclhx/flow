@@ -6,6 +6,7 @@ import {
   SUPERVISOR_QUEUES,
   type SupervisorStatusData,
   type SupervisorWakeData,
+  TASK_STAGE_LABELS,
   type WakeSummary,
 } from '@raindown/core'
 import { defineCommand } from '../command.ts'
@@ -21,7 +22,7 @@ const wsRef = (s: string) => (s.startsWith('ws/') ? s : `ws/${s}`)
 const usage = (message: string) => fail('usage', 'invalid_arguments', message)
 
 const wakeLine = (w: WakeSummary) =>
-  `${w.task_id}（${w.origin}，第 ${w.generation} 代，${w.events} 个事件，${w.status}）`
+  `${w.task_id}（${w.origin}，第 ${w.generation} 代，${w.events} 个事件，${w.status}${w.stage ? `，${TASK_STAGE_LABELS[w.stage]}` : ''}）`
 
 const humanWake = (d: SupervisorWakeData) =>
   d.state === 'started' && d.wake ? `已唤醒 supervisor：${wakeLine(d.wake)}` : d.message

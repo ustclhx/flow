@@ -2,6 +2,7 @@ import type { z } from 'zod'
 import { HubClient } from '../daemon/client.ts'
 import { renderTable } from '../format/table.ts'
 import { inboxActRequest, inboxItemRef, inboxListQuery } from '../inbox/schema.ts'
+import { TASK_STAGE_LABELS } from '../ledger/stage.ts'
 import { defineOperation } from './operation.ts'
 
 export const inboxListOp = defineOperation({
@@ -20,6 +21,7 @@ export const inboxListOp = defineOperation({
         { header: '级别', value: (i) => i.level },
         { header: '来源', value: (i) => i.source },
         { header: 'Workspace', value: (i) => i.workspace ?? '—' },
+        { header: '阶段', value: (i) => (i.task_stage ? TASK_STAGE_LABELS[i.task_stage] : '—') },
         { header: '标题', value: (i) => i.title, max: 60 },
         { header: '创建时间', value: (i) => i.created_at },
       ],

@@ -4,6 +4,7 @@ import { dateString, workspaceRef } from '../schema/common.ts'
 import { taskId, timestamp } from './common.ts'
 import { supervisorQueue } from './events.ts'
 import { PROTOCOL_MESSAGE_MAX } from './redact.ts'
+import { taskStageSchema } from './stage.ts'
 import { taskStatus, wakeGeneration, wakeOrigin } from './task.ts'
 
 /**
@@ -47,6 +48,10 @@ export const wakeSummary = z
     origin: wakeOrigin,
     generation: wakeGeneration,
     status: taskStatus,
+    stage: taskStageSchema
+      .nullable()
+      .optional()
+      .meta({ description: '读取时从账本派生的当前阶段' }),
     events: z.number().int().min(0),
     started_at: timestamp,
     finished_at: timestamp.nullable(),

@@ -750,13 +750,13 @@ describe('reply 队列骨架（3.2，D15）', () => {
 })
 
 describe('用户接口（3.4）', () => {
-  function app(scheduler: WakeScheduler, actor: string) {
+  function app(scheduler: WakeScheduler, actor: string, ledger: LedgerStore) {
     const a = new Hono()
     a.use('*', async (c, next) => {
       c.set('actor', actor)
       await next()
     })
-    a.route('/', createSupervisorRoutes({ scheduler: () => scheduler }))
+    a.route('/', createSupervisorRoutes({ scheduler: () => scheduler, ledger }))
     return a
   }
   const post = (a: Hono, body: unknown) =>
@@ -768,7 +768,7 @@ describe('用户接口（3.4）', () => {
 
   test('raindown ask：写入 actor 为 user、via cli 的指令并返回唤醒任务；第二条返回已排队', async () => {
     const env = await setup()
-    const a = app(env.scheduler, 'user')
+    const a = app(env.scheduler, 'user', env.store)
     const r1 = await post(a, { workspace: WS, text: '修一下 README' })
     expect(r1.status).toBe(200)
     const b1 = (await r1.json()) as { data: { state: string; wake: { task_id: string } } }
@@ -800,8 +800,13 @@ describe('用户接口（3.4）', () => {
       data: { workspaces: { current: { task_id: string }; queues: { instruction: number } }[] }
     }
     expect(body.data.workspaces[0]).toMatchObject({
-      current: { task_id: b1.data.wake.task_id },
+      current: { task_id: b1.data.wake.task_id, stage: 'queued' },
       queues: { instruction: 1 },
+    })
+    start(env.store, b1.data.wake.task_id)
+    const running = await a.request(`/v1/supervisor/status?workspace=${encodeURIComponent(WS)}`)
+    expect(await running.json()).toMatchObject({
+      data: { workspaces: [{ current: { task_id: b1.data.wake.task_id, stage: 'working' } }] },
     })
 
     const bad = await post(a, { workspace: WS, text: 'x', release: 'instruction' })
@@ -812,7 +817,7 @@ describe('用户接口（3.4）', () => {
     for (const actor of ['reviewer', 'supervisor', 'hub']) {
       const env = await setup()
       const before = env.store.seq()
-      const a = app(env.scheduler, actor)
+      const a = app(env.scheduler, actor, env.store)
       const r = await post(a, { workspace: WS, text: '越权' })
       expect(r.status).toBe(403)
       expect(((await r.json()) as { error: { code: string } }).error.code).toBe('user_only')
@@ -1110,7 +1115,12 @@ describe('经 hubAuth 的身份检查', () => {
       tokens,
       wakeTokens,
       ledger: env.store,
-      mount: [{ path: '/', app: createSupervisorRoutes({ scheduler: () => env.scheduler }) }],
+      mount: [
+        {
+          path: '/',
+          app: createSupervisorRoutes({ scheduler: () => env.scheduler, ledger: env.store }),
+        },
+      ],
     })
     const before = env.store.seq()
     for (const secret of [wakeSecret, bound]) {
@@ -1340,7 +1350,12 @@ describe('第三轮审查', () => {
       token: testToken,
       wakeTokens,
       ledger: env.store,
-      mount: [{ path: '/', app: createSupervisorRoutes({ scheduler: () => env.scheduler }) }],
+      mount: [
+        {
+          path: '/',
+          app: createSupervisorRoutes({ scheduler: () => env.scheduler, ledger: env.store }),
+        },
+      ],
     })
     const call = () =>
       app.request('/v1/supervisor/status', { headers: { Authorization: `Bearer ${secret}` } })
@@ -1756,6 +1771,8 @@ describe('读取指针与关联任务（6.3）', () => {
     }
     expect(pointer.op).toBe('task_list')
     env.store.listTasks = originalList
+    // 读取限制只约束唤醒构造；按指针分页的 task_list 要为未结束任务派生阶段，需读其事件。
+    env.store.taskEvents = originalEvents
     const restored: string[] = []
     for (let offset = 0; ; offset += pointer.args.limit) {
       const page = must(env.tasks.listTasks({ ...pointer.args, offset })).tasks
@@ -1764,6 +1781,11 @@ describe('读取指针与关联任务（6.3）', () => {
     }
     expect(restored).toHaveLength(119)
     expect(restored).not.toContain('history-119')
+    // 第三次唤醒仍在“不得读取未涉及任务历史”的限制下构造。
+    env.store.taskEvents = (id) => {
+      if (id.startsWith('history-') && id !== 'history-0') throw new Error('不得读取未涉及任务历史')
+      return originalEvents.call(env.store, id)
+    }
     for (let i = 0; i < 200; i++) {
       const id = `current-${i}`
       must(

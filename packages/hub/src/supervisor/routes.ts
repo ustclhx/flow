@@ -1,14 +1,18 @@
 import {
   ENDPOINTS,
   fail,
+  ok,
   redactSecrets,
   supervisorStatusData,
   supervisorStatusQuery,
   supervisorWakeData,
   supervisorWakeRequest,
+  type WakeSummary,
 } from '@raindown/core'
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
+import type { TaskStageReader } from '../ledger/task-stage.ts'
+import { readTaskStage } from '../ledger/task-stage.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { userOnly } from '../server/auth.ts'
 import type { WakeScheduler } from './scheduler.ts'
@@ -18,7 +22,10 @@ import type { WakeScheduler } from './scheduler.ts'
  * `raindown supervisor status`。全部只接受 user 身份：AI、节点与唤醒 token 一律 `user_only`，
  * `user.instruction` 与 `supervisor.release` 因此只由用户写入（store 另有身份白名单兜底）。
  */
-export function createSupervisorRoutes(deps: { scheduler: () => WakeScheduler | undefined }): Hono {
+export function createSupervisorRoutes(deps: {
+  scheduler: () => WakeScheduler | undefined
+  ledger: TaskStageReader
+}): Hono {
   const app = new Hono()
   const notReady = () => fail('retryable', 'hub_busy', '中枢尚未就绪，请稍后重试')
   const usage = (issues: Parameters<typeof fieldIssues>[0], data: unknown) => {
@@ -53,7 +60,25 @@ export function createSupervisorRoutes(deps: { scheduler: () => WakeScheduler | 
     if (!parsed.success) return respond(c, usage(parsed.error.issues, query), supervisorStatusData)
     const scheduler = deps.scheduler()
     if (!scheduler) return respond(c, notReady(), supervisorStatusData)
-    return respond(c, await scheduler.status(parsed.data.workspace), supervisorStatusData)
+    const result = await scheduler.status(parsed.data.workspace)
+    if (!result.ok) return respond(c, result, supervisorStatusData)
+    const withStage = (wake: WakeSummary | null): WakeSummary | null => {
+      if (!wake) return null
+      const task = deps.ledger.getTask(wake.task_id)
+      return { ...wake, stage: task ? readTaskStage(deps.ledger, task) : null }
+    }
+    return respond(
+      c,
+      ok({
+        workspaces: result.data.workspaces.map((workspace) => ({
+          ...workspace,
+          current: withStage(workspace.current),
+          reply: withStage(workspace.reply),
+          last: withStage(workspace.last),
+        })),
+      }),
+      supervisorStatusData,
+    )
   })
 
   app.onError((err, c) =>

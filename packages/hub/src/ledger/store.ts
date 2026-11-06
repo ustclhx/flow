@@ -176,7 +176,13 @@ export interface LedgerStore extends LedgerReader, LedgerMaintenance {
   eventsByPayload(type: EventType, key: string, value: string): LedgerEvent[]
 
   getTask(id: string): TaskView | null
-  listTasks(filter?: Partial<ListTasksQuery>): TaskView[]
+  /**
+   * `open_only`：只取未结束（非 done / failed / cancelled）的任务；`exclude_ids`：排除这些任务；
+   * `limit: -1` 不截取。
+   */
+  listTasks(
+    filter?: Partial<ListTasksQuery> & { open_only?: boolean; exclude_ids?: readonly string[] },
+  ): TaskView[]
   /** 从可重放的 PR 索引读取，按创建时间倒序分页，包含历史派工产物。 */
   tasksForPr(workspace: string, pr: string, limit?: number, offset?: number): TaskView[]
   taskPrs(taskId: string): string[]
@@ -1579,6 +1585,15 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
         )
         params.push(normalizePrUrl(filter.pr) ?? '')
         if (filter.workspace !== undefined) params.push(filter.workspace)
+      }
+      if (filter.open_only) {
+        where.push(`t.status NOT IN (${TERMINAL_STATUSES.map(() => '?').join(', ')})`)
+        params.push(...TERMINAL_STATUSES)
+      }
+      if (filter.exclude_ids !== undefined && filter.exclude_ids.length > 0) {
+        // 用 json_each 传入整组 id，避免超出 SQLite 参数个数上限。
+        where.push('t.id NOT IN (SELECT value FROM json_each(?))')
+        params.push(JSON.stringify(filter.exclude_ids))
       }
       params.push(filter.limit ?? 50, filter.offset ?? 0)
       const clause = where.length === 0 ? '' : `WHERE ${where.join(' AND ')}`

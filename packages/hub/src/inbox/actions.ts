@@ -2,6 +2,7 @@ import {
   acceptProposals,
   fail,
   type InboxActRequest,
+  type InboxItemData,
   type InboxItemView,
   type InboxVia,
   inboxItemRef,
@@ -13,6 +14,7 @@ import {
 import type { LedgerStore } from '../ledger/store.ts'
 import type { TaskService } from '../ledger/tasks.ts'
 import { answerQuestion, isQuestionItem } from '../supervisor-tools/questions.ts'
+import { readInboxItem } from './read.ts'
 
 /**
  * 任务提案条目（`source: task_proposal`）的接受与驳回（design D11；tasks 4.6）。
@@ -71,7 +73,7 @@ export async function actOnInbox(
   actor: string,
   /** 唤醒绑定 token 认定的调用方（D6）：只能作用于绑定的 workspace。 */
   binding?: { workspace: string; origin?: string },
-): Promise<Result<{ item: InboxItemView }>> {
+): Promise<Result<{ item: InboxItemData }>> {
   const { ledger, tasks, home } = deps
   if (actor !== 'user' && input.action !== 'dismiss') {
     return fail('failure', 'user_only', '只有用户本人可以处理收件箱条目')
@@ -218,5 +220,5 @@ export async function actOnInbox(
         return fail('failure', 'action_not_available', '条目不支持该操作', { action })
     }
   }
-  return ok({ item: ledger.getInboxItem(item.id) ?? item })
+  return ok({ item: readInboxItem(ledger, ledger.getInboxItem(item.id) ?? item) })
 }
