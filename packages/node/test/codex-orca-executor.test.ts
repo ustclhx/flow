@@ -1254,6 +1254,35 @@ function approvalCommand(command: string) {
   }
 }
 
+describe('弹窗指纹', () => {
+  for (const change of ['行尾空白', '括号内容']) {
+    test(`两次终端读取仅改变${change}时，指纹${change === '行尾空白' ? '相同' : '不同'}`, async () => {
+      const first = approvalCommand("rm -rf '/tmp/(1s harmless)'")
+      const second =
+        change === '行尾空白'
+          ? { ...first, tail: first.tail.map((line) => `${line} \t `) }
+          : approvalCommand("rm -rf '/tmp/(2s valuable)'")
+      const s = await start({}, (o) => {
+        o.reads = [ok(first)]
+      })
+      await s.poll(2)
+      s.orca.reads = [ok(tuiFixture('working'))]
+      await s.poll()
+      s.orca.reads = [ok(second)]
+      await s.poll(2)
+      const fingerprints = idles(s).map(
+        (a) =>
+          (a.data?.hint as { approval_fingerprint?: string } | undefined)?.approval_fingerprint,
+      )
+      expect(fingerprints).toHaveLength(2)
+      expect(fingerprints[0]).toMatch(/^[a-f0-9]{64}$/)
+      if (change === '行尾空白') expect(fingerprints[1]).toBe(fingerprints[0])
+      else expect(fingerprints[1]).not.toBe(fingerprints[0])
+      await s.run.cancel()
+    })
+  }
+})
+
 describe('授权回合跨重启恢复', () => {
   async function pendingApproval(command?: string) {
     const first = await start({}, (o) => {
