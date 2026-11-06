@@ -463,6 +463,28 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     })
   }
 
+  /** 策略变化作为独立通知保留；不改变任务状态或取消任务。 */
+  function onTaskPolicyChanged(e: EventOf<'task.policy_changed'>) {
+    const ws = e.workspace as string
+    write({
+      type: 'inbox.item_created',
+      task_id: e.task_id as string,
+      workspace: ws,
+      payload: {
+        item_id: `policychg.${e.seq}`,
+        level: 'decide',
+        source: 'policy',
+        source_ref: String(e.seq),
+        source_seq: e.seq,
+        title: clipText(`[${ws}] 任务授权策略已变化：${e.task_id}`, INBOX_TITLE_MAX),
+        body: clipText(
+          `策略变化事件 #${e.payload.policy_seq}；任务 ${e.task_id} 依赖的规则已删除或修改：${e.payload.rules.join('、')}。任务继续保留，代批委托已按当前策略核对。`,
+          INBOX_BODY_MAX,
+        ),
+      },
+    })
+  }
+
   /**
    * 代回复委托（D15）：委托开始时条目标题标"supervisor 处理中"；委托结束（转交）时恢复标题，
    * 由 supervisor、超时或唤醒问题转交的在正文末尾注明原因（转交说明来自 supervisor，只给用户看）。
@@ -527,6 +549,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
       else if (e.type === 'task.reply_dropped') onReplyDropped(e)
       else if (e.type === 'task.out_of_band') onOutOfBand(e)
       else if (e.type === 'policy.decided') onPolicyDecided(e)
+      else if (e.type === 'task.policy_changed') onTaskPolicyChanged(e)
       else if (e.type === 'task.reply_delegated' || e.type === 'task.reply_escalated') {
         onDelegation(e)
       } else if (e.type === 'task.cancel_requested') onCancelRequested(e)
@@ -693,6 +716,7 @@ const delegatedTitle = (title: string) =>
 const ESCALATION_LABEL: Record<ReplyEscalationReason, string> = {
   supervisor: 'supervisor 判断需要你来决定',
   timeout: 'supervisor 超时未回复',
+  policy_changed: '代批依据的策略规则已删除或修改',
   wake_unavailable: 'supervisor 无法开始处理',
   wake_failed: 'supervisor 处理失败',
   wake_ended: 'supervisor 结束时没有回复',

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDatabase, policyDecisionSchema, taskView } from '@raindown/core'
+import { openDatabase, policyDecisionSchema, policyVersion, taskView } from '@raindown/core'
 import {
   completionDrafts,
   createNodeProtocol,
@@ -613,25 +613,27 @@ describe('scrub', () => {
   })
 })
 
-describe('旧账本迁移：origin、branch 列', () => {
-  test('有 resume_json 但缺 origin、branch 的旧库打开后补列，可写入 origin 与分支', async () => {
+describe('旧账本迁移：origin、branch 与 mandate 列', () => {
+  test('有 resume_json 的旧库打开后补列，可写入 origin、分支与授权依据', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'raindown-ledger-migrate-sup-'))
     try {
       const path = join(dir, 'raindown.db')
       const db = await openDatabase(path)
       db.exec(
         LEDGER_DDL.replace(
-          ',\n  origin           TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
+          ',\n  origin           TEXT,\n  mandate_json     TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
           '\n',
         ),
       )
       const cols = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
       expect(cols.map((c) => c.name)).toContain('resume_json')
+      expect(cols.map((c) => c.name)).not.toContain('mandate_json')
       expect(cols.map((c) => c.name)).not.toContain('origin')
       expect(cols.map((c) => c.name)).not.toContain('branch')
       expect(cols.map((c) => c.name)).not.toContain('worktree')
       db.close()
       const store = await openLedger(path)
+      const mandate = { created_by: 'hub', origin: 'hub', policy_version: policyVersion([]) }
       try {
         must(
           store.append(
@@ -639,7 +641,11 @@ describe('旧账本迁移：origin、branch 列', () => {
               task_id: 't-old',
               workspace: WS,
               type: 'task.created',
-              payload: { contract: contract({ executor: 'codex-orca' }), origin: 'autonomous' },
+              payload: {
+                contract: contract({ executor: 'codex-orca' }),
+                origin: 'autonomous',
+                mandate,
+              },
             },
             sys,
           ),
@@ -658,6 +664,7 @@ describe('旧账本迁移：origin、branch 列', () => {
         )
         expect(store.getTask('t-old')).toMatchObject({
           origin: 'autonomous',
+          mandate,
           branch: 'ustclhx/t-old',
           worktree: '/w/t-old',
         })

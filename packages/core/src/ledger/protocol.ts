@@ -9,6 +9,7 @@ import {
   inboxOptions,
 } from '../inbox/schema.ts'
 import { policyDecisionSchema } from '../policy/decide.ts'
+import { policyVersionSchema } from '../policy/version.ts'
 import { workspaceRef } from '../schema/common.ts'
 import { taskAttempt } from './attempts.ts'
 import { actor, capability, leaseId, nodeId, taskId, timestamp } from './common.ts'
@@ -208,6 +209,7 @@ const policyStatusIssue = z.object({
 })
 
 export const policiesStatus = z.object({
+  version: policyVersionSchema.optional(),
   loaded: z.number().int().min(0),
   errors: z.array(policyStatusIssue),
   warnings: z.array(policyStatusIssue).optional(),

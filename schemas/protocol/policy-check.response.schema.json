@@ -113,6 +113,10 @@
               "legacy_tool_action": {
                 "type": "boolean",
                 "const": true
+              },
+              "rule_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
               }
             },
             "required": [
@@ -242,6 +246,10 @@
                     "legacy_tool_action": {
                       "type": "boolean",
                       "const": true
+                    },
+                    "rule_hash": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
                     }
                   },
                   "required": [

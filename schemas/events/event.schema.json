@@ -19,6 +19,92 @@
         },
         "type": {
           "type": "string",
+          "const": "policy.changed"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{12}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{12}$"
+            },
+            "added": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "added",
+            "removed"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "policy.changed"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
           "const": "policy.decided"
         },
         "workspace": {
@@ -142,6 +228,10 @@
                   "legacy_tool_action": {
                     "type": "boolean",
                     "const": true
+                  },
+                  "rule_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                   }
                 },
                 "required": [
@@ -271,6 +361,10 @@
                         "legacy_tool_action": {
                           "type": "boolean",
                           "const": true
+                        },
+                        "rule_hash": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
                         }
                       },
                       "required": [
@@ -297,6 +391,10 @@
               "type": "string",
               "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
               "description": "任务 id，由中枢在创建时分配"
+            },
+            "policy_version": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{12}$"
             },
             "request": {
               "type": "object",
@@ -1205,6 +1303,138 @@
               "title": "Raindown task contract",
               "description": "创建任务时提交的合同"
             },
+            "mandate": {
+              "type": "object",
+              "properties": {
+                "created_by": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "origin": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "创建来源，例如 user、supervisor、schedule"
+                },
+                "wake_task": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                  "description": "任务 id，由中枢在创建时分配"
+                },
+                "instruction_seq": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "policy_version": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{12}$"
+                },
+                "matched_rules": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "rule_index": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "rule": {
+                        "type": "object",
+                        "properties": {
+                          "scope": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "const": "*"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                                "description": "workspace 标识，形如 ws/<id>"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^[^\\s/*]+$"
+                              }
+                            ]
+                          },
+                          "action": {
+                            "type": "string",
+                            "pattern": "^[^\\s]+$"
+                          },
+                          "level": {
+                            "type": "string",
+                            "enum": [
+                              "notify",
+                              "draft-approve",
+                              "supervisor",
+                              "auto-report",
+                              "auto"
+                            ]
+                          },
+                          "when": {
+                            "type": "object",
+                            "properties": {
+                              "command_prefix": {
+                                "description": "按原始命令词严格匹配前缀（不消去环境变量赋值、包装命令或执行文件路径，只接受空格与可见 ASCII）；串联请求的每段命令都必须满足",
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "paths": {
+                                "description": "每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /",
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "push_to": {
+                                "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），节点上报 push_env_ok，命令在任务 worktree 中执行；任何不确定都不满足",
+                                "type": "string",
+                                "const": "task_branch"
+                              },
+                              "gh_scope": {
+                                "description": "用于 gh pr create|view|diff：不带 -R/--repo 与 --body-file、无环境变量前缀、--head 只能是任务分支、节点上报 gh_env_ok，命令在任务 worktree 中执行",
+                                "type": "string",
+                                "const": "workspace_repo"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "scope",
+                          "action",
+                          "level"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "legacy_tool_action": {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      "rule_hash": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "rule_index",
+                      "rule"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "created_by",
+                "origin",
+                "policy_version"
+              ],
+              "additionalProperties": false
+            },
             "origin": {
               "description": "中枢计算的来源（D2），创建时写入、之后不变；不在 supervisor 链上的任务省略",
               "type": "string",
@@ -1231,6 +1461,75 @@
       ],
       "additionalProperties": false,
       "title": "task.created"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "账本序号，单调递增"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "type": {
+          "type": "string",
+          "const": "task.policy_changed"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+          "description": "workspace 标识，形如 ws/<id>"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "description": "任务 id，由中枢在创建时分配"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+          "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "policy_seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "required": [
+            "policy_seq",
+            "rules"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "workspace",
+        "task_id",
+        "actor",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "title": "task.policy_changed"
     },
     {
       "type": "object",
@@ -2472,6 +2771,108 @@
               ],
               "description": "回复发起的渠道；supervisor 表示 supervisor 代用户回复"
             },
+            "policy_version": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{12}$"
+            },
+            "matched_rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "rule_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "rule": {
+                    "type": "object",
+                    "properties": {
+                      "scope": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "const": "*"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                            "description": "workspace 标识，形如 ws/<id>"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^[^\\s/*]+$"
+                          }
+                        ]
+                      },
+                      "action": {
+                        "type": "string",
+                        "pattern": "^[^\\s]+$"
+                      },
+                      "level": {
+                        "type": "string",
+                        "enum": [
+                          "notify",
+                          "draft-approve",
+                          "supervisor",
+                          "auto-report",
+                          "auto"
+                        ]
+                      },
+                      "when": {
+                        "type": "object",
+                        "properties": {
+                          "command_prefix": {
+                            "description": "按原始命令词严格匹配前缀（不消去环境变量赋值、包装命令或执行文件路径，只接受空格与可见 ASCII）；串联请求的每段命令都必须满足",
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "paths": {
+                            "description": "每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /",
+                            "minItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "push_to": {
+                            "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），节点上报 push_env_ok，命令在任务 worktree 中执行；任何不确定都不满足",
+                            "type": "string",
+                            "const": "task_branch"
+                          },
+                          "gh_scope": {
+                            "description": "用于 gh pr create|view|diff：不带 -R/--repo 与 --body-file、无环境变量前缀、--head 只能是任务分支、节点上报 gh_env_ok，命令在任务 worktree 中执行",
+                            "type": "string",
+                            "const": "workspace_repo"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "scope",
+                      "action",
+                      "level"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "legacy_tool_action": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "rule_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "rule_index",
+                  "rule"
+                ],
+                "additionalProperties": false
+              }
+            },
             "text": {
               "description": "回复文字或拒绝理由",
               "type": "string",
@@ -3122,6 +3523,108 @@
               "maximum": 9007199254740991,
               "description": "策略判定 id，即对应 policy.decided 事件的 seq"
             },
+            "policy_version": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{12}$"
+            },
+            "matched_rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "rule_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "rule": {
+                    "type": "object",
+                    "properties": {
+                      "scope": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "const": "*"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                            "description": "workspace 标识，形如 ws/<id>"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^[^\\s/*]+$"
+                          }
+                        ]
+                      },
+                      "action": {
+                        "type": "string",
+                        "pattern": "^[^\\s]+$"
+                      },
+                      "level": {
+                        "type": "string",
+                        "enum": [
+                          "notify",
+                          "draft-approve",
+                          "supervisor",
+                          "auto-report",
+                          "auto"
+                        ]
+                      },
+                      "when": {
+                        "type": "object",
+                        "properties": {
+                          "command_prefix": {
+                            "description": "按原始命令词严格匹配前缀（不消去环境变量赋值、包装命令或执行文件路径，只接受空格与可见 ASCII）；串联请求的每段命令都必须满足",
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "paths": {
+                            "description": "每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /",
+                            "minItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "push_to": {
+                            "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），节点上报 push_env_ok，命令在任务 worktree 中执行；任何不确定都不满足",
+                            "type": "string",
+                            "const": "task_branch"
+                          },
+                          "gh_scope": {
+                            "description": "用于 gh pr create|view|diff：不带 -R/--repo 与 --body-file、无环境变量前缀、--head 只能是任务分支、节点上报 gh_env_ok，命令在任务 worktree 中执行",
+                            "type": "string",
+                            "const": "workspace_repo"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "scope",
+                      "action",
+                      "level"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "legacy_tool_action": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "rule_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "rule_index",
+                  "rule"
+                ],
+                "additionalProperties": false
+              }
+            },
             "deadline": {
               "type": "string",
               "format": "date-time",
@@ -3196,9 +3699,112 @@
                 "wake_failed",
                 "wake_ended",
                 "user_dismissed",
-                "user_replied"
+                "user_replied",
+                "policy_changed"
               ],
-              "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复"
+              "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变"
+            },
+            "policy_version": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{12}$"
+            },
+            "matched_rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "rule_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "rule": {
+                    "type": "object",
+                    "properties": {
+                      "scope": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "const": "*"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                            "description": "workspace 标识，形如 ws/<id>"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^[^\\s/*]+$"
+                          }
+                        ]
+                      },
+                      "action": {
+                        "type": "string",
+                        "pattern": "^[^\\s]+$"
+                      },
+                      "level": {
+                        "type": "string",
+                        "enum": [
+                          "notify",
+                          "draft-approve",
+                          "supervisor",
+                          "auto-report",
+                          "auto"
+                        ]
+                      },
+                      "when": {
+                        "type": "object",
+                        "properties": {
+                          "command_prefix": {
+                            "description": "按原始命令词严格匹配前缀（不消去环境变量赋值、包装命令或执行文件路径，只接受空格与可见 ASCII）；串联请求的每段命令都必须满足",
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "paths": {
+                            "description": "每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /",
+                            "minItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "push_to": {
+                            "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），节点上报 push_env_ok，命令在任务 worktree 中执行；任何不确定都不满足",
+                            "type": "string",
+                            "const": "task_branch"
+                          },
+                          "gh_scope": {
+                            "description": "用于 gh pr create|view|diff：不带 -R/--repo 与 --body-file、无环境变量前缀、--head 只能是任务分支、节点上报 gh_env_ok，命令在任务 worktree 中执行",
+                            "type": "string",
+                            "const": "workspace_repo"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "scope",
+                      "action",
+                      "level"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "legacy_tool_action": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "rule_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "rule_index",
+                  "rule"
+                ],
+                "additionalProperties": false
+              }
             },
             "block_seq": {
               "type": "integer",
@@ -3689,6 +4295,17 @@
             "version": {
               "type": "string",
               "minLength": 1
+            },
+            "policy_version": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{12}$"
+            },
+            "policy_rules": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
             },
             "pid": {
               "type": "integer",

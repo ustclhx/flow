@@ -624,7 +624,7 @@ describe('旧账本迁移', () => {
       // 旧版 DDL：去掉 resume_json（以及 ④ 的 origin、branch、worktree）列与 replies 表。
       db.exec(
         LEDGER_DDL.replace(
-          ',\n  resume_json      TEXT,\n  origin           TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
+          ',\n  resume_json      TEXT,\n  origin           TEXT,\n  mandate_json     TEXT,\n  branch           TEXT,\n  worktree         TEXT,\n  repo_snapshot_json TEXT\n',
           '\n',
         ).replace(/CREATE TABLE IF NOT EXISTS replies[\s\S]*$/, ''),
       )

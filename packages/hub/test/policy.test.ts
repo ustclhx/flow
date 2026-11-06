@@ -8,6 +8,7 @@ import {
   initRaindownHome,
   type PolicyCheckRequest,
   policyCheckData,
+  policyVersion,
   raindownPaths,
 } from '@raindown/core'
 import { stringify } from 'yaml'
@@ -103,6 +104,7 @@ test('具体规则优先：合同 scope 决定 draft-approve，事件可查询�
     payload: {
       task_id: task.id,
       request: { tool: request.tool, command: request.command, actions: ['tool:Bash', 'git.push'] },
+      policy_version: task.mandate?.policy_version,
       level: checked.level,
       matched_rules: checked.matched_rules,
       actions: checked.actions,
@@ -175,7 +177,11 @@ test('坏规则被跳过、保留原始索引；status 报错，配置修正后�
   expect(checked.level).toBe('auto')
   expect(checked.matched_rules[0]?.rule_index).toBe(1)
   policies([])
-  expect(must(await user.status()).policies).toEqual({ loaded: 0, errors: [] })
+  expect(must(await user.status()).policies).toEqual({
+    loaded: 0,
+    errors: [],
+    version: policyVersion([]),
+  })
   expect(must(await user.checkPolicy(request)).level).toBe('user')
 })
 

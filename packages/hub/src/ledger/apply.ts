@@ -89,6 +89,7 @@ export function createApplier(db: Database): Applier {
   function applyEvent(e: LedgerEvent) {
     switch (e.type) {
       case 'task.out_of_band':
+      case 'policy.changed':
       case 'policy.decided':
         // 策略判定只供审计，不修改任务或租约投影。
         return
@@ -96,8 +97,8 @@ export function createApplier(db: Database): Applier {
         const c = e.payload.contract
         stmt(
           `INSERT INTO tasks (id, workspace, status, contract_json, idempotency_key, parent,
-             attempt, created_seq, last_seq, created_at, updated_at, created_by, origin)
-           VALUES (?, ?, 'queued', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+             attempt, created_seq, last_seq, created_at, updated_at, created_by, origin, mandate_json)
+           VALUES (?, ?, 'queued', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           e.task_id ?? null,
           e.workspace ?? null,
@@ -110,6 +111,7 @@ export function createApplier(db: Database): Applier {
           e.ts,
           e.actor,
           e.payload.origin ?? null,
+          e.payload.mandate ? JSON.stringify(e.payload.mandate) : null,
         )
         return
       }
@@ -253,6 +255,7 @@ export function createApplier(db: Database): Applier {
         )
         return
       case 'task.attempt_ended':
+      case 'task.policy_changed':
       case 'task.reply_delegated':
       case 'task.reply_escalated':
       case 'supervisor.wake_started':

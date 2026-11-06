@@ -5,6 +5,7 @@ import {
   canCreateRole,
   checkContractSecrets,
   createTaskRequest,
+  decide,
   decideVerifySteps,
   defaultSupervisorConfig,
   fail,
@@ -18,6 +19,8 @@ import {
   loadWorkspaces,
   ok,
   RETRYABLE_BLOCKED_REASONS,
+  type PolicyConfig,
+  policyVersion,
   type ReplyKind,
   type ReplyTaskData,
   type Result,
@@ -35,6 +38,7 @@ import {
   type VerifyVerdict,
   type Workspace,
 } from '@raindown/core'
+import { auditRules } from '../policy/service.ts'
 import type { EventInput, LedgerStore } from './store.ts'
 import {
   chainDepth,
@@ -162,6 +166,8 @@ export interface TaskServiceOptions {
   workspaces?: WorkspaceLookup
   /** 仓库检查的选项（测试注入家目录）。 */
   repoCheck?: RepoCheckOptions
+  /** 创建时固化授权依据所用的策略；生产环境注入共享策略加载器。 */
+  policy?: { load(): Promise<Result<PolicyConfig>> }
   /** 验收命令的策略判定；缺省为没有规则（全部拒绝）。 */
   verifyPolicy?: VerifyPolicyCheck
   now?: () => number
@@ -609,6 +615,27 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         }
       }
 
+      // 授权依据只由中枢计算；与策略检查共用加载与版本比较入口。
+      const policy = o.policy
+        ? await o.policy.load()
+        : ok({ rules: [], version: policyVersion([]) })
+      if (!policy.ok) return policy
+      const creationDecision = decide(policy.data.rules, {
+        scope: { workspace: contract.workspace, role: opts.actor },
+        actions: ['task.create'],
+      })
+      const instructions = (callerWake?.events ?? []).filter(
+        (seq) => ledger.eventsAfter(seq - 1, undefined, 1)[0]?.type === 'user.instruction',
+      )
+      const mandate = {
+        created_by: opts.actor,
+        origin: opts.actor,
+        ...(callerWake ? { wake_task: callerWake.task_id } : {}),
+        ...(instructions.length === 1 ? { instruction_seq: instructions[0] as number } : {}),
+        policy_version: policy.data.version,
+        matched_rules: auditRules(creationDecision.matched_rules),
+      }
+
       // 从这里到 append 都是同步代码，不会与其他请求交错：重新检查幂等键、上限与 parent 状态。
       const raced = existing()
       if (raced) return ok({ task: raced, created: false })
@@ -630,7 +657,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
         type: 'task.created',
         task_id: id,
         workspace: contract.workspace,
-        payload: { contract, ...(origin === undefined ? {} : { origin }) },
+        payload: { contract, mandate, ...(origin === undefined ? {} : { origin }) },
       }
       const before = opts.coWrite?.before ?? []
       const own = [created, ...(opts.withCreated?.(id) ?? [])]

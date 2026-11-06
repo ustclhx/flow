@@ -25,6 +25,10 @@ const samples: Record<
   EventType,
   { valid: Record<string, unknown>; invalid: Record<string, unknown> }
 > = {
+  'policy.changed': {
+    valid: { payload: { from: null, to: '012345abcdef', added: [sha], removed: [] } },
+    invalid: { payload: { from: null, to: 'invalid', added: [sha], removed: [] } },
+  },
   'policy.decided': {
     valid: {
       ...task,
@@ -41,6 +45,10 @@ const samples: Record<
   'task.created': {
     valid: { ...task, payload: { contract } },
     invalid: { ...task, payload: { contract: { ...contract, workspace: undefined } } },
+  },
+  'task.policy_changed': {
+    valid: { ...task, payload: { policy_seq: 10, rules: [sha] } },
+    invalid: { ...task, payload: { policy_seq: 0, rules: [sha] } },
   },
   'task.started': {
     valid: { ...task, payload: { node_id: 'n1', lease_id: 'l1', attempt: 1 } },
@@ -437,6 +445,11 @@ describe('事件触发的状态转换', () => {
   const expected: Record<string, [TaskStatus | null, TaskStatus][]> = {
     'policy.decided': TASK_STATUSES.map((status) => [status, status]),
     'task.created': [[null, 'queued']],
+    'task.policy_changed': [
+      ['running', 'running'],
+      ['verifying', 'verifying'],
+      ['blocked', 'blocked'],
+    ],
     'task.started': [['queued', 'running']],
     'task.attempt_ended': TASK_STATUSES.map((status) => [status, status]),
     'lease.granted': [['running', 'running']],

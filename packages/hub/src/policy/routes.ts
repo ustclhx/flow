@@ -6,6 +6,7 @@ import {
   decide,
   ENDPOINTS,
   fail,
+  type IndexedPolicyRule,
   isNodeActor,
   loadHubConfig,
   loadPoliciesConfig,
@@ -24,6 +25,7 @@ import { scrubPayload } from '../ledger/scrub.ts'
 import type { LedgerStore } from '../ledger/store.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { checkTaskScope, type HubAuthOptions } from '../server/auth.ts'
+import { auditRules, type PolicyService } from './service.ts'
 
 /**
  * 登记仓库可接受的 remote 名。workspace 登记的仓库只有本地路径（`repos`），没有 remote 字段，
@@ -98,12 +100,24 @@ export function leaseTokenMatches(
  */
 export function policyCheckResponse(decision: PolicyDecision, seq: number): PolicyCheckData {
   const { level, matched_rules, actions } = decision
-  return { level, matched_rules, actions, ...(level === 'supervisor' ? { decision_id: seq } : {}) }
+  // 内容摘要仅用于账本追踪，响应保持旧节点 strict 规则结构。
+  const publicRules = (rules: readonly IndexedPolicyRule[]) =>
+    rules.map(({ rule_hash: _, ...rule }) => rule)
+  return {
+    level,
+    matched_rules: publicRules(matched_rules),
+    actions: actions.map((action) => ({
+      ...action,
+      matched_rules: publicRules(action.matched_rules),
+    })),
+    ...(level === 'supervisor' ? { decision_id: seq } : {}),
+  }
 }
 
 /** 只做预检与审计；执行器放行、blocked 和收件箱由后续节点与反应器接入。 */
 export function createPolicyRoutes(deps: {
   home: string
+  policy?: Pick<PolicyService, 'load'>
   ledger: LedgerStore
   leaseHolders: HubAuthOptions['leaseHolders']
   /** 当前时间（毫秒），校验租约令牌是否过期；缺省 Date.now。 */
@@ -165,7 +179,7 @@ export function createPolicyRoutes(deps: {
     // 中枢端口用于识别直接访问中枢的命令；读取失败时只用默认端口（7477、7478）。
     const hubConfig = await loadHubConfig(deps.home)
     const hubPorts = hubConfig.ok ? [hubConfig.data.port] : []
-    const loaded = await loadPoliciesConfig(deps.home)
+    const loaded = await (deps.policy?.load() ?? loadPoliciesConfig(deps.home))
     // 文件级错误沿用加载器的失败语义；节点按 D2 将调用失败视为需要用户。
     if (!loaded.ok) return errorResponse(c, 'internal_error', redactSecrets(loaded.error.message))
     // 异步读取配置期间租约可能结束或过期；入账前重新校验，此后到 append 之间没有 await。
@@ -214,7 +228,17 @@ export function createPolicyRoutes(deps: {
         type: 'policy.decided',
         workspace: task.contract.workspace,
         task_id,
-        payload: { task_id, request: { ...request, actions, ...env }, ...decision },
+        payload: {
+          task_id,
+          request: { ...request, actions, ...env },
+          ...decision,
+          policy_version: loaded.data.version,
+          matched_rules: auditRules(decision.matched_rules),
+          actions: decision.actions.map((action) => ({
+            ...action,
+            matched_rules: auditRules(action.matched_rules),
+          })),
+        },
       },
       { actor: 'policy' },
     )

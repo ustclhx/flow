@@ -44,6 +44,14 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
     ['actions', '*', 'matched_rules', '*', 'rule', 'when', 'paths', '*'],
   ],
   'task.attempt_ended': [['last_report']],
+  'task.created': [
+    ['mandate', 'matched_rules', '*', 'rule', 'when', 'command_prefix'],
+    ['mandate', 'matched_rules', '*', 'rule', 'when', 'paths', '*'],
+  ],
+  'task.reply_delegated': [
+    ['matched_rules', '*', 'rule', 'when', 'command_prefix'],
+    ['matched_rules', '*', 'rule', 'when', 'paths', '*'],
+  ],
   'task.done': RESULT_TEXT,
   'task.failed': [...RESULT_TEXT, ['message']],
   'task.cancelled': [...RESULT_TEXT, ['reason']],
@@ -56,7 +64,11 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
     ['request', 'paths', '*'],
     ['request', 'reason'],
   ],
-  'task.reply_escalated': [['note']],
+  'task.reply_escalated': [
+    ['note'],
+    ['matched_rules', '*', 'rule', 'when', 'command_prefix'],
+    ['matched_rules', '*', 'rule', 'when', 'paths', '*'],
+  ],
   'supervisor.answered': [['text']],
   // 提案的目标会展示在收件箱条目与渠道消息中（D11），按自由文本处理。
   'task_proposal.created': [['reason'], ['draft', 'goal']],
@@ -67,7 +79,12 @@ export const FREE_TEXT_FIELDS: Partial<Record<EventType, readonly FieldPath[]>> 
   'task.reply_dropped': [['message']],
   'task.out_of_band': [['command'], ['message']],
   // reason：supervisor 代回复的理由（D15），只进每日摘要。
-  'task.replied': [['text'], ['reason']],
+  'task.replied': [
+    ['text'],
+    ['reason'],
+    ['matched_rules', '*', 'rule', 'when', 'command_prefix'],
+    ['matched_rules', '*', 'rule', 'when', 'paths', '*'],
+  ],
   'task.requeued': [['note'], ['retry_reason']],
   'task.cancel_requested': [['reason']],
   // 收件箱条目的文字会外发到渠道（notify-channel "外发内容脱敏"），入账前就按自由文本处理。

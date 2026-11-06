@@ -11,12 +11,14 @@ import {
   policyLevelSchema,
   policyRuleSchema,
 } from './config.ts'
+import { policyRuleHashSchema } from './version.ts'
 
 export const policyDecisionLevelSchema = policyLevelSchema.or(z.literal('user'))
 export const indexedPolicyRuleSchema = z.strictObject({
   rule_index: z.number().int().min(0),
   rule: policyRuleSchema,
   legacy_tool_action: z.literal(true).optional(),
+  rule_hash: policyRuleHashSchema.optional(),
 })
 export const actionDecisionSchema = z.strictObject({
   action: z.string().min(1),

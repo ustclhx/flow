@@ -17,7 +17,8 @@ import {
   inboxSource,
   inboxVia,
 } from '../inbox/schema.ts'
-import { policyDecisionSchema } from '../policy/decide.ts'
+import { indexedPolicyRuleSchema, policyDecisionSchema } from '../policy/decide.ts'
+import { policyRuleHashSchema, policyVersionSchema } from '../policy/version.ts'
 import { fail, ok, type Result } from '../result.ts'
 import { dateString, workspaceRef } from '../schema/common.ts'
 import { adapterCapabilities, NO_ADAPTER_CAPABILITIES, readAdapterCapabilities } from './adapter.ts'
@@ -39,6 +40,7 @@ import {
   taskAttemptEndReason,
   taskBranch,
   taskContract,
+  taskMandate,
   taskOrigin,
   taskResult,
   taskWorktree,
@@ -113,11 +115,12 @@ export const REPLY_ESCALATION_REASONS = [
   'wake_ended',
   'user_dismissed',
   'user_replied',
+  'policy_changed',
 ] as const
 export type ReplyEscalationReason = (typeof REPLY_ESCALATION_REASONS)[number]
 export const replyEscalationReason = z.enum(REPLY_ESCALATION_REASONS).meta({
   description:
-    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复',
+    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变',
 })
 
 /** supervisor 代回复（task_respond）的理由上限。 */
@@ -179,8 +182,15 @@ export const taskProposalDecision = z
   .meta({ title: 'Task proposal decision' })
 
 export const eventPayloads = {
+  'policy.changed': z.strictObject({
+    from: policyVersionSchema.nullable(),
+    to: policyVersionSchema,
+    added: z.array(policyRuleHashSchema),
+    removed: z.array(policyRuleHashSchema),
+  }),
   'policy.decided': policyDecisionSchema.extend({
     task_id: taskId,
+    policy_version: policyVersionSchema.optional(),
     request: z.strictObject({
       tool: z.string().min(1).max(128),
       actions: z.array(z.string().min(1)),
@@ -201,9 +211,14 @@ export const eventPayloads = {
   }),
   'task.created': z.strictObject({
     contract: taskContract,
+    mandate: taskMandate.optional(),
     origin: taskOrigin.optional().meta({
       description: '中枢计算的来源（D2），创建时写入、之后不变；不在 supervisor 链上的任务省略',
     }),
+  }),
+  'task.policy_changed': z.strictObject({
+    policy_seq: z.number().int().min(1),
+    rules: z.array(policyRuleHashSchema),
   }),
   'task.started': z.strictObject({
     node_id: nodeId,
@@ -272,6 +287,8 @@ export const eventPayloads = {
       reply_id: replyId,
       kind: replyKind,
       via: replyVia.optional(),
+      policy_version: policyVersionSchema.optional(),
+      matched_rules: z.array(indexedPolicyRuleSchema).optional(),
       text: z.string().min(1).max(16_384).optional().meta({ description: '回复文字或拒绝理由' }),
       reason: z.string().min(1).max(REPLY_REASON_MAX).optional().meta({
         description:
@@ -324,11 +341,15 @@ export const eventPayloads = {
     block_seq: z.number().int().min(1).meta({ description: '被委托的那次 task.blocked 的 seq' }),
     kind: delegableBlockedReason.meta({ description: '卡住原因：question 或 awaiting_approval' }),
     decision_id: policyDecisionId.optional(),
+    policy_version: policyVersionSchema.optional(),
+    matched_rules: z.array(indexedPolicyRuleSchema).optional(),
     deadline: timestamp.meta({ description: '超过此时间仍未回复即转交用户（reply_timeout_s）' }),
   }),
   /** 代回复委托结束、转交用户（D15）；除 user_replied、user_dismissed 外按条目原级别推送。 */
   'task.reply_escalated': z.strictObject({
     reason: replyEscalationReason,
+    policy_version: policyVersionSchema.optional(),
+    matched_rules: z.array(indexedPolicyRuleSchema).optional(),
     block_seq: z
       .number()
       .int()
@@ -376,6 +397,8 @@ export const eventPayloads = {
   }),
   'hub.started': z.strictObject({
     version: z.string().min(1),
+    policy_version: policyVersionSchema.optional(),
+    policy_rules: z.array(policyRuleHashSchema).optional(),
     pid: z.number().int().positive(),
     runtime: z.enum(['bun', 'node']),
     port: z.number().int().min(1).max(65535),
@@ -647,8 +670,10 @@ export type EventPayload<T extends EventType> = z.infer<(typeof eventPayloads)[T
 /** 信封中 task_id / workspace 的要求。 */
 type Scope = 'task' | 'workspace' | 'none'
 export const EVENT_SCOPES: Record<EventType, Scope> = {
+  'policy.changed': 'none',
   'policy.decided': 'task',
   'task.created': 'task',
+  'task.policy_changed': 'task',
   'task.started': 'task',
   'task.attempt_ended': 'task',
   'task.verifying': 'task',
@@ -792,6 +817,7 @@ export const TASK_EVENT_RULES: Readonly<
       | `task_proposal.${string}`
       | `decision.${string}`
       | `merge_request.${string}`
+      | 'policy.changed'
       | 'supervisor.answered'
       | 'supervisor.release'
       | 'supervisor.queue_dropped'
@@ -806,6 +832,7 @@ export const TASK_EVENT_RULES: Readonly<
     to: 'unchanged',
   },
   'task.created': { from: [null], to: 'queued' },
+  'task.policy_changed': { from: ['running', 'verifying', 'blocked'], to: 'unchanged' },
   'task.started': { from: ['queued'], to: 'running' },
   'task.attempt_ended': {
     from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed', 'cancelled'],

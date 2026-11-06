@@ -302,6 +302,7 @@ interface TaskRow {
   result_json: string | null
   created_by: string
   origin: TaskView['origin']
+  mandate_json: string | null
   branch: string | null
   worktree: string | null
   repo_snapshot_json: string | null
@@ -455,6 +456,7 @@ function rowToTask(r: TaskRow): TaskView {
     result: r.result_json === null ? null : JSON.parse(r.result_json),
     created_by: r.created_by,
     origin: r.origin ?? null,
+    ...(r.mandate_json ? { mandate: JSON.parse(r.mandate_json) } : {}),
     branch: r.branch ?? null,
     worktree: r.worktree ?? null,
     repo_snapshot: r.repo_snapshot_json ? JSON.parse(r.repo_snapshot_json) : null,
@@ -500,6 +502,8 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'supervisor.answered': ['hub', 'user'],
   'task_proposal.created': ['hub'],
   'decision.review_due': ['hub'],
+  'policy.changed': ['hub'],
+  'task.policy_changed': ['hub'],
   'task.reply_delegated': ['hub'],
   // 回复只有用户本人与 supervisor（经 task_respond、落在有效委托上）能写（D15）。
   'task.replied': ['user', 'supervisor'],

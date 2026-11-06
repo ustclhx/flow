@@ -84,6 +84,7 @@ export const taskShowOp = defineOperation({
     [
       taskSummary(task),
       `合同：${JSON.stringify(task.contract, null, 2)}`,
+      `授权依据：${task.mandate ? JSON.stringify(task.mandate, null, 2) : '未记录（旧任务）'}`,
       ...(task.blocked ? [`卡住原因：${task.blocked.reason} — ${task.blocked.message}`] : []),
       ...(task.result
         ? [

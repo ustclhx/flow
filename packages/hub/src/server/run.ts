@@ -9,10 +9,10 @@ import {
   inboxActRequest,
   loadChannelsConfig,
   loadHubConfig,
-  loadPoliciesConfig,
   loadRoles,
   loadWorkspaces,
   ok,
+  policyRuleHash,
   type Result,
   raindownPaths,
   redactSecrets,
@@ -50,6 +50,7 @@ import {
 } from '../ledger/tasks.ts'
 import { createNodeProtocol, type NodeProtocol } from '../nodes/protocol.ts'
 import { createPolicyRoutes } from '../policy/routes.ts'
+import { createPolicyService, type PolicyService } from '../policy/service.ts'
 import { verifyPolicyFromHome } from '../policy/verify.ts'
 import { createScheduler, type Scheduler } from '../scheduler/index.ts'
 import { redactingLogger } from '../secrets/logger.ts'
@@ -143,6 +144,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   let inbox: InboxService | undefined
   /** 收件箱操作的依赖：HTTP 路由与中枢内渠道共用同一个实现（actOnInbox）。 */
   let inboxActions: InboxActionDeps | undefined
+  let policiesService: PolicyService | undefined
   let ledger: LedgerStore | undefined
   let config: HubConfig | undefined
   let protocol: NodeProtocol | undefined
@@ -182,6 +184,10 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         now: () => clock.now(),
         redact: redactor.redact,
       })
+      policiesService = createPolicyService({ home: options.home, ledger, clock, logger })
+      // 策略文件错误由 status 报告；后续判定继续失败关闭，定期检查会重试。
+      const initialPolicies = await policiesService.load()
+      if (!initialPolicies.ok) logger.warn('策略加载失败', initialPolicies.error)
       // 中枢停机期间节点无法续约：重启后给每个活动租约至少一个 TTL 的宽限，
       // 让仍在运行的节点有机会续上，而不是在第一次扫描时被误判为 node_lost（hub-daemon "崩溃后自动恢复"）。
       const graceUntil = new Date(clock.now() + config.lease_ttl_s * 1000).toISOString()
@@ -191,17 +197,20 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       return ledger
     },
     routes: () => {
-      if (!ledger || !config) return []
+      if (!ledger || !config || !policiesService) return []
+      const policy = policiesService
       const tasks = createTaskService({
         ledger,
+        policy,
         workspaceExists: workspaceCheckFromHome(options.home),
         workspaces: workspaceLookupFromHome(options.home),
-        verifyPolicy: verifyPolicyFromHome(options.home),
+        verifyPolicy: verifyPolicyFromHome(options.home, policy),
         roles: roleLookupFromHome(options.home),
         now: () => clock.now(),
       })
       delegation = createDelegationService({
         ledger,
+        policy,
         clock,
         workspaces: workspaceLookupFromHome(options.home),
         roles: roleLookupFromHome(options.home),
@@ -222,7 +231,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         home: options.home,
         workspaces: workspaceLookupFromHome(options.home),
         roles: roleLookupFromHome(options.home),
-        verifyPolicy: verifyPolicyFromHome(options.home),
+        verifyPolicy: verifyPolicyFromHome(options.home, policy),
         levels: () => inbox?.config() ?? EMPTY_INBOX_CONFIG,
         supervisorActive: supervisorActiveFromHome(options.home),
         now: () => clock.now(),
@@ -258,7 +267,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       inboxActions = inboxDeps
       const status = new Hono()
       status.get('/v1/hub/status', async (c) => {
-        const policies = await loadPoliciesConfig(options.home)
+        const policies = await policy.load()
         const backup = ledger?.latestEvent(undefined, 'hub.backup_done')
         const scheduleErrors = scheduler?.errors() ?? []
         const data: HubStatusData = {
@@ -278,6 +287,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
           policies: policies.ok
             ? {
                 loaded: policies.data.rules.length,
+                version: policies.data.version,
                 errors: policies.data.errors,
                 ...(policies.data.warnings.length ? { warnings: policies.data.warnings } : {}),
               }
@@ -341,6 +351,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
           app: createPolicyRoutes({
             home: options.home,
             ledger,
+            policy,
             leaseHolders,
             now: () => clock.now(),
           }),
@@ -349,6 +360,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       ]
     },
     onStop: async () => {
+      await policiesService?.stop()
       stopSupervisorTools?.()
       wakes?.stop()
       delegation?.stop()
@@ -376,12 +388,13 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
       )
     },
   })
-  if (!started.ok || !ledger) {
+  if (!started.ok || !ledger || !policiesService) {
     secrets.close()
     unregister()
     return started
   }
   uiPort = started.data.port
+  const baseline = await policiesService.load()
   const marker = ledger.append(
     {
       type: 'hub.started',
@@ -390,6 +403,12 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         pid: process.pid,
         runtime: options.runtime ?? currentRuntime(),
         port: started.data.port,
+        ...(baseline.ok
+          ? {
+              policy_version: baseline.data.version,
+              policy_rules: baseline.data.rules.map(policyRuleHash),
+            }
+          : {}),
       },
     },
     { actor: 'hub' },
@@ -398,6 +417,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
     await started.data.stop()
     return marker
   }
+  policiesService.start()
   scheduler = await createScheduler({
     ledger,
     clock,

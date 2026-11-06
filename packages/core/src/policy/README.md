@@ -7,6 +7,18 @@
 旧动作 `flow.admin`、`tool:mcp__flow__<操作名>` 在加载时归一为新名称，规则档位和索引保留；
 迁移提示单独收集到 `warnings`（`legacy_policy_action`），不作为错误排除规则，也不改写配置文件。
 
+加载结果的 `version` 是有效规则有序数组经对象键排序的规范 JSON 的 SHA-256 前 12 位。
+注释、空白、无效规则与 `rule_index` 不参与；有效规则顺序及 `legacy_tool_action` 参与。
+`policyVersion(rules)` 计算该版本，`policyRuleHash(rule)` 返回单条规则的完整 SHA-256。
+可选 `rule_hash` 保存入账脱敏前的摘要，本身不参与哈希。
+`flow.admin` 与 `raindown.admin` 归一后语义一致，因此版本相同；旧 MCP 工具规则与直接写新名的规则
+因 `legacy_tool_action` 的保守合并语义不同，版本也不同。
+中枢在启动与每 60 秒检查文件 mtime，所有判定与建任务的加载也共用版本比较入口。
+首次基线写入 `hub.started`，之后用 `policy.changed` 记录规则摘要的增删；受影响任务记录
+`task.policy_changed` 并显示在详情和收件箱。通用追加输入由第 8 阶段统一送达。
+`checkTaskMandateForResume(task, { supervisor_enabled, role })` 在恢复前检查 supervisor
+是否仍启用、角色的 `creatable_by` 是否仍允许它，旧任务使用账本中的 `created_by`。
+
 ```yaml
 - scope: dev
   action: 'tool:*'

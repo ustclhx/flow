@@ -146,6 +146,37 @@ describe('任务操作与真实中枢', () => {
     expect(data(await client().listTasks({ status: 'done' })).tasks).toEqual([])
     const shown = data(await invokeOperation(taskShowOp, { id: created.task.id }, ctx()))
     expect(shown.events[0]?.actor).toBe('test-agent')
+    const mandate = {
+      created_by: 'supervisor',
+      origin: 'instruction',
+      wake_task: 'wake-1',
+      instruction_seq: 42,
+      policy_version: 'a1b2c3d4e5f6',
+      matched_rules: [
+        {
+          rule_index: 0,
+          rule: { scope: '*', action: 'raindown.task.create', level: 'auto' as const },
+        },
+      ],
+    }
+    expect(taskShowOp.human?.({ ...shown, task: { ...shown.task, mandate } })).toContain(
+      `授权依据：${JSON.stringify(mandate, null, 2)}`,
+    )
+    expect(taskShowOp.human?.({ ...shown, task: { ...shown.task, mandate: undefined } })).toContain(
+      '授权依据：未记录（旧任务）',
+    )
+    const policyChanged = {
+      seq: 43,
+      ts: new Date().toISOString(),
+      type: 'task.policy_changed' as const,
+      actor: 'policy',
+      task_id: shown.task.id,
+      workspace: shown.task.workspace,
+      payload: { policy_seq: 42, rules: ['a'.repeat(64)] },
+    }
+    expect(taskShowOp.human?.({ ...shown, events: [...shown.events, policyChanged] })).toContain(
+      JSON.stringify(policyChanged, null, 2).split('\n').join('\n  '),
+    )
     const cancelled = data(
       await invokeOperation(taskCancelOp, { id: created.task.id, reason: '测试取消' }, ctx()),
     )
@@ -482,7 +513,7 @@ describe('HubClient 协议边界', () => {
     }
   })
 
-  test('status 有端点时使用协议响应，并显示定时规则错误', async () => {
+  test('status 有端点时使用协议响应，并显示定时规则错误与策略版本', async () => {
     await mkdir(raindownPaths(home).state, { recursive: true })
     await writeFile(raindownPaths(home).hubToken, randomUUID())
     const status = hubStatusData.parse({
@@ -493,6 +524,7 @@ describe('HubClient 协议边界', () => {
       started_at: new Date().toISOString(),
       runtime: 'bun',
       schedules: { loaded: 1, errors: [{ rule_id: 'bad-rule', message: 'cron 不合法' }] },
+      policies: { loaded: 1, errors: [], version: 'a1b2c3d4e5f6' },
       last_backup: null,
     })
     const probe = new HubClient({
@@ -505,6 +537,7 @@ describe('HubClient 协议边界', () => {
     expect(data(await probe.status())).toEqual(status)
     const command = commands.find((c) => c.name === 'hub status')
     expect(command?.human?.(status)).toContain('bad-rule cron 不合法')
+    expect(command?.human?.(status)).toContain('a1b2c3d4e5f6')
   })
 
   test('旧中枢缺少 status 路由时回退显示 health、pid、最新备份，rebuild 显示事件数和耗时', async () => {

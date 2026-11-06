@@ -1271,6 +1271,146 @@
               "type": "string",
               "description": "创建者（task.created 的 actor）"
             },
+            "mandate": {
+              "description": "创建时固化的授权依据；旧任务可缺省",
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "created_by": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "origin": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "创建来源，例如 user、supervisor、schedule"
+                    },
+                    "wake_task": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                      "description": "任务 id，由中枢在创建时分配"
+                    },
+                    "instruction_seq": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "policy_version": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{12}$"
+                    },
+                    "matched_rules": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "rule_index": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "rule": {
+                            "type": "object",
+                            "properties": {
+                              "scope": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "const": "*"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                                    "description": "workspace 标识，形如 ws/<id>"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[^\\s/*]+$"
+                                  }
+                                ]
+                              },
+                              "action": {
+                                "type": "string",
+                                "pattern": "^[^\\s]+$"
+                              },
+                              "level": {
+                                "type": "string",
+                                "enum": [
+                                  "notify",
+                                  "draft-approve",
+                                  "supervisor",
+                                  "auto-report",
+                                  "auto"
+                                ]
+                              },
+                              "when": {
+                                "type": "object",
+                                "properties": {
+                                  "command_prefix": {
+                                    "description": "按原始命令词严格匹配前缀（不消去环境变量赋值、包装命令或执行文件路径，只接受空格与可见 ASCII）；串联请求的每段命令都必须满足",
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "paths": {
+                                    "description": "每个请求路径都须匹配至少一个模式；支持 *、**、?，路径使用 /",
+                                    "minItems": 1,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "push_to": {
+                                    "description": "只用于 git.push：单段 git push 推到执行器上报的任务分支（非默认分支），节点上报 push_env_ok，命令在任务 worktree 中执行；任何不确定都不满足",
+                                    "type": "string",
+                                    "const": "task_branch"
+                                  },
+                                  "gh_scope": {
+                                    "description": "用于 gh pr create|view|diff：不带 -R/--repo 与 --body-file、无环境变量前缀、--head 只能是任务分支、节点上报 gh_env_ok，命令在任务 worktree 中执行",
+                                    "type": "string",
+                                    "const": "workspace_repo"
+                                  }
+                                },
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "scope",
+                              "action",
+                              "level"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "legacy_tool_action": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "rule_hash": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          }
+                        },
+                        "required": [
+                          "rule_index",
+                          "rule"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "created_by",
+                    "origin",
+                    "policy_version"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "origin": {
               "anyOf": [
                 {
