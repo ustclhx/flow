@@ -2431,7 +2431,7 @@
             },
             "deliverables": {
               "minItems": 1,
-              "maxItems": 20,
+              "maxItems": 5,
               "type": "array",
               "items": {
                 "type": "string",

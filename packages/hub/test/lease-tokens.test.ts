@@ -42,7 +42,7 @@ test.each(['expired', 'ended', 'terminal', 'requeued'] as const)(
   '派工凭证在 %s 后失效',
   async (reason) => {
     const e = await setup()
-    if (reason === 'expired') e.advance(3_600_000)
+    if (reason === 'expired') must(e.store.append(e.d['task.lease_expired'], sys))
     if (reason === 'terminal') must(e.store.append(e.d['task.done'], sys))
     if (reason === 'requeued') must(e.store.append(e.d['task.requeued:lease_expired'], sys))
     if (reason === 'ended')
@@ -61,6 +61,31 @@ test.each(['expired', 'ended', 'terminal', 'requeued'] as const)(
     expect(e.authority.size()).toBe(0)
   },
 )
+
+test('到期时间已过但清扫前仍可鉴权，续约后沿用原凭证', async () => {
+  const e = await setup()
+  const grant = { task_id: e.id, lease_id: `l-${e.id}-1` }
+  e.advance(3_600_001)
+  expect(e.authority.authenticate(e.token)?.task_id).toBe(e.id)
+  expect(e.authority.ensure(grant)).toBeUndefined()
+  expect(e.store.renewLease(grant.lease_id, '2026-10-24T02:00:00.000Z')).toBe(true)
+  expect(e.authority.authenticate(e.token)?.task_id).toBe(e.id)
+})
+
+test('中枢重启后缺失凭证可重发一次，旧凭证在新 authority 中不可用', async () => {
+  const e = await setup()
+  const authority = createTaskTokenAuthority({ ledger: () => e.store })
+  const grant = { task_id: e.id, lease_id: `l-${e.id}-1` }
+  const token = authority.ensure(grant)
+  expect(token).toMatch(/^fls_/)
+  expect(authority.authenticate(e.token)).toBeNull()
+  expect(authority.authenticate(token ?? '')?.task_id).toBe(e.id)
+  expect(authority.ensure(grant)).toBeUndefined()
+  expect(authority.size()).toBe(1)
+  must(e.store.append(e.d['task.lease_expired'], sys))
+  expect(authority.ensure(grant)).toBeUndefined()
+  expect(authority.authenticate(token ?? '')).toBeNull()
+})
 
 test('HTTP 强制派工 scope，不能改 actor、task id 或调用写操作；绑定查询来自凭证', async () => {
   const e = await setup()
@@ -102,6 +127,6 @@ test('HTTP 强制派工 scope，不能改 actor、task id 或调用写操作；�
       })
     ).status,
   ).toBe(403)
-  e.advance(3_600_000)
+  must(e.store.append(e.d['task.lease_expired'], sys))
   expect((await app.request('/v1/binding', { headers })).status).toBe(401)
 })

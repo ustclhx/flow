@@ -109,6 +109,8 @@ export const PROTOCOL_ERRORS = {
   forbidden: { status: 403, kind: 'failure' },
   deliverable_not_found: { status: 422, kind: 'failure' },
   deliverable_check_failed: { status: 502, kind: 'failure' },
+  report_busy: { status: 429, kind: 'retryable' },
+  report_rate_limited: { status: 429, kind: 'retryable' },
   not_blocked: { status: 409, kind: 'failure' },
   reply_kind_mismatch: { status: 409, kind: 'failure' },
   reply_pending: { status: 409, kind: 'failure' },
@@ -797,6 +799,9 @@ export const renewLeaseData = z
   .object({
     lease_id: leaseId,
     expires_at: timestamp,
+    dispatch_token: z.string().min(16).optional().meta({
+      description: '中枢没有当前派工凭证记录时重新签发；节点须更新同一凭证文件',
+    }),
     cancel_requested: z
       .boolean()
       .meta({ description: '为 true 时节点应停止执行器并提交 cancelled' }),

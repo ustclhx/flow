@@ -24,14 +24,19 @@ test('任务绑定只列只读知识、本任务详情与上报；隐藏操作�
     const { tools } = await client.listTools()
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'kb_get',
-      'kb_proposals_diff',
-      'kb_proposals_list',
       'kb_query',
       'kb_search',
       'raindown_report',
       'task_show',
     ])
-    for (const name of ['task_create', 'task_respond', 'inbox_act', 'kb_journal']) {
+    for (const name of [
+      'task_create',
+      'task_respond',
+      'inbox_act',
+      'kb_journal',
+      'kb_proposals_list',
+      'kb_proposals_diff',
+    ]) {
       expect(await callJson(client, name, {})).toMatchObject({
         isError: true,
         doc: { ok: false, error: { code: 'unknown_tool' } },
@@ -51,19 +56,28 @@ test('任务绑定只列只读知识、本任务详情与上报；隐藏操作�
   }
 })
 
-test('supervisor 唤醒绑定继续列出全部操作', async () => {
-  const client = await connect({
-    actor: 'supervisor',
-    binding: { workspace: 'ws/demo', task: 'wake-a', replyOnly: true },
-  })
-  try {
-    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(
-      operations.map((op) => op.name),
-    )
-  } finally {
-    await client.close()
-  }
-})
+test.each([undefined, { workspace: 'ws/demo', task: 'wake-a', replyOnly: true }])(
+  '无绑定与 supervisor 唤醒保持原工具集，不列出 worker 上报（binding=%j）',
+  async (binding) => {
+    const client = await connect({
+      actor: 'supervisor',
+      ...(binding ? { binding } : {}),
+    })
+    try {
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(
+        operations.filter((op) => op.name !== 'raindown_report').map((op) => op.name),
+      )
+      expect(
+        await callJson(client, 'raindown_report', { status: 'progress', summary: '不应调用' }),
+      ).toMatchObject({
+        isError: true,
+        doc: { error: { code: 'unknown_tool' } },
+      })
+    } finally {
+      await client.close()
+    }
+  },
+)
 
 test('MCP 启动绑定以中枢响应为准，命令行仅核对，凭证失效就启动失败', async () => {
   const home = await mkdtemp(join(tmpdir(), 'raindown-mcp-binding-'))

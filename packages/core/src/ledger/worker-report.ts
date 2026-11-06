@@ -27,7 +27,7 @@ const reportShape = {
   question: text.optional(),
   options: z.array(reportOption).min(2).max(8).optional(),
   recommended: z.string().trim().min(1).max(100).optional(),
-  deliverables: z.array(z.string().url().max(2048)).min(1).max(20).optional(),
+  deliverables: z.array(z.string().url().max(2048)).min(1).max(5).optional(),
   missing: text.optional(),
   tried: text.optional(),
   reason: text.optional(),

@@ -254,6 +254,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
         leaseWaitMaxS: config.lease_wait_max_s,
         issueWakeToken: (grant) => wakeTokens.issue(grant),
         issueTaskToken: (grant) => taskTokens.issue(grant),
+        renewTaskToken: (grant) => taskTokens.ensure(grant),
         onResume: () => scheduler?.resume(),
         ...(options.logger ? { logger: options.logger } : {}),
       })

@@ -154,8 +154,8 @@ export function createRaindownMcpServer(opts: RaindownMcpServerOptions): Server 
   const bound = resolveMcpBinding(opts.binding)
   if (!bound.ok) throw new RaindownMcpConfigError(bound.error)
   const binding = bound.binding
-  const ops = (opts.operations ?? allOperations).filter(
-    (op) => binding?.kind !== 'task' || taskBindingAllows(op),
+  const ops = (opts.operations ?? allOperations).filter((op) =>
+    binding?.kind === 'task' ? taskBindingAllows(op) : op.name !== 'raindown_report',
   )
   const byName = new Map(ops.map((op) => [op.name, op]))
   if (byName.size !== ops.length) {

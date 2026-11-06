@@ -220,7 +220,13 @@ export function hubAuth(options: HubAuthOptions = {}): MiddlewareHandler {
         return
       }
       const id = show?.[1] ?? report?.[1]
-      if (!id || decodeURIComponent(id) !== task?.task_id) {
+      let decoded: string | undefined
+      try {
+        decoded = id === undefined ? undefined : decodeURIComponent(id)
+      } catch {
+        return errorResponse(c, 'invalid_arguments', '任务路径编码不合法')
+      }
+      if (!decoded || decoded !== task?.task_id) {
         return errorResponse(c, 'forbidden', '派工凭证只能读取与上报当前任务')
       }
       await next()

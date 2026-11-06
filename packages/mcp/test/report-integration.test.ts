@@ -11,6 +11,81 @@ const must = <T>(r: Result<T>): T => {
   return r.data
 }
 
+test('中枢重启后续约补发派工凭证，新令牌可用而旧令牌失效', async () => {
+  const home = await initTempHome('raindown-report-restart-')
+  const options = {
+    home,
+    port: 0,
+    logger: { info() {}, warn() {} },
+    secrets: { watch: false },
+    inbox: { watch: false, channels: [] },
+  }
+  let hub = must(await runHub(options))
+  try {
+    await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
+    const node = new HubClient({
+      home,
+      actor: 'user',
+      token: (await readFile(raindownPaths(home).hubToken, 'utf8')).trim(),
+    })
+    must(
+      await node.createTask({
+        goal: '恢复上报',
+        workspace: 'ws/product-res',
+        role: 'dev',
+        executor: 'fake',
+      }),
+    )
+    must(
+      await node.request('nodes-register', {
+        node_id: 'n-restart',
+        hostname: 'test',
+        version: '1',
+        capabilities: ['executor:fake'],
+      }),
+    )
+    const lease = must(
+      await node.request('leases-acquire', {
+        node_id: 'n-restart',
+        capabilities: ['executor:fake'],
+        wait_s: 0,
+      }),
+    ).lease
+    if (!lease?.dispatch_token) throw new Error('未下发派工凭证')
+    const oldWorker = new HubClient({ home, actor: 'dev', token: lease.dispatch_token })
+    expect((await oldWorker.request('session-binding')).ok).toBe(true)
+    await hub.stop()
+    hub = must(await runHub(options))
+    await writeFile(raindownPaths(home).hubConfig, `port: ${hub.port}\n`)
+    expect(await oldWorker.request('session-binding')).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized' },
+    })
+    const renewed = must(
+      await node.request('leases-renew', { lease_token: lease.lease_token }, lease.lease_id),
+    )
+    expect(renewed.dispatch_token).toBeString()
+    expect(renewed.dispatch_token).not.toBe(lease.dispatch_token)
+    if (!renewed.dispatch_token) throw new Error('未补发凭证')
+    const newWorker = new HubClient({ home, actor: 'dev', token: renewed.dispatch_token })
+    expect(await newWorker.request('session-binding')).toMatchObject({
+      ok: true,
+      data: { kind: 'task', task: { task_id: lease.task_id } },
+    })
+    expect(await oldWorker.request('session-binding')).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized' },
+    })
+    expect(
+      must(await node.request('leases-renew', { lease_token: lease.lease_token }, lease.lease_id))
+        .dispatch_token,
+    ).toBeUndefined()
+  } finally {
+    await hub.stop()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
 test('真实中枢派工经 MCP 上报、续约下发并引用 dropped 完成，结束后凭证失效', async () => {
   const home = await initTempHome('raindown-report-integration-')
   const previous = process.env.RAINDOWN_LEASE_TOKEN_FILE

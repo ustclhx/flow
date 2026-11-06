@@ -84,6 +84,8 @@ export interface NodeServiceOptions extends NodeProtocolConfig {
    */
   issueWakeToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
   issueTaskToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
+  /** 中枢重启等导致派工凭证记录丢失时，在续约响应补发。 */
+  renewTaskToken?: (grant: { lease_id: string; task_id: string }) => string | undefined
   /** 不影响请求结果的失败（例如任务分支上报写入失败）只记日志。 */
   logger?: Pick<HubLogger, 'warn'>
 }
@@ -409,19 +411,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
 
   /** 回复绑定到写入 task.replied 之前的卡住，不能借用之后出现的新回合。 */
   function replyBinding(taskId: string, replyId: string) {
-    let binding: { block_seq: number; approval_fingerprint?: string } | undefined
-    for (const event of ledger.taskEvents(taskId)) {
-      if (event.type === 'task.blocked') {
-        binding = {
-          block_seq: event.seq,
-          ...(event.payload.approval_fingerprint
-            ? { approval_fingerprint: event.payload.approval_fingerprint }
-            : {}),
-        }
-      }
-      if (event.type === 'task.replied' && event.payload.reply_id === replyId) return binding
-    }
-    return undefined
+    return ledger.replyBlock(taskId, replyId)
   }
 
   /** 恢复回复只属于紧接该次重新排队的派工，不能跨过其他派工或手动重新排队。 */
@@ -684,6 +674,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         ? reportBranch(ledger.getTask(task.id) ?? task, lease, req.data.branch)
         : undefined
       const after = ledger.getTask(task.id) ?? task
+      const dispatchToken = o.renewTaskToken?.({ lease_id: lease.lease_id, task_id: task.id })
       // 已请求取消的任务不再送达回复。
       const pending =
         after.status === 'blocked' && !after.cancel_requested ? ledger.pendingReply(task.id) : null
@@ -701,7 +692,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         if (!fetched.ok) return fetched
       }
       const lastBlock = req.data.blocked
-        ? ledger.taskEvents(task.id).findLast((e) => e.type === 'task.blocked')
+        ? ledger.latestTaskEvent(task.id, 'task.blocked')
         : undefined
       const reportedBlock =
         lastBlock?.type === 'task.blocked' &&
@@ -712,6 +703,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       return ok({
         lease_id: lease.lease_id,
         expires_at: expiresAt,
+        ...(dispatchToken ? { dispatch_token: dispatchToken } : {}),
         cancel_requested: after.cancel_requested,
         ...pendingReport(task, lease),
         ...(branchReport ? { branch_report: branchReport } : {}),
@@ -919,14 +911,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
             lease,
             completion.data,
             pending,
-            ledger
-              .taskEvents(task.id)
-              .flatMap((e) =>
-                e.type === 'task.reported' && e.payload.attempt === lease.attempt
-                  ? [e.payload.summary]
-                  : [],
-              )
-              .at(-1),
+            ledger.latestWorkerReport(task.id, lease.lease_id, lease.attempt)?.payload.summary,
           ),
         ],
         {
@@ -965,12 +950,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   }
 
   function reportFor(task: TaskView, lease: LeaseRecord, seq: number) {
-    const event = ledger.taskEvents(task.id).find((e) => e.seq === seq)
-    return event?.type === 'task.reported' &&
-      event.payload.lease_id === lease.lease_id &&
-      event.payload.attempt === lease.attempt
-      ? event
-      : null
+    return ledger.workerReport(task.id, lease.lease_id, lease.attempt, seq)
   }
 
   /** 消费以 seq 作水位，确认较新的上报后不再重新投递旧上报；重复确认幂等。 */
@@ -982,18 +962,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
     if (seq === undefined) return ok(null)
     if (!reportFor(task, lease, seq))
       return fail('usage', 'invalid_arguments', 'report_seq 必须引用本派工的上报')
-    if (
-      ledger
-        .taskEvents(task.id)
-        .some(
-          (e) =>
-            e.type === 'task.report_consumed' &&
-            e.payload.lease_id === lease.lease_id &&
-            e.payload.attempt === lease.attempt &&
-            e.payload.report_seq >= seq,
-        )
-    )
-      return ok(null)
+    if (ledger.workerReportWatermark(task.id, lease.lease_id, lease.attempt) >= seq) return ok(null)
     return ok({
       task_id: task.id,
       workspace: task.workspace,
@@ -1003,24 +972,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   }
 
   function pendingReport(task: TaskView, lease: LeaseRecord) {
-    const events = ledger.taskEvents(task.id)
-    const consumed = events.reduce(
-      (seq, e) =>
-        e.type === 'task.report_consumed' &&
-        e.payload.lease_id === lease.lease_id &&
-        e.payload.attempt === lease.attempt
-          ? Math.max(seq, e.payload.report_seq)
-          : seq,
-      0,
-    )
-    const event = events.findLast(
-      (e) =>
-        e.type === 'task.reported' &&
-        e.payload.lease_id === lease.lease_id &&
-        e.payload.attempt === lease.attempt &&
-        e.seq > consumed,
-    )
-    if (event?.type !== 'task.reported') return {}
+    const consumed = ledger.workerReportWatermark(task.id, lease.lease_id, lease.attempt)
+    const event = ledger.latestWorkerReport(task.id, lease.lease_id, lease.attempt)
+    if (!event || event.seq <= consumed) return {}
     const { lease_id: _, ...report } = event.payload
     return { report: { seq: event.seq, ...report } }
   }
@@ -1061,15 +1015,18 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       (req.outcome === 'done' && (report.status === 'ready' || report.status === 'dropped')) ||
       (req.outcome === 'failed' && report.status === 'failed')
     ) {
+      const artifacts = [...req.result.artifacts]
+      for (const ref of report.deliverables ?? []) {
+        if (!artifacts.some((artifact) => artifact.kind === 'pr' && artifact.ref === ref))
+          artifacts.push({ kind: 'pr', ref })
+      }
       return ok({
         ...req,
         result: {
           ...req.result,
           summary: report.summary,
           ...(report.reason ? { reported_reason: report.reason } : {}),
-          ...(report.deliverables
-            ? { artifacts: report.deliverables.map((ref) => ({ kind: 'pr' as const, ref })) }
-            : {}),
+          artifacts,
           ...(report.status === 'dropped' ? { dropped: true } : {}),
         },
       })

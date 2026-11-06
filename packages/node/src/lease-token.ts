@@ -1,4 +1,5 @@
-import { chmod, lstat, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { chmod, lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { raindownPaths } from '@raindown/core'
 
@@ -32,9 +33,15 @@ export async function writeLeaseTokenFile(
   const dir = leaseTokenDir(home, taskId)
   await privateDirectory(dir)
   const path = join(dir, `${leaseId}.token`)
-  await rm(path, { force: true })
-  await writeFile(path, `${token}\n`, { flag: 'wx', mode: 0o600 })
-  await chmod(path, 0o600)
+  // 同目录原子替换：MCP 每次读取同一路径时只会看到完整的旧 token 或新 token。
+  const pending = join(dir, `${leaseId}.${randomUUID()}.token`)
+  try {
+    await writeFile(pending, `${token}\n`, { flag: 'wx', mode: 0o600 })
+    await chmod(pending, 0o600)
+    await rename(pending, path)
+  } finally {
+    await rm(pending, { force: true })
+  }
   return path
 }
 
