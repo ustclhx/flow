@@ -400,13 +400,34 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   let closed = false
 
   /** 回复绑定到写入 task.replied 之前的卡住，不能借用之后出现的新回合。 */
-  function replyBlockSeq(taskId: string, replyId: string): number | undefined {
-    let seq: number | undefined
+  function replyBinding(taskId: string, replyId: string) {
+    let binding: { block_seq: number; approval_fingerprint?: string } | undefined
     for (const event of ledger.taskEvents(taskId)) {
-      if (event.type === 'task.blocked') seq = event.seq
-      if (event.type === 'task.replied' && event.payload.reply_id === replyId) return seq
+      if (event.type === 'task.blocked') {
+        binding = {
+          block_seq: event.seq,
+          ...(event.payload.approval_fingerprint
+            ? { approval_fingerprint: event.payload.approval_fingerprint }
+            : {}),
+        }
+      }
+      if (event.type === 'task.replied' && event.payload.reply_id === replyId) return binding
     }
     return undefined
+  }
+
+  /** 恢复回复只属于紧接该次重新排队的派工，不能跨过其他派工或手动重新排队。 */
+  function isLeaseResumeReply(taskId: string, leaseId: string, replyId: string): boolean {
+    const events = ledger.taskEvents(taskId)
+    const started = events.findIndex(
+      (event) => event.type === 'task.started' && event.payload.lease_id === leaseId,
+    )
+    for (let i = started - 1; i >= 0; i--) {
+      const event = events[i]
+      if (event?.type === 'task.requeued_with_reply') return event.payload.reply_id === replyId
+      if (event?.type === 'task.started' || event?.type === 'task.requeued') return false
+    }
+    return false
   }
 
   /** 在同一事务写 `task.started` + `lease.granted`；被其他请求抢先时返回 null。 */
@@ -456,7 +477,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         ? {
             resume: {
               ...resume,
-              reply: { ...resume.reply, block_seq: replyBlockSeq(task.id, resume.reply.reply_id) },
+              reply: { ...resume.reply, ...replyBinding(task.id, resume.reply.reply_id) },
             },
           }
         : {}),
@@ -676,7 +697,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
         reply: pending
           ? {
               reply_id: pending.id,
-              block_seq: replyBlockSeq(task.id, pending.id),
+              ...replyBinding(task.id, pending.id),
               kind: pending.kind,
               ...(pending.text === null ? {} : { text: pending.text }),
               by: pending.by,
@@ -707,6 +728,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
             `回复 ${reply.id} 已是 ${reply.state}，不能丢弃`,
           )
         }
+        if (reply.state === 'requeued' && !isLeaseResumeReply(task.id, lease.lease_id, reply.id)) {
+          return fail('failure', 'invalid_transition', `回复 ${reply.id} 不属于本租约的恢复回复`)
+        }
         const written = ledger.append(
           {
             task_id: task.id,
@@ -715,8 +739,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
             payload: {
               reply_id: reply.id,
               reason: 'round_closed',
-              message:
-                '这条回复没有送达，原因：授权回合已关闭或请求已变化。请查看当前任务后重新回复。',
+              message: `这条回复${req.data.attempted ? '可能没有' : '没有'}送达，原因：授权回合已关闭或请求已变化。请查看当前任务后重新回复。`,
             },
           },
           { actor: `node:${lease.node_id}` },
@@ -769,7 +792,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
                   ...base,
                   type: 'task.unblocked',
                   payload: {
-                    note: `${reply.by} 的${reply.kind === 'approve' ? '批准' : '回复'}未送达：待批请求已变化或环境复查未通过（${req.data.reason ?? 'request_changed'}）`,
+                    note: `${reply.by} 的${reply.kind === 'approve' ? '批准' : '回复'}${req.data.attempted ? '可能没有送达' : '未送达'}：待批请求已变化或环境复查未通过（${req.data.reason ?? 'request_changed'}）`,
                     dropped_reply_ids: [reply.id],
                   },
                 }
@@ -938,6 +961,9 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
           payload: {
             reason: req.blocked.reason,
             ...(req.blocked.request_id ? { request_id: req.blocked.request_id } : {}),
+            ...(req.blocked.approval_fingerprint
+              ? { approval_fingerprint: req.blocked.approval_fingerprint }
+              : {}),
             message: sanitizeMessage(req.blocked.message),
             ...(req.blocked.tail ? { tail: sanitizeTail(req.blocked.tail) } : {}),
             ...(req.blocked.session ? { session: req.blocked.session } : {}),

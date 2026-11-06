@@ -24,6 +24,7 @@ import { adapterCapabilities, NO_ADAPTER_CAPABILITIES, readAdapterCapabilities }
 import { actor, capability, executorType, leaseId, nodeId, taskId, timestamp } from './common.ts'
 import { PROTOCOL_MESSAGE_MAX } from './redact.ts'
 import {
+  approvalFingerprint,
   blockedDelegationShape,
   blockedReason,
   canTransition,
@@ -226,6 +227,7 @@ export const eventPayloads = {
     }),
   'task.blocked': z.strictObject({
     request_id: z.string().min(1).max(512).optional(),
+    approval_fingerprint: approvalFingerprint.optional(),
     reason: blockedReason,
     message: z.string().min(1),
     tail: z

@@ -302,7 +302,10 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         source_seq: e.seq,
         level: 'interrupt',
         reason: e.payload.reason,
-        title: clipText(`[${task.workspace}] 回复没有送达`, INBOX_TITLE_MAX),
+        title: clipText(
+          `[${task.workspace}] 回复${e.payload.message.startsWith('这条回复可能没有送达') ? '可能没有' : '没有'}送达`,
+          INBOX_TITLE_MAX,
+        ),
         body: clipText(
           `任务 ${task.id}\n回复 ${e.payload.reply_id}\n${e.payload.message}`,
           INBOX_BODY_MAX,

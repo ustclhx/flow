@@ -5,6 +5,7 @@ import { hostname as osHostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   type Activity,
+  approvalFingerprint,
   BLOCKED_REQUEST_TEXT_MAX,
   type BlockedReason,
   type BlockedRequest,
@@ -241,6 +242,7 @@ interface BlockedSignal {
   session?: string
   decision_id?: number
   request?: BlockedRequest
+  approval_fingerprint?: string
   diff_stat?: string
   no_delegate?: boolean
 }
@@ -579,13 +581,13 @@ class LeaseRunner {
   }
 
   /** 恢复时只允许拒收租约自带的回复，执行器不能指定其他回复。 */
-  private reportResumeReplyDropped() {
+  private reportResumeReplyDropped(details?: { attempted?: boolean }) {
     const reply = this.grant.resume?.reply
     if (!reply || this.released || this.delivered.has(reply.reply_id)) return
     this.delivered.add(reply.reply_id)
     this.unacked = {
       reply_id: reply.reply_id,
-      outcome: { outcome: 'dropped', reason: 'round_closed' },
+      outcome: { outcome: 'dropped', reason: 'round_closed', ...details },
     }
     void this.renewNow()
   }
@@ -598,7 +600,10 @@ class LeaseRunner {
       reply_id: u.reply_id,
       outcome: typeof u.outcome === 'string' ? u.outcome : u.outcome.outcome,
       ...(typeof u.outcome === 'object'
-        ? { reason: u.outcome.reason }
+        ? {
+            reason: u.outcome.reason,
+            ...(u.outcome.attempted !== undefined ? { attempted: u.outcome.attempted } : {}),
+          }
         : u.outcome === 'dropped'
           ? { reason: 'request_changed' as const }
           : {}),
@@ -618,9 +623,12 @@ class LeaseRunner {
     if (u.outcome === 'delivered') {
       // 中枢已写入 task.unblocked：回到 running，重新开始计时。
       this.enterRunning()
-    } else if (typeof u.outcome === 'object') {
+    } else if (typeof u.outcome === 'object' && u.outcome.reason === 'round_closed') {
       this.env.logger.info(`回复 ${u.reply_id} 已拒收：授权回合已关闭或请求已变化`)
-    } else if (u.outcome === 'dropped') {
+    } else if (
+      u.outcome === 'dropped' ||
+      (typeof u.outcome === 'object' && u.outcome.reason === 'request_changed')
+    ) {
       // supervisor 的批准被拒收（D15）：中枢已写 task.unblocked 并丢弃这条回复。worker 仍在等待，
       // 执行器随后重新报告停下；这次卡住以 no_delegate 上报，直接交给用户。
       this.env.logger.info(`回复 ${u.reply_id} 已拒收：待批请求已变化或环境复查未通过`)
@@ -667,7 +675,12 @@ class LeaseRunner {
       )
     } else if (isResumedSignal(a)) {
       // round_closed 只确认旧回复被拒收；确认重试期间的真实恢复仍须上报。
-      if (this.phase === 'blocked' && (!this.unacked || typeof this.unacked.outcome === 'object')) {
+      if (
+        this.phase === 'blocked' &&
+        (!this.unacked ||
+          (typeof this.unacked.outcome === 'object' &&
+            this.unacked.outcome.reason === 'round_closed'))
+      ) {
         this.signals.push({ resumed: { note: a.text ?? 'worker 自行恢复' } })
         this.enterRunning()
         void this.renewNow()
@@ -705,6 +718,7 @@ class LeaseRunner {
     this.cancelIdle()
     this.pauseTimeout()
     const session = v.session ?? (typeof hint?.session === 'string' ? hint.session : undefined)
+    const fingerprint = approvalFingerprint.safeParse(hint?.approval_fingerprint)
     const delegation = this.delegationFor(v.reason, hint)
     const gen = ++this.stuckGen
     const report = (diff?: string) => {
@@ -715,6 +729,7 @@ class LeaseRunner {
           reason: v.reason,
           message: v.message,
           ...(typeof hint?.request_id === 'string' ? { request_id: hint.request_id } : {}),
+          ...(fingerprint.success ? { approval_fingerprint: fingerprint.data } : {}),
           ...(tail.length > 0 ? { tail } : {}),
           ...(session ? { session } : {}),
           ...delegation,
@@ -1036,7 +1051,7 @@ class LeaseRunner {
           reportBranch: (report) => this.reportBranch(report),
           confirmApproval: (reply, live) => this.confirmApproval(reply, live),
           ...(grant.resume
-            ? { reportResumeReplyDropped: () => this.reportResumeReplyDropped() }
+            ? { reportResumeReplyDropped: (details) => this.reportResumeReplyDropped(details) }
             : {}),
         })
         const run = this.run

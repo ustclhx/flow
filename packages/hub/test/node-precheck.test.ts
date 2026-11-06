@@ -358,67 +358,78 @@ describe('卡住附带的请求文本与改动摘要', () => {
 })
 
 describe('ack-reply 拒收（dropped{reason: request_changed}）', () => {
-  test('supervisor 的批准被拒收：写 task.unblocked、回复标记 dropped，之后以 no_delegate 重新卡住', async () => {
-    const ctx = await setup()
-    const { id, lease } = await delegatedApprove(ctx)
-    must(
-      ctx.ledger.append(
-        {
-          task_id: id,
-          workspace: 'ws/demo',
-          type: 'task.replied',
-          payload: { reply_id: 'r-sup', kind: 'approve', via: 'supervisor', reason: '白名单内' },
-        },
-        { actor: 'supervisor' },
-      ),
-    )
-    const renewed = must(
-      ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token }),
-    )
-    expect(renewed.reply).toMatchObject({ reply_id: 'r-sup', kind: 'approve', by: 'supervisor' })
-    const ack = ctx.protocol.service.ackReply(lease.lease_id, {
-      lease_token: lease.lease_token,
-      reply_id: 'r-sup',
-      outcome: 'dropped',
-      reason: 'request_changed',
-    })
-    expect(ack.ok && ack.data.task.status).toBe('running')
-    expect(ctx.ledger.getReply('r-sup')).toMatchObject({ state: 'dropped' })
-    const unblocked = ctx.ledger.taskEvents(id).at(-1)
-    expect(unblocked).toMatchObject({
-      type: 'task.unblocked',
-      actor: 'node:n1',
-      payload: { dropped_reply_ids: ['r-sup'] },
-    })
-    expect(unblocked?.payload).not.toHaveProperty('reply_id')
-    // 重复确认是幂等的。
-    expect(
-      code(
-        ctx.protocol.service.ackReply(lease.lease_id, {
-          lease_token: lease.lease_token,
-          reply_id: 'r-sup',
-          outcome: 'dropped',
-          reason: 'request_changed',
-        }),
-      ),
-    ).toBe('ok')
-    // 节点以 no_delegate 重新上报卡住：新卡住不带 decision_id，任务视图记录 no_delegate。
-    must(
-      ctx.protocol.service.renew(lease.lease_id, {
+  test.each([false, true])(
+    'supervisor 的批准被拒收（attempted=%s）：记录送达语义并以 no_delegate 重新卡住',
+    async (attempted) => {
+      const ctx = await setup()
+      const { id, lease } = await delegatedApprove(ctx)
+      must(
+        ctx.ledger.append(
+          {
+            task_id: id,
+            workspace: 'ws/demo',
+            type: 'task.replied',
+            payload: { reply_id: 'r-sup', kind: 'approve', via: 'supervisor', reason: '白名单内' },
+          },
+          { actor: 'supervisor' },
+        ),
+      )
+      const renewed = must(
+        ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token }),
+      )
+      expect(renewed.reply).toMatchObject({ reply_id: 'r-sup', kind: 'approve', by: 'supervisor' })
+      const ack = ctx.protocol.service.ackReply(lease.lease_id, {
         lease_token: lease.lease_token,
-        blocked: { reason: 'awaiting_approval', message: '等待授权：pnpm lint', no_delegate: true },
-      }),
-    )
-    expect(ctx.ledger.getTask(id)?.blocked).toMatchObject({
-      reason: 'awaiting_approval',
-      no_delegate: true,
-    })
-    expect(ctx.ledger.getTask(id)?.blocked).not.toHaveProperty('decision_id')
-    // 续约不再返回已拒收的回复。
-    expect(
-      must(ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token })).reply,
-    ).toBeNull()
-  })
+        reply_id: 'r-sup',
+        outcome: 'dropped',
+        reason: 'request_changed',
+        attempted,
+      })
+      expect(ack.ok && ack.data.task.status).toBe('running')
+      expect(ctx.ledger.getReply('r-sup')).toMatchObject({ state: 'dropped' })
+      const unblocked = ctx.ledger.taskEvents(id).at(-1)
+      expect(unblocked).toMatchObject({
+        type: 'task.unblocked',
+        actor: 'node:n1',
+        payload: {
+          dropped_reply_ids: ['r-sup'],
+          note: `supervisor 的批准${attempted ? '可能没有送达' : '未送达'}：待批请求已变化或环境复查未通过（request_changed）`,
+        },
+      })
+      expect(unblocked?.payload).not.toHaveProperty('reply_id')
+      // 重复确认是幂等的。
+      expect(
+        code(
+          ctx.protocol.service.ackReply(lease.lease_id, {
+            lease_token: lease.lease_token,
+            reply_id: 'r-sup',
+            outcome: 'dropped',
+            reason: 'request_changed',
+          }),
+        ),
+      ).toBe('ok')
+      // 节点以 no_delegate 重新上报卡住：新卡住不带 decision_id，任务视图记录 no_delegate。
+      must(
+        ctx.protocol.service.renew(lease.lease_id, {
+          lease_token: lease.lease_token,
+          blocked: {
+            reason: 'awaiting_approval',
+            message: '等待授权：pnpm lint',
+            no_delegate: true,
+          },
+        }),
+      )
+      expect(ctx.ledger.getTask(id)?.blocked).toMatchObject({
+        reason: 'awaiting_approval',
+        no_delegate: true,
+      })
+      expect(ctx.ledger.getTask(id)?.blocked).not.toHaveProperty('decision_id')
+      // 续约不再返回已拒收的回复。
+      expect(
+        must(ctx.protocol.service.renew(lease.lease_id, { lease_token: lease.lease_token })).reply,
+      ).toBeNull()
+    },
+  )
 
   test('supervisor 的拒绝或文字回复不能拒收（只限批准）', async () => {
     const ctx = await setup()

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, statSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -150,13 +150,14 @@ const replyStateSchema = z.object({
   request_id: z.string().optional(),
   esc_sent: z.boolean().optional(),
   done: z.boolean().optional(),
-  /** supervisor 的批准被拒收（待批请求已变或环境复查未通过，D15）：没有发送任何按键。 */
+  /** 拒收结果；曾尝试输入但未能确认时，另用 drop_attempted 保留不确定性。 */
   dropped: z.boolean().optional(),
-  drop_reason: z.literal('round_closed').optional(),
+  drop_reason: z.enum(['round_closed', 'request_changed']).optional(),
+  drop_attempted: z.boolean().optional(),
 })
 type ReplyState = z.infer<typeof replyStateSchema>
 
-/** 授权回合随 Orca 会话保存，恢复时仍按原请求和 blocked seq 复核。 */
+/** 授权回合的本地缓存；恢复授权以中枢账本下发的 seq 与指纹为准。 */
 const approvalRoundSchema = z.object({
   request_id: z.string().min(1),
   fingerprint: z.string().min(1),
@@ -331,7 +332,9 @@ function isDirectory(
 const normLine = (l: string) => l.replace(/\(\d+[hms][^)]*\)/g, '()').replace(/\s+$/, '')
 /** 以识别出的整个弹窗绑定回合；严格命令解析仅用于代批与额外的执行证据。 */
 const approvalFingerprint = (a: TailAnalysis): string | undefined =>
-  a.kind === 'awaiting_approval' ? a.last_message.map(normLine).join('\n') : undefined
+  a.kind === 'awaiting_approval' ? a.last_message.join('\n') : undefined
+const fingerprintHash = (fingerprint: string): string =>
+  createHash('sha256').update(fingerprint).digest('hex')
 
 /** 把回复渲染成发进终端的文字（终端输入框里换行会提前提交，换成空格）。 */
 function replyText(reply: DeliveredReply): string {
@@ -417,6 +420,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       let decision: { popup: string; id: number } | undefined
       /** 关闭的回合也保留，迟到的回复不能借实时界面操作另一个请求。 */
       let approvalRound: z.infer<typeof approvalRoundSchema> | undefined
+      let restoredApprovalRound = false
       let resumeReplyHandled = false
       const inflight = new Map<string, Promise<DeliverResult>>()
       const directoryRetry = new AbortController()
@@ -427,7 +431,9 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       const rejectResumeReply = () => {
         if (resumeReplyHandled || !ctx.resume) return
         resumeReplyHandled = true
-        ctx.reportResumeReplyDropped?.()
+        const attempted =
+          state?.replies[ctx.resume.reply.reply_id]?.drop_attempted || approvalRound?.attempted
+        ctx.reportResumeReplyDropped?.(attempted ? { attempted: true } : undefined)
       }
       const finish = (r: Result<ExecutorOutcome>) => {
         if (finished) return
@@ -531,6 +537,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           if (!r.ok) logger?.warn(`关闭任务 ${ctx.taskId} 的终端失败`, r.error.message)
         }
         finish(ok({ outcome: 'cancelled', message }))
+        await saving
       }
       const onAbort = () => {
         void stop('codex-orca 已取消：终端已关闭，worktree 保留')
@@ -790,11 +797,17 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         if (!(await requireWorkdir())) return 'not_running'
         const st = replyState(reply.reply_id)
         if (st.done) return 'delivered'
-        if (st.dropped)
-          return st.drop_reason ? { outcome: 'dropped', reason: st.drop_reason } : 'dropped'
+        if (st.dropped) return droppedReply(st)
         if (await blockProjectConfig(state.worktree_path)) return 'not_running'
-        const round = approvalRound
-        if (round && reply.block_seq === round.blockSeq && st.round_id === undefined) {
+        const restoringApproval =
+          ctx.resume?.reply.reply_id === reply.reply_id && ctx.resume.reply.kind !== 'text'
+        let round = approvalRound
+        if (
+          !restoringApproval &&
+          round &&
+          reply.block_seq === round.blockSeq &&
+          st.round_id === undefined
+        ) {
           st.round_id = round.request_id
           await saveState()
         }
@@ -810,11 +823,40 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         }
         if (!(await requireWorkdir())) return 'not_running'
         if (now.data.status !== 'running') return 'not_running'
+        const h = handle
+        const live = analyzeTail(now.data.tail)
+        if (restoringApproval && !restoredApprovalRound) {
+          const granted = ctx.resume?.reply
+          const fingerprint = approvalFingerprint(live)
+          // 只以账本下发的 seq 与哈希恢复授权，本地 orca.json 中的回合不能提供授权依据。
+          // 固有限制：节点停机期间用户在终端处理后，同一命令的相同弹窗再次出现时，
+          // 指纹无法区分两次请求，携带的批准会作用于新请求。
+          if (
+            !granted?.block_seq ||
+            reply.block_seq !== granted.block_seq ||
+            fingerprint === undefined ||
+            granted.approval_fingerprint !== fingerprintHash(fingerprint)
+          ) {
+            throw new RoundClosedError('账本授权指纹缺失或与实时弹窗不一致，回复尚未送达')
+          }
+          const command = approvalForPrecheck(now.data.tail)?.command
+          round = approvalRound = {
+            request_id: randomUUID(),
+            fingerprint,
+            blockSeq: granted.block_seq,
+            ...(command ? { command } : {}),
+            closed: false,
+            attempted: approvalRound?.attempted === true,
+            evidence: command ? approvalExecutionLines(now.data.tail, command).length : 0,
+            reportedApproval: true,
+          }
+          st.round_id = round.request_id
+          restoredApprovalRound = true
+          await saveState()
+        }
         if (await detectOutsideApproval(now.data.tail)) {
           throw new RoundClosedError('待批命令已在 Raindown 之外获准执行，回复尚未送达')
         }
-        const h = handle
-        const live = analyzeTail(now.data.tail)
         if (round && approvalFingerprint(live) !== round.fingerprint) {
           round.closed = true
           await saveState()
@@ -824,6 +866,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         }
         const approval = live.kind === 'awaiting_approval'
         const prompt = approvalForPrecheck(now.data.tail)
+        const fingerprint = approvalFingerprint(live)
         const bound =
           round !== undefined &&
           !round.closed &&
@@ -831,13 +874,11 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           reply.block_seq !== undefined &&
           reply.block_seq === round.blockSeq &&
           st.round_id === round.request_id &&
-          approvalFingerprint(live) === round.fingerprint
+          fingerprint === round.fingerprint &&
+          reply.approval_fingerprint !== undefined &&
+          reply.approval_fingerprint === fingerprintHash(fingerprint)
         // approve/deny 不得降级成普通文字；在授权弹窗上发送 Esc 的文字回复也受同一回合约束。
         // 跨重启携带的授权回复须重新验证完整回合，不能沿用上个进程的 Esc 中间状态。
-        const restoringApproval =
-          !resumeReplyHandled &&
-          ctx.resume?.reply.reply_id === reply.reply_id &&
-          reply.kind !== 'text'
         if (
           (restoringApproval ||
             (!st.esc_sent && (reply.kind !== 'text' || approval || st.round_id !== undefined))) &&
@@ -851,14 +892,20 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         const drop = async (): Promise<DeliverResult> => {
           if (round) round.closed = true
           st.dropped = true
+          if (round?.attempted) {
+            st.drop_reason = 'request_changed'
+            st.drop_attempted = true
+          }
           await saveState()
           // 新的卡住直接交给用户：当前弹窗不再预检，监控循环随后照常上报停下。
           prechecked = approval ? live.last_message.join('\n') : undefined
           decision = undefined
           reported = false
           idlePolls = 0
-          status(`回复 ${reply.reply_id}（${reply.by} 批准）未送达：待批请求已变化或环境复查未通过`)
-          return 'dropped'
+          status(
+            `回复 ${reply.reply_id}（${reply.by} 批准）${round?.attempted ? '可能没有送达' : '未送达'}：待批请求已变化或环境复查未通过`,
+          )
+          return droppedReply(st)
         }
         if (reply.kind === 'approve' && reply.by === SUPERVISOR_ACTOR && !prompt) return drop()
         if (reply.kind === 'approve' && ctx.confirmApproval) {
@@ -913,7 +960,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             round !== approvalRound ||
             reply.block_seq !== round.blockSeq ||
             st.round_id !== round.request_id ||
-            approvalFingerprint(analyzeTail(current.data.tail)) !== round.fingerprint
+            approvalFingerprint(analyzeTail(current.data.tail)) !== round.fingerprint ||
+            reply.approval_fingerprint !== fingerprintHash(round.fingerprint)
           ) {
             if (round) round.closed = true
             throw new RoundClosedError('授权回合已关闭，回复尚未送达')
@@ -946,12 +994,21 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         return 'delivered'
       }
 
+      const droppedReply = (st: ReplyState): DeliverResult =>
+        st.drop_reason
+          ? {
+              outcome: 'dropped',
+              reason: st.drop_reason,
+              ...(st.drop_attempted ? { attempted: true } : {}),
+            }
+          : 'dropped'
+
       const deliver = (reply: DeliveredReply): Promise<DeliverResult> => {
         if (finished) return Promise.resolve('not_running')
-        if (state?.replies[reply.reply_id]?.done) return Promise.resolve('delivered')
-        if (state?.replies[reply.reply_id]?.dropped) {
-          const reason = state.replies[reply.reply_id]?.drop_reason
-          return Promise.resolve(reason ? { outcome: 'dropped', reason } : 'dropped')
+        const previous = state?.replies[reply.reply_id]
+        if (previous?.done) return Promise.resolve('delivered')
+        if (previous?.dropped) {
+          return Promise.resolve(droppedReply(previous))
         }
         const running = inflight.get(reply.reply_id)
         if (running) return running
@@ -962,9 +1019,10 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             const st = replyState(reply.reply_id)
             st.dropped = true
             st.drop_reason = 'round_closed'
+            st.drop_attempted = approvalRound?.attempted === true
             await saveState()
-            status(`这条回复没有送达：${error.message}`)
-            return { outcome: 'dropped', reason: 'round_closed' }
+            status(`这条回复${st.drop_attempted ? '可能' : ''}没有送达：${error.message}`)
+            return droppedReply(st)
           })
           .finally(() => inflight.delete(reply.reply_id))
         inflight.set(reply.reply_id, p)
@@ -998,7 +1056,10 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         message: a.message,
         tail: redactLines(tail).slice(-STUCK_TAIL),
         ...(approvalRound && approvalFingerprint(a) === approvalRound.fingerprint
-          ? { request_id: approvalRound.request_id }
+          ? {
+              request_id: approvalRound.request_id,
+              approval_fingerprint: fingerprintHash(approvalRound.fingerprint),
+            }
           : {}),
         ...extra,
       })

@@ -2028,6 +2028,11 @@
               "minLength": 1,
               "maxLength": 512
             },
+            "approval_fingerprint": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "description": "节点上报的授权弹窗 SHA-256，用于恢复时核对原请求"
+            },
             "reason": {
               "type": "string",
               "enum": [

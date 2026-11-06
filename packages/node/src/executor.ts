@@ -43,8 +43,9 @@ export interface ExecutorContext {
   /**
    * 恢复时发现回复所属授权回合已关闭或请求不匹配：节点拒收当前 resume.reply，通知回复者。
    * 不接受回复 id；可在 run 初始化期间调用，节点在执行结束前完成确认与临时失败重试。
+   * 已尝试输入但不能确认送达时传 `attempted: true`，通知保留送达结果的不确定性。
    */
-  reportResumeReplyDropped?: () => void
+  reportResumeReplyDropped?: (details?: { attempted?: boolean }) => void
   /**
    * 策略预检（add-m1-inbox 2.3）：执行器把审批请求交给用户之前先调用，`allow` 时在本地放行。
    * 节点为每个租约绑定任务 id；缺省（例如单元测试直接运行执行器）时执行器一律交给用户。
@@ -111,14 +112,14 @@ export interface StuckVerdict {
 
 /**
  * 回复送达结果：worker 已不在运行时返回 not_running，中枢会让任务带着回复重新排队；
- * dropped 字符串表示 `confirmApproval` 拒收 supervisor 的批准；round_closed 表示回复所属回合已关闭，
- * 中枢只丢弃这条回复并通知用户，保留当前任务状态。
+ * dropped 字符串或 request_changed 表示 `confirmApproval` 拒收 supervisor 的批准；round_closed 表示
+ * 回复所属回合已关闭，中枢只丢弃这条回复并通知用户，保留当前任务状态；attempted 标记已尝试但不能确认的输入。
  */
 export type DeliverResult =
   | 'delivered'
   | 'not_running'
   | 'dropped'
-  | { outcome: 'dropped'; reason: 'round_closed' }
+  | { outcome: 'dropped'; reason: 'round_closed' | 'request_changed'; attempted?: boolean }
 
 /** 执行器的最终结果：done / failed 附带结果，blocked 附带原因与说明。 */
 export type ExecutorOutcome =

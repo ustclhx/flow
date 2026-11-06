@@ -8,6 +8,7 @@ import {
   DIFF_STAT_MAX,
   defaultSupervisorConfig,
   delegationEnabled,
+  deliveredReply,
   describeSupervisorConfig,
   ledgerEvent,
   loadWorkspaces,
@@ -103,6 +104,31 @@ describe('合同 inputs.wake 与 inputs.review（1.5）', () => {
 })
 
 describe('账本事件与协议字段（1.1、1.6）', () => {
+  test('授权弹窗指纹在卡住上报、账本和送达回复中只接受64位小写SHA-256', () => {
+    const blocked = { reason: 'awaiting_approval', message: '请求运行 pnpm check' }
+    for (const approval_fingerprint of [
+      '0123456789abcdef'.repeat(4),
+      'a'.repeat(63),
+      'A'.repeat(64),
+      'g'.repeat(64),
+    ]) {
+      const valid = approval_fingerprint === '0123456789abcdef'.repeat(4)
+      const payload = { ...blocked, approval_fingerprint }
+      expect(event('task.blocked', { ...task, payload }).success).toBe(valid)
+      expect(
+        renewLeaseRequest.safeParse({ lease_token: 'x'.repeat(24), blocked: payload }).success,
+      ).toBe(valid)
+      expect(
+        deliveredReply.safeParse({
+          reply_id: 'r-1',
+          kind: 'approve',
+          by: 'user',
+          approval_fingerprint,
+        }).success,
+      ).toBe(valid)
+    }
+  })
+
   test('task.created 的 origin 只能是 instruction 或 autonomous', () => {
     expect(event('task.created', { ...task, payload: { contract } }).success).toBe(true)
     for (const origin of ['instruction', 'autonomous']) {

@@ -801,6 +801,12 @@ export const replyId = z
 export const REPLY_STATES = ['pending', 'delivered', 'requeued', 'dropped'] as const
 export const replyState = z.enum(REPLY_STATES)
 
+/** 账本保存的授权弹窗指纹；节点恢复时以此核对原请求。 */
+export const approvalFingerprint = z
+  .string()
+  .regex(/^[a-f0-9]{64}$/)
+  .meta({ description: '节点上报的授权弹窗 SHA-256，用于恢复时核对原请求' })
+
 /** 送达给执行器的回复。 */
 export const deliveredReply = z
   .object({
@@ -811,6 +817,7 @@ export const deliveredReply = z
       .min(1)
       .optional()
       .meta({ description: '这条回复所针对的 task.blocked seq' }),
+    approval_fingerprint: approvalFingerprint.optional(),
     kind: replyKind,
     text: z.string().optional(),
     by: z.string().meta({ description: '回复者（task.replied 的 actor）' }),

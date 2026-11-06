@@ -32,6 +32,7 @@ import {
 } from './supervisor-api.ts'
 import {
   activity,
+  approvalFingerprint,
   blockedReason,
   deliveredReply,
   outOfBandSignal,
@@ -728,6 +729,7 @@ export const renewLeaseRequest = z
     blocked: z
       .strictObject({
         request_id: z.string().min(1).max(512).optional(),
+        approval_fingerprint: approvalFingerprint.optional(),
         reason: blockedReason,
         message: blockedMessage,
         tail: blockedTail,
@@ -851,6 +853,9 @@ export const ackReplyRequest = z
       .enum(['request_changed', 'round_closed'])
       .optional()
       .meta({ description: 'outcome 为 dropped 时必填：拒收的原因' }),
+    attempted: z.boolean().optional().meta({
+      description: '拒收回复时是否已经尝试注入；true 表示可能已送达',
+    }),
   })
   .refine((r) => (r.outcome === 'dropped') === (r.reason !== undefined), {
     message: 'outcome 为 dropped 时必须带 reason，其他 outcome 不能带 reason',
