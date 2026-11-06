@@ -8,6 +8,22 @@
       "minLength": 1,
       "description": "结果摘要"
     },
+    "completed_via": {
+      "description": "工作目录丢失或崩溃后，中枢依据本任务已存在的 PR 判定完成",
+      "type": "string",
+      "const": "existing_pr"
+    },
+    "prs": {
+      "description": "已存在 PR 判定所依据的 PR",
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 512,
+        "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
+        "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
+      }
+    },
     "artifacts": {
       "default": [],
       "type": "array",

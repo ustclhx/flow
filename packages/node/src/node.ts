@@ -1048,6 +1048,7 @@ class LeaseRunner {
           },
           signal: this.abort.signal,
           ...(grant.resume ? { resume: grant.resume } : {}),
+          ...(grant.recovery ? { recovery: grant.recovery } : {}),
           ...(wakeTokenFile ? { wakeTokenFile } : {}),
           precheck,
           reportBranch: (report) => this.reportBranch(report),

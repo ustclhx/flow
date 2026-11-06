@@ -13,6 +13,7 @@ import {
   type Role,
   redactLines,
   redactSecrets,
+  renderRecoveryPrompt,
   SUPERVISOR_ACTOR,
   type TaskContract,
   type TaskResult,
@@ -424,6 +425,9 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       let approvalRound: z.infer<typeof approvalRoundSchema> | undefined
       let restoredApprovalRound = false
       let resumeReplyHandled = false
+      const recoveryText = ctx.recovery ? renderRecoveryPrompt(ctx.recovery) : undefined
+      // 与用户回复的 r-* id 分离；保存 request id，重试送达时沿用 Orca 的幂等机制。
+      const recoveryId = `recovery-${ctx.attempt}`
       const inflight = new Map<string, Promise<DeliverResult>>()
       const directoryRetry = new AbortController()
 
@@ -724,21 +728,33 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
       }
 
       /** 发一段文字并确认 Codex 开始了这一轮（幂等：同一个 request id 不会重发）。 */
-      const sendPrompt = async (h: string, text: string, st: ReplyState) => {
+      const sendPrompt = async (
+        h: string,
+        text: string,
+        st: ReplyState,
+        beforeSend?: () => Promise<void>,
+        requireStarted = false,
+      ) => {
+        const confirmed = (r: OrcaSendResult) =>
+          r.send.accepted &&
+          (requireStarted
+            ? !r.send.prompt || r.send.prompt.stages.includes('turn_started')
+            : started(r))
         // Esc 后的文字可以重试，但复核回执和补发回车前也不能越过新的授权弹窗。
-        const guardPrompt = st.esc_sent
-          ? async () => {
-              const current = await orca.terminalRead({ handle: h, limit: 200 })
-              if (!current.ok) throw new TransientDeliverError(current.error.message)
-              if (current.data.status !== 'running') {
-                await terminalExited(current.data)
-                throw new TransientDeliverError('终端已退出，回复尚未送达')
-              }
-              const kind = analyzeTail(current.data.tail).kind
-              if (kind === 'awaiting_approval' || kind === 'trust_prompt')
-                throw new RoundClosedError('拒绝后出现新的授权弹窗，回复尚未送达')
+        const guardPrompt = async () => {
+          await beforeSend?.()
+          if (st.esc_sent) {
+            const current = await orca.terminalRead({ handle: h, limit: 200 })
+            if (!current.ok) throw new TransientDeliverError(current.error.message)
+            if (current.data.status !== 'running') {
+              await terminalExited(current.data)
+              throw new TransientDeliverError('终端已退出，回复尚未送达')
             }
-          : undefined
+            const kind = analyzeTail(current.data.tail).kind
+            if (kind === 'awaiting_approval' || kind === 'trust_prompt')
+              throw new RoundClosedError('拒绝后出现新的授权弹窗，回复尚未送达')
+          }
+        }
         if (!st.request_id) {
           const r = await sendOrThrow(
             { handle: h, text, enter: true, waitSubmitS: sendWaitS },
@@ -746,7 +762,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           )
           if (!r.send.accepted) throw new TransientDeliverError('Orca 没有接受这次输入')
           const id = r.send.prompt?.requestId
-          if (started(r) || !id) return
+          if (confirmed(r)) return true
+          if (!id) return !requireStarted
           st.request_id = id
           await saveState()
         }
@@ -761,11 +778,12 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             },
             guardPrompt,
           )
-          if (r.ok && started(r.data)) return
+          if (r.ok && confirmed(r.data)) return true
         }
         // 输入已被接受但没观察到开始：回车可能被吞掉，补发一次。
         status('终端没有确认这一轮开始，补发一次回车')
-        await send({ handle: h, enter: true }, guardPrompt)
+        const submitted = await send({ handle: h, enter: true }, guardPrompt)
+        return submitted.ok && confirmed(submitted.data)
       }
 
       /** 轮询与送达前共用同一判定，防止外部批准恰好发生在两次轮询之间。 */
@@ -983,8 +1001,20 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             await saveState()
             await sleep(clock, 1_000)
           }
-          const text = replyText(reply)
-          if (text) await sendPrompt(h, text, st)
+          const recovery = replyState(recoveryId)
+          const needsRecovery = recoveryText !== undefined && !recovery.done
+          if (needsRecovery && recovery.request_id)
+            throw new TransientDeliverError('恢复提示已接受，等待原 request id 确认后再送达回复')
+          const text = [
+            ...(needsRecovery ? [recoveryText.replace(/\n/g, ' ')] : []),
+            replyText(reply),
+          ].join(' ')
+          if (text) {
+            const submitted = await sendPrompt(h, text, st, undefined, needsRecovery)
+            if (needsRecovery && !submitted)
+              throw new TransientDeliverError('恢复提示尚未确认开始，等待幂等重验')
+          }
+          if (recoveryText) recovery.done = true
         }
         if (round) round.closed = true
         st.done = true
@@ -1040,6 +1070,47 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
         } catch (error) {
           if (!(error instanceof TransientDeliverError)) throw error
           logger?.warn('恢复回复暂时未送达，下一轮重试', error.message)
+        }
+      }
+
+      /** 重挂接不会重读 spec；只在普通输入框可用时送达，绝不把恢复文字当成批准按键。 */
+      const deliverRecoveryPrompt = async () => {
+        if (!recoveryText || !handle || replyState(recoveryId).done || inflight.size > 0) return
+        // 已合并到恢复回复的输入只由该回复的 request id 重验，避免再独立发送一遍。
+        if (ctx.resume && !resumeReplyHandled) return
+        const h = handle
+        const guard = async () => {
+          const current = await orca.terminalRead({ handle: h, limit: 200 })
+          if (!current.ok) throw new TransientDeliverError(current.error.message)
+          const kind = analyzeTail(current.data.tail).kind
+          if (
+            current.data.status !== 'running' ||
+            kind === 'working' ||
+            kind === 'trust_prompt' ||
+            kind === 'awaiting_approval' ||
+            !current.data.tail.some((line) => /^›(?:\s|$)|\? for shortcuts/.test(line.trim()))
+          ) {
+            throw new TransientDeliverError('普通输入框尚不可用，恢复提示等待下一次送达')
+          }
+        }
+        try {
+          await guard()
+          const delivery = replyState(recoveryId)
+          const submitted = await sendPrompt(
+            h,
+            recoveryText.replace(/\n/g, ' '),
+            delivery,
+            guard,
+            true,
+          )
+          if (!submitted) throw new TransientDeliverError('恢复提示尚未确认开始，等待幂等重验')
+          delivery.done = true
+          await saveState()
+          reported = false
+          idlePolls = 0
+          status('已把恢复提示送进已有终端')
+        } catch (error) {
+          if (!(error instanceof TransientDeliverError)) throw error
         }
       }
 
@@ -1138,6 +1209,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           await sleep(clock, pollMs, ctx.signal)
           if (finished || stopping || !handle || !(await requireWorkdir())) return
           await deliverResumeReply()
+          await deliverRecoveryPrompt()
           if (finished || stopping) return
           if (!state || (await blockProjectConfig(state.worktree_path))) return
           const r = await orca.terminalRead({ handle, limit: 200 })
@@ -1363,6 +1435,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           context,
           ...(scope ? { scope } : {}),
           ...(ctx.resume?.reply.kind === 'text' ? { resume: ctx.resume } : {}),
+          ...(ctx.recovery ? { recovery: ctx.recovery } : {}),
         })
         const specPath = await writeTaskSpec(options.home, ctx.taskId, spec)
         if (finished || stopping) return
@@ -1395,6 +1468,7 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
             prevTail = tail
             status(`接着使用已有的终端 ${handle}`)
             await deliverResumeReply()
+            await deliverRecoveryPrompt()
           }
         }
         if (!handle) {
@@ -1431,6 +1505,8 @@ export function createCodexOrcaExecutor(options: CodexOrcaOptions): ExecutorPlug
           if (await blockProjectConfig(st.worktree_path)) return
           launchedHere = true
           st.handle = handle
+          // 新终端的首条输入已从 spec 读取恢复提示。
+          if (recoveryText) replyState(recoveryId).done = true
           st.codex_home = isolated.data
           if (term.data.ptyId) st.pty_id = term.data.ptyId
           else delete st.pty_id

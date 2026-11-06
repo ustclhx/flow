@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { taskContract } from '@raindown/core'
+import { renderRecoveryPrompt, type TaskRecovery, taskContract } from '@raindown/core'
 import { renderTaskSpec, resolveContext, writeTaskSpec } from '../src/codex-orca/spec.ts'
 import { orcaHome } from './codex-orca-helpers.ts'
 
@@ -46,6 +46,16 @@ const base = {
 }
 
 describe('renderTaskSpec', () => {
+  test('恢复派工的说明开头使用 core 模板；首次派工不加提示', () => {
+    const recovery: TaskRecovery = {
+      previous_end: { attempt: 1, reason: 'lease_expired' },
+      prs: [],
+    }
+    expect(renderTaskSpec({ ...base, recovery })).toStartWith(
+      `${renderRecoveryPrompt(recovery)}\n\n# Raindown`,
+    )
+    expect(renderTaskSpec(base)).toStartWith('# Raindown')
+  })
   test('完整的任务说明', () => {
     expect(renderTaskSpec({ ...base, scope: ['README.md', 'docs/'] })).toMatchSnapshot()
   })

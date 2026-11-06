@@ -1,7 +1,14 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, normalize } from 'node:path'
-import { parseFrontmatter, raindownPaths, type TaskContract, type TaskResume } from '@raindown/core'
+import {
+  parseFrontmatter,
+  raindownPaths,
+  renderRecoveryPrompt,
+  type TaskContract,
+  type TaskRecovery,
+  type TaskResume,
+} from '@raindown/core'
 
 /**
  * 任务说明的渲染与存档（add-m1-executors 2.2；executor-codex-orca "任务说明"）。
@@ -32,6 +39,7 @@ export interface TaskSpecInput {
   scope?: readonly string[]
   /** 带着回复重新开始时的上一轮回复。 */
   resume?: TaskResume
+  recovery?: TaskRecovery
 }
 
 /** 本任务在节点上的状态目录：`state/tasks/<id>/`。 */
@@ -95,6 +103,7 @@ export function renderTaskSpec(input: TaskSpecInput): string {
         )
       : ['（合同没有指定验收命令；请运行仓库约定的检查）']
   const out = [
+    ...(input.recovery ? [renderRecoveryPrompt(input.recovery), ''] : []),
     `# Raindown 任务 ${input.taskId}`,
     '',
     `- workspace：\`${contract.workspace}\``,

@@ -142,7 +142,7 @@ export function createApplier(db: Database): Applier {
         setStatus(
           e,
           'done',
-          ', finished_at = ?, result_json = ?',
+          ', finished_at = ?, result_json = ?, blocked_json = NULL',
           e.ts,
           JSON.stringify(e.payload.result),
         )

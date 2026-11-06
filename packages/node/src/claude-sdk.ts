@@ -32,6 +32,7 @@ import {
   readScope,
   redactLines,
   redactSecrets,
+  renderRecoveryPrompt,
   reviewerRoleProblem,
   reviewOutput,
   SUPERVISOR_ACTOR,
@@ -1055,13 +1056,16 @@ export function createClaudeSdkExecutor(options: ClaudeSdkExecutorOptions): Exec
         })
         // 首条用户消息：恢复会话时是回复本身，否则是任务说明（无会话可恢复时把回复附在后面）。
         const resume = sessionCtx.resume
-        const first = resume?.session
+        const taskInput = resume?.session
           ? renderReply(resume.reply)
           : [
               renderTaskPrompt(contract, sessionCtx.cwd),
               ...(review ? ['', reviewPromptSection(review)] : []),
               ...(resume ? ['', renderReply(resume.reply)] : []),
             ].join('\n')
+        const first = sessionCtx.recovery
+          ? `${renderRecoveryPrompt(sessionCtx.recovery)}\n\n${taskInput}`
+          : taskInput
         if (resume) seenReplies.add(resume.reply.reply_id)
         input.push(userMessage(first))
         status(

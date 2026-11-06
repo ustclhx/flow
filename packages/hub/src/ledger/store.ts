@@ -802,6 +802,19 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return invalidEvent(`事件的 workspace ${draft.workspace} 与任务的 ${task.workspace} 不一致`)
     }
     switch (draft.type) {
+      case 'task.done': {
+        if (draft.payload.result.completed_via !== 'existing_pr') return ok(null)
+        const blocked = lastBlocked(draft.task_id)
+        if (
+          draft.actor !== 'hub' ||
+          task?.status !== 'blocked' ||
+          !blocked ||
+          !['workdir_missing', 'crashed'].includes(blocked.payload.reason)
+        ) {
+          return invalidEvent('已有 PR 完成判定只允许中枢结束因工作目录丢失或崩溃卡住的任务')
+        }
+        return ok(null)
+      }
       case 'policy.decided':
         return draft.payload.task_id === draft.task_id
           ? ok(null)
