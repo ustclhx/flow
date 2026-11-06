@@ -39,7 +39,6 @@ import {
   type TaskContract,
   type TaskOrigin,
   type TaskShowResponse,
-  type TaskStage,
   type TaskView,
   USER_ACTOR,
   type VerifyStep,
@@ -962,26 +961,43 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
     listTasks(filter = {}) {
       const parsed = listTasksQuery.safeParse(filter)
       if (!parsed.success) return invalidArguments('查询参数', parsed.error.issues, filter)
-      const { stage, limit, ...filters } = parsed.data
-      const staged = (list: TaskView[]) =>
-        list.map((task) => ({ ...task, stage: readTaskStage(ledger, task) }))
-      const waitingHumanFirst = (a: { stage: TaskStage | null }, b: { stage: TaskStage | null }) =>
-        Number(isWaitingHumanStage(b.stage)) - Number(isWaitingHumanStage(a.stage))
-      // 不过滤阶段：保留 SQL 的排序与 LIMIT，只在这一页内把等人的任务排到最前。
-      if (stage === undefined) {
-        return ok({
-          tasks: staged(ledger.listTasks({ ...filters, limit })).sort(waitingHumanFirst),
-        })
+      const { stage, limit, offset = 0, ...filters } = parsed.data
+      // 未结束的候选：每个任务只读一次事件派生阶段；终态任务没有阶段，不读事件。
+      const open = ledger
+        .listTasks({ ...filters, open_only: true, limit: -1 })
+        .map((task) => ({ ...task, stage: readTaskStage(ledger, task) }))
+      if (stage !== undefined) {
+        // 按阶段过滤：offset 作用于过滤后的结果，不能交给 SQL。
+        const tasks = open
+          .filter((task) =>
+            stage === 'waiting-human' ? isWaitingHumanStage(task.stage) : task.stage === stage,
+          )
+          .slice(offset, offset + limit)
+        return ok({ tasks })
       }
-      // 按阶段过滤：终态任务没有阶段，只取未结束的候选，派生阶段后再过滤、排序与截取；
-      // offset 作用于过滤后的结果，不能交给 SQL。
-      const { offset = 0, ...candidates } = filters
-      const tasks = staged(ledger.listTasks({ ...candidates, open_only: true, limit: -1 }))
-        .filter((task) =>
-          stage === 'waiting-human' ? isWaitingHumanStage(task.stage) : task.stage === stage,
-        )
-        .sort(waitingHumanFirst)
-        .slice(offset, offset + limit)
+      // 默认顺序：全部等人的任务（按创建倒序）在前，其余按 SQL 原顺序接在后面，再整体分页；
+      // 等人的任务不会因为有更多较新的任务而被挤出第一页，翻页（例如按 PR 的指针分页）保持确定。
+      const waiting = open.filter((task) => isWaitingHumanStage(task.stage))
+      const head = waiting.slice(offset, offset + limit)
+      const need = limit - head.length
+      const stages = new Map(open.map((task) => [task.id, task.stage]))
+      const rest =
+        need <= 0
+          ? []
+          : ledger
+              .listTasks({
+                ...filters,
+                exclude_ids: waiting.map((task) => task.id),
+                limit: need,
+                offset: Math.max(0, offset - waiting.length),
+              })
+              .map((task) => ({
+                ...task,
+                stage: stages.has(task.id)
+                  ? (stages.get(task.id) ?? null)
+                  : readTaskStage(ledger, task),
+              }))
+      const tasks = [...head, ...rest]
       return ok({ tasks })
     },
 

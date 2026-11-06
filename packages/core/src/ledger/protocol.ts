@@ -518,8 +518,7 @@ export const listTasksQuery = z
   })
   .meta({
     title: 'GET /v1/tasks 查询参数',
-    description:
-      '按创建时间倒序取 limit 条，页内等人的任务优先；按阶段过滤时只在未结束的任务中筛选',
+    description: '等人的任务优先，同组按创建时间倒序',
   })
 export type ListTasksQuery = z.infer<typeof listTasksQuery>
 

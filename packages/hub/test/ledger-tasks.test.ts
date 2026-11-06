@@ -462,7 +462,8 @@ test('旧账本中的相对 cwd 合同仍可 list、show、读取事件及领取
   expect(granted.data.lease?.contract.cwd).toBe('./legacy-repo')
 })
 
-describe('任务列表的阶段派生开销（PR #83 审查 1）', () => {
+describe('任务列表的阶段派生与等人优先（PR #83 审查）', () => {
+  /** 最早建的任务卡住等人回答，之后两个排队任务，再之后 60 个已取消任务。 */
   async function spied() {
     const l = await tempLedger()
     cleanups.push(l.cleanup)
@@ -485,6 +486,9 @@ describe('任务列表的阶段派生开销（PR #83 审查 1）', () => {
     for (let i = 0; i < 3; i++) {
       open.push(must(await tasks.createTask(contractInput(), { actor: 'user' })).task.id)
     }
+    const waiting = open[0] ?? ''
+    const d = startTask(l.store, waiting)
+    must(l.store.append(d['task.blocked'], sys))
     const closed: string[] = []
     for (let i = 0; i < 60; i++) {
       const id = must(await tasks.createTask(contractInput(), { actor: 'user' })).task.id
@@ -492,37 +496,50 @@ describe('任务列表的阶段派生开销（PR #83 审查 1）', () => {
       closed.push(id)
     }
     reads.length = 0
-    return { tasks, reads, open, closed }
+    return { tasks, reads, open, closed, waiting }
   }
 
-  test('不过滤阶段时保留 SQL 的 LIMIT，终态任务不读事件，阶段为 null', async () => {
-    const { tasks, reads, closed } = await spied()
+  test('较早的等人任务在 60 个较新的已取消任务之后仍排在默认列表第一位；终态任务不读事件', async () => {
+    const { tasks, reads, open, closed, waiting } = await spied()
     const page = must(tasks.listTasks({})).tasks
     expect(page).toHaveLength(50)
-    expect(page.every((t) => t.status === 'cancelled' && t.stage === null)).toBe(true)
-    expect(page[0]?.id).toBe(closed.at(-1))
-    expect(reads).toEqual([])
-    expect(must(tasks.listTasks({ limit: 5 })).tasks).toHaveLength(5)
-    expect(reads).toEqual([])
+    expect(page[0]).toMatchObject({ id: waiting, stage: 'waiting-human-answer' })
+    expect(page.slice(1).map((t) => t.id)).toEqual([...closed].reverse().slice(0, 49))
+    expect(page.slice(1).every((t) => t.stage === null)).toBe(true)
+    // 只为未结束的任务读事件，且每个只读一次。
+    expect([...reads].sort()).toEqual([...open].sort())
+    expect(must(tasks.listTasks({ limit: 1 })).tasks.map((t) => t.id)).toEqual([waiting])
   })
 
-  test('按阶段过滤只取未结束的候选，每个任务只读一次事件', async () => {
-    const { tasks, reads, open } = await spied()
-    const queued = must(tasks.listTasks({ stage: 'queued' })).tasks
-    expect(queued.map((t) => t.id).sort()).toEqual([...open].sort())
+  test('分页覆盖“等人在前、其余按创建倒序”的整体顺序，不重不漏', async () => {
+    const { tasks, open, closed, waiting } = await spied()
+    const expected = [waiting, ...[...closed].reverse(), open[2] ?? '', open[1] ?? '']
+    const seen: string[] = []
+    for (let offset = 0; ; offset += 7) {
+      const page = must(tasks.listTasks({ limit: 7, offset })).tasks
+      seen.push(...page.map((t) => t.id))
+      if (page.length < 7) break
+    }
+    expect(seen).toEqual(expected)
+  })
+
+  test('按阶段过滤只取未结束的候选，offset 作用于过滤之后', async () => {
+    const { tasks, reads, open, waiting } = await spied()
+    const queued = must(tasks.listTasks({ stage: 'queued' })).tasks.map((t) => t.id)
+    expect(queued).toEqual([open[2] ?? '', open[1] ?? ''])
     expect([...reads].sort()).toEqual([...open].sort())
-    expect(must(tasks.listTasks({ stage: 'queued', limit: 2 })).tasks).toHaveLength(2)
-    // offset 作用于阶段过滤之后的结果，而不是 SQL 候选。
-    expect(must(tasks.listTasks({ stage: 'queued', offset: 2 })).tasks.map((t) => t.id)).toEqual([
-      queued[2]?.id ?? '',
+    expect(must(tasks.listTasks({ stage: 'queued', offset: 1 })).tasks.map((t) => t.id)).toEqual([
+      open[1] ?? '',
     ])
-    expect(must(tasks.listTasks({ stage: 'waiting-human' })).tasks).toEqual([])
+    expect(must(tasks.listTasks({ stage: 'waiting-human' })).tasks.map((t) => t.id)).toEqual([
+      waiting,
+    ])
     expect(must(tasks.listTasks({ stage: 'queued', status: 'cancelled' })).tasks).toEqual([])
   })
 
   test('任务详情只读一次事件，同时给出阶段', async () => {
     const { tasks, reads, open } = await spied()
-    const id = open[0] ?? ''
+    const id = open[1] ?? ''
     expect(must(tasks.getTask(id)).task.stage).toBe('queued')
     expect(reads).toEqual([id])
   })

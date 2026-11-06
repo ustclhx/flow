@@ -1781,6 +1781,11 @@ describe('读取指针与关联任务（6.3）', () => {
     }
     expect(restored).toHaveLength(119)
     expect(restored).not.toContain('history-119')
+    // 第三次唤醒仍在“不得读取未涉及任务历史”的限制下构造。
+    env.store.taskEvents = (id) => {
+      if (id.startsWith('history-') && id !== 'history-0') throw new Error('不得读取未涉及任务历史')
+      return originalEvents.call(env.store, id)
+    }
     for (let i = 0; i < 200; i++) {
       const id = `current-${i}`
       must(
