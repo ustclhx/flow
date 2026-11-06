@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   BLOCKED_REASONS,
   defaultInboxLevel,
+  INBOX_SOURCES,
   jsonSchemas,
   loadInboxConfig,
   parseInboxConfig,
@@ -45,6 +46,50 @@ describe('默认分级', () => {
 })
 
 describe('分级覆盖', () => {
+  test('来源允许自身原因、无来源的全局原因规则和无原因的来源规则', () => {
+    const levels = [
+      ...BLOCKED_REASONS.map((reason) => ({ source: 'task', reason, level: 'digest' })),
+      { source: 'task_retry', reason: 'user', level: 'decide' },
+      { source: 'task_retry', reason: 'supervisor', level: 'decide' },
+      ...[...BLOCKED_REASONS, 'user', 'supervisor'].map((reason) => ({ reason, level: 'digest' })),
+      ...INBOX_SOURCES.map((source) => ({ source, level: 'interrupt' })),
+    ]
+    const c = must(parseInboxConfig({ levels }))
+    expect(c.errors).toEqual([])
+    expect(c.levels).toHaveLength(levels.length)
+    const global = must(parseInboxConfig({ levels: [{ reason: 'supervisor', level: 'decide' }] }))
+    expect(resolveInboxLevel(global, { source: 'task_retry', reason: 'supervisor' })).toBe('decide')
+  })
+
+  test('来源与原因不兼容时只排除该规则，并报告原始索引的 reason 字段', () => {
+    const c = must(
+      parseInboxConfig({
+        levels: [
+          { source: 'task', reason: 'user', level: 'digest' },
+          { source: 'task', reason: 'supervisor', level: 'digest' },
+          { source: 'task_retry', reason: 'question', level: 'digest' },
+          { source: 'proposal', reason: 'question', level: 'digest' },
+          { source: 'task_retry', reason: 'supervisor', level: 'decide' },
+        ],
+      }),
+    )
+    expect(c.levels.map((r) => r.rule_index)).toEqual([4])
+    expect(
+      c.errors.map(({ file, field, rule_index, code }) => ({ file, field, rule_index, code })),
+    ).toEqual(
+      [0, 1, 2, 3].map((rule_index) => ({
+        file: 'config/inbox.yaml',
+        field: `levels.${rule_index}.reason`,
+        rule_index,
+        code: 'invalid_field',
+      })),
+    )
+    expect(c.errors[0]?.message).toContain('task 的 reason 必须是卡住原因')
+    expect(c.errors[2]?.message).toContain('task_retry 的 reason 必须是 user 或 supervisor')
+    expect(c.errors[3]?.message).toContain('proposal 不支持 reason 条件')
+    expect(resolveInboxLevel(c, { source: 'task_retry', reason: 'supervisor' })).toBe('decide')
+  })
+
   test('重试支持来源、发起者和 workspace 多级覆盖，严格拒绝拼写错误', () => {
     const c = must(
       parseInboxConfig({

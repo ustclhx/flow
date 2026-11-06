@@ -616,7 +616,14 @@ describe('合并请求的资格（D10 第 4 步）', () => {
       ),
     )
     await reactor.idle()
-    expect(s.ledger.listInboxItems({ source: 'task_retry' })).toEqual(notices)
+    const closedNotices = s.ledger.listInboxItems({ source: 'task_retry' })
+    expect(closedNotices).toHaveLength(1)
+    expect(closedNotices[0]).toMatchObject({
+      id: notices[0]?.id,
+      body: notices[0]?.body,
+      state: 'closed',
+      closed: { reason: 'task_done' },
+    })
     const approved = must(await s.request(w.token, rv))
     expect(approved.mode).toBe('approval')
     expect(

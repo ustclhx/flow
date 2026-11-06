@@ -61,6 +61,22 @@ export const inboxLevelRuleSchema = z
       .meta({ description: '只匹配该卡住原因或重试发起者（user、supervisor）；缺省匹配所有原因' }),
     level: levelInput,
   })
+  .superRefine((rule, ctx) => {
+    if (rule.source === undefined || rule.reason === undefined) return
+    const retryReason = rule.reason === 'user' || rule.reason === 'supervisor'
+    if (rule.source === 'task' && !retryReason) return
+    if (rule.source === 'task_retry' && retryReason) return
+    ctx.addIssue({
+      code: 'custom',
+      path: ['reason'],
+      message:
+        rule.source === 'task'
+          ? 'task 的 reason 必须是卡住原因'
+          : rule.source === 'task_retry'
+            ? 'task_retry 的 reason 必须是 user 或 supervisor'
+            : `${rule.source} 不支持 reason 条件`,
+    })
+  })
   .meta({ title: 'Inbox level rule', description: '一条分级覆盖规则' })
 
 /** 本地时间 `HH:MM`（24 小时制）。 */

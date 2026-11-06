@@ -26,12 +26,24 @@ test('工具说明与 supervisor 提示说明租约、取消、唤醒与自主�
   }
 })
 
-test('升级说明明确 failed 重试是不能直接回滚的单向迁移', async () => {
-  const docs = await readFile(new URL('../../../docs/daemon.md', import.meta.url), 'utf8')
-  expect(docs).toContain('出现重试过的 failed 任务后不能回滚到本版本之前的中枢')
-  expect(docs).toContain('单向迁移')
-  expect(docs).toContain('task.requeued')
-  expect(docs).toContain('task.started')
-  expect(docs).toContain('ledger_inconsistent')
-  expect(docs).toContain('使用升级前的备份')
+test('两份升级说明覆盖任何任务重试及通知对旧中枢和旧客户端的回滚限制', async () => {
+  for (const file of ['daemon.md', 'supervisor.md']) {
+    const docs = await readFile(new URL(`../../../docs/${file}`, import.meta.url), 'utf8')
+    expect(docs).toMatch(/任何一次任务重试（包括它生成的收件箱通知）之后[^。]*旧中枢与旧客户端/)
+    expect(docs).toMatch(/task\.requeued[^。]*strictObject[^。]*requested_by[^。]*retry_reason/)
+    expect(docs).toMatch(
+      /inbox\.item_created[^。]*source[^。]*task_retry[^。]*旧 CLI[^。]*收件箱[^。]*失败/,
+    )
+    expect(docs).toMatch(/failed → queued[^。]*task\.started[^。]*ledger_inconsistent/)
+    expect(docs).toContain('使用升级前的备份')
+  }
+})
+
+test('supervisor 权限说明按创建者逐级约束重试，继承 origin 不授予用户任务重试权限', async () => {
+  const docs = await readFile(new URL('../../../docs/supervisor.md', import.meta.url), 'utf8')
+  const permissions = docs.split('## 3. 权限与硬性上限')[1]?.split('## 4.')[0] ?? ''
+  expect(permissions).toMatch(/created_by[^。]*每一级[^。]*supervisor[^。]*hub/)
+  expect(permissions).toMatch(
+    /用户手工创建[^。]*接受提案后以 `user` 创建[^。]*继承 origin[^。]*user[^。]*重试/,
+  )
 })

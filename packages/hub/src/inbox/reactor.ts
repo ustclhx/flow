@@ -373,6 +373,29 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     })
   }
 
+  /** 终态结束此前重试通知的生命周期；后续重试不能被旧终态关闭。 */
+  function closeRetryDrafts(
+    task: TaskView,
+    e: LedgerEvent,
+    reason: InboxCloseReason,
+  ): EventInput[] {
+    return ledger
+      .listInboxItems({ task_id: task.id, source: 'task_retry', state: 'open', limit: 1000 })
+      .filter((item) => Number(item.id.slice('retry.'.length)) < e.seq)
+      .map((item) => ({
+        type: 'inbox.item_closed',
+        task_id: task.id,
+        workspace: task.workspace,
+        payload: {
+          item_id: item.id,
+          reason,
+          note: `任务进入 ${e.type.slice('task.'.length)} 终态，自动关闭重试通知`,
+          cause_seq: e.seq,
+          cause_actor: e.actor,
+        },
+      }))
+  }
+
   function onTaskLeft(e: LedgerEvent, reason: InboxCloseReason) {
     const task = ledger.getTask(e.task_id ?? '')
     if (!task) return
@@ -396,6 +419,9 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         // supervisor 代回复不是收件箱渠道：关闭记录只留 cause_actor（supervisor），不写 via。
         ...(via && via !== 'supervisor' ? { via } : {}),
       }),
+      ...(e.type === 'task.done' || e.type === 'task.failed' || e.type === 'task.cancelled'
+        ? closeRetryDrafts(task, e, reason)
+        : []),
     )
   }
 
@@ -558,7 +584,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
    * - 未关闭的任务条目，若任务已不再因该事件卡住，按任务当前状态关闭；
    * - 仍处于 blocked、最近一次卡住还没有对应条目的任务，补开条目。条目已存在（包括已被用户
    *   忽略而关闭的）就不动：同一次卡住只开一次。
-   * - 带外、拒收与主动重试通知独立于当前任务状态，扫描源事件补齐写入失败的历史条目。
+   * - 带外、拒收与主动重试通知扫描源事件补齐；重试通知在其后的任务终态自动关闭。
    */
   function reconcile() {
     needsReconcile = false
@@ -594,6 +620,28 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
         workspace: task.workspace,
         payload: { item_id: item.id, reason: STATUS_CLOSE[task.status] },
       })
+    }
+    // 游标可能已越过终态，通知也可能在补齐历史时才创建，因此按源 seq 再核对一次。
+    for (const item of ledger.listInboxItems({
+      source: 'task_retry',
+      state: 'open',
+      limit: 10_000,
+    })) {
+      if (item.task_id === null) continue
+      const task = ledger.getTask(item.task_id)
+      if (!task) continue
+      const sourceSeq = Number(item.id.slice('retry.'.length))
+      const ended = ledger
+        .taskEvents(task.id)
+        .find(
+          (event) =>
+            event.seq > sourceSeq &&
+            (event.type === 'task.done' ||
+              event.type === 'task.failed' ||
+              event.type === 'task.cancelled'),
+        )
+      const reason = ended ? CLOSING[ended.type] : undefined
+      if (ended && reason !== undefined) write(...closeRetryDrafts(task, ended, reason))
     }
     // 这里的写入再失败时 needsReconcile 重新置位：下一轮 drain（有新事件时）或下次启动再试，不在此循环重试。
   }

@@ -167,7 +167,55 @@ describe('task_retry 收件箱通知', () => {
     expect(item?.body).toContain('上次失败摘要')
     expect(item?.body).toContain('上次日志')
     expect(item?.body).not.toContain('后续失败不能串入')
-    expect(item?.state).toBe('open')
+    expect(item).toMatchObject({ state: 'closed', closed: { reason: 'task_failed' } })
+  })
+
+  test.each(['done', 'failed', 'cancelled'] as const)(
+    '任务 %s 时关闭重试通知，重复处理与重启保持幂等',
+    async (status) => {
+      const { store, reactor } = await setup()
+      const r = reactor()
+      r.start()
+      blocked(store, 'terminal')
+      const event = retry(store, 'terminal', 'supervisor')
+      await r.idle()
+      const d = startTask(store, 'terminal', 2)
+      const terminal = must(store.append(d[`task.${status}`], { actor: 'node:n1' }))
+      await r.idle()
+      const item = store.getInboxItem(`retry.${event.seq}`)
+      expect(item).toMatchObject({
+        state: 'closed',
+        closed: { reason: `task_${status}`, cause_actor: 'node:n1' },
+      })
+      expect(item?.closed?.note).toContain('自动关闭重试通知')
+      r.stop()
+      const seq = store.seq()
+      const fresh = reactor()
+      fresh.handle(terminal)
+      fresh.start()
+      fresh.reconcile()
+      await fresh.idle()
+      expect(store.seq()).toBe(seq)
+      must(store.rebuild())
+      expect(store.getInboxItem(`retry.${event.seq}`)).toEqual(item)
+    },
+  )
+
+  test('终态只关闭此前的重试通知，之后的新重试通知保持打开', async () => {
+    const { store, reactor } = await setup()
+    blocked(store, 'again')
+    const first = retry(store, 'again', 'user')
+    const d = startTask(store, 'again', 2)
+    must(store.append(d['task.failed'], { actor: 'node:n1' }))
+    const second = retry(store, 'again', 'user')
+    const r = reactor()
+    r.start()
+    await r.idle()
+    expect(store.getInboxItem(`retry.${first.seq}`)).toMatchObject({
+      state: 'closed',
+      closed: { reason: 'task_failed' },
+    })
+    expect(store.getInboxItem(`retry.${second.seq}`)?.state).toBe('open')
   })
 
   test('旧账 user/supervisor manual 使用 note；hub manual 与租约过期不通知', async () => {
@@ -268,7 +316,8 @@ describe('task_retry 收件箱通知', () => {
     await healed.idle()
     expect(store.getInboxItem(`retry.${event.seq}`)).toMatchObject({
       level: 'interrupt',
-      state: 'open',
+      state: 'closed',
+      closed: { reason: 'task_done' },
     })
     expect(store.getInboxItem(`retry.${event.seq}`)?.body).toContain('执行器退出 137')
     expect(store.listInboxItems({ source: 'task_retry' })).toHaveLength(1)
