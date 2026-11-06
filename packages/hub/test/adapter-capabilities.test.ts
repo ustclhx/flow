@@ -86,13 +86,13 @@ test('旧节点注册、旧投影与旧注册事件重放都补齐保守能力',
 
 test('HTTP 注册剥离未来能力键，已知能力字段类型错误仍拒绝', async () => {
   const { routes } = await setup()
-  const register = (adapter_capabilities: unknown) =>
+  const register = (adapter_capabilities: unknown, mode?: unknown) =>
     routes.request('/v1/nodes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...registration,
-        executors: [{ type: 'custom-harness', adapter_capabilities, future_metadata: true }],
+        executors: [{ type: 'custom-harness', mode, adapter_capabilities, future_metadata: true }],
       }),
     })
   const response = await register({ ...NO_ADAPTER_CAPABILITIES, future_feature: true })
@@ -103,10 +103,12 @@ test('HTTP 注册剥离未来能力键，已知能力字段类型错误仍拒绝
   ])
   const invalid = await register({ ...NO_ADAPTER_CAPABILITIES, resume_session: 'true' })
   expect(invalid.status).toBe(400)
+  const invalidMode = await register(NO_ADAPTER_CAPABILITIES, 'future-mode')
+  expect(invalidMode.status).toBe(400)
 })
 
 test.each(['event', 'projection'] as const)(
-  '读取 %s 的未来能力键与未知字段值时逐项降级，保留其他已知能力',
+  '读取 %s 的未来 mode、能力键与未知字段值时逐项降级，保留其他已知能力',
   async (source) => {
     const { path, store, service } = await setup()
     const registered = service.registerNode(
@@ -117,6 +119,7 @@ test.each(['event', 'projection'] as const)(
     const executors = [
       {
         type: 'custom-harness',
+        mode: 'future-mode',
         future_metadata: true,
         adapter_capabilities: {
           approval_requests: 'future-approval-mode',
@@ -146,7 +149,9 @@ test.each(['event', 'projection'] as const)(
       db.close()
     }
     if (source === 'event') expect(store.rebuild().ok).toBe(true)
-    expect(store.getNode(registration.node_id)?.executors).toEqual([
+    const storedExecutors = store.getNode(registration.node_id)?.executors
+    expect(JSON.stringify(storedExecutors)).not.toContain('"mode"')
+    expect(storedExecutors).toEqual([
       {
         type: 'custom-harness',
         adapter_capabilities: {

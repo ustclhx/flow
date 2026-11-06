@@ -14,6 +14,7 @@ import { actor, capability, leaseId, nodeId, taskId, timestamp } from './common.
 import {
   decisionPath,
   executorInfo,
+  filterUnknownEventTypes,
   ledgerEvent,
   mergeRequestId,
   REPLY_REASON_MAX,
@@ -501,6 +502,11 @@ export const showTaskData = z
   })
   .meta({ title: 'GET /v1/tasks/:id' })
 export type ShowTaskData = z.infer<typeof showTaskData>
+
+/** CLI 与节点共用的任务详情读侧兼容规则，不放宽已知事件的载荷校验。 */
+export const compatibleShowTaskData = showTaskData.extend({
+  events: z.preprocess(filterUnknownEventTypes, showTaskData.shape.events),
+})
 
 export const cancelTaskRequest = z
   .strictObject({ reason: z.string().optional() })

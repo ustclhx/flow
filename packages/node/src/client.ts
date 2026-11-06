@@ -9,6 +9,7 @@ import {
   acquireLeaseData,
   type CompleteLeaseData,
   type CompleteLeaseRequest,
+  compatibleShowTaskData,
   completeLeaseData,
   ENDPOINTS,
   errorBody,
@@ -16,7 +17,6 @@ import {
   HEADERS,
   HUB_TOKEN_ENV,
   HUB_UNAVAILABLE,
-  isKnownEventType,
   type ListTasksData,
   listNodesData,
   listTasksData,
@@ -38,28 +38,9 @@ import {
   renewLeaseData,
   resolveHubUrl,
   type ShowTaskData,
-  showTaskData,
   type TaskStatus,
 } from '@raindown/core'
-import { z } from 'zod'
-
-/** 较新中枢可能返回新增事件；仅跳过未知类型，已知事件和损坏信封仍按协议严格校验。 */
-const compatibleShowTaskData = showTaskData.extend({
-  events: z.preprocess(
-    (events) =>
-      Array.isArray(events)
-        ? events.filter(
-            (event) =>
-              typeof event !== 'object' ||
-              event === null ||
-              !('type' in event) ||
-              typeof event.type !== 'string' ||
-              isKnownEventType(event.type),
-          )
-        : events,
-    showTaskData.shape.events,
-  ),
-})
+import type { z } from 'zod'
 
 /**
  * 节点访问中枢的最小 HTTP 客户端：只覆盖 nodes / leases（含 ack-reply）端点（node-protocol spec），
