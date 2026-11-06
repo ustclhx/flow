@@ -46,6 +46,7 @@ const REASON_LABEL: Record<string, string> = {
 const SOURCE_LABEL: Record<string, string> = {
   task: '任务',
   out_of_band: '带外操作',
+  reply_delivery: '回复送达',
   proposal: '修改提案',
   policy: '自动放行记录',
   supervisor: 'supervisor 提问',

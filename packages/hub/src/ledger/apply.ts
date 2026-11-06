@@ -179,6 +179,9 @@ export function createApplier(db: Database): Applier {
         }
         setStatus(e, 'running', ', blocked_json = NULL')
         return
+      case 'task.reply_dropped':
+        stmt(`UPDATE replies SET state = 'dropped' WHERE id = ?`).run(e.payload.reply_id)
+        return
       case 'task.replied':
         stmt(
           `INSERT INTO replies (id, task_id, kind, text, by, created_at, created_seq, state)

@@ -218,6 +218,7 @@ export const eventPayloads = {
       message: 'task.failed 至少需要 result 或 message',
     }),
   'task.blocked': z.strictObject({
+    request_id: z.string().min(1).max(512).optional(),
     reason: blockedReason,
     message: z.string().min(1),
     tail: z
@@ -241,6 +242,11 @@ export const eventPayloads = {
         'node_lost 时节点掉线之前的卡住原因，例如 awaiting_approval（仍可 approve / deny）',
     }),
     ...blockedDelegationShape,
+  }),
+  'task.reply_dropped': z.strictObject({
+    reply_id: replyId,
+    reason: z.literal('round_closed'),
+    message: z.string().min(1).max(2000),
   }),
   'task.out_of_band': outOfBandSignal,
   'task.unblocked': z.strictObject({
@@ -637,6 +643,7 @@ export const EVENT_SCOPES: Record<EventType, Scope> = {
   'task.done': 'task',
   'task.failed': 'task',
   'task.blocked': 'task',
+  'task.reply_dropped': 'task',
   'task.out_of_band': 'task',
   'task.unblocked': 'task',
   'task.replied': 'task',
@@ -795,6 +802,10 @@ export const TASK_EVENT_RULES: Readonly<
   // blocked → blocked：只用于"本轮结束"（lease_held=false），例如卡住期间 worker 崩溃、节点掉线（D7a）。
   'task.blocked': { from: ['running', 'verifying', 'blocked'], to: 'blocked' },
   'task.out_of_band': {
+    from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed', 'cancelled'],
+    to: 'unchanged',
+  },
+  'task.reply_dropped': {
     from: ['queued', 'running', 'verifying', 'blocked', 'done', 'failed', 'cancelled'],
     to: 'unchanged',
   },

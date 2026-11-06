@@ -784,6 +784,12 @@ export const replyState = z.enum(REPLY_STATES)
 export const deliveredReply = z
   .object({
     reply_id: replyId,
+    block_seq: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .meta({ description: '这条回复所针对的 task.blocked seq' }),
     kind: replyKind,
     text: z.string().optional(),
     by: z.string().meta({ description: '回复者（task.replied 的 actor）' }),

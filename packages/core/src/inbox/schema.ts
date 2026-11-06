@@ -38,6 +38,7 @@ export const INBOX_LEVEL_RANK: Readonly<Record<InboxLevel, number>> = {
 export const INBOX_SOURCES = [
   'task',
   'out_of_band',
+  'reply_delivery',
   'proposal',
   'policy',
   'supervisor',

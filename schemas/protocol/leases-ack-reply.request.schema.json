@@ -14,7 +14,7 @@
     },
     "outcome": {
       "default": "delivered",
-      "description": "dropped：节点拒收这条回复（例如 supervisor 的批准送达时待批请求已变），中枢写入 task.unblocked 并丢弃它，节点随后以 no_delegate 重新上报卡住",
+      "description": "dropped：round_closed 只丢弃该回复并通知用户，保留当前任务状态；request_changed 仅用于 supervisor 的批准，中枢解除卡住后由节点以 no_delegate 重新上报",
       "type": "string",
       "enum": [
         "delivered",
@@ -26,7 +26,8 @@
       "description": "outcome 为 dropped 时必填：拒收的原因",
       "type": "string",
       "enum": [
-        "request_changed"
+        "request_changed",
+        "round_closed"
       ]
     }
   },

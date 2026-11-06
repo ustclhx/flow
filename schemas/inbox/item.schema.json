@@ -26,6 +26,7 @@
       "enum": [
         "task",
         "out_of_band",
+        "reply_delivery",
         "proposal",
         "policy",
         "supervisor",

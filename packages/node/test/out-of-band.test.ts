@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { ok, type Result } from '@raindown/core'
+import { NO_ADAPTER_CAPABILITIES, ok, type Result } from '@raindown/core'
 import {
   ActivityQueue,
   type ExecutorOutcome,
@@ -23,6 +23,7 @@ test('带外信号经节点续约上报，临时失败重试且中枢只记一�
   })
   const executor: ExecutorPlugin = {
     type: 'probe',
+    adapterCapabilities: NO_ADAPTER_CAPABILITIES,
     classify: () => ({ reason: 'awaiting_approval', message: '等待授权：gh pr create' }),
     run: () => ({
       activity,

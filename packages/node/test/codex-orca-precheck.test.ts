@@ -82,8 +82,23 @@ async function start(
     ...extra,
   })
   const activity: Activity[] = []
+  let blockSeq = 0
+  const replySequences = new Map<string, number>()
+  const originalDeliver = run.deliver?.bind(run)
+  run.deliver = (reply) => {
+    const seq = reply.block_seq ?? replySequences.get(reply.reply_id) ?? blockSeq
+    replySequences.set(reply.reply_id, seq)
+    return originalDeliver?.({ ...reply, block_seq: seq }) ?? Promise.resolve('not_running')
+  }
   void (async () => {
-    for await (const a of run.activity) activity.push(a)
+    for await (const a of run.activity) {
+      activity.push(a)
+      if (a.data?.idle) {
+        blockSeq++
+        const hint = a.data.hint as { request_id?: string } | undefined
+        if (hint?.request_id) run.bindBlocked?.({ seq: blockSeq, request_id: hint.request_id })
+      }
+    }
   })()
   let outcome: Result<ExecutorOutcome> | undefined
   void run.done.then((o) => {
@@ -496,7 +511,7 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
     // 新的弹窗尚未上报，旧回合的用户批准也不能按键。
     await expect(
       s.run.deliver?.({ reply_id: 'r-2', kind: 'approve', by: 'user' }),
-    ).rejects.toThrow()
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
     expect(s.enters()).toHaveLength(0)
     await s.poll(2)
     expect(await s.run.deliver?.({ reply_id: 'r-3', kind: 'approve', by: 'user' })).toBe(
@@ -517,7 +532,7 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
     await s.poll(2)
     await expect(
       s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'supervisor' }),
-    ).rejects.toThrow()
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
     expect(lives).toEqual([])
     expect(s.orca.ops('terminalSend')).toHaveLength(0)
     await s.run.cancel()
@@ -539,7 +554,7 @@ describe('codex-orca 的代回复支撑（D15，tasks 5.6）', () => {
     await s.poll(2)
     await expect(
       s.run.deliver?.({ reply_id: 'user-old', kind: 'approve', by: 'user' }),
-    ).rejects.toThrow()
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
     expect(s.enters()).toHaveLength(0)
     await s.run.cancel()
   })

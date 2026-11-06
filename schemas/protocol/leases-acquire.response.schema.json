@@ -861,6 +861,12 @@
                           "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
                           "description": "回复 id，由中枢在收到回复时分配"
                         },
+                        "block_seq": {
+                          "description": "这条回复所针对的 task.blocked seq",
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
                         "kind": {
                           "type": "string",
                           "enum": [

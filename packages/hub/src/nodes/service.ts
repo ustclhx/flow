@@ -379,6 +379,16 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
   let draining = false
   let closed = false
 
+  /** 回复绑定到写入 task.replied 之前的卡住，不能借用之后出现的新回合。 */
+  function replyBlockSeq(taskId: string, replyId: string): number | undefined {
+    let seq: number | undefined
+    for (const event of ledger.taskEvents(taskId)) {
+      if (event.type === 'task.blocked') seq = event.seq
+      if (event.type === 'task.replied' && event.payload.reply_id === replyId) return seq
+    }
+    return undefined
+  }
+
   /** 在同一事务写 `task.started` + `lease.granted`；被其他请求抢先时返回 null。 */
   function grantTask(task: TaskView, nodeId: string): LeaseGrant | null {
     // resume 只交给紧接着的这一次执行：task.started 会在投影里清空它（PR #16 审查第 1 条）。
@@ -422,7 +432,14 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       attempt,
       ttl_s: ttl,
       expires_at: expiresAt,
-      ...(resume ? { resume } : {}),
+      ...(resume
+        ? {
+            resume: {
+              ...resume,
+              reply: { ...resume.reply, block_seq: replyBlockSeq(task.id, resume.reply.reply_id) },
+            },
+          }
+        : {}),
       // 投影中固定的登记仓库快照（D15）：节点据此检查，不再重新采集。
       ...(task.repo_snapshot ? { repo_snapshot: task.repo_snapshot } : {}),
     }
@@ -612,14 +629,34 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       // 已请求取消的任务不再送达回复。
       const pending =
         after.status === 'blocked' && !after.cancel_requested ? ledger.pendingReply(task.id) : null
+      const lastBlock = req.data.blocked
+        ? ledger.taskEvents(task.id).findLast((e) => e.type === 'task.blocked')
+        : undefined
+      const reportedBlock =
+        lastBlock?.type === 'task.blocked' &&
+        lastBlock.payload.request_id === req.data.blocked?.request_id &&
+        after.status === 'blocked'
+          ? lastBlock
+          : undefined
       return ok({
         lease_id: lease.lease_id,
         expires_at: expiresAt,
         cancel_requested: after.cancel_requested,
         ...(branchReport ? { branch_report: branchReport } : {}),
+        ...(reportedBlock
+          ? {
+              blocked: {
+                seq: reportedBlock.seq,
+                ...(reportedBlock.payload.request_id
+                  ? { request_id: reportedBlock.payload.request_id }
+                  : {}),
+              },
+            }
+          : {}),
         reply: pending
           ? {
               reply_id: pending.id,
+              block_seq: replyBlockSeq(task.id, pending.id),
               kind: pending.kind,
               ...(pending.text === null ? {} : { text: pending.text }),
               by: pending.by,
@@ -640,8 +677,39 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
       }
       // 重复确认（例如上一次的响应丢失）：已送达或已拒收就直接返回，保证只处理一次。
       if (reply.state === 'delivered' && req.data.outcome === 'delivered') return ok({ task })
+      if (req.data.outcome === 'dropped' && req.data.reason === 'round_closed') {
+        // 即使已自行恢复并出现新卡住，也只记录这一条回复的拒收，不解除当前卡住。
+        const recorded = ledger
+          .taskEvents(task.id)
+          .some((e) => e.type === 'task.reply_dropped' && e.payload.reply_id === reply.id)
+        if (recorded) return ok({ task })
+        if (reply.state !== 'pending' && reply.state !== 'dropped') {
+          return fail(
+            'failure',
+            'invalid_transition',
+            `回复 ${reply.id} 已是 ${reply.state}，不能丢弃`,
+          )
+        }
+        const written = ledger.append(
+          {
+            task_id: task.id,
+            workspace: task.workspace,
+            type: 'task.reply_dropped',
+            payload: {
+              reply_id: reply.id,
+              reason: 'round_closed',
+              message:
+                '这条回复没有送达，原因：授权回合已关闭或请求已变化。请查看当前任务后重新回复。',
+            },
+          },
+          { actor: `node:${lease.node_id}` },
+        )
+        if (!written.ok) return written
+        ledger.touchNode(lease.node_id)
+        return ok({ task: ledger.getTask(task.id) ?? task })
+      }
       if (reply.state === 'dropped' && req.data.outcome === 'dropped') return ok({ task })
-      // 拒收只用于 supervisor 的回复（D15）：用户的回复按原有语义送达，节点不能静默丢弃。
+      // request_changed 仍只用于 supervisor 的批准（D15）；人类回复只能经带通知的 round_closed 拒收。
       if (
         req.data.outcome === 'dropped' &&
         (reply.by !== SUPERVISOR_ACTOR || reply.kind !== 'approve')
@@ -838,6 +906,7 @@ export function createNodeService(o: NodeServiceOptions): NodeService {
           type: 'task.blocked',
           payload: {
             reason: req.blocked.reason,
+            ...(req.blocked.request_id ? { request_id: req.blocked.request_id } : {}),
             message: sanitizeMessage(req.blocked.message),
             ...(req.blocked.tail ? { tail: sanitizeTail(req.blocked.tail) } : {}),
             ...(req.blocked.session ? { session: req.blocked.session } : {}),

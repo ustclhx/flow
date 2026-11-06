@@ -6,8 +6,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
@@ -20,6 +20,7 @@ import {
   type TaskResume,
   taskContract,
 } from '@raindown/core'
+import { analyzeTail, approvalForPrecheck } from '../src/codex-orca/classify.ts'
 import { createCodexOrcaExecutor } from '../src/codex-orca/executor.ts'
 import {
   ActivityQueue,
@@ -108,8 +109,24 @@ async function start(
     ...(extra.resume ? { resume: extra.resume } : {}),
   })
   const activity: Activity[] = []
+  // 直接运行执行器的测试模拟中枢 blocked 回执，以及每条回复固定的来源 seq。
+  let blockSeq = 0
+  const replySequences = new Map<string, number>()
+  const originalDeliver = run.deliver?.bind(run)
+  run.deliver = (reply) => {
+    const seq = reply.block_seq ?? replySequences.get(reply.reply_id) ?? blockSeq
+    replySequences.set(reply.reply_id, seq)
+    return originalDeliver?.({ ...reply, block_seq: seq }) ?? Promise.resolve('not_running')
+  }
   void (async () => {
-    for await (const a of run.activity) activity.push(a)
+    for await (const a of run.activity) {
+      activity.push(a)
+      if (a.data?.idle) {
+        blockSeq++
+        const hint = a.data.hint as { request_id?: string } | undefined
+        if (hint?.request_id) run.bindBlocked?.({ seq: blockSeq, request_id: hint.request_id })
+      }
+    }
   })()
   let outcome: Result<ExecutorOutcome> | undefined
   void run.done.then((o) => {
@@ -147,6 +164,11 @@ const idles = (s: Started) => s.activity.filter((a) => a.data?.idle === true)
 const sends = (s: Started) => s.orca.ops('terminalSend').map((c) => c.input)
 
 describe('启动', () => {
+  test('0：codex-orca 声明带外检测能力', () => {
+    expect(
+      createCodexOrcaExecutor({ home: '/unused' }).adapterCapabilities.out_of_band_detection,
+    ).toBe(true)
+  })
   test('按任务 id 建 worktree（基于 origin/main），任务说明写入 state/tasks/<id>/spec.md，在终端启动 Codex', async () => {
     const s = await start()
     await ready(s)
@@ -713,10 +735,13 @@ describe('deliver 与 cancel', () => {
       }
       const second = await start({}, (o) => o.show(fixture), { home, resume: { reply } })
       await ready(second)
-      expect(await second.run.deliver?.(reply)).toBe('dropped')
+      expect(await second.run.deliver?.(reply)).toEqual({
+        outcome: 'dropped',
+        reason: 'round_closed',
+      })
       expect(
         await second.run.deliver?.({ reply_id: 'r-trust-approve', kind: 'approve', by: 'user' }),
-      ).toBe('dropped')
+      ).toEqual({ outcome: 'dropped', reason: 'round_closed' })
       expect(sends(second)).toEqual([])
       expect(second.orca.ops('terminalCreate')).toEqual([])
       await first.run.cancel()
@@ -843,7 +868,7 @@ describe('deliver 与 cancel', () => {
     await s.poll(2)
     await expect(
       s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'user' }),
-    ).rejects.toThrow()
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
     expect(sends(s)).toEqual([])
     await s.run.cancel()
   })
@@ -854,7 +879,7 @@ describe('deliver 与 cancel', () => {
     await s.poll(2)
     await expect(
       s.run.deliver?.({ reply_id: 'r-1', kind: 'approve', by: 'user' }),
-    ).rejects.toThrow()
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
     expect(sends(s)).toEqual([])
     await s.run.cancel()
   })
@@ -963,7 +988,7 @@ describe('deliver 与 cancel', () => {
     await first.run.cancel()
   })
 
-  test('恢复时整个 worktree 丢失：blocked(other)，不重建目录或启动 Codex', async () => {
+  test('恢复时整个 worktree 丢失：blocked(workdir_missing)，不重建目录或启动 Codex', async () => {
     const first = await start({}, (o) => o.show('working'))
     await ready(first)
     const home = h
@@ -975,8 +1000,8 @@ describe('deliver 与 cancel', () => {
       ok: true,
       data: {
         outcome: 'blocked',
-        reason: 'other',
-        message: expect.stringContaining('worktree_git_missing'),
+        reason: 'workdir_missing',
+        message: expect.stringContaining('工作目录不存在'),
       },
     })
     expect(second.orca.ops('worktreeCreate')).toEqual([])
@@ -1214,17 +1239,207 @@ function approvalCommand(command: string) {
   }
 }
 
+describe('第二轮审查回归', () => {
+  test('1：弹窗离开为提问后，同指纹弹窗重现会建立新回合', async () => {
+    const s = await start({}, (o) => o.show('approval'))
+    await s.poll(2)
+    s.orca.reads = [ok(tuiFixture('question'))]
+    await s.poll(2)
+    s.orca.reads = [ok(tuiFixture('approval'))]
+    await s.poll(3)
+    expect(idles(s)).toHaveLength(3)
+    expect(s.activity.filter((a) => a.data?.resumed)).toHaveLength(2)
+    expect(await s.run.deliver?.({ reply_id: 'reappeared', kind: 'approve', by: 'user' })).toBe(
+      'delivered',
+    )
+    expect(sends(s)).toEqual([{ handle: s.orca.handle, enter: true }])
+    await s.run.cancel()
+  })
+  const wrapped = () => {
+    const modal = approvalCommand('gh pr create --title "long title" --body "long description"')
+    return {
+      ...modal,
+      tail: modal.tail.flatMap((line) =>
+        line.trimStart().startsWith('$ ')
+          ? ['  $ gh pr create --title "long title"', '    --body "long description"']
+          : [line],
+      ),
+    }
+  }
+  const edits = () => {
+    const modal = tuiFixture('approval')
+    return {
+      ...modal,
+      tail: modal.tail.flatMap((line) =>
+        line.includes('Would you like to run the following command?')
+          ? ['  Would you like to make the following edits?']
+          : line.trimStart().startsWith('$ ')
+            ? ['  *** Update File: README.md', '  + new text']
+            : [line],
+      ),
+    }
+  }
+  for (const [name, modal] of [
+    ['折行长命令', wrapped],
+    ['编辑类', edits],
+  ] as const) {
+    test(`1：${name}弹窗不能由 supervisor 绕过严格解析代批`, async () => {
+      const s = await start({}, (o) => o.reads.push(ok(modal())))
+      await s.poll(2)
+      expect(
+        await s.run.deliver?.({
+          reply_id: 'supervisor-unparsed',
+          kind: 'approve',
+          by: 'supervisor',
+        }),
+      ).toBe('dropped')
+      expect(sends(s)).toEqual([])
+      await s.run.cancel()
+    })
+    for (const kind of ['approve', 'deny'] as const) {
+      test(`1：${name}弹窗严格解析失败，用户仍可 ${kind}`, async () => {
+        expect(approvalForPrecheck(modal().tail)).toBeUndefined()
+        expect(analyzeTail(modal().tail).kind).toBe('awaiting_approval')
+        const s = await start({}, (o) => o.reads.push(ok(modal())))
+        await s.poll(2)
+        const timers = s.clock.pendingTimers()
+        const delivery = s.run.deliver?.({
+          reply_id: `human-${kind}`,
+          kind,
+          by: 'user',
+          text: kind === 'deny' ? '停止' : undefined,
+        })
+        if (kind === 'deny') {
+          await until(() => s.clock.pendingTimers() > timers, 'Esc 后等待')
+          s.orca.reads = [ok(tuiFixture('question'))]
+          await s.clock.advance(1_000)
+        }
+        expect(await delivery).toBe('delivered')
+        expect(sends(s)[0]).toMatchObject(kind === 'approve' ? { enter: true } : { text: '\u001b' })
+        await s.run.cancel()
+      })
+    }
+  }
+
+  test('1：命令相同但弹窗指纹变化，旧批准被确定性丢弃', async () => {
+    const s = await start({}, (o) => o.reads.push(ok(wrapped())))
+    await s.poll(2)
+    const changed = wrapped()
+    changed.tail = changed.tail.map((line) =>
+      line.includes('Reason:') ? '  Reason: 已改变的授权范围' : line,
+    )
+    s.orca.reads = [ok(changed)]
+    expect(
+      await s.run.deliver?.({ reply_id: 'changed-modal', kind: 'approve', by: 'user' }),
+    ).toEqual({ outcome: 'dropped', reason: 'round_closed' })
+    expect(sends(s)).toEqual([])
+    await s.run.cancel()
+  })
+
+  test('2：Esc 后理由发送暂时失败，弹窗关闭后可重试文字且不重发 Esc', async () => {
+    const s = await start({}, (o) => o.show('approval'))
+    await s.poll(2)
+    s.orca.sends = [
+      ok(sendFixture('terminal-send-enter')),
+      fail('failure', 'orca_failed', 'temporary send error'),
+    ]
+    const timers = s.clock.pendingTimers()
+    const reply = { reply_id: 'retry-denial', kind: 'deny' as const, by: 'user', text: '停止写入' }
+    const failed = s.run.deliver?.(reply).then(
+      () => false,
+      () => true,
+    )
+    await until(() => s.clock.pendingTimers() > timers, 'Esc 后等待')
+    s.orca.reads = [ok(tuiFixture('question'))]
+    await s.clock.advance(1_000)
+    expect(await failed).toBe(true)
+    await s.poll(2)
+    expect(await s.run.deliver?.(reply)).toBe('delivered')
+    expect(
+      (sends(s) as Array<{ text?: string }>).filter((input) => input.text === '\u001b'),
+    ).toHaveLength(1)
+    await s.run.cancel()
+  })
+
+  test('2：Esc 后文字已接受但等待回执时出现新弹窗，不补发裸 Enter', async () => {
+    const s = await start({}, (o) => o.show('approval'))
+    await s.poll(2)
+    const noTurn = ok(sendFixture('terminal-send-no-turn'))
+    s.orca.sends = [ok(sendFixture('terminal-send-enter')), noTurn, noTurn, noTurn]
+    const original = s.orca.terminalSend.bind(s.orca)
+    s.orca.terminalSend = async (input) => {
+      const result = await original(input)
+      if (input.retryRequest) s.orca.reads = [ok(approvalCommand('git push --force origin HEAD'))]
+      return result
+    }
+    const timers = s.clock.pendingTimers()
+    const delivery = s.run.deliver?.({
+      reply_id: 'no-extra-enter',
+      kind: 'deny',
+      text: '停止',
+      by: 'user',
+    })
+    await until(() => s.clock.pendingTimers() > timers, 'Esc 后等待')
+    s.orca.reads = [ok(tuiFixture('question'))]
+    await s.clock.advance(1_000)
+    expect(await delivery).toEqual({ outcome: 'dropped', reason: 'round_closed' })
+    expect(
+      (sends(s) as Array<{ text?: string; enter?: boolean }>).filter(
+        (input) => input.enter && input.text === undefined,
+      ),
+    ).toEqual([])
+    await s.run.cancel()
+  })
+
+  test('4：未知 reply_id 的旧 blocked seq 不能首次绑定到新弹窗', async () => {
+    const s = await start({}, (o) => o.show('approval'))
+    await s.poll(2)
+    s.orca.reads = [ok(tuiFixture('working'))]
+    await s.poll()
+    s.orca.reads = [ok(approvalCommand('git push --force origin HEAD'))]
+    await s.poll(2)
+    expect(
+      await s.run.deliver?.({
+        reply_id: 'unseen-old-approval',
+        block_seq: 1,
+        kind: 'approve',
+        by: 'user',
+      }),
+    ).toEqual({ outcome: 'dropped', reason: 'round_closed' })
+    expect(sends(s)).toEqual([])
+    expect(
+      await s.run.deliver?.({
+        reply_id: 'new-approval',
+        block_seq: 2,
+        kind: 'approve',
+        by: 'user',
+      }),
+    ).toBe('delivered')
+    expect(sends(s)).toEqual([{ handle: s.orca.handle, enter: true }])
+    await s.run.cancel()
+  })
+})
+
 describe('第一轮审查回归', () => {
   test('1：外批后重投旧回复，下一回合的新弹窗不会收到 Enter 或 Esc', async () => {
     const s = await start({}, (o) => o.show('approval'))
     await s.poll(2)
     const reply = { reply_id: 'old-approval', kind: 'approve' as const, by: 'user' }
     s.orca.reads = [ok(executed(`• Ran ${APPROVAL_COMMAND}`))]
-    await expect(s.run.deliver?.(reply)).rejects.toThrow()
+    await expect(s.run.deliver?.(reply)).resolves.toMatchObject({
+      outcome: 'dropped',
+      reason: 'round_closed',
+    })
     s.orca.reads = [ok(approvalCommand('git push --force origin HEAD'))]
-    await expect(s.run.deliver?.(reply)).rejects.toThrow()
+    await expect(s.run.deliver?.(reply)).resolves.toMatchObject({
+      outcome: 'dropped',
+      reason: 'round_closed',
+    })
     await s.poll(2)
-    await expect(s.run.deliver?.(reply)).rejects.toThrow()
+    await expect(s.run.deliver?.(reply)).resolves.toMatchObject({
+      outcome: 'dropped',
+      reason: 'round_closed',
+    })
     expect(sends(s)).toEqual([])
     await s.run.cancel()
   })
@@ -1238,7 +1453,7 @@ describe('第一轮审查回归', () => {
     expect(outside(s)).toHaveLength(0)
     await expect(
       s.run.deliver?.({ reply_id: 'late-denial', kind: 'deny', by: 'user' }),
-    ).rejects.toThrow()
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
     expect(sends(s)).toEqual([])
     await s.run.cancel()
   })
@@ -1254,8 +1469,8 @@ describe('第一轮审查回归', () => {
       by: 'user',
     })
     const rejected = delivery?.then(
+      (r) => typeof r === 'object' && r.outcome === 'dropped',
       () => false,
-      () => true,
     )
     await until(() => s.clock.pendingTimers() > timers, 'Esc 后等待')
     s.orca.reads = [ok(approvalCommand('git push --force origin HEAD'))]
@@ -1450,7 +1665,7 @@ describe('带外操作', () => {
     s.orca.reads = [ok(executed(`• Ran ${APPROVAL_COMMAND}`))]
     await expect(
       s.run.deliver?.({ reply_id: 'r-late', kind: 'approve', by: 'user' }),
-    ).rejects.toThrow('回复尚未送达')
+    ).resolves.toMatchObject({ outcome: 'dropped', reason: 'round_closed' })
     expect(sends(s)).toHaveLength(0)
     expect(outside(s)).toHaveLength(1)
     expect(s.activity.filter((a) => a.data?.resumed)).toHaveLength(1)

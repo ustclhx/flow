@@ -106,9 +106,14 @@ export interface StuckVerdict {
 
 /**
  * 回复送达结果：worker 已不在运行时返回 not_running，中枢会让任务带着回复重新排队；
- * dropped 表示执行器按 `confirmApproval` 拒收了这条批准（待批请求已变或环境复查未通过），没有放行。
+ * dropped 字符串表示 `confirmApproval` 拒收 supervisor 的批准；round_closed 表示回复所属回合已关闭，
+ * 中枢只丢弃这条回复并通知用户，保留当前任务状态。
  */
-export type DeliverResult = 'delivered' | 'not_running' | 'dropped'
+export type DeliverResult =
+  | 'delivered'
+  | 'not_running'
+  | 'dropped'
+  | { outcome: 'dropped'; reason: 'round_closed' }
 
 /** 执行器的最终结果：done / failed 附带结果，blocked 附带原因与说明。 */
 export type ExecutorOutcome =
@@ -146,6 +151,8 @@ export interface ExecutorRun {
    * 返回 not_running 只用于确认 worker 已不在；临时失败请抛出异常。
    */
   deliver?(reply: DeliveredReply): Promise<DeliverResult>
+  /** 续约确认的卡住事件与适配器本地请求的对应关系；在送达回复之前调用。 */
+  bindBlocked?(binding: { seq: number; request_id: string }): void
 }
 
 export interface ExecutorPlugin {

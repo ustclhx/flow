@@ -25,6 +25,26 @@
           "type": "boolean",
           "description": "为 true 时节点应停止执行器并提交 cancelled"
         },
+        "blocked": {
+          "description": "本次 blocked 上报对应的事件；request_id 不同则不确认",
+          "type": "object",
+          "properties": {
+            "seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "request_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          "required": [
+            "seq"
+          ],
+          "additionalProperties": false
+        },
         "branch_report": {
           "description": "续约带了 branch 时的处理结果（D15）：recorded 已写入；ignored 已上报过或被拒绝（节点不再上报）；retry 临时失败（例如数据库忙），节点保留并重发",
           "type": "string",
@@ -45,6 +65,12 @@
                   "type": "string",
                   "pattern": "^r-[A-Za-z0-9_.-]{1,64}$",
                   "description": "回复 id，由中枢在收到回复时分配"
+                },
+                "block_seq": {
+                  "description": "这条回复所针对的 task.blocked seq",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
                 },
                 "kind": {
                   "type": "string",

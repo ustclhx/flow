@@ -61,6 +61,11 @@
       "description": "worker 卡住但仍活着（交互式执行器）：中枢写入 task.blocked(lease_held=true)，租约照常续约",
       "type": "object",
       "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
         "reason": {
           "type": "string",
           "enum": [

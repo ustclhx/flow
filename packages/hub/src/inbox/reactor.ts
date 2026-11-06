@@ -283,6 +283,32 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     write(...drafts)
   }
 
+  /** 回复拒收是独立通知，不随任务恢复或新一轮卡住关闭。 */
+  function onReplyDropped(e: EventOf<'task.reply_dropped'>) {
+    const task = ledger.getTask(e.task_id ?? '')
+    const itemId = `reply.${e.payload.reply_id}`
+    if (!task || ledger.getInboxItem(itemId)) return
+    write({
+      type: 'inbox.item_created',
+      task_id: task.id,
+      workspace: task.workspace,
+      payload: {
+        item_id: itemId,
+        source: 'reply_delivery',
+        source_ref: e.payload.reply_id,
+        source_seq: e.seq,
+        level: 'interrupt',
+        reason: e.payload.reason,
+        title: clipText(`[${task.workspace}] 回复没有送达`, INBOX_TITLE_MAX),
+        body: clipText(
+          `任务 ${task.id}\n回复 ${e.payload.reply_id}\n${e.payload.message}`,
+          INBOX_BODY_MAX,
+        ),
+        actions: [],
+      },
+    })
+  }
+
   function onTaskLeft(e: LedgerEvent, reason: InboxCloseReason) {
     const task = ledger.getTask(e.task_id ?? '')
     if (!task) return
@@ -405,6 +431,7 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
     if (e.seq <= done) return
     try {
       if (e.type === 'task.blocked') onBlocked(e)
+      else if (e.type === 'task.reply_dropped') onReplyDropped(e)
       else if (e.type === 'task.out_of_band') onOutOfBand(e)
       else if (e.type === 'policy.decided') onPolicyDecided(e)
       else if (e.type === 'task.reply_delegated' || e.type === 'task.reply_escalated') {
@@ -473,6 +500,9 @@ export function createInboxReactor(o: InboxReactorOptions): InboxReactor {
       for (const event of ledger.eventsByPayload('task.out_of_band', 'kind', kind)) {
         if (event.type === 'task.out_of_band') onOutOfBand(event)
       }
+    }
+    for (const event of ledger.eventsByPayload('task.reply_dropped', 'reason', 'round_closed')) {
+      if (event.type === 'task.reply_dropped') onReplyDropped(event)
     }
     for (const task of ledger.listTasks({ status: 'blocked', limit: 100_000 })) {
       const e = latestBlocked(task.id)

@@ -37,6 +37,11 @@
     "payload": {
       "type": "object",
       "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
         "reason": {
           "type": "string",
           "enum": [

@@ -711,6 +711,7 @@ export const renewLeaseRequest = z
       .meta({ description: '开始执行验收命令时带上，中枢写入 task.verifying' }),
     blocked: z
       .strictObject({
+        request_id: z.string().min(1).max(512).optional(),
         reason: blockedReason,
         message: blockedMessage,
         tail: blockedTail,
@@ -760,6 +761,13 @@ export const renewLeaseData = z
     cancel_requested: z
       .boolean()
       .meta({ description: '为 true 时节点应停止执行器并提交 cancelled' }),
+    blocked: z
+      .object({
+        seq: z.number().int().min(1),
+        request_id: z.string().min(1).max(512).optional(),
+      })
+      .optional()
+      .meta({ description: '本次 blocked 上报对应的事件；request_id 不同则不确认' }),
     branch_report: z.enum(['recorded', 'ignored', 'retry']).optional().meta({
       description:
         '续约带了 branch 时的处理结果（D15）：recorded 已写入；ignored 已上报过或被拒绝（节点不再上报）；retry 临时失败（例如数据库忙），节点保留并重发',
@@ -821,10 +829,10 @@ export const ackReplyRequest = z
     reply_id: replyId,
     outcome: z.enum(['delivered', 'not_running', 'dropped']).default('delivered').meta({
       description:
-        'dropped：节点拒收这条回复（例如 supervisor 的批准送达时待批请求已变），中枢写入 task.unblocked 并丢弃它，节点随后以 no_delegate 重新上报卡住',
+        'dropped：round_closed 只丢弃该回复并通知用户，保留当前任务状态；request_changed 仅用于 supervisor 的批准，中枢解除卡住后由节点以 no_delegate 重新上报',
     }),
     reason: z
-      .enum(['request_changed'])
+      .enum(['request_changed', 'round_closed'])
       .optional()
       .meta({ description: 'outcome 为 dropped 时必填：拒收的原因' }),
   })

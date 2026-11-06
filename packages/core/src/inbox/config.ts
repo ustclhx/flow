@@ -283,6 +283,7 @@ export interface LevelQuery {
  */
 export function defaultInboxLevel(q: LevelQuery): InboxLevel {
   switch (q.source) {
+    case 'reply_delivery':
     case 'out_of_band':
       return 'interrupt'
     case 'task':

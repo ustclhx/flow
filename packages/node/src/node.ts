@@ -501,6 +501,9 @@ class LeaseRunner {
       this.abort.abort()
       await this.run?.cancel().catch(() => {})
     }
+    if (r.data.blocked?.request_id) {
+      this.run?.bindBlocked?.({ seq: r.data.blocked.seq, request_id: r.data.blocked.request_id })
+    }
     if (r.data.reply && !this.cancelRequested && !this.unacked) this.deliver(r.data.reply)
     if (this.unacked) await this.ack()
     this.scheduleRenew()
@@ -581,8 +584,12 @@ class LeaseRunner {
     const r = await this.env.client.ackReply(this.grant.lease_id, {
       lease_token: this.grant.lease_token,
       reply_id: u.reply_id,
-      outcome: u.outcome,
-      ...(u.outcome === 'dropped' ? { reason: 'request_changed' as const } : {}),
+      outcome: typeof u.outcome === 'string' ? u.outcome : u.outcome.outcome,
+      ...(typeof u.outcome === 'object'
+        ? { reason: u.outcome.reason }
+        : u.outcome === 'dropped'
+          ? { reason: 'request_changed' as const }
+          : {}),
     })
     if (this.released) return
     if (!r.ok) {
@@ -599,6 +606,8 @@ class LeaseRunner {
     if (u.outcome === 'delivered') {
       // 中枢已写入 task.unblocked：回到 running，重新开始计时。
       this.enterRunning()
+    } else if (typeof u.outcome === 'object') {
+      this.env.logger.info(`回复 ${u.reply_id} 已拒收：授权回合已关闭或请求已变化`)
     } else if (u.outcome === 'dropped') {
       // supervisor 的批准被拒收（D15）：中枢已写 task.unblocked 并丢弃这条回复。worker 仍在等待，
       // 执行器随后重新报告停下；这次卡住以 no_delegate 上报，直接交给用户。
@@ -645,7 +654,8 @@ class LeaseRunner {
         a.text,
       )
     } else if (isResumedSignal(a)) {
-      if (this.phase === 'blocked' && !this.unacked) {
+      // round_closed 只确认旧回复被拒收；确认重试期间的真实恢复仍须上报。
+      if (this.phase === 'blocked' && (!this.unacked || typeof this.unacked.outcome === 'object')) {
         this.signal = { resumed: { note: a.text ?? 'worker 自行恢复' } }
         this.enterRunning()
         void this.renewNow()
@@ -692,6 +702,7 @@ class LeaseRunner {
         blocked: {
           reason: v.reason,
           message: v.message,
+          ...(typeof hint?.request_id === 'string' ? { request_id: hint.request_id } : {}),
           ...(tail.length > 0 ? { tail } : {}),
           ...(session ? { session } : {}),
           ...delegation,
