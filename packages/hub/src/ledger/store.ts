@@ -575,6 +575,9 @@ const EVENT_ACTORS: Partial<Record<LedgerEventDraft['type'], readonly string[]>>
   'task.policy_changed': ['hub'],
   'task.reply_delegated': ['hub'],
   'task.reply_fetched': ['hub'],
+  // observe 判断与未执行的自主动作（D10）只由中枢写入。
+  'task.reply_observed': ['hub'],
+  'supervisor.observed_action': ['hub'],
   // 回复只有用户本人与 supervisor（经 task_respond、落在有效委托上）能写（D15）。
   'task.replied': ['user', 'supervisor'],
 }
@@ -868,6 +871,14 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       if (!active || active.block_seq !== lastBlocked(draft.task_id)?.seq) {
         return fail('failure', 'not_delegated', '这次卡住没有仍有效的 supervisor 委托')
       }
+      // observe（D10）：判断只记录为 task.reply_observed，supervisor 的回复绝不入账、不送达。
+      if (active.observe === true) {
+        return fail(
+          'failure',
+          'not_delegated',
+          '这次委托处于 observe 模式，supervisor 的判断不能送达',
+        )
+      }
       // 回复类型必须与委托的卡住类型一致：提问只能文字回答，授权请求只能批准或拒绝。
       const allowed = active.kind === 'question' ? ['text'] : ['approve', 'deny']
       if (!allowed.includes(draft.payload.kind)) {
@@ -882,6 +893,44 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       return invalidEvent(
         '这次卡住仍委托给 supervisor：用户回复必须在同一次追加中先写 task.reply_escalated（user_replied）',
       )
+    }
+    return ok(null)
+  }
+
+  /**
+   * `task.reply_observed`（D10）：observe 判断只能落在当前这次卡住上仍有效的委托上，引用必须与委托一致；
+   * 信封不带 task_id（任务绑定的读取看不到它），workspace 与任务一致；判断类型与卡住类型一致。
+   */
+  function validateObserved(draft: Extract<LedgerEventDraft, { type: 'task.reply_observed' }>) {
+    const p = draft.payload
+    if (draft.task_id !== undefined) {
+      return invalidEvent('task.reply_observed 不带信封 task_id（任务 id 只写在载荷中）')
+    }
+    const t = taskState(p.task_id)
+    if (!t) return fail('failure', 'not_found', `没有任务 ${p.task_id}`)
+    if (t.workspace !== draft.workspace) {
+      return invalidEvent(`事件的 workspace ${draft.workspace} 与任务的 ${t.workspace} 不一致`)
+    }
+    if (t.status !== 'blocked') {
+      return fail('failure', 'invalid_transition', `任务状态为 ${t.status}，不能记录 observe 判断`)
+    }
+    const last = lastBlocked(p.task_id)
+    if (!last || last.seq !== p.block_seq) {
+      return invalidEvent(`block_seq ${p.block_seq} 不是该任务当前的卡住`)
+    }
+    const active = currentDelegation(p.task_id)
+    if (!active || active.block_seq !== p.block_seq || active.seq !== p.delegation_seq) {
+      return fail('failure', 'not_delegated', '这次卡住没有仍有效的 supervisor 委托')
+    }
+    if (active.kind !== p.kind || active.decision_id !== p.decision_id) {
+      return invalidEvent('observe 判断的卡住类型或策略判定与委托不一致')
+    }
+    const allowed = p.kind === 'question' ? ['answer', 'escalate'] : ['approve', 'deny', 'escalate']
+    if (!allowed.includes(p.decision)) {
+      return invalidEvent(`委托的卡住为 ${p.kind}，不能记录 ${p.decision}`)
+    }
+    if (p.decision === 'answer' && p.text === undefined) {
+      return invalidEvent('answer 的 observe 判断必须带 text')
     }
     return ok(null)
   }
@@ -1143,6 +1192,8 @@ function createStore(db: Database, opts: OpenLedgerOptions): LedgerStore {
       }
       case 'task.reply_delegated':
         return validateDelegation(draft)
+      case 'task.reply_observed':
+        return validateObserved(draft)
       case 'task.reply_escalated': {
         // 身份按 reason 区分：user_replied / user_dismissed 只接受 user，其他原因只接受 hub。
         const expected = ESCALATION_BY_USER.has(draft.payload.reason) ? 'user' : 'hub'

@@ -3,6 +3,8 @@ import {
   fail,
   ok,
   redactSecrets,
+  supervisorReportData,
+  supervisorReportQuery,
   supervisorStatusData,
   supervisorStatusQuery,
   supervisorWakeData,
@@ -11,10 +13,11 @@ import {
 } from '@raindown/core'
 import { Hono } from 'hono'
 import { jsonBody, respond } from '../ledger/routes.ts'
-import type { TaskStageReader } from '../ledger/task-stage.ts'
+import type { LedgerStore } from '../ledger/store.ts'
 import { readTaskStage } from '../ledger/task-stage.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
 import { userOnly } from '../server/auth.ts'
+import { supervisorReport } from './report.ts'
 import type { WakeScheduler } from './scheduler.ts'
 
 /**
@@ -24,7 +27,9 @@ import type { WakeScheduler } from './scheduler.ts'
  */
 export function createSupervisorRoutes(deps: {
   scheduler: () => WakeScheduler | undefined
-  ledger: TaskStageReader
+  /** 阶段读取与 `raindown supervisor report`（D10，tasks 7.4）的数据来源。 */
+  ledger: Pick<LedgerStore, 'eventsBetween' | 'taskEvents' | 'getTask'>
+  now?: () => number
 }): Hono {
   const app = new Hono()
   const notReady = () => fail('retryable', 'hub_busy', '中枢尚未就绪，请稍后重试')
@@ -78,6 +83,27 @@ export function createSupervisorRoutes(deps: {
         })),
       }),
       supervisorStatusData,
+    )
+  })
+
+  app.get(ENDPOINTS['supervisor-report'].path, userOnly('查看 supervisor observe 报告'), (c) => {
+    const query = c.req.query()
+    const parsed = supervisorReportQuery.safeParse(query)
+    if (!parsed.success) return respond(c, usage(parsed.error.issues, query), supervisorReportData)
+    const { since, until } = parsed.data
+    if (since !== undefined && until !== undefined && Date.parse(since) >= Date.parse(until)) {
+      return respond(
+        c,
+        fail('usage', 'invalid_arguments', 'since 必须早于 until', [
+          { field: 'since', code: 'invalid_field', message: 'since 必须早于 until' },
+        ]),
+        supervisorReportData,
+      )
+    }
+    return respond(
+      c,
+      { ok: true, data: supervisorReport(deps.ledger, parsed.data, (deps.now ?? Date.now)()) },
+      supervisorReportData,
     )
   })
 

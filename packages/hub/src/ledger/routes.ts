@@ -6,6 +6,7 @@ import {
   eventGetData,
   eventGetQuery,
   fail,
+  hiddenFromWorker,
   listTasksData,
   ok,
   PROTOCOL_ERRORS,
@@ -125,7 +126,11 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     if (task && auth?.kind === 'wake' && task.workspace !== auth.wake.workspace) {
       return respond(c, fail('failure', 'not_found', `没有任务 ${id}`), taskShowResponse)
     }
-    return respond(c, tasks.getTask(id, parsed.data), taskShowResponse)
+    return respond(
+      c,
+      tasks.getTask(id, parsed.data, { forWorker: auth?.kind === 'task' }),
+      taskShowResponse,
+    )
   })
 
   app.get(ENDPOINTS['events-get'].path, (c) => {
@@ -145,7 +150,10 @@ export function createTaskRoutes(deps: TaskRoutesDeps): Hono {
     if (
       event?.seq !== seq ||
       (auth?.kind === 'task' &&
-        (event.task_id !== auth.task.task_id || event.workspace !== auth.task.workspace))
+        (event.task_id !== auth.task.task_id ||
+          event.workspace !== auth.task.workspace ||
+          // observe 判断、未执行的动作与收件箱条目不给 worker 看（D10）。
+          hiddenFromWorker(event.type)))
     )
       return respond(c, fail('failure', 'not_found', '账本事件不存在'), eventGetData)
     if (auth?.kind === 'wake') {

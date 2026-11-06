@@ -95,7 +95,13 @@ const roles: RoleLookup = async (name) => {
 
 const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? 'ok' : r.error?.code)
 
-async function setup(o: { supervisorActive?: (ws: string) => Promise<boolean> } = {}) {
+async function setup(
+  o: {
+    supervisorActive?: (ws: string) => Promise<boolean>
+    /** observe 模式（harness-neutral 7.3）。 */
+    observeAutonomous?: boolean
+  } = {},
+) {
   const home = await initTempHome('raindown-sv-tools-')
   const restore = isolateHub(home)
   const repo = mkdtempSync(join(tmpdir(), 'raindown-sv-repo-'))
@@ -111,7 +117,14 @@ async function setup(o: { supervisorActive?: (ws: string) => Promise<boolean> } 
   })
   const workspaces = async (ref: string) =>
     ref === WS || ref === OTHER
-      ? { ref, repos: [repo], supervisor: defaultSupervisorConfig() }
+      ? {
+          ref,
+          repos: [repo],
+          supervisor: {
+            ...defaultSupervisorConfig(),
+            observe: { replies: false, approvals: false, autonomous: o.observeAutonomous === true },
+          },
+        }
       : null
   /** 验收命令的策略判定：测试中切换。 */
   const verify = { allow: true }
@@ -398,6 +411,31 @@ describe('task_propose 与收件箱接受 / 驳回（4.5、4.6）', () => {
     cwd: repo,
     verify: [{ cmd: ['pnpm', 'test'] }],
     ...over,
+  })
+
+  test('observe（7.3）：autonomous 唤醒的提案只写 supervisor.observed_action，不生成条目；instruction 不受影响', async () => {
+    const { ledger, repo, wake, ctx } = await setup({ observeAutonomous: true })
+    const w = await wake('autonomous')
+    const r = await taskProposeOp.run(
+      { draft: draft(repo) as never, reason: `巡检 Bearer ${'a'.repeat(40)}` },
+      ctx(w.token),
+    )
+    expect(code(r)).toBe('observe_not_executed')
+    expect(r.ok ? '' : r.error.message).toStartWith('observe：未执行')
+    expect(ledger.listInboxItems({}).filter((i) => i.source === 'task_proposal')).toHaveLength(0)
+    const observed = ledger.recentEvents(WS, ['supervisor.observed_action'], 10)
+    expect(observed).toHaveLength(1)
+    expect(observed[0]).toMatchObject({
+      actor: 'hub',
+      payload: { wake_task_id: w.id, action: 'task_propose' },
+    })
+    const args = observed[0]?.type === 'supervisor.observed_action' ? observed[0].payload.args : ''
+    // 参数摘要经过遮蔽：疑似密钥不出现在账本中。
+    expect(args).not.toContain('a'.repeat(40))
+    expect(args).toContain('REDACTED')
+    const i = await wake('instruction')
+    must(await taskProposeOp.run({ draft: draft(repo) as never }, ctx(i.token)))
+    expect(ledger.recentEvents(WS, ['supervisor.observed_action'], 10)).toHaveLength(1)
   })
 
   test('提交带决策的提案：条目展示角色、执行器、仓库与 cwd、验收命令、目标、决策', async () => {

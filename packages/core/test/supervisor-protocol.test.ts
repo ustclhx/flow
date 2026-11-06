@@ -294,6 +294,7 @@ describe('workspace 的 supervisor 配置（1.2）', () => {
       reviewer_roles: ['pr-reviewer'],
       delegate_replies: true,
       reply_timeout_s: 600,
+      observe: { replies: false, approvals: false, autonomous: false },
       limits: {
         tasks_per_wake: 5,
         wakes_per_day: 24,

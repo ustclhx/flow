@@ -39,6 +39,11 @@
               "chain_depth": 8,
               "review_rounds": 2,
               "open_questions": 3
+            },
+            "observe": {
+              "replies": false,
+              "approvals": false,
+              "autonomous": false
             }
           },
           "description": "supervisor 设置（add-m1-supervisor）；缺省全部取默认值",
@@ -160,6 +165,34 @@
               "additionalProperties": false,
               "title": "Supervisor limits",
               "description": "中枢强制的硬性上限（D4）"
+            },
+            "observe": {
+              "default": {
+                "replies": false,
+                "approvals": false,
+                "autonomous": false
+              },
+              "type": "object",
+              "properties": {
+                "replies": {
+                  "default": false,
+                  "description": "true：代答（提问）只记录 supervisor 的判断（task.reply_observed），提问照常转给用户",
+                  "type": "boolean"
+                },
+                "approvals": {
+                  "default": false,
+                  "description": "true：代批（授权请求）只记录 supervisor 的判断，授权照常推给用户",
+                  "type": "boolean"
+                },
+                "autonomous": {
+                  "default": false,
+                  "description": "true：autonomous 唤醒中的 task_create、task_propose、pr_merge_request 只写 supervisor.observed_action，不执行",
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "title": "Supervisor observe",
+              "description": "observe 模式：逐项只记录不执行（D10）"
             }
           },
           "additionalProperties": false,
@@ -226,6 +259,11 @@
               "chain_depth": 8,
               "review_rounds": 2,
               "open_questions": 3
+            },
+            "observe": {
+              "replies": false,
+              "approvals": false,
+              "autonomous": false
             }
           },
           "description": "supervisor 设置（add-m1-supervisor）；缺省全部取默认值",
@@ -347,6 +385,34 @@
               "additionalProperties": false,
               "title": "Supervisor limits",
               "description": "中枢强制的硬性上限（D4）"
+            },
+            "observe": {
+              "default": {
+                "replies": false,
+                "approvals": false,
+                "autonomous": false
+              },
+              "type": "object",
+              "properties": {
+                "replies": {
+                  "default": false,
+                  "description": "true：代答（提问）只记录 supervisor 的判断（task.reply_observed），提问照常转给用户",
+                  "type": "boolean"
+                },
+                "approvals": {
+                  "default": false,
+                  "description": "true：代批（授权请求）只记录 supervisor 的判断，授权照常推给用户",
+                  "type": "boolean"
+                },
+                "autonomous": {
+                  "default": false,
+                  "description": "true：autonomous 唤醒中的 task_create、task_propose、pr_merge_request 只写 supervisor.observed_action，不执行",
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "title": "Supervisor observe",
+              "description": "observe 模式：逐项只记录不执行（D10）"
             }
           },
           "additionalProperties": false,

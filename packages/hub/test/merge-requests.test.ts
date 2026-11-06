@@ -1121,6 +1121,29 @@ describe('自动合并与收尾', () => {
     expect(s.events('merge_request.created')).toHaveLength(1)
   })
 
+  test('observe（7.3）：autonomous 唤醒的合并请求只写 supervisor.observed_action，不建 merger、不生成条目；instruction 照常', async () => {
+    const observe = { replies: false, approvals: false, autonomous: true }
+    const s = await setup({ supervisor: { auto_merge: true, observe } })
+    s.dev()
+    const rv = s.review()
+    const w = await s.wake('autonomous')
+    const r = await s.request(w.token, rv)
+    expect(code(r)).toBe('observe_not_executed')
+    expect(r.ok ? '' : r.error.message).toStartWith('observe：未执行')
+    expect(s.events('merge_request.created')).toHaveLength(0)
+    expect(s.ledger.findTaskByIdempotencyKey(`merge:${rv}`)).toBeNull()
+    const observed = s.events('supervisor.observed_action')
+    expect(observed).toHaveLength(1)
+    expect(observed[0]).toMatchObject({
+      actor: 'hub',
+      payload: { wake_task_id: w.id, action: 'pr_merge_request' },
+    })
+    expect(observed[0]?.payload).toHaveProperty('args')
+    // instruction 唤醒不受 observe 影响（auto_merge 照常直接建 merger）。
+    const i = await s.wake('instruction')
+    expect(must(await s.request(i.token, rv)).mode).toBe('auto')
+  })
+
   test('auto_merge 只对 instruction 唤醒生效：autonomous 唤醒的请求只生成审批条目', async () => {
     const s = await setup({ supervisor: { auto_merge: true } })
     s.dev()

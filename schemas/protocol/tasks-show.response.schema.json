@@ -8904,6 +8904,11 @@
                                 "format": "date-time",
                                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                                 "description": "超过此时间仍未回复即转交用户（reply_timeout_s）"
+                              },
+                              "observe": {
+                                "description": "委托时该项处于 observe 模式（D10）：supervisor 的判断只记录为 task.reply_observed，不送达 worker",
+                                "type": "boolean",
+                                "const": true
                               }
                             },
                             "required": [
@@ -8974,9 +8979,10 @@
                                   "wake_ended",
                                   "user_dismissed",
                                   "user_replied",
-                                  "policy_changed"
+                                  "policy_changed",
+                                  "observe"
                                 ],
-                                "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变"
+                                "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变；observe 该项处于 observe 模式，supervisor 的判断只记录不送达"
                               },
                               "policy_version": {
                                 "type": "string",
@@ -9120,6 +9126,122 @@
                         ],
                         "additionalProperties": false,
                         "title": "task.reply_escalated"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "seq": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991,
+                            "description": "账本序号，单调递增"
+                          },
+                          "ts": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "task.reply_observed"
+                          },
+                          "workspace": {
+                            "type": "string",
+                            "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                            "description": "workspace 标识，形如 ws/<id>"
+                          },
+                          "task_id": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                            "description": "任务 id，由中枢在创建时分配"
+                          },
+                          "actor": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                            "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                          },
+                          "payload": {
+                            "type": "object",
+                            "properties": {
+                              "task_id": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                                "description": "任务 id，由中枢在创建时分配"
+                              },
+                              "block_seq": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991,
+                                "description": "被委托的那次 task.blocked 的 seq"
+                              },
+                              "delegation_seq": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991,
+                                "description": "对应的 task.reply_delegated 的 seq"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "question",
+                                  "awaiting_approval"
+                                ]
+                              },
+                              "decision_id": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991,
+                                "description": "策略判定 id，即对应 policy.decided 事件的 seq"
+                              },
+                              "decision": {
+                                "type": "string",
+                                "enum": [
+                                  "approve",
+                                  "deny",
+                                  "answer",
+                                  "escalate"
+                                ],
+                                "description": "supervisor 的判断：批准、拒绝、回答或转交"
+                              },
+                              "text": {
+                                "description": "回答的文字（answer）",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000,
+                                "description": "supervisor 给出的理由"
+                              },
+                              "policy_version": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{12}$"
+                              }
+                            },
+                            "required": [
+                              "task_id",
+                              "block_seq",
+                              "delegation_seq",
+                              "kind",
+                              "decision",
+                              "reason"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "seq",
+                          "ts",
+                          "type",
+                          "workspace",
+                          "actor",
+                          "payload"
+                        ],
+                        "additionalProperties": false,
+                        "title": "task.reply_observed"
                       },
                       {
                         "type": "object",
@@ -10821,6 +10943,88 @@
                         ],
                         "additionalProperties": false,
                         "title": "supervisor.scheduler_initialized"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "seq": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991,
+                            "description": "账本序号，单调递增"
+                          },
+                          "ts": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "supervisor.observed_action"
+                          },
+                          "workspace": {
+                            "type": "string",
+                            "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                            "description": "workspace 标识，形如 ws/<id>"
+                          },
+                          "task_id": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                            "description": "任务 id，由中枢在创建时分配"
+                          },
+                          "actor": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                            "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                          },
+                          "payload": {
+                            "type": "object",
+                            "properties": {
+                              "wake_task_id": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                                "description": "发起动作的 autonomous 唤醒任务"
+                              },
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "task_create",
+                                  "task_propose",
+                                  "pr_merge_request"
+                                ]
+                              },
+                              "args": {
+                                "type": "string",
+                                "maxLength": 1000,
+                                "description": "参数摘要（遮蔽疑似密钥，最多 1000 字符）"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000,
+                                "description": "未执行的原因"
+                              }
+                            },
+                            "required": [
+                              "wake_task_id",
+                              "action",
+                              "args",
+                              "reason"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "seq",
+                          "ts",
+                          "type",
+                          "workspace",
+                          "actor",
+                          "payload"
+                        ],
+                        "additionalProperties": false,
+                        "title": "supervisor.observed_action"
                       },
                       {
                         "type": "object",
@@ -28329,6 +28533,11 @@
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                             "description": "超过此时间仍未回复即转交用户（reply_timeout_s）"
+                          },
+                          "observe": {
+                            "description": "委托时该项处于 observe 模式（D10）：supervisor 的判断只记录为 task.reply_observed，不送达 worker",
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": [
@@ -28399,9 +28608,10 @@
                               "wake_ended",
                               "user_dismissed",
                               "user_replied",
-                              "policy_changed"
+                              "policy_changed",
+                              "observe"
                             ],
-                            "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变"
+                            "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变；observe 该项处于 observe 模式，supervisor 的判断只记录不送达"
                           },
                           "policy_version": {
                             "type": "string",
@@ -28545,6 +28755,122 @@
                     ],
                     "additionalProperties": false,
                     "title": "task.reply_escalated"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "seq": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991,
+                        "description": "账本序号，单调递增"
+                      },
+                      "ts": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "task.reply_observed"
+                      },
+                      "workspace": {
+                        "type": "string",
+                        "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                        "description": "workspace 标识，形如 ws/<id>"
+                      },
+                      "task_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                        "description": "任务 id，由中枢在创建时分配"
+                      },
+                      "actor": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                        "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "task_id": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                            "description": "任务 id，由中枢在创建时分配"
+                          },
+                          "block_seq": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991,
+                            "description": "被委托的那次 task.blocked 的 seq"
+                          },
+                          "delegation_seq": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991,
+                            "description": "对应的 task.reply_delegated 的 seq"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "question",
+                              "awaiting_approval"
+                            ]
+                          },
+                          "decision_id": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991,
+                            "description": "策略判定 id，即对应 policy.decided 事件的 seq"
+                          },
+                          "decision": {
+                            "type": "string",
+                            "enum": [
+                              "approve",
+                              "deny",
+                              "answer",
+                              "escalate"
+                            ],
+                            "description": "supervisor 的判断：批准、拒绝、回答或转交"
+                          },
+                          "text": {
+                            "description": "回答的文字（answer）",
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000,
+                            "description": "supervisor 给出的理由"
+                          },
+                          "policy_version": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{12}$"
+                          }
+                        },
+                        "required": [
+                          "task_id",
+                          "block_seq",
+                          "delegation_seq",
+                          "kind",
+                          "decision",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "seq",
+                      "ts",
+                      "type",
+                      "workspace",
+                      "actor",
+                      "payload"
+                    ],
+                    "additionalProperties": false,
+                    "title": "task.reply_observed"
                   },
                   {
                     "type": "object",
@@ -30246,6 +30572,88 @@
                     ],
                     "additionalProperties": false,
                     "title": "supervisor.scheduler_initialized"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "seq": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991,
+                        "description": "账本序号，单调递增"
+                      },
+                      "ts": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+                      },
+                      "type": {
+                        "type": "string",
+                        "const": "supervisor.observed_action"
+                      },
+                      "workspace": {
+                        "type": "string",
+                        "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                        "description": "workspace 标识，形如 ws/<id>"
+                      },
+                      "task_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                        "description": "任务 id，由中枢在创建时分配"
+                      },
+                      "actor": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+                        "description": "操作者标识，例如 user、agent:claude、node:<id>、hub、scheduler"
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "wake_task_id": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+                            "description": "发起动作的 autonomous 唤醒任务"
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "task_create",
+                              "task_propose",
+                              "pr_merge_request"
+                            ]
+                          },
+                          "args": {
+                            "type": "string",
+                            "maxLength": 1000,
+                            "description": "参数摘要（遮蔽疑似密钥，最多 1000 字符）"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000,
+                            "description": "未执行的原因"
+                          }
+                        },
+                        "required": [
+                          "wake_task_id",
+                          "action",
+                          "args",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "seq",
+                      "ts",
+                      "type",
+                      "workspace",
+                      "actor",
+                      "payload"
+                    ],
+                    "additionalProperties": false,
+                    "title": "supervisor.observed_action"
                   },
                   {
                     "type": "object",

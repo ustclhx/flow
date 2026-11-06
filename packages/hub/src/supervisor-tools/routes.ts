@@ -113,9 +113,17 @@ export function createSupervisorToolRoutes(deps: SupervisorToolsDeps): Hono {
       const loaded = await deps.policy.load()
       if (!loaded.ok) return respond(c, loaded, taskRespondData)
     }
+    // observe（D10）：读取 workspace 当前配置，与委托时记录的 observe 取并集。workspace 已查不到时按 observe
+    // 处理（失败即不送达）；observe 段缺省时各项为 false，行为与没有 observe 时相同。
+    const caller = wakeCallerOf(c)
+    let observe: { replies: boolean; approvals: boolean } | undefined
+    if (caller && typeof deps.workspaces === 'function') {
+      const ws = await deps.workspaces(caller.workspace)
+      observe = ws ? ws.supervisor.observe : { replies: true, approvals: true }
+    }
     return respond(
       c,
-      deps.delegation.respond(actorOf(c), wakeCallerOf(c), input.data),
+      deps.delegation.respond(actorOf(c), caller, input.data, observe ? { observe } : {}),
       taskRespondData,
     )
   })

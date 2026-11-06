@@ -1,0 +1,271 @@
+{
+  "$id": "https://raindown.local/schemas/protocol/supervisor-report.response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "until": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "description": "ISO 8601 时间，例如 2026-10-24T08:00:00.000Z"
+        },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "workspace": {
+                "type": "string",
+                "pattern": "^ws\\/[a-z0-9][a-z0-9-]*$",
+                "description": "workspace 标识，形如 ws/<id>"
+              },
+              "observed_replies": {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "observe 判断（task.reply_observed）总数"
+                  },
+                  "question": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "其中代答（提问）"
+                  },
+                  "awaiting_approval": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "其中代批（授权请求）"
+                  },
+                  "escalate": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "supervisor 自己也会转交给用户的判断（不参与一致率）"
+                  },
+                  "pending": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "用户尚未回复（或卡住已以其他方式结束）的判断"
+                  },
+                  "replied": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "用户已回复的判断（不含 escalate）"
+                  },
+                  "judged": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "能判定一致与否的判断：批准 / 拒绝，以及双方都选了结构化选项的回答"
+                  },
+                  "agreed": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "判定为一致的判断"
+                  },
+                  "agreement": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "agreed / judged；没有可判定的判断时为 null"
+                  },
+                  "approvals": {
+                    "type": "object",
+                    "properties": {
+                      "judged": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "agreed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "judged",
+                      "agreed"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "choices": {
+                    "type": "object",
+                    "properties": {
+                      "judged": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "agreed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "judged",
+                      "agreed"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "free_text": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "自由文本回答：只统计已回复，不判一致"
+                  }
+                },
+                "required": [
+                  "total",
+                  "question",
+                  "awaiting_approval",
+                  "escalate",
+                  "pending",
+                  "replied",
+                  "judged",
+                  "agreed",
+                  "agreement",
+                  "approvals",
+                  "choices",
+                  "free_text"
+                ],
+                "additionalProperties": false,
+                "title": "Observed replies summary"
+              },
+              "stuck_basis": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "executor": {
+                      "type": "string"
+                    },
+                    "reported": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "inferred": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "unspecified": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991,
+                      "description": "旧事件或没有 basis 的卡住"
+                    },
+                    "reported_ratio": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "reported / 全部卡住"
+                    }
+                  },
+                  "required": [
+                    "executor",
+                    "reported",
+                    "inferred",
+                    "unspecified",
+                    "reported_ratio"
+                  ],
+                  "additionalProperties": false,
+                  "title": "Stuck basis row"
+                },
+                "description": "按执行器分组的卡住 basis"
+              },
+              "observed_actions": {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "task_create": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "task_propose": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "pr_merge_request": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "total",
+                  "task_create",
+                  "task_propose",
+                  "pr_merge_request"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "workspace",
+              "observed_replies",
+              "stuck_basis",
+              "observed_actions"
+            ],
+            "additionalProperties": false,
+            "title": "Supervisor report workspace"
+          }
+        }
+      },
+      "required": [
+        "since",
+        "until",
+        "workspaces"
+      ],
+      "additionalProperties": false,
+      "title": "GET /v1/supervisor/report"
+    }
+  },
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false
+}

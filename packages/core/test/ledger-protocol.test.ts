@@ -303,6 +303,7 @@ describe('端点清单与 JSON Schema 导出', () => {
       'POST /v1/telegram/unlink',
       'POST /v1/supervisor/wake',
       'GET /v1/supervisor/status',
+      'GET /v1/supervisor/report',
       'POST /v1/tasks',
       'GET /v1/tasks',
       'GET /v1/tasks/:id',

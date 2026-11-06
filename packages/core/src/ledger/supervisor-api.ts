@@ -151,3 +151,72 @@ export const supervisorStatusData = z
   .object({ workspaces: z.array(supervisorWorkspaceStatus) })
   .meta({ title: 'GET /v1/supervisor/status' })
 export type SupervisorStatusData = z.infer<typeof supervisorStatusData>
+
+/**
+ * `raindown supervisor report`（add-harness-neutral-coordination D10，tasks 7.4）：按 workspace 与时间范围统计
+ * observe 判断与用户实际回复的一致率、卡住记录的 basis 比例与 observe 下未执行的自主动作。只接受 user。
+ */
+export const supervisorReportQuery = z
+  .strictObject({
+    workspace: workspaceRef.optional(),
+    since: timestamp.optional().meta({ description: '统计起点（含），缺省为 7 天前' }),
+    until: timestamp.optional().meta({ description: '统计终点（不含），缺省为现在' }),
+  })
+  .meta({ title: 'GET /v1/supervisor/report 查询参数' })
+export type SupervisorReportQuery = z.infer<typeof supervisorReportQuery>
+
+const count = z.number().int().min(0)
+const ratio = z.number().min(0).max(1).nullable()
+
+export const observedRepliesSummary = z
+  .object({
+    total: count.meta({ description: 'observe 判断（task.reply_observed）总数' }),
+    question: count.meta({ description: '其中代答（提问）' }),
+    awaiting_approval: count.meta({ description: '其中代批（授权请求）' }),
+    escalate: count.meta({ description: 'supervisor 自己也会转交给用户的判断（不参与一致率）' }),
+    pending: count.meta({ description: '用户尚未回复（或卡住已以其他方式结束）的判断' }),
+    replied: count.meta({ description: '用户已回复的判断（不含 escalate）' }),
+    judged: count.meta({
+      description: '能判定一致与否的判断：批准 / 拒绝，以及双方都选了结构化选项的回答',
+    }),
+    agreed: count.meta({ description: '判定为一致的判断' }),
+    agreement: ratio.meta({ description: 'agreed / judged；没有可判定的判断时为 null' }),
+    approvals: z.object({ judged: count, agreed: count }),
+    choices: z.object({ judged: count, agreed: count }),
+    free_text: count.meta({ description: '自由文本回答：只统计已回复，不判一致' }),
+  })
+  .meta({ title: 'Observed replies summary' })
+
+export const stuckBasisRow = z
+  .object({
+    executor: z.string(),
+    reported: count,
+    inferred: count,
+    unspecified: count.meta({ description: '旧事件或没有 basis 的卡住' }),
+    reported_ratio: ratio.meta({ description: 'reported / 全部卡住' }),
+  })
+  .meta({ title: 'Stuck basis row' })
+
+export const supervisorReportWorkspace = z
+  .object({
+    workspace: workspaceRef,
+    observed_replies: observedRepliesSummary,
+    stuck_basis: z.array(stuckBasisRow).meta({ description: '按执行器分组的卡住 basis' }),
+    observed_actions: z.object({
+      total: count,
+      task_create: count,
+      task_propose: count,
+      pr_merge_request: count,
+    }),
+  })
+  .meta({ title: 'Supervisor report workspace' })
+export type SupervisorReportWorkspace = z.infer<typeof supervisorReportWorkspace>
+
+export const supervisorReportData = z
+  .object({
+    since: timestamp,
+    until: timestamp,
+    workspaces: z.array(supervisorReportWorkspace),
+  })
+  .meta({ title: 'GET /v1/supervisor/report' })
+export type SupervisorReportData = z.infer<typeof supervisorReportData>

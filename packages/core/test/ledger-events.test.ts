@@ -152,6 +152,31 @@ const samples: Record<
     valid: { ...task, payload: { reason: 'timeout', block_seq: 7 } },
     invalid: { ...task, payload: { reason: 'bored' } },
   },
+  'task.reply_observed': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: {
+        task_id: 't-1',
+        block_seq: 7,
+        delegation_seq: 8,
+        kind: 'awaiting_approval',
+        decision_id: 6,
+        decision: 'approve',
+        reason: '只读检查',
+      },
+    },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: {
+        task_id: 't-1',
+        block_seq: 7,
+        delegation_seq: 8,
+        kind: 'question',
+        decision: 'maybe',
+        reason: 'x',
+      },
+    },
+  },
   'task.branch_reported': {
     valid: { ...task, payload: { branch: 'ustclhx/t-1' } },
     invalid: { ...task, payload: { branch: 'feature/../main' } },
@@ -294,6 +319,16 @@ const samples: Record<
   'supervisor.scheduler_initialized': {
     valid: { payload: { up_to_seq: 0 } },
     invalid: { payload: { up_to_seq: -1 } },
+  },
+  'supervisor.observed_action': {
+    valid: {
+      workspace: 'ws/product-res',
+      payload: { wake_task_id: 't-1', action: 'task_create', args: '{}', reason: 'observe' },
+    },
+    invalid: {
+      workspace: 'ws/product-res',
+      payload: { wake_task_id: 't-1', action: 'task_retry', args: '{}', reason: 'observe' },
+    },
   },
   'supervisor.queue_dropped': {
     valid: {

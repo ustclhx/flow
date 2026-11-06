@@ -36,6 +36,10 @@ supervisor:
   reviewer_roles: [pr-reviewer]   # 审查结论被采信的角色，默认 [pr-reviewer]
   delegate_replies: true   # 卡住时先交给 supervisor 代回复，默认 true
   reply_timeout_s: 600     # 代回复等待秒数，超时转交你；默认 600，范围 30–86400
+  observe:                 # observe 模式：只记录 supervisor 会怎么做，不执行；三项默认都是 false，见第 8 节末尾
+    replies: false         # 代答（提问）
+    approvals: false       # 代批（授权请求）
+    autonomous: false      # 自主工作（巡检、回看唤醒中的建任务、提案、合并请求）
   limits:                  # 见第 3 节；均为非负整数，括号内为取值范围
     tasks_per_wake: 5               # 0–100
     wakes_per_day: 24               # 0–1000，普通唤醒（instruction + autonomous）
@@ -308,6 +312,59 @@ autonomous 每天最多 4 次（`autonomous_wakes_per_day`），计入每日普�
    为此 reply 唤醒不能建任务、提案、提问或请求合并，回答原文也不进入任何后续唤醒的上下文（但仍在账本里，后续唤醒可以主动读到，读到的仍只是数据）。
 4. 与全局一致：能读 `state/hub.token` 的同用户进程就是 user（[hub-auth.md](hub-auth.md) 信任边界）。
 
+### observe 模式：先看 supervisor 会怎么做
+
+放开代答、代批或自主工作之前，可以先让 supervisor 只"说"不"做"，用一段时间的真实数据看它的判断和你是否一致。
+在 workspace 配置里逐项打开（三项相互独立，缺省都是 `false`，缺省时行为与没有这一节完全相同）：
+
+```yaml
+supervisor:
+  observe:
+    approvals: true     # 代批只记录
+    replies: true       # 代答只记录
+    autonomous: true    # 自主工作的写类动作只记录
+```
+
+`raindown doctor` 的 supervisor 摘要会显示每项是"开"还是"关"。改配置不需要重启中枢。
+
+**代答 / 代批处于 observe 时**：委托照常发生，reply 唤醒照常给出判断；`task_respond` 不写回复，而是记录
+`task.reply_observed`（判断、理由、对应的委托与策略判定），随后以转交原因 `observe` 把卡住推给你。收件箱条目
+（含 Telegram）第一行是"【observe】supervisor 会：批准 / 拒绝 / 回答「…」（理由）"。你照常回复，回复照常送达 worker，
+之后 `raindown supervisor report` 会把它和 supervisor 的判断对比。
+
+- **判断绝不会到达 worker**：不建回复、不重新排队，续约、交付记录与恢复回复里都没有它；带 observe 的委托上 supervisor 的回复
+  会被账本直接拒绝。observe 判断是不带任务 id 的 workspace 级事件，worker 用任务绑定的 `task_show` / `event_get`
+  读不到它，也读不到收件箱条目（其中附有"supervisor 会：……"）。
+- 判断以委托时的配置为准；委托之后才打开 observe 的，`task_respond` 时读取的当前配置同样生效（两者任一开启即不送达）。
+- supervisor 自己判断要转交（`escalate`）的也会记录，但不计入一致率。
+
+**自主工作处于 observe 时**：只影响 autonomous 唤醒（巡检、决策回看）。其中的 `task_create`、`task_propose`、
+`pr_merge_request` 在各自的核对全部通过后不执行，只记录 `supervisor.observed_action{action, 参数摘要, reason}`
+（参数摘要遮蔽疑似密钥、最多 1000 字符），supervisor 收到错误码 `observe_not_executed`，说明以"observe：未执行"开头。
+instruction 与 reply 唤醒不受影响。
+
+**看一致率**：
+
+```sh
+raindown supervisor report product-res            # 最近 7 天
+raindown supervisor report product-res --days 30  # 最近 30 天
+raindown supervisor report --since 2026-11-01 --until 2026-11-08 --json
+```
+
+- 代批：你的批准 / 拒绝与 supervisor 的判断相同即一致；
+- 代答：提问带结构化选项、且双方都恰好选了某个选项时比较是否同一项；自由文本回答只统计"已回复"，不判一致；
+- 另外列出卡住记录中 `basis: reported`（worker 主动上报）与 `inferred`（终端推断）的比例（按执行器），
+  以及 observe 下未执行的自主动作数量与类型。
+
+**建议的逐项放开顺序**：
+
+1. 先打开 `approvals` 与 `replies` 的 observe 跑一到两周；
+2. 代批一致率稳定在高位（例如 ≥ 95%，样本至少几十条）后关掉 `approvals` 的 observe，让 supervisor 真正代批；
+3. 再看代答：可判定样本足够、一致率稳定后关掉 `replies` 的 observe；自由文本多时先让 worker 用结构化选项提问；
+4. 最后才考虑自主工作：先开 `autonomous` 的 observe 看几轮巡检会建什么、提什么、请求合并什么，确认无误再关闭。
+
+任何一步出现不一致，重新打开对应项即可回到只记录，不影响其他项。
+
 ## 9. 费用
 
 每次唤醒是一次 Opus 级别的 claude-sdk 会话；代回复唤醒、巡检、审查任务也各自是会话。claude-sdk 执行器在结果里记录
@@ -332,6 +389,7 @@ raindown ask product-res "给登录页加上忘记密码链接"       # 下指�
 raindown supervisor wake product-res [<说明>]               # 手动唤醒（有说明则等同指令）
 raindown supervisor wake product-res --release instruction  # 放行暂停 / 达到上限的队列（instruction | autonomous）
 raindown supervisor status [product-res]                    # 当前唤醒、各队列长度、暂停状态、今日次数与花费、最近一次结果
+raindown supervisor report [product-res] [--days 30]        # observe 一致率、卡住 basis 比例、未执行的自主动作（第 8 节末尾）
 ```
 
 - workspace 写 `product-res` 或 `ws/product-res` 都可以。以上命令都**只有 user** 能用，AI 身份返回 `user_only`。
