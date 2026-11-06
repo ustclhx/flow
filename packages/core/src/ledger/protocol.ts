@@ -704,7 +704,8 @@ export const leaseGrant = z
     resume: taskResume
       .optional()
       .meta({ description: '任务带着回复重新排队时，本次执行要带上的回复与会话 id' }),
-    recovery: taskRecovery.optional(),
+    // 恢复上下文只是提示；较新中枢扩展字段或原因时，旧节点仍须接受租约。
+    recovery: taskRecovery.optional().catch(undefined),
     wake_token: z.string().min(16).optional().meta({
       description:
         '唤醒绑定 token（add-m1-supervisor D6）：只在领到 supervisor 唤醒任务时下发，身份为 supervisor，绑定 workspace 与该唤醒，租约结束或任务结束即失效；旧节点忽略',

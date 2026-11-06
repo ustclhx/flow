@@ -13,7 +13,6 @@ describe('派工恢复提示', () => {
       },
       reported_branch: 'dev/t-1',
       prs: ['https://github.com/example/repo/pull/32'],
-      pushed_sha: 'a'.repeat(40),
     })
     const prompt = renderRecoveryPrompt(recovery)
     expect(prompt).toStartWith('# 任务恢复提示')

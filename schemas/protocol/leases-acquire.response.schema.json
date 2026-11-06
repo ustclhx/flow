@@ -988,11 +988,6 @@
                         "pattern": "^https:\\/\\/[A-Za-z0-9.-]+(?::\\d+)?\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[1-9]\\d*$",
                         "description": "PR 链接，例如 https://github.com/owner/repo/pull/12"
                       }
-                    },
-                    "pushed_sha": {
-                      "type": "string",
-                      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
-                      "description": "提交 sha"
                     }
                   },
                   "required": [

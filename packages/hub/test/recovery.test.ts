@@ -91,7 +91,7 @@ test('首次派工不携带恢复提示', async () => {
   expect(await ctx.grant()).not.toHaveProperty('recovery')
 })
 
-test('push后节点重启、租约过期重新派工：保留分支和结构化外部事实并附恢复提示', async () => {
+test('节点重启后租约过期重新派工：保留账本分支，忽略临时 activity 中的 PR 和 push', async () => {
   const ctx = await setup()
   const first = await ctx.grant()
   must(
@@ -117,15 +117,17 @@ test('push后节点重启、租约过期重新派工：保留分支和结构化�
     recovery: {
       previous_end: { attempt: 1, reason: 'lease_expired' },
       reported_branch: 'task/recovery',
-      prs: [PR],
-      pushed_sha: PUSHED_SHA,
+      prs: [],
     },
   })
   if (!second.recovery) throw new Error('重新派工缺少恢复上下文')
   const prompt = renderRecoveryPrompt(second.recovery)
-  for (const fact of ['工作目录', 'git', 'PR', 'push', PR, PUSHED_SHA]) {
+  for (const fact of ['工作目录', 'git', 'PR', 'push']) {
     expect(prompt).toContain(fact)
   }
+  expect(prompt).not.toContain(PR)
+  expect(prompt).not.toContain(PUSHED_SHA)
+  expect(second.recovery).not.toHaveProperty('pushed_sha')
 })
 
 test('task_retry后的派工包含上次崩溃，旧账缺少结束事件仍可恢复', async () => {
@@ -161,7 +163,6 @@ test('task_retry后的派工包含上次崩溃，旧账缺少结束事件仍可�
     recoveryForTask(
       {
         taskEvents: () => oldEvents,
-        taskActivity: () => [],
       },
       { ...ctx.task, attempt: 1 },
     )?.previous_end.reason,
@@ -198,6 +199,7 @@ test('失败后重试保留本任务已记录的PR，不把commit产物或push�
       },
     }),
   )
+  must(ctx.ledger().rebuild())
   must(await ctx.tasks().retryTask(ctx.task.id, { actor: 'user' }))
   const second = await ctx.grant()
   expect(second.recovery).toMatchObject({
@@ -206,4 +208,50 @@ test('失败后重试保留本任务已记录的PR，不把commit产物或push�
   })
   expect(second.recovery).not.toHaveProperty('pushed_sha')
   expect(second.recovery?.previous_end).not.toHaveProperty('blocked_reason')
+})
+
+test('普通提问回复重排不附恢复提示，也不继承更早派工的崩溃原因', async () => {
+  const ctx = await setup()
+  const first = await ctx.grant()
+  must(
+    ctx.nodes().complete(first.lease_id, {
+      lease_token: first.lease_token,
+      outcome: 'blocked',
+      blocked_reason: 'crashed',
+      message: '上一次崩溃',
+    }),
+  )
+  must(await ctx.tasks().retryTask(ctx.task.id, { actor: 'user' }))
+  const recovered = await ctx.grant()
+  expect(recovered.recovery?.previous_end.blocked_reason).toBe('crashed')
+  must(
+    ctx.nodes().complete(recovered.lease_id, {
+      lease_token: recovered.lease_token,
+      outcome: 'blocked',
+      blocked_reason: 'question',
+      message: '用哪个标题？',
+      session: 'session-2',
+    }),
+  )
+  must(ctx.tasks().replyTask(ctx.task.id, { kind: 'text', text: '标题A' }, { actor: 'user' }))
+  const answered = await ctx.grant()
+  expect(answered.resume).toMatchObject({ session: 'session-2', reply: { text: '标题A' } })
+  expect(answered).not.toHaveProperty('recovery')
+})
+
+test('提问等待期间节点失联，带回复重排仍须附恢复提示', async () => {
+  const ctx = await setup()
+  const first = await ctx.grant()
+  must(
+    ctx.nodes().renew(first.lease_id, {
+      lease_token: first.lease_token,
+      blocked: { reason: 'question', message: '用哪个标题？' },
+    }),
+  )
+  must(ctx.tasks().replyTask(ctx.task.id, { kind: 'text', text: '标题A' }, { actor: 'user' }))
+  await ctx.clock.advance(60_001)
+  expect(ctx.nodes().expireDue()).toBe(1)
+  const answered = await ctx.grant()
+  expect(answered.resume?.reply.text).toBe('标题A')
+  expect(answered.recovery?.previous_end.reason).toBe('lease_expired')
 })

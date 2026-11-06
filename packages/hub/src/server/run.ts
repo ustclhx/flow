@@ -513,6 +513,7 @@ export async function runHub(input: RunHubOptions): Promise<Result<RunningHub>> 
   }
   existingPr = createExistingPrReactor({
     ledger,
+    clock,
     roles: roleLookupFromHome(options.home),
     workspaces: workspaceLookupFromHome(options.home),
     logger,

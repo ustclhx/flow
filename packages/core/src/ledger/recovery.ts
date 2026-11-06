@@ -3,7 +3,6 @@ import { timestamp } from './common.ts'
 import {
   type BlockedReason,
   blockedReason,
-  gitSha,
   prUrl,
   type TaskAttemptEndReason,
   taskAttemptEndReason,
@@ -23,7 +22,6 @@ export const taskRecovery = z
     }),
     reported_branch: taskBranch.optional(),
     prs: z.array(prUrl),
-    pushed_sha: gitSha.optional(),
   })
   .meta({ title: 'Task recovery', description: '同一任务上一次派工的结束与交付事实' })
 export type TaskRecovery = z.infer<typeof taskRecovery>

@@ -249,6 +249,19 @@ describe('响应体', () => {
     }
     expect(acquireLeaseData.safeParse({ lease }).success).toBe(true)
     expect(acquireLeaseData.safeParse({ lease: { ...lease, attempt: 0 } }).success).toBe(false)
+    const recovery = { previous_end: { attempt: 1, reason: 'lease_expired' as const }, prs: [] }
+    expect(acquireLeaseData.parse({ lease: { ...lease, recovery } }).lease?.recovery).toEqual(
+      recovery,
+    )
+    // 恢复提示的未来字段或结束原因不能让已分配的租约在旧节点上解析失败。
+    for (const future of [
+      { ...recovery, future_field: true },
+      { ...recovery, previous_end: { attempt: 1, reason: 'future_end_reason' } },
+    ]) {
+      const parsed = acquireLeaseData.parse({ lease: { ...lease, recovery: future } }).lease
+      expect(parsed?.lease_id).toBe(lease.lease_id)
+      expect(parsed?.recovery).toBeUndefined()
+    }
   })
   test('renew', () => {
     expect(

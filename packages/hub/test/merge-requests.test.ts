@@ -1194,6 +1194,7 @@ test('已有 PR 判定完成的开发任务仍必须通过可信审查才可请�
   const id = s.dev({}, 'blocked')
   const reactor = createExistingPrReactor({
     ledger: s.ledger,
+    clock: s.clock,
     roles: s.tools.roles,
     workspaces: s.tools.workspaces,
     query: async () =>
@@ -1204,6 +1205,7 @@ test('已有 PR 判定完成的开发任务仍必须通过可信审查才可请�
           headRefName: BRANCH,
           createdAt: '2026-10-26T09:00:00Z',
           isCrossRepository: false,
+          isDraft: false,
         },
       ]),
   })

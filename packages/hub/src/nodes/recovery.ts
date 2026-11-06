@@ -1,9 +1,31 @@
-import { foldTaskAttempts, gitSha, prUrl, type TaskRecovery, type TaskView } from '@raindown/core'
+import { foldTaskAttempts, prUrl, type TaskRecovery, type TaskView } from '@raindown/core'
 import type { LedgerStore } from '../ledger/store.ts'
 
-/** 只读任务自己的已知事实；不把终端文字或获准 push 当成已经发生的外部动作。 */
+/** 只从可重放的本任务账本结果读取 PR，不采信临时活动或终端文字。 */
+export function recordedTaskPrs(ledger: Pick<LedgerStore, 'taskEvents'>, taskId: string): string[] {
+  const prs = new Set<string>()
+  const addPr = (value: unknown) => {
+    const parsed = prUrl.safeParse(value)
+    if (parsed.success) prs.add(parsed.data)
+  }
+  for (const event of ledger.taskEvents(taskId)) {
+    if (
+      event.type !== 'task.done' &&
+      event.type !== 'task.failed' &&
+      event.type !== 'task.cancelled'
+    )
+      continue
+    for (const artifact of event.payload.result?.artifacts ?? []) {
+      if (artifact.kind === 'pr') addPr(artifact.ref)
+    }
+    for (const pr of event.payload.result?.prs ?? []) addPr(pr)
+  }
+  return [...prs]
+}
+
+/** 只为中断后的恢复或主动重试附提示；普通提问回复沿用原任务输入。 */
 export function recoveryForTask(
-  ledger: Pick<LedgerStore, 'taskEvents' | 'taskActivity'>,
+  ledger: Pick<LedgerStore, 'taskEvents'>,
   task: TaskView,
 ): TaskRecovery | undefined {
   if (task.attempt === 0) return undefined
@@ -16,31 +38,16 @@ export function recoveryForTask(
   const context = prior.findLast(
     (e) => e.type === 'task.blocked' || e.type === 'task.failed' || e.type === 'task.unblocked',
   )
-  const prs = new Set<string>()
-  const addPr = (value: unknown) => {
-    const parsed = prUrl.safeParse(value)
-    if (parsed.success) prs.add(parsed.data)
-  }
-  for (const event of events) {
-    if (
-      event.type !== 'task.done' &&
-      event.type !== 'task.failed' &&
-      event.type !== 'task.cancelled'
-    )
-      continue
-    for (const artifact of event.payload.result?.artifacts ?? []) {
-      if (artifact.kind === 'pr') addPr(artifact.ref)
-    }
-    for (const pr of event.payload.result?.prs ?? []) addPr(pr)
-  }
-  // 活动 data 是已有的结构化执行器事实通道；只采信明确的 PR / push 字段，逐项校验。
-  let pushedSha: string | undefined
-  for (const activity of ledger.taskActivity(task.id)) {
-    const data = activity.data
-    if (Array.isArray(data?.prs)) for (const pr of data.prs) addPr(pr)
-    const sha = gitSha.safeParse(data?.pushed_sha)
-    if (sha.success) pushedSha = sha.data
-  }
+  const requeued = prior.findLast(
+    (e) => e.type === 'task.requeued' || e.type === 'task.requeued_with_reply',
+  )
+  const interrupted =
+    prior.some((e) => e.type === 'task.lease_expired') ||
+    previous?.reason === 'lease_expired' ||
+    previous?.reason === 'node_lost' ||
+    previous?.reason === 'retry' ||
+    (context?.type === 'task.blocked' && ['crashed', 'node_lost'].includes(context.payload.reason))
+  if (requeued?.type !== 'task.requeued' && !interrupted) return undefined
   return {
     previous_end: {
       attempt: previous?.attempt ?? task.attempt,
@@ -54,7 +61,6 @@ export function recoveryForTask(
           : {}),
     },
     ...(task.branch ? { reported_branch: task.branch } : {}),
-    prs: [...prs],
-    ...(pushedSha ? { pushed_sha: pushedSha } : {}),
+    prs: recordedTaskPrs(ledger, task.id),
   }
 }
