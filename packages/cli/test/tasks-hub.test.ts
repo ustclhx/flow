@@ -406,7 +406,15 @@ describe('任务操作与真实中枢', () => {
     }
     const mcp = await connect({ home, actor: 'test-agent' })
     try {
-      expect((await callJson(mcp, 'task_show', { id: task.id })).doc).toEqual(doc)
+      // 非 user 身份（这里是 user token 声明的 AI 身份）读不到收件箱事件（D10 observe 的可见范围）。
+      const forAgent = {
+        ...doc,
+        data: {
+          ...doc.data,
+          events: doc.data.events.filter((e: { type: string }) => !e.type.startsWith('inbox.')),
+        },
+      }
+      expect((await callJson(mcp, 'task_show', { id: task.id })).doc).toEqual(forAgent)
     } finally {
       await mcp.close()
     }

@@ -943,6 +943,7 @@ export function createTaskService(o: TaskServiceOptions): TaskService {
           wake_task_id: callerWake.task_id,
           action: 'task_create',
           args: { ...shown, goal },
+          limit: limits.tasks_per_wake,
         })
       }
       const parentNow = parent ? ledger.getTask(parent.id) : null

@@ -92,6 +92,11 @@
         "policy_version": {
           "type": "string",
           "pattern": "^[0-9a-f]{12}$"
+        },
+        "forced": {
+          "description": "不是 observe 模式：回复时 workspace 配置无法读取，按失败即不送达只记录（不计入 supervisor report 一致率）",
+          "type": "string",
+          "const": "config_unavailable"
         }
       },
       "required": [

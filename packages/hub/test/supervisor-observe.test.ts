@@ -17,6 +17,7 @@ import {
 import {
   createDelegationService,
   createHubApp,
+  createInboxRoutes,
   createNodeProtocol,
   createSupervisorRoutes,
   createSupervisorToolRoutes,
@@ -76,6 +77,8 @@ const ROLES: Record<string, unknown> = {
 const OFF: SupervisorObserveConfig = { replies: false, approvals: false, autonomous: false }
 
 async function setup(o: { observe?: Partial<SupervisorObserveConfig> } = {}) {
+  /** 模拟节点已不持有任务租约（委托服务看到的 activeLease 返回 null）。 */
+  const lease = { lost: false }
   const clock = new FakeClock(T0)
   const t = await tempLedger({ now: clock.now })
   cleanups.push(t.cleanup)
@@ -101,8 +104,15 @@ async function setup(o: { observe?: Partial<SupervisorObserveConfig> } = {}) {
     newTaskId: () => `t-${String(++n).padStart(3, '0')}`,
   })
   let r = 0
+  const delegationLedger = new Proxy(store, {
+    get(target, key) {
+      if (key === 'activeLease' && lease.lost) return () => null
+      const v = Reflect.get(target, key)
+      return typeof v === 'function' ? v.bind(target) : v
+    },
+  })
   const delegation = createDelegationService({
-    ledger: store,
+    ledger: delegationLedger,
     clock,
     workspaces: lookup,
     roles,
@@ -165,7 +175,18 @@ async function setup(o: { observe?: Partial<SupervisorObserveConfig> } = {}) {
       await tick()
     }
   }
-  return { store, clock, tasks, delegation, protocol, wakeTokens, workspaces, channel, settle }
+  return {
+    store,
+    clock,
+    tasks,
+    delegation,
+    protocol,
+    wakeTokens,
+    workspaces,
+    channel,
+    settle,
+    lease,
+  }
 }
 type Env = Awaited<ReturnType<typeof setup>>
 
@@ -708,6 +729,205 @@ describe('HTTP task_respond 读取当前配置', () => {
     })
     expect(res.status).toBe(200)
     expect(((await res.json()) as { data: { observed?: boolean } }).data.observed).toBe(true)
+    expectNotDelivered(env, id, lease)
+  })
+})
+
+describe('审查修复（PR #85）', () => {
+  /** 一个代批 observe 已记录并转交的任务。 */
+  async function observedApproval(reason = 'SECRET_JUDGEMENT') {
+    const env = await setup({ observe: { approvals: true } })
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const { blockSeq } = blockApproval(env, lease)
+    await env.settle()
+    const caller = await replyCaller(env)
+    must(respond(env, caller, { task_id: id, block_seq: blockSeq, decision: 'approve', reason }))
+    await env.settle()
+    return { env, id, lease, blockSeq }
+  }
+
+  test('user token 声明的 AI 身份按 worker 处理：task_show 去掉判断与收件箱事件，inbox_list 去掉 observe 行', async () => {
+    const { env, id, blockSeq } = await observedApproval()
+    const ai = { ...authHeaders, 'X-Raindown-Actor': 'reviewer' }
+    const app = createHubApp({
+      token: testToken,
+      wakeTokens: {
+        authenticate: (token) =>
+          token === 'wake-instruction'
+            ? {
+                actor: 'supervisor',
+                task_id: 'wake-x',
+                workspace: WS,
+                lease_id: 'l-x',
+                origin: 'instruction',
+                generation: 1,
+              }
+            : null,
+      },
+      ledger: env.store,
+      mount: [
+        { path: '/', app: createTaskRoutes({ ledger: env.store, tasks: env.tasks }) },
+        {
+          path: '/',
+          app: createInboxRoutes({
+            ledger: env.store,
+            tasks: env.tasks,
+            home: '/nonexistent',
+            scanProposals: async () => {},
+          }),
+        },
+      ],
+    })
+    for (const path of [`/v1/tasks/${id}`, `/v1/tasks/${id}?section=events&limit=500`]) {
+      const text = await (await app.request(path, { headers: ai })).text()
+      expect(text).not.toContain('SECRET_JUDGEMENT')
+      expect(text).not.toContain('"inbox.')
+    }
+    const listAs = async (headers: Record<string, string>) => {
+      const res = await app.request('/v1/inbox?state=open', { headers })
+      const items = ((await res.json()) as { data: { items: { id: string; body: string }[] } }).data
+        .items
+      return items.find((i) => i.id === `blk.${blockSeq}`)
+    }
+    const asUser = await listAs(authHeaders)
+    expect(asUser?.body.startsWith(OBSERVE_LINE_PREFIX)).toBe(true)
+    for (const headers of [ai, { Authorization: 'Bearer wake-instruction' }]) {
+      const item = await listAs(headers)
+      expect(item).toBeDefined()
+      expect(item?.body).not.toContain('SECRET_JUDGEMENT')
+      expect(item?.body).not.toContain(OBSERVE_LINE_PREFIX)
+      expect(item?.body).toContain('pnpm check')
+    }
+  })
+
+  test('event_get：observe 判断只给 reply 唤醒读，instruction / autonomous 唤醒被拒', async () => {
+    const { env, id } = await observedApproval()
+    const caller = (origin: 'instruction' | 'autonomous' | 'reply') => ({
+      actor: 'supervisor' as const,
+      task_id: `wake-${origin}`,
+      workspace: WS,
+      lease_id: `l-${origin}`,
+      origin,
+      generation: 1,
+    })
+    const app = createHubApp({
+      token: testToken,
+      wakeTokens: {
+        authenticate: (token) =>
+          token === 'w-instruction'
+            ? caller('instruction')
+            : token === 'w-autonomous'
+              ? caller('autonomous')
+              : token === 'w-reply'
+                ? caller('reply')
+                : null,
+      },
+      ledger: env.store,
+      mount: [{ path: '/', app: createTaskRoutes({ ledger: env.store, tasks: env.tasks }) }],
+    })
+    const seq = observedOf(env, id)[0]?.seq ?? 0
+    const read = (token: string) =>
+      app.request(`/v1/events/${seq}`, { headers: { Authorization: `Bearer ${token}` } })
+    for (const token of ['w-instruction', 'w-autonomous']) {
+      const res = await read(token)
+      expect(res.status).toBe(403)
+      expect(await res.text()).not.toContain('SECRET_JUDGEMENT')
+    }
+    expect((await read('w-reply')).status).toBe(200)
+  })
+
+  test('回复时 workspace 配置读不到：如实标为 config_unavailable（不是 observe），不送达，report 不计入一致率', async () => {
+    const env = await setup()
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const blockSeq = blockQuestion(env, lease)
+    await env.settle()
+    const wake = await grant(env, 'claude-sdk')
+    const app = createHubApp({
+      token: testToken,
+      wakeTokens: env.wakeTokens,
+      ledger: env.store,
+      mount: [
+        {
+          path: '/',
+          app: createSupervisorToolRoutes({
+            delegation: env.delegation,
+            workspaces: async () => null,
+          } as unknown as SupervisorToolsDeps),
+        },
+      ],
+    })
+    const res = await app.request('/v1/supervisor/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${wake.wake_token}` },
+      body: JSON.stringify({
+        task_id: id,
+        block_seq: blockSeq,
+        decision: 'answer',
+        text: 'A',
+        reason: '范围内',
+      }),
+    })
+    expect(res.status).toBe(200)
+    expect(observedOf(env, id)[0]?.payload.forced).toBe('config_unavailable')
+    const esc = env.store.taskEvents(id).find((e) => e.type === 'task.reply_escalated')
+    expect(esc?.payload).toMatchObject({ reason: 'config_unavailable' })
+    expect(JSON.stringify(esc?.payload)).not.toContain('observe')
+    expectNotDelivered(env, id, lease)
+    await env.settle()
+    const item = env.store.getInboxItem(`blk.${blockSeq}`)
+    expect(item?.body.startsWith(OBSERVE_LINE_PREFIX)).toBe(false)
+    expect(item?.body).toContain('无法读取 workspace 配置')
+    must(env.tasks.replyTask(id, { kind: 'text', text: 'A' }, { actor: 'user' }))
+    const s = supervisorReport(env.store, ALL_TIME, env.clock.now()).workspaces[0]?.observed_replies
+    expect(s).toMatchObject({ total: 0, replied: 0, judged: 0, config_unavailable: 1 })
+  })
+
+  test('observe 下节点已不持有租约：判断照常记录并立即转交（不再 stale_block、不等超时）', async () => {
+    const env = await setup({ observe: { approvals: true } })
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const { blockSeq } = blockApproval(env, lease)
+    await env.settle()
+    const caller = await replyCaller(env)
+    env.lease.lost = true
+    const r = must(respond(env, caller, { task_id: id, block_seq: blockSeq, decision: 'approve' }))
+    expect(r.observed).toBe(true)
+    expect(observedOf(env, id)).toHaveLength(1)
+    expect(env.store.taskEvents(id).find((e) => e.type === 'task.reply_escalated')).toMatchObject({
+      payload: { reason: 'observe' },
+    })
+    expectNotDelivered(env, id)
+    // 非 observe 时这一前提仍然有效。
+    const plain = await setup()
+    const t = await create(plain)
+    const l = await grant(plain, 'fake')
+    const b = blockApproval(plain, l)
+    await plain.settle()
+    const c = await replyCaller(plain)
+    plain.lease.lost = true
+    expect(
+      code(respond(plain, c, { task_id: t, block_seq: b.blockSeq, decision: 'approve' })),
+    ).toBe('stale_block')
+  })
+
+  test('observe 下判断无法记录（类型与卡住不符）：返回错误并立即以 observe 转交', async () => {
+    const env = await setup({ observe: { approvals: true } })
+    const id = await create(env)
+    const lease = await grant(env, 'fake')
+    const { blockSeq } = blockApproval(env, lease)
+    await env.settle()
+    const caller = await replyCaller(env)
+    expect(
+      code(respond(env, caller, { task_id: id, block_seq: blockSeq, decision: 'answer' })),
+    ).toBe('invalid_arguments')
+    expect(observedOf(env, id)).toHaveLength(0)
+    expect(env.store.taskEvents(id).find((e) => e.type === 'task.reply_escalated')).toMatchObject({
+      actor: 'hub',
+      payload: { reason: 'observe' },
+    })
+    expect(env.store.activeDelegation(id)).toBeNull()
     expectNotDelivered(env, id, lease)
   })
 })

@@ -1501,6 +1501,22 @@ describe('observe：autonomous 唤醒的 task_create（harness-neutral 7.3）', 
     expect(events[0]?.payload.args).toContain('"role":"triage"')
   })
 
+  test('observe 记录计入 tasks_per_wake：一次唤醒不能无限写 observed_action', async () => {
+    const s = await setup({
+      supervisor: {
+        observe: OBSERVE,
+        limits: { ...defaultSupervisorConfig().limits, tasks_per_wake: 2 },
+      },
+    })
+    const a = await s.wake('autonomous')
+    for (let i = 0; i < 2; i++) {
+      expect((await s.supCreate(a.token, { parent: a.id })).code).toBe('observe_not_executed')
+    }
+    const third = await s.supCreate(a.token, { parent: a.id })
+    expect([third.status, third.code]).toEqual([429, 'limit_exceeded'])
+    expect(observed(s.store)).toHaveLength(2)
+  })
+
   test('核对不通过的动作照常报错，不记录为 observe', async () => {
     const s = await setup({ supervisor: { observe: OBSERVE } })
     const a = await s.wake('autonomous')

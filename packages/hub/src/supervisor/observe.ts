@@ -40,11 +40,35 @@ export function summarizeArgs(args: unknown): string {
 const OBSERVE_REASON =
   '本 workspace 的 supervisor.observe.autonomous 已开启：autonomous 唤醒的写类动作只记录、不执行'
 
-/** 写 `supervisor.observed_action` 并返回 `observe_not_executed`（写入失败时返回写入错误，同样未执行）。 */
+/** 本次唤醒已记录的 observe 动作数。 */
+export const observedActionCount = (
+  ledger: Pick<LedgerStore, 'eventsByPayload'>,
+  wakeTaskId: string,
+): number => ledger.eventsByPayload('supervisor.observed_action', 'wake_task_id', wakeTaskId).length
+
+/**
+ * 写 `supervisor.observed_action` 并返回 `observe_not_executed`（写入失败时返回写入错误，同样未执行）。
+ * 记录数计入 `limits.tasks_per_wake`（`limit`）：一次唤醒不能无限写 observe 记录，达到上限返回 `limit_exceeded`。
+ */
 export function recordObservedAction(
-  ledger: Pick<LedgerStore, 'append'>,
-  o: { workspace: string; wake_task_id: string; action: ObservedAction; args: unknown },
+  ledger: Pick<LedgerStore, 'append' | 'eventsByPayload'>,
+  o: {
+    workspace: string
+    wake_task_id: string
+    action: ObservedAction
+    args: unknown
+    limit: number
+  },
 ): Result<never> {
+  const made = observedActionCount(ledger, o.wake_task_id)
+  if (made >= o.limit) {
+    return fail(
+      'failure',
+      'limit_exceeded',
+      `observe：本次唤醒已记录 ${made} 个未执行的动作，达到上限 ${o.limit}（supervisor.limits.tasks_per_wake）`,
+      { limit: 'tasks_per_wake', max: o.limit },
+    )
+  }
   const written = ledger.append(
     {
       type: 'supervisor.observed_action',

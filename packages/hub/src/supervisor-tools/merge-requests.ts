@@ -557,6 +557,7 @@ export async function requestMerge(
       workspace: wake.workspace,
       wake_task_id: wake.task_id,
       action: 'pr_merge_request',
+      limit: e.workspace.supervisor.limits.tasks_per_wake,
       args: { pr: e.pr, review_task: e.review.id, reviewed_sha: e.reviewed_sha },
     })
   }

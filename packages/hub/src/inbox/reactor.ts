@@ -772,6 +772,16 @@ const OBSERVE_DECISION_LABEL = {
   escalate: '转交给你',
 } as const
 
+/**
+ * 去掉条目正文开头的 observe 行（D10）：observe 判断只给用户看，非 user 的调用方（AI 身份、任务绑定、
+ * supervisor 唤醒）读取收件箱时只看到条目标题与原卡住说明。
+ */
+export function stripObserveLine(body: string): string {
+  if (!body.startsWith(OBSERVE_LINE_PREFIX)) return body
+  const cut = body.indexOf('\n\n')
+  return cut === -1 ? '' : body.slice(cut + 2)
+}
+
 /** "【observe】supervisor 会：批准（理由）"——一行，最多 600 字符。 */
 export function observeLine(p: {
   decision: keyof typeof OBSERVE_DECISION_LABEL
@@ -801,6 +811,7 @@ const ESCALATION_LABEL: Record<ReplyEscalationReason, string> = {
   user_dismissed: '你忽略了该条目',
   user_replied: '你已回复',
   observe: '该项处于 observe 模式，supervisor 的判断只记录、未送达',
+  config_unavailable: '回复时无法读取 workspace 配置，supervisor 的判断未送达',
 }
 
 function blockedTitle(task: TaskView, reason: BlockedReason): string {

@@ -333,15 +333,25 @@ supervisor:
 之后 `raindown supervisor report` 会把它和 supervisor 的判断对比。
 
 - **判断绝不会到达 worker**：不建回复、不重新排队，续约、交付记录与恢复回复里都没有它；带 observe 的委托上 supervisor 的回复
-  会被账本直接拒绝。observe 判断是不带任务 id 的 workspace 级事件，worker 用任务绑定的 `task_show` / `event_get`
-  读不到它，也读不到收件箱条目（其中附有"supervisor 会：……"）。
+  会被账本直接拒绝。observe 判断是不带任务 id 的 workspace 级事件，不在任何任务的事件列表里。
+- **可见范围**：只有 user 能看到 observe 判断与条目里的"supervisor 会：……"。
+  - 任务绑定的 worker（派工令牌），以及 user token 声明的其他身份（AI、节点等，非 supervisor 唤醒）调用 `task_show` 时，
+    事件列表去掉 observe 判断、未执行的自主动作与全部 `inbox.*` 事件；任务绑定的 `event_get` 读这些事件按不存在处理；
+  - 非 user 的调用方（含 supervisor 唤醒）读取收件箱（`inbox_list`）时，条目正文去掉 observe 这一行，只剩标题与原卡住说明；
+  - `event_get` 读 `task.reply_observed` 只对 reply 唤醒开放：instruction / autonomous 唤醒被拒绝，reply 唤醒的产出不进入
+    其他唤醒的上下文（与第 8 节"回答原文不进入后续唤醒"一致；简报同样只取条目标题）。
 - 判断以委托时的配置为准；委托之后才打开 observe 的，`task_respond` 时读取的当前配置同样生效（两者任一开启即不送达）。
+- observe 只记录、从不送达，所以只与送达有关的前提（节点仍持有租约、没有待送达回复、当前策略仍允许代批）不再检查：
+  判断照常记录并立即转交；判断本身无法记录（例如对授权请求给出 answer）时返回错误，同时立即以 `observe` 转交，不等 `reply_timeout_s`。
+- 回复时读不到该 workspace 的配置（workspace 已被删除等）：同样只记录、不送达（失败即不送达），但如实标为
+  `forced: config_unavailable`、转交原因 `config_unavailable`，条目不显示"supervisor 会"，report 单独计数、不计入一致率。
 - supervisor 自己判断要转交（`escalate`）的也会记录，但不计入一致率。
 
 **自主工作处于 observe 时**：只影响 autonomous 唤醒（巡检、决策回看）。其中的 `task_create`、`task_propose`、
 `pr_merge_request` 在各自的核对全部通过后不执行，只记录 `supervisor.observed_action{action, 参数摘要, reason}`
 （参数摘要遮蔽疑似密钥、最多 1000 字符），supervisor 收到错误码 `observe_not_executed`，说明以"observe：未执行"开头。
-instruction 与 reply 唤醒不受影响。
+instruction 与 reply 唤醒不受影响。autonomous observe **只覆盖这三个动作**；其他写类操作（`ask_user`、`decision_review`、
+`patrol_report`、`brief update` 等）照常执行。observe 记录计入 `limits.tasks_per_wake`：一次唤醒记录满上限后返回 `limit_exceeded`。
 
 **看一致率**：
 

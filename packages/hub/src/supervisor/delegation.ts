@@ -123,6 +123,11 @@ export interface RespondOptions {
    * 委托之后才打开 observe 的，判断同样不送达。
    */
   observe?: Pick<SupervisorObserveConfig, 'replies' | 'approvals'>
+  /**
+   * 回复时 workspace 配置无法读取（路由传入）：按失败即不送达只记录判断，但**不是 observe 模式**——
+   * `task.reply_observed.forced` 与转交原因 `config_unavailable` 如实标明，report 不计入一致率。
+   */
+  forced?: 'config_unavailable'
 }
 
 /** 委托判定的默认总时限。 */
@@ -642,12 +647,15 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
       const delegation = ledger.activeDelegation(input.task_id)
       const basis = policyBasis(delegation?.decision_id, delegation)
       // observe（D10）：委托时已开启，或调用时的当前配置已开启，都只记录判断、不送达。
-      const observing =
+      // 配置无法读取（forced）时同样只记录，但如实标明不是 observe。
+      const observeConfigured =
         delegation !== null &&
         (delegation.observe === true ||
           (delegation.kind === 'question'
             ? opts.observe?.replies === true
             : opts.observe?.approvals === true))
+      const forced = !observeConfigured && delegation !== null ? opts.forced : undefined
+      const observing = observeConfigured || forced !== undefined
 
       /** 全部核对：在写入的同一事务里执行（AppendOptions.check）。 */
       const check = (): Result<null> => {
@@ -685,13 +693,17 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
         if (d.observe === true && !observing) {
           return staleBlock('这次委托处于 observe 模式，判断不能送达')
         }
-        if (ledger.pendingReply(t.id) !== null) return staleBlock('该任务已有尚未送达的回复')
+        // observe 只记录、绝不送达：只与送达有关的前提（待送达回复、节点持有租约、当前策略仍允许代批）
+        // 不再检查，判断照常记录并立即转交（D10）。
+        if (!observing && ledger.pendingReply(t.id) !== null) {
+          return staleBlock('该任务已有尚未送达的回复')
+        }
         // 授权请求的批准必须送到仍在等待的那个 worker：节点已不持有租约时，带着批准重新排队会让
         // 下一轮执行（可能是另一个请求）拿到它，拒绝。
-        if (d.kind === 'awaiting_approval' && ledger.activeLease(t.id) === null) {
+        if (!observing && d.kind === 'awaiting_approval' && ledger.activeLease(t.id) === null) {
           return staleBlock('节点已不持有该任务的租约，这次授权请求已不在等待')
         }
-        if (d.kind === 'awaiting_approval' && o.policy) {
+        if (!observing && d.kind === 'awaiting_approval' && o.policy) {
           const decision = d.decision_id === undefined ? null : eventAt(d.decision_id)
           const current = o.policy.current()
           if (
@@ -738,18 +750,26 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
                 : {}),
               reason: input.reason,
               policy_version: basis.policy_version,
+              ...(forced ? { forced } : {}),
             },
           },
           {
             ...base,
             type: 'task.reply_escalated',
-            payload: {
-              reason: input.decision === 'escalate' ? 'supervisor' : 'observe',
-              block_seq: input.block_seq,
-              // supervisor 主动转交时附它的说明（与非 observe 相同）；observe 判断本身只在 reply_observed 中。
-              ...(input.decision === 'escalate' ? { note: input.reason } : {}),
-              ...basis,
-            },
+            payload: forced
+              ? {
+                  reason: 'config_unavailable',
+                  block_seq: input.block_seq,
+                  note: '回复时无法读取该 workspace 的配置，supervisor 的判断未送达，请你来决定',
+                  ...basis,
+                }
+              : {
+                  reason: input.decision === 'escalate' ? 'supervisor' : 'observe',
+                  block_seq: input.block_seq,
+                  // supervisor 主动转交时附它的说明（与非 observe 相同）；observe 判断本身只在 reply_observed 中。
+                  ...(input.decision === 'escalate' ? { note: input.reason } : {}),
+                  ...basis,
+                },
           },
         ]
       } else if (input.decision === 'escalate') {
@@ -811,7 +831,27 @@ export function createDelegationService(o: DelegationServiceOptions): Delegation
         ]
       }
       const written = ledger.appendMany(drafts, { actor: actorOf, check })
-      if (!written.ok) return written
+      if (!written.ok) {
+        // observe 下判断无法记录（例如判断类型与卡住不符）时不等 reply_timeout_s：委托仍有效且分配给本次唤醒，
+        // 就立即转交用户（原因 observe；配置无法读取时为 config_unavailable）。
+        if (observing && delegation) {
+          const wake = ledger.wakeOf(caller.task_id)
+          const d = ledger.activeDelegation(input.task_id)
+          if (
+            wake?.origin === 'reply' &&
+            d?.seq === delegation.seq &&
+            wake.events.includes(d.seq)
+          ) {
+            escalate(
+              input.task_id,
+              d.seq,
+              forced ? 'config_unavailable' : 'observe',
+              `supervisor 的判断无法记录（${written.error.code}），已转交给你`,
+            )
+          }
+        }
+        return written
+      }
       if (input.decision === 'escalate' || observing) {
         clearTimer(input.task_id)
         release()

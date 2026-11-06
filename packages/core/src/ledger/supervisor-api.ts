@@ -184,6 +184,9 @@ export const observedRepliesSummary = z
     approvals: z.object({ judged: count, agreed: count }),
     choices: z.object({ judged: count, agreed: count }),
     free_text: count.meta({ description: '自由文本回答：只统计已回复，不判一致' }),
+    config_unavailable: count.meta({
+      description: '回复时 workspace 配置无法读取而未送达的判断（不是 observe，不计入以上各项）',
+    }),
   })
   .meta({ title: 'Observed replies summary' })
 

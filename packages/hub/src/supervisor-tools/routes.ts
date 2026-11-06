@@ -19,6 +19,7 @@ import { type Context, Hono } from 'hono'
 import type { z } from 'zod'
 import { jsonBody, respond } from '../ledger/routes.ts'
 import { fieldIssues } from '../ledger/tasks.ts'
+import type { RespondOptions } from '../supervisor/delegation.ts'
 import { checkWakeCaller, type SupervisorToolsDeps, wakeCallerOf } from './common.ts'
 import { decisionReview } from './decisions.ts'
 import { requestMerge } from './merge-requests.ts'
@@ -116,14 +117,14 @@ export function createSupervisorToolRoutes(deps: SupervisorToolsDeps): Hono {
     // observe（D10）：读取 workspace 当前配置，与委托时记录的 observe 取并集。workspace 已查不到时按 observe
     // 处理（失败即不送达）；observe 段缺省时各项为 false，行为与没有 observe 时相同。
     const caller = wakeCallerOf(c)
-    let observe: { replies: boolean; approvals: boolean } | undefined
+    let opts: RespondOptions = {}
     if (caller && typeof deps.workspaces === 'function') {
       const ws = await deps.workspaces(caller.workspace)
-      observe = ws ? ws.supervisor.observe : { replies: true, approvals: true }
+      opts = ws ? { observe: ws.supervisor.observe } : { forced: 'config_unavailable' }
     }
     return respond(
       c,
-      deps.delegation.respond(actorOf(c), caller, input.data, observe ? { observe } : {}),
+      deps.delegation.respond(actorOf(c), caller, input.data, opts),
       taskRespondData,
     )
   })

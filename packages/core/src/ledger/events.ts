@@ -118,11 +118,12 @@ export const REPLY_ESCALATION_REASONS = [
   'user_replied',
   'policy_changed',
   'observe',
+  'config_unavailable',
 ] as const
 export type ReplyEscalationReason = (typeof REPLY_ESCALATION_REASONS)[number]
 export const replyEscalationReason = z.enum(REPLY_ESCALATION_REASONS).meta({
   description:
-    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变；observe 该项处于 observe 模式，supervisor 的判断只记录不送达',
+    'supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变；observe 该项处于 observe 模式，supervisor 的判断只记录不送达；config_unavailable 回复时 workspace 配置无法读取，判断按失败即不送达处理',
 })
 
 /** `supervisor.observed_action.args` 的上限（D10：参数摘要做遮蔽与长度限制）。 */
@@ -411,6 +412,10 @@ export const eventPayloads = {
     text: z.string().min(1).max(2000).optional().meta({ description: '回答的文字（answer）' }),
     reason: z.string().min(1).max(REPLY_REASON_MAX).meta({ description: 'supervisor 给出的理由' }),
     policy_version: policyVersionSchema.optional(),
+    forced: z.literal('config_unavailable').optional().meta({
+      description:
+        '不是 observe 模式：回复时 workspace 配置无法读取，按失败即不送达只记录（不计入 supervisor report 一致率）',
+    }),
   }),
   /**
    * 执行器创建的任务分支（D15，写类适配器启动前上报）：只接受持有该任务活动租约的节点写入，

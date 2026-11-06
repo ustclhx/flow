@@ -141,6 +141,12 @@
                     "minimum": 0,
                     "maximum": 9007199254740991,
                     "description": "自由文本回答：只统计已回复，不判一致"
+                  },
+                  "config_unavailable": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "回复时 workspace 配置无法读取而未送达的判断（不是 observe，不计入以上各项）"
                   }
                 },
                 "required": [
@@ -155,7 +161,8 @@
                   "agreement",
                   "approvals",
                   "choices",
-                  "free_text"
+                  "free_text",
+                  "config_unavailable"
                 ],
                 "additionalProperties": false,
                 "title": "Observed replies summary"

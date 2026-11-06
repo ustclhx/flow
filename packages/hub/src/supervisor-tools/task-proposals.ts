@@ -249,6 +249,7 @@ export async function proposeTask(
         workspace: wake.workspace,
         wake_task_id: wake.task_id,
         action: 'task_propose',
+        limit: ws?.supervisor.limits.tasks_per_wake ?? 0,
         args: {
           draft,
           ...(input.decision ? { decision: input.decision } : {}),

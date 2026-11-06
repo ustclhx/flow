@@ -69,6 +69,7 @@ function emptyWorkspace(workspace: string): SupervisorReportWorkspace {
       approvals: { judged: 0, agreed: 0 },
       choices: { judged: 0, agreed: 0 },
       free_text: 0,
+      config_unavailable: 0,
     },
     stuck_basis: [],
     observed_actions: { total: 0, task_create: 0, task_propose: 0, pr_merge_request: 0 },
@@ -116,6 +117,11 @@ export function supervisorReport(
     if (!r) continue
     const s = r.observed_replies
     const p = e.payload
+    // 配置无法读取而未送达的判断不是 observe：单独计数，不计入一致率与各项。
+    if (p.forced !== undefined) {
+      s.config_unavailable++
+      continue
+    }
     s.total++
     s[p.kind]++
     if (p.decision === 'escalate') {

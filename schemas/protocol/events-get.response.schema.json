@@ -4753,9 +4753,10 @@
                             "user_dismissed",
                             "user_replied",
                             "policy_changed",
-                            "observe"
+                            "observe",
+                            "config_unavailable"
                           ],
-                          "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变；observe 该项处于 observe 模式，supervisor 的判断只记录不送达"
+                          "description": "supervisor 主动转交；timeout 超时；wake_unavailable 唤醒无法开始；wake_failed / wake_ended 唤醒失败或结束仍未回复；user_dismissed 用户忽略；user_replied 用户已回复；policy_changed 依赖的策略已改变；observe 该项处于 observe 模式，supervisor 的判断只记录不送达；config_unavailable 回复时 workspace 配置无法读取，判断按失败即不送达处理"
                         },
                         "policy_version": {
                           "type": "string",
@@ -4992,6 +4993,11 @@
                         "policy_version": {
                           "type": "string",
                           "pattern": "^[0-9a-f]{12}$"
+                        },
+                        "forced": {
+                          "description": "不是 observe 模式：回复时 workspace 配置无法读取，按失败即不送达只记录（不计入 supervisor report 一致率）",
+                          "type": "string",
+                          "const": "config_unavailable"
                         }
                       },
                       "required": [
