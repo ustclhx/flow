@@ -46,7 +46,11 @@ async function setup() {
         { actor: 'user' },
       ),
     ).seq
-  const wake = async (events: number[], origin: 'instruction' | 'autonomous' = 'instruction') => {
+  const wake = async (
+    events: number[],
+    origin: 'instruction' | 'autonomous' = 'instruction',
+    source?: 'pr',
+  ) => {
     const g = ++generation
     return must(
       await tasks.createTask(contractInput({ role: 'supervisor' }), {
@@ -56,7 +60,14 @@ async function setup() {
             type: 'supervisor.wake_started',
             task_id: id,
             workspace: WS,
-            payload: { task_id: id, workspace: WS, origin, events, generation: g },
+            payload: {
+              task_id: id,
+              workspace: WS,
+              origin,
+              events,
+              generation: g,
+              ...(source ? { source } : {}),
+            },
           },
         ],
       }),
@@ -264,4 +275,55 @@ test('开发任务重试清空当前结果后，审查仍沿历史PR产物继承
   ).task
   expect(review.contract.origin_instruction).toEqual({ seq, text: '保留已有PR并继续审查' })
   expect(review.mandate?.instruction_seq).toBe(seq)
+})
+
+test('PR 评论引起的唤醒（source: pr）建的任务不继承来源任务的原始指令，并记录 instruction_note', async () => {
+  const s = await setup()
+  const seq = s.instruction('实现缓存')
+  const first = await s.wake([seq])
+  const dev = must(await s.create(first)).task
+  expect(dev.mandate?.instruction_seq).toBe(seq)
+  const pr = 'https://github.com/acme/repo/pull/8'
+  await complete(s, dev.id, pr)
+  const wakeEvent = (n: number) => {
+    const comment = must(
+      s.ledger.append(
+        {
+          type: 'pr.event',
+          workspace: WS,
+          payload: {
+            pr,
+            kind: 'issue_comment',
+            actor: 'acme',
+            actor_kind: 'human',
+            allowed: true,
+            text: '顺带把导出也做了',
+            url: `${pr}#issuecomment-${n}`,
+            cursor: `2026-10-24T00:00:00.000Z|${n}`,
+          },
+        },
+        { actor: 'hub' },
+      ),
+    )
+    return must(
+      s.ledger.append(
+        {
+          type: 'pr.wake_requested',
+          task_id: dev.id,
+          workspace: WS,
+          payload: { pr_event_seq: comment.seq, reason: 'resume_rejected' },
+        },
+        { actor: 'hub' },
+      ),
+    ).seq
+  }
+  // 对照：同样的关联任务，普通 instruction 唤醒会继承原始指令。
+  const plain = await s.wake([wakeEvent(1)])
+  expect(must(await s.create(plain)).task.mandate?.instruction_seq).toBe(seq)
+  const fromPr = await s.wake([wakeEvent(2)], 'instruction', 'pr')
+  expect(s.ledger.wakeOf(fromPr)?.source).toBe('pr')
+  const task = must(await s.create(fromPr)).task
+  expect(task.contract.origin_instruction).toBeUndefined()
+  expect(task.mandate?.instruction_seq).toBeUndefined()
+  expect(task.mandate?.instruction_note).toContain('PR 评论')
 })
